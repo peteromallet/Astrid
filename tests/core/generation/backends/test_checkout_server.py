@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import socket
 import sys
 import threading
+import time
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -36,6 +38,7 @@ def _adapter(server_url: str, **kwargs: object) -> CheckoutServerAdapter:
         checkout_root="/fixture/checkout",
         listener_port=backend_module._origin_port(origin),
         profile_digest=PROFILE_DIGEST,
+        profile=PROFILE,
     )
     return CheckoutServerAdapter(
         server_url,
@@ -48,8 +51,18 @@ def _adapter(server_url: str, **kwargs: object) -> CheckoutServerAdapter:
 def _warmth(adapter: CheckoutServerAdapter, fingerprint: str, model: str = "sha256:" + "a" * 64) -> str:
     binding = adapter._managed_binding
     assert binding is not None
+    session = adapter.session_fingerprint(
+        model_fingerprint="z-image:image/z_image",
+        model_bytes_digest=model,
+        environment_fingerprint=PROFILE,
+        server_url=binding.origin,
+        runtime_instance_id=binding.runtime_instance_id,
+        declared_root=binding.checkout_root,
+        declared_port=binding.listener_port,
+        managed_binding=binding,
+    )
     return adapter.warmth_identity(
-        fingerprint=fingerprint,
+        fingerprint=session,
         model_bytes_digest=model,
         environment_fingerprint=PROFILE,
         server_url=binding.origin,
@@ -68,6 +81,7 @@ class _Workflow:
 
 class _Response(io.BytesIO):
     status = 200
+    _deadline_capable = True
 
     def __init__(self, body: bytes, *, payload: object | None = None) -> None:
         super().__init__(body)
@@ -318,7 +332,8 @@ def test_remote_output_custody_downloads_metadata_descriptors_atomically(
     assert generated.image_paths[0].parent.name.startswith("checkout-batch-")
     assert not list((tmp_path / "out").glob(".checkout-download-*"))
     assert modules["vibecomfy.runtime.run"].run_sync.call_args.kwargs == {
-        "server_url": "https://gpu.example.test:8888"
+        "server_url": "https://gpu.example.test:8888",
+        "transport_generation": "fixture-transport-generation-1",
     }
 
 
@@ -385,8 +400,7 @@ def test_checkout_server_url_accepts_canonical_origin() -> None:
 
 
 def test_checkout_identity_binds_profile_root_and_declared_port(tmp_path: Path) -> None:
-    root_a = tmp_path / "checkout-a"
-    root_b = tmp_path / "checkout-b"
+    del tmp_path
     kwargs = {
         "model_fingerprint": "z-image:image/z_image",
         "model_bytes_digest": "sha256:" + "a" * 64,
@@ -395,17 +409,30 @@ def test_checkout_identity_binds_profile_root_and_declared_port(tmp_path: Path) 
         "runtime_instance_id": RUNTIME_A,
         "declared_port": 8188,
     }
-    first = CheckoutServerAdapter.session_fingerprint(**kwargs, declared_root=root_a)
-    second = CheckoutServerAdapter.session_fingerprint(**kwargs, declared_root=root_b)
+    binding_a = backend_module._CheckoutRuntimeBinding._fixture(
+        origin=kwargs["server_url"], runtime_instance_id=RUNTIME_A,
+        checkout_root="/fixture/checkout-a", listener_port=8188,
+        profile=kwargs["environment_fingerprint"],
+        profile_digest=backend_module.VibeComfyEngine._profile_identity(
+            kwargs["environment_fingerprint"], "profile"
+        ),
+    )
+    binding_b = replace(binding_a, checkout_root="/fixture/checkout-b")
+    first = CheckoutServerAdapter.session_fingerprint(
+        **kwargs, declared_root=binding_a.checkout_root, managed_binding=binding_a
+    )
+    second = CheckoutServerAdapter.session_fingerprint(
+        **kwargs, declared_root=binding_b.checkout_root, managed_binding=binding_b
+    )
     assert first != second
 
     adapter = CheckoutServerAdapter(
         "HTTP://GPU.EXAMPLE.TEST:8188/",
         environment_fingerprint={"profile": "checkout-a", "engine": "pinned"},
-        declared_root=root_a,
+        declared_root="/fixture/checkout-a",
         declared_port=8188,
     )
-    assert adapter.declared_root == str(root_a.resolve())
+    assert adapter.declared_root == str(Path("/fixture/checkout-a").resolve())
     assert adapter.declared_port == 8188
     with pytest.raises(ValueError, match="declared_port"):
         CheckoutServerAdapter("http://gpu.example.test:8188", declared_port=8189)
@@ -543,14 +570,7 @@ def test_generate_failure_discards_prepared_warmth(
 
     assert adapter._engine.warm is False
     assert adapter._engine.last_warm_reused is False
-    second = adapter._engine.prepare_session(
-        "same-fingerprint",
-        "sha256:" + "c" * 64,
-        runtime_instance_id=RUNTIME_A,
-        model_bytes_digest="sha256:" + "a" * 64,
-    )
-    assert second["lifecycle"] == "cold"
-    assert second["warm_reused"] is False
+    assert adapter._engine.prepared_fingerprint is None
 
 
 def test_remote_output_failure_poisons_and_cold_reset_recovers(
@@ -635,10 +655,56 @@ def test_correction_f01_omitted_warmth_identity_cannot_reuse_published_warmth(
     engine._warm_declared_port = engine._prepared_declared_port
     with pytest.raises(ValueError, match="checkout_warmth_identity_incomplete"):
         engine.prepare_session(
-            "probe", None, runtime_instance_id=RUNTIME_A, model_bytes_digest="sha256:" + "a" * 64
+            engine._prepared_fingerprint or "sha256:" + "0" * 64,
+            None,
+            runtime_instance_id=RUNTIME_A,
+            model_bytes_digest="sha256:" + "a" * 64,
+            environment_fingerprint=PROFILE,
+            managed_binding=adapter._managed_binding,
+            model_id="z-image",
+            template_id="image/z_image",
+            declared_root="/fixture/checkout",
+            declared_port=80,
         )
     assert engine.warm is True
     assert engine.last_warm_reused is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("runtime_epoch", 2),
+        ("coordinator_epoch", 2),
+        ("engine_birth_id", "replacement-birth"),
+        ("engine_lifetime_id", "replacement-lifetime"),
+        ("listener_owner", "replacement-owner"),
+        ("listener_address", "127.0.0.2"),
+        ("transport_generation", "replacement-transport"),
+        ("invocation_identity", "replacement-invocation"),
+        ("checkout_root", "/replacement/checkout"),
+    ],
+)
+def test_correction_f01_every_latched_binding_field_is_exact(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    adapter = _prepared_adapter(monkeypatch)
+    engine = adapter._engine
+    binding = adapter._managed_binding
+    assert binding is not None
+    replacement = replace(binding, **{field: value})
+    with pytest.raises(ValueError, match="checkout_(runtime_binding|session_identity)_"):
+        engine.prepare_session(
+            engine._prepared_fingerprint,
+            engine._prepared_warmth_identity,
+            runtime_instance_id=engine._prepared_runtime_instance_id,
+            model_bytes_digest=engine._prepared_model_bytes_digest,
+            environment_fingerprint=PROFILE,
+            managed_binding=replacement,
+            model_id=replacement.model_id,
+            template_id=replacement.template_id,
+            declared_root=engine._prepared_declared_root,
+            declared_port=engine._prepared_declared_port,
+        )
 
 
 def test_correction_f02_secret_control_response_is_typed_and_not_returned(
@@ -652,6 +718,61 @@ def test_correction_f02_secret_control_response_is_typed_and_not_returned(
     assert getattr(caught.value, "code", None) == "checkout_response_secret_shaped"
     assert "CONTROL_SECRET_SENTINEL" not in str(caught.value)
     assert "CONTROL_SECRET_SENTINEL" not in repr(caught.value.args)
+
+
+@pytest.mark.parametrize("body", [b'{"status":"[REDACTED]"}', b'{"nested":{"key":"***"}}'])
+def test_correction_f02_redaction_and_deep_documents_are_fixed_local_errors(body: bytes) -> None:
+    with pytest.raises(ValueError) as caught:
+        backend_module._checkout_json(body)
+    assert getattr(caught.value, "code", None) == "checkout_response_secret_shaped"
+    deep = b'{"a":' * (backend_module._MAX_CHECKOUT_JSON_DEPTH + 2) + b"null" + b"}" * (
+        backend_module._MAX_CHECKOUT_JSON_DEPTH + 2
+    )
+    with pytest.raises(ValueError) as deep_error:
+        backend_module._checkout_json(deep)
+    assert getattr(deep_error.value, "code", None) == "checkout_response_malformed"
+    assert not isinstance(deep_error.value, (RecursionError, MemoryError))
+
+
+def test_correction_f03_real_loopback_slow_drip_stops_at_absolute_deadline() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    ready = threading.Event()
+
+    def serve() -> None:
+        ready.set()
+        conn, _address = listener.accept()
+        try:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nx")
+            time.sleep(0.15)
+            try:
+                conn.sendall(b"y")
+            except OSError:
+                pass
+        finally:
+            conn.close()
+            listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    assert ready.wait(1)
+    request = backend_module.urllib_request.Request(f"http://127.0.0.1:{port}/view")
+    deadline = time.monotonic_ns() + 50_000_000
+    started = time.monotonic()
+    with pytest.raises(ValueError) as caught:
+        with backend_module._open_checkout_http_bounded(request, deadline) as response:
+            backend_module._read_framed_response(
+                response, limit=8, timeout=0.05, deadline_ns=deadline
+            )
+    elapsed = time.monotonic() - started
+    thread.join(timeout=1)
+    assert getattr(caught.value, "code", None) == "checkout_response_deadline_expired"
+    assert elapsed < 0.12
 
 
 @pytest.mark.parametrize(
@@ -765,19 +886,10 @@ def test_correction_f05_only_matching_independent_binding_is_admitted(
     binding = matching._managed_binding
     assert binding is not None
     lie_root = "/caller/lie"
-    lied_warmth = matching.warmth_identity(
-        fingerprint="probe",
-        model_bytes_digest="sha256:" + "a" * 64,
-        environment_fingerprint=PROFILE,
-        server_url=binding.origin,
-        runtime_instance_id=binding.runtime_instance_id,
-        declared_root=lie_root,
-        declared_port=binding.listener_port,
-    )
     with pytest.raises(ValueError, match="checkout_runtime_binding_mismatch"):
         matching.warm_session(
             "probe",
-            lied_warmth,
+            _warmth(matching, "probe"),
             runtime_instance_id=RUNTIME_A,
             model_bytes_digest="sha256:" + "a" * 64,
             declared_root=lie_root,

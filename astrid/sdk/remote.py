@@ -266,21 +266,35 @@ class RemoteTasks(_RemoteFamily):
         return self._typed("register_executor", {"executor_id": executor_id, "capabilities": capabilities}, key=idempotency_key, idempotency_key=idempotency_key)
     def register_capability(self, capability_id: str, definition_digest: str, *, idempotency_key=None):
         return self._typed("register_capability", capability_id, definition_digest, key=idempotency_key, idempotency_key=idempotency_key)
-    def create(self, *, project_id: str, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None):
+    def create(self, *, project_id: str, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, schema_version: str = "1", capability_digest: str | None = None):
         key = idempotency_key or uuid.uuid4().hex
-        capabilities = paged_rows(self._client.list_capabilities, limit=50)
-        if capabilities is None:
-            return DomainResult.failure(
-                ErrorObject(
-                    "protocol_error",
-                    "runtime capability listing returned an invalid page",
-                    {},
-                ),
-                idempotency_key=key,
-            )
-        match = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability), None)
-        if match is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability}), idempotency_key=key)
-        return self._typed("admit_task", key=key, capability_id=capability, capability_digest=str(match["definition_digest"]), input_object_ids=input_manifest or [], idempotency_key=key, project_id=project_id, spec=spec, settlement_effect=settlement_effect, storage_estimate=storage_estimate)
+        if capability_digest is None:
+            capabilities = paged_rows(self._client.list_capabilities, limit=50)
+            if capabilities is None:
+                return DomainResult.failure(
+                    ErrorObject(
+                        "protocol_error",
+                        "runtime capability listing returned an invalid page",
+                        {},
+                    ),
+                    idempotency_key=key,
+                )
+            match = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability), None)
+            if match is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability}), idempotency_key=key)
+            capability_digest = str(match["definition_digest"])
+        return self._typed(
+            "admit_task",
+            key=key,
+            capability_id=capability,
+            capability_digest=capability_digest,
+            input_object_ids=list(input_manifest or []),
+            idempotency_key=key,
+            project_id=project_id,
+            schema_version=schema_version,
+            spec=spec,
+            settlement_effect=dict(settlement_effect or {}),
+            storage_estimate=dict(storage_estimate or {"scratch_bytes": 0, "output_bytes": 0}),
+        )
     def claim(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
         return self._typed("claim_task", key=idempotency_key, executor_id=executor_id, capability_ids=capability_ids, idempotency_key=idempotency_key)
     def settle(
@@ -555,20 +569,22 @@ class RemoteAstridClient:
             noninteractive=noninteractive,
         )
     def purge_realm(self, confirmation): return self._transport.purge_realm(confirmation)
-    def invoke(self, capability_id: str, *, project_id: str, spec: Mapping[str, Any], input_object_ids: list[str] | None = None, idempotency_key: str | None = None, settlement_effect: Mapping[str, Any] | None = None):
+    def invoke(self, capability_id: str, *, project_id: str, spec: Mapping[str, Any], input_object_ids: list[str] | None = None, idempotency_key: str | None = None, settlement_effect: Mapping[str, Any] | None = None, storage_estimate: Mapping[str, int] | None = None, schema_version: str = "1", capability_digest: str | None = None):
         capability_id = str(capability_id); key = idempotency_key or uuid.uuid4().hex
-        capabilities = paged_rows(self._transport.list_capabilities, limit=50)
-        if capabilities is None:
-            return DomainResult.failure(
-                ErrorObject(
-                    "protocol_error",
-                    "runtime capability listing returned an invalid page",
-                    {},
-                ),
-                idempotency_key=key,
-            )
-        capability = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability_id), None)
-        if capability is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability_id}), idempotency_key=key)
+        if capability_digest is None:
+            capabilities = paged_rows(self._transport.list_capabilities, limit=50)
+            if capabilities is None:
+                return DomainResult.failure(
+                    ErrorObject(
+                        "protocol_error",
+                        "runtime capability listing returned an invalid page",
+                        {},
+                    ),
+                    idempotency_key=key,
+                )
+            capability = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability_id), None)
+            if capability is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability_id}), idempotency_key=key)
+            capability_digest = str(capability["definition_digest"])
         # Keep the generated client's complete mutation result intact.
         # In particular, ``admit_task`` carries the server's committed
         # receipt out-of-band alongside the task resource.
@@ -576,10 +592,12 @@ class RemoteAstridClient:
             "admit_task",
             key=key,
             capability_id=capability_id,
-            capability_digest=capability["definition_digest"],
+            capability_digest=capability_digest,
             input_object_ids=list(input_object_ids or []),
             idempotency_key=key,
             project_id=project_id,
+            schema_version=schema_version,
             spec=spec,
-            settlement_effect=settlement_effect,
+            settlement_effect=dict(settlement_effect or {}),
+            storage_estimate=dict(storage_estimate or {"scratch_bytes": 0, "output_bytes": 0}),
         )

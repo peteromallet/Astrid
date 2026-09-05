@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from astrid.sdk.remote import RemoteAstridClient, RemoteProjects, RemoteShots, RemoteTasks
+from astrid.sdk.workspace_client import WorkspaceClient
 
 
 class _RecordingClient:
@@ -100,6 +101,112 @@ class GeneratedClientCutoverRegressionTest(unittest.TestCase):
             client.task_call["storage_estimate"],
             {"scratch_bytes": 100, "output_bytes": 23},
         )
+        self.assertEqual(client.task_call["schema_version"], "1")
+        self.assertEqual(client.task_call["settlement_effect"], {})
+
+    def test_task_create_emits_complete_hc04_admission_defaults(self) -> None:
+        client = _RecordingClient()
+        result = RemoteTasks(client).create(
+            project_id="project-1",
+            capability="capability-1",
+            spec={"family": "image_generation", "params": {"prompt": "hello"}},
+            input_manifest=["object-a", "object-b"],
+            idempotency_key="task-key",
+        )
+
+        self.assertTrue(result.ok)
+        assert client.task_call is not None
+        self.assertEqual(
+            client.task_call,
+            {
+                "capability_id": "capability-1",
+                "capability_digest": "digest-1",
+                "input_object_ids": ["object-a", "object-b"],
+                "idempotency_key": "task-key",
+                "project_id": "project-1",
+                "schema_version": "1",
+                "spec": {"family": "image_generation", "params": {"prompt": "hello"}},
+                "settlement_effect": {},
+                "storage_estimate": {"scratch_bytes": 0, "output_bytes": 0},
+            },
+        )
+
+    def test_generic_invoke_forwards_complete_hc04_admission(self) -> None:
+        client = _RecordingClient()
+        result = RemoteAstridClient(client).invoke(
+            "capability-1",
+            project_id="project-1",
+            spec={"family": "image_generation", "params": {}},
+            input_object_ids=["object-a"],
+            idempotency_key="invoke-key",
+            settlement_effect={"publish": {"generation_id": "generation-1"}},
+            storage_estimate={"scratch_bytes": 100, "output_bytes": 23},
+        )
+
+        self.assertTrue(result.ok)
+        assert client.task_call is not None
+        self.assertEqual(client.task_call["capability_id"], "capability-1")
+        self.assertEqual(client.task_call["capability_digest"], "digest-1")
+        self.assertEqual(client.task_call["input_object_ids"], ["object-a"])
+        self.assertEqual(client.task_call["project_id"], "project-1")
+        self.assertEqual(client.task_call["schema_version"], "1")
+        self.assertEqual(client.task_call["settlement_effect"], {"publish": {"generation_id": "generation-1"}})
+        self.assertEqual(client.task_call["storage_estimate"], {"scratch_bytes": 100, "output_bytes": 23})
+
+    def test_explicit_capability_digest_skips_catalog_inference(self) -> None:
+        class ExplicitClient(_RecordingClient):
+            def list_capabilities(self, **kwargs: object):
+                raise AssertionError("explicit HC-04 digest must not require catalog inference")
+
+        client = ExplicitClient()
+        result = RemoteTasks(client).create(
+            project_id="project-1",
+            capability="capability-1",
+            capability_digest="digest-explicit",
+            spec={"family": "image_generation", "params": {}},
+            idempotency_key="task-key",
+        )
+
+        self.assertTrue(result.ok)
+        assert client.task_call is not None
+        self.assertEqual(client.task_call["capability_digest"], "digest-explicit")
+
+    def test_workspace_client_admit_task_supplies_neutral_hc04_defaults(self) -> None:
+        client = WorkspaceClient.__new__(WorkspaceClient)
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        def call(operation: str, **kwargs: object) -> dict[str, object]:
+            calls.append((operation, kwargs))
+            return {"task_id": "task-1"}
+
+        client._call_generated = call
+        value = client.admit_task(
+            capability_id="capability-1",
+            capability_digest="digest-1",
+            input_object_ids=["object-a"],
+            idempotency_key="task-key",
+            project_id="project-1",
+            spec={"family": "image_generation", "params": {}},
+        )
+
+        self.assertEqual(value, {"task_id": "task-1"})
+        self.assertEqual(calls[0], ("admit_task", {
+            "capability_id": "capability-1",
+            "capability_digest": "digest-1",
+            "input_object_ids": ["object-a"],
+            "idempotency_key": "task-key",
+            "schema_version": "1",
+            "settlement_effect": {},
+            "project_id": "project-1",
+            "spec": {"family": "image_generation", "params": {}},
+            "storage_estimate": {"scratch_bytes": 0, "output_bytes": 0},
+        }))
+
+    def test_hc04_sdk_adapters_do_not_run_local_engine_or_supabase_authority(self) -> None:
+        sdk_root = Path(__file__).resolve().parents[2] / "astrid" / "sdk"
+        source = (sdk_root / "remote.py").read_text(encoding="utf-8") + (sdk_root / "workspace_client.py").read_text(encoding="utf-8")
+        for forbidden in ("run_sync", "subprocess", "supabase", "route_key", "selected_backend", "Worker backend"):
+            self.assertNotIn(forbidden, source)
 
     def test_generic_invoke_forwards_server_receipt(self) -> None:
         result = RemoteAstridClient(_ReceiptClient()).invoke(

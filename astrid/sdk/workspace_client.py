@@ -552,6 +552,12 @@ class WorkspaceClient:
         spec: Mapping[str, Any] | None = None,
         storage_estimate: Mapping[str, int] | None = None,
     ) -> Any:
+        # HC-04 requires an explicit storage estimate and settlement effect
+        # in the logical admission record.  Keep the generated client as the
+        # sole wire encoder while supplying neutral zero/empty defaults for
+        # capabilities that do not reserve additional resources or lineage.
+        settlement_effect = dict(settlement_effect or {})
+        storage_estimate = dict(storage_estimate or {"scratch_bytes": 0, "output_bytes": 0})
         return self._call_generated(
             "admit_task",
             capability_id=capability_id,

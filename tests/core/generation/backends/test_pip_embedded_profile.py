@@ -1,51 +1,108 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
+import os
+import shutil
 import sys
 import threading
-from dataclasses import fields
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from astrid.core.generation.backends.vibecomfy import (
+    _PIP_EMBEDDED_SCRIPT,
     PipEmbeddedProfile,
     PipEmbeddedSession,
+    PipEmbeddedTimeouts,
     VibeComfyBackend,
+    _ChildResult,
+    _strict_json_value,
+    _strict_load_json,
 )
 
-
-def _sha(value: Any) -> str:
-    return "sha256:" + hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+REVISION = "dc8d962a8e330015bbb209080292fad248f1ceb3"
 
 
-def _profile(tmp_path: Path, *, root_suffix: str = "") -> PipEmbeddedProfile:
-    root = tmp_path / root_suffix if root_suffix else tmp_path
-    environment = root / "venv"
-    source = root / "Astrid"
-    pack = source / "astrid" / "packs"
-    engine = root / "vibecomfy"
-    nodes = engine / "custom_nodes"
-    models = root / "models"
-    output = root / "output"
-    scratch = root / "scratch"
-    cas = root / "cas"
-    for path in (environment, pack, nodes, models, output, scratch, cas):
+def digest(value: Any) -> str:
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+
+
+def file_digest(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def kwargs(profile: PipEmbeddedProfile) -> dict[str, Any]:
+    return {field.name: getattr(profile, field.name) for field in dataclasses.fields(profile)}
+
+
+def workflow() -> Any:
+    sys.path.insert(0, "/Users/peteromalley/Documents/reigh-workspace/vibecomfy")
+    from vibecomfy.workflow import VibeWorkflow, WorkflowSource
+
+    return VibeWorkflow(
+        id="fixture", source=WorkflowSource(id="fixture", path="fixture", source_type="ready")
+    )
+
+
+def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
+    root = tmp_path / "layout"
+    env, exe = root / "venv", root / "venv" / "bin" / "python"
+    source, pack, engine = root / "Astrid", root / "Astrid" / "astrid" / "packs", root / "vibecomfy"
+    nodes, models, output, scratch, cas, support = (
+        engine / "custom_nodes",
+        root / "models",
+        root / "output",
+        root / "scratch",
+        root / "cas",
+        root / "support",
+    )
+    for path in (pack, nodes, models, output, scratch, cas, support):
         path.mkdir(parents=True, exist_ok=True)
-    interpreter = str(Path(sys.executable).resolve())
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sys.executable, exe)
+    exe.chmod(0o755)
+    engine.mkdir(parents=True, exist_ok=True)
+    lock = engine / "uv.lock"
+    lock.write_bytes(b"pinned engine lock")
+    model_manifest, node_manifest = root / "models.json", root / "nodes.json"
+    model_manifest.write_text('{"files":[]}', encoding="utf-8")
+    node_manifest.write_text('{"files":[]}', encoding="utf-8")
+    roots = {
+        name: digest({"path": str(path)})
+        for name, path in (
+            ("source", source),
+            ("model", models),
+            ("custom_node", nodes),
+            ("scratch", scratch),
+            ("cas", cas),
+        )
+    }
+    host, child = str(Path(sys.executable).resolve()), str(exe.resolve())
+    version = ".".join(str(x) for x in sys.version_info[:3])
     facts = {
         "exact": {
-            "interpreter": interpreter,
+            "interpreter": json.dumps(
+                [
+                    {"path": host, "version": version, "sha256": file_digest(Path(sys.executable))},
+                    {"path": child, "version": version, "sha256": file_digest(exe)},
+                ],
+                separators=(",", ":"),
+            ),
             "runtime_lock": "sha256:" + "1" * 64,
-            "engine_lock": "sha256:" + "2" * 64,
+            "engine_lock": file_digest(lock),
             "model_digest": "sha256:" + "3" * 64,
             "custom_node_digest": "sha256:" + "4" * 64,
             "driver": "fixture-driver",
-            "root": "sha256:" + "5" * 64,
+            "root": digest(dict(sorted(roots.items()))),
             "port": 18765,
         },
         "minimum": {"vram_bytes": 1, "scratch_bytes": 1},
@@ -54,30 +111,30 @@ def _profile(tmp_path: Path, *, root_suffix: str = "") -> PipEmbeddedProfile:
         "schema_version": "hc03-worker-readiness.v1",
         "status": "ready",
         "verified_facts": facts,
-        "verified_facts_digest": _sha(facts),
+        "verified_facts_digest": digest(facts),
         "runtime": {
             "endpoint": "http://127.0.0.1:18765",
             "port": 18765,
             "pid": 1,
-            "process_birth_id": "proc-start-ticks:1",
-            "runtime_instance_id": "runtime-instance-1",
+            "process_birth_id": "fixture-process",
+            "runtime_instance_id": "fixture-runtime",
             "runtime_epoch": 1,
             "schema_digest": "sha256:" + "6" * 64,
-            "coordinator_epoch": "coordinator-1",
-            "active_realm": "realm-1",
-            "credential_reference": "/private/credential.token",
+            "coordinator_epoch": "fixture-coordinator",
+            "active_realm": "fixture-realm",
+            "credential_reference": str(support / "credential"),
             "discovery_digest": "sha256:" + "7" * 64,
         },
         "launch": {
-            "host_interpreter": interpreter,
-            "source_checkout": str(source.resolve()),
-            "engine_interpreter": interpreter,
-            "output_root": str(output.resolve()),
-            "pack_root": str(pack.resolve()),
-            "support_root": str((root / "support").resolve()),
-            "ready_file": str((root / "support" / "ready.json").resolve()),
-            "state_file": str((root / "support" / "state.json").resolve()),
-            "boot_manifest_path": str((root / "support" / "boot.json").resolve()),
+            "host_interpreter": host,
+            "source_checkout": str(source),
+            "engine_interpreter": child,
+            "output_root": str(output),
+            "pack_root": str(pack),
+            "support_root": str(support),
+            "ready_file": str(support / "ready.json"),
+            "state_file": str(support / "state.json"),
+            "boot_manifest_path": str(support / "boot.json"),
             "boot_manifest_hash": "sha256:" + "8" * 64,
         },
         "worker_actor": "astrid-pack-host",
@@ -90,11 +147,30 @@ def _profile(tmp_path: Path, *, root_suffix: str = "") -> PipEmbeddedProfile:
             "objects:write",
         ],
     }
+    evidence = {
+        "engine_lock_path": str(lock),
+        "vibecomfy_root": str(engine),
+        "vibecomfy_revision": REVISION,
+        "python_sha256": file_digest(exe),
+        "python_version": version,
+        "python_prefix": str(env),
+        "root_map": roots,
+        "model_manifest": {
+            "path": str(model_manifest),
+            "digest": facts["exact"]["model_digest"],
+            "sha256": file_digest(model_manifest),
+        },
+        "custom_node_manifest": {
+            "path": str(node_manifest),
+            "digest": facts["exact"]["custom_node_digest"],
+            "sha256": file_digest(node_manifest),
+        },
+    }
     return PipEmbeddedProfile.from_hc03(
-        python_executable=interpreter,
-        python_environment=environment,
-        vibecomfy_revision="dc8d962a8e330015bbb209080292fad248f1ceb3",
-        package_lock_digest="sha256:" + "2" * 64,
+        python_executable=exe,
+        python_environment=env,
+        vibecomfy_revision=REVISION,
+        package_lock_digest=file_digest(lock),
         astrid_source_root=source,
         astrid_pack_root=pack,
         engine_root=engine,
@@ -104,242 +180,248 @@ def _profile(tmp_path: Path, *, root_suffix: str = "") -> PipEmbeddedProfile:
         scratch_root=scratch,
         cas_root=cas,
         hc03_profile=readiness,
+        installation_evidence=evidence,
+        hc03_handoff_hash="sha256:" + "9" * 64,
     )
 
 
-def _profile_kwargs(profile: PipEmbeddedProfile) -> dict[str, Any]:
-    return {field.name: getattr(profile, field.name) for field in fields(profile)}
-
-
-def test_profile_digests_are_deterministic_and_explicit(tmp_path: Path) -> None:
-    first = _profile(tmp_path)
-    second = _profile(tmp_path)
-
-    assert first.to_dict() == second.to_dict()
-    assert first.command[0] == str(Path(sys.executable).resolve())
-    assert first.command[1] == "-c"
-    assert "from vibecomfy.runtime.run import run_sync" in first.command[2]
-    assert first.command_digest.startswith("sha256:")
-    assert first.readiness_digest.startswith("sha256:")
-    assert first.profile_digest.startswith("sha256:")
-
-
-def test_profile_binds_interpreter_lock_and_all_roots(tmp_path: Path) -> None:
-    profile = _profile(tmp_path)
-    identity = profile.identity
-
-    for field in (
-        "python_executable",
-        "python_environment",
-        "vibecomfy_revision",
-        "package_lock_digest",
-        "astrid_source_root",
-        "astrid_pack_root",
-        "engine_root",
-        "custom_nodes_root",
-        "model_root",
-        "output_root",
-        "scratch_root",
-        "cas_root",
-        "hc03",
-    ):
-        assert field in identity
-
-    with pytest.raises(ValueError, match="interpreter"):
-        PipEmbeddedProfile.from_hc03(
-            **{**_profile_kwargs(profile), "python_executable": "/usr/bin/python3"}
-        )
-
-
-def test_profile_relocation_changes_root_bearing_identity(tmp_path: Path) -> None:
-    first = _profile(tmp_path, root_suffix="one")
-    second = _profile(tmp_path, root_suffix="two")
-
-    assert first.profile_digest != second.profile_digest
-    assert first.command_digest != second.command_digest
-
-
-def test_profile_rejects_missing_readiness_or_secret_material(tmp_path: Path) -> None:
-    profile = _profile(tmp_path)
-    with pytest.raises(ValueError, match="verified facts digest"):
-        PipEmbeddedProfile.from_hc03(
-            **{**_profile_kwargs(profile), "hc03_profile": {**profile.hc03_profile, "verified_facts_digest": "sha256:" + "0" * 64}}
-        )
-    with pytest.raises(ValueError, match="secret-shaped"):
-        PipEmbeddedProfile.from_hc03(
-            **{**_profile_kwargs(profile), "hc03_profile": {**profile.hc03_profile, "worker_token": "do-not-copy"}}
-        )
-
-
-def test_session_is_cold_only_and_never_reuses_a_handle(tmp_path: Path) -> None:
-    profile = _profile(tmp_path)
-    calls: list[tuple[str, Path]] = []
-
-    class Handle:
-        def __init__(self, value: object, staging: Path) -> None:
-            self.value = value
-            self.staging = staging
-
-        def run(self) -> object:
-            calls.append(("run", self.staging))
-            return self.value
-
-        def terminate(self) -> None:
-            calls.append(("terminate", self.staging))
-
-        def reap(self) -> None:
-            calls.append(("reap", self.staging))
-
-        def cleanup(self) -> None:
-            calls.append(("cleanup", self.staging))
-
-    handles = 0
-
-    def factory(_profile: PipEmbeddedProfile, workflow: object, staging: Path) -> Handle:
-        nonlocal handles
-        handles += 1
-        return Handle(workflow, staging)
-
-    session = PipEmbeddedSession(profile, execution_factory=factory)
-    assert session.run("a", task_identity="task-a") == "a"
-    assert session.run("b", task_identity="task-b") == "b"
-    assert handles == 2
-    assert session.warm is False
-    assert session.last_warm_reused is False
-    assert not list(Path(profile.scratch_root).glob("pip-embedded-*"))
-    assert [name for name, _path in calls] == ["run", "reap", "cleanup", "run", "reap", "cleanup"]
-
-
-class _BlockingHandle:
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.released = threading.Event()
+class Handle:
+    def __init__(self, staging: Path, block: bool = False) -> None:
+        self.output_dir, self.block = staging / "engine-output", block
+        self.nonce = "nonce"
+        self.started, self.release = threading.Event(), threading.Event()
         self.calls: list[str] = []
 
-    def run(self) -> str:
+    def start(self) -> None:
+        self.calls.append("start")
+        self.output_dir.mkdir()
+
+    def wait_ready(self, timeout: float) -> None:
+        self.calls.append("ready")
+
+    def go(self) -> None:
+        self.calls.append("go")
         self.started.set()
-        self.released.wait(timeout=5)
-        return "cancelled-run"
 
-    def terminate(self) -> None:
+    def run(self, timeout: float) -> _ChildResult:
+        self.calls.append("run")
+        if self.block:
+            self.release.wait(timeout=timeout)
+        path = self.output_dir / "frame.bin"
+        path.write_bytes(b"frame")
+        return _ChildResult(self.nonce, "run", None, ((path.name, 5, file_digest(path)),))
+
+    def terminate(self, term: float, kill: float, reap: float) -> None:
         self.calls.append("terminate")
-        self.released.set()
-
-    def reap(self) -> None:
-        self.calls.append("reap")
+        self.release.set()
 
     def cleanup(self) -> None:
         self.calls.append("cleanup")
 
 
-def test_cancel_terminates_reaps_cleans_and_rejects_mismatched_identity(tmp_path: Path) -> None:
-    handle = _BlockingHandle()
-    session = PipEmbeddedSession(
-        _profile(tmp_path),
-        execution_factory=lambda _profile, _workflow, _staging: handle,
-    )
-    thread = threading.Thread(target=session.run, args=("workflow",), kwargs={"task_identity": "task-a"})
+def test_profile_freezes_nested_readiness_and_actual_command_flags(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    before = profile.profile_digest
+    exported = profile.identity
+    exported["hc03"]["runtime"]["port"] = 1
+    assert profile.profile_digest == before
+    with pytest.raises(TypeError):
+        profile.hc03_profile["runtime"]["port"] = 1  # type: ignore[index]
+    assert profile.command[:4] == (str(profile.python_executable), "-I", "-B", "-c")
+    assert not {"--backend", "--ensure-models", "--ensure-packs"}.intersection(profile.command)
+
+
+def test_hc03_and_installation_mismatches_fail_closed(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    raw = json.loads(json.dumps(profile.to_dict()["readiness"]))
+    raw["runtime"]["port"] = 18766
+    with pytest.raises(ValueError, match="endpoint/port"):
+        PipEmbeddedProfile.from_hc03(**{**kwargs(profile), "hc03_profile": raw})
+    evidence = dict(profile.installation_evidence)
+    evidence["vibecomfy_revision"] = "0" * 40
+    with pytest.raises(ValueError, match="revision"):
+        PipEmbeddedProfile.from_hc03(**{**kwargs(profile), "installation_evidence": evidence})
+
+
+def test_reservation_busy_and_factory_cancel_race(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    entered, release, holder = threading.Event(), threading.Event(), []
+
+    def factory(_p: PipEmbeddedProfile, _r: Any, staging: Path) -> Handle:
+        entered.set()
+        release.wait(timeout=2)
+        handle = Handle(staging)
+        handle.nonce = _r["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+    run_error: list[BaseException] = []
+
+    def run_once() -> None:
+        try:
+            session.run(workflow(), task_identity="race", out_dir=Path(profile.output_root))
+        except BaseException as exc:
+            run_error.append(exc)
+
+    thread = threading.Thread(target=run_once)
     thread.start()
-    assert handle.started.wait(timeout=2)
+    assert entered.wait(timeout=1)
+    with pytest.raises(RuntimeError, match="already in progress"):
+        session.run(workflow(), task_identity="other", out_dir=Path(profile.output_root))
+    control_result: list[dict[str, Any]] = []
+    control = threading.Thread(
+        target=lambda: control_result.append(session.cancel(task_identity="race"))
+    )
+    control.start()
+    time.sleep(0.05)
+    release.set()
+    control.join(timeout=3)
+    thread.join(timeout=3)
+    assert run_error and "cancelled" in str(run_error[0])
+    assert control_result and control_result[0]["reaped"] is True
+    assert holder[0].calls == ["terminate", "cleanup"]
+
+
+def test_wrong_identity_and_repeated_control_are_deterministic(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    holder: list[Handle] = []
+
+    def factory(_p: PipEmbeddedProfile, _r: Any, staging: Path) -> Handle:
+        handle = Handle(staging, block=True)
+        handle.nonce = _r["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+
+    def run_once() -> None:
+        try:
+            session.run(workflow(), out_dir=Path(profile.output_root))
+        except RuntimeError:
+            pass
+
+    thread = threading.Thread(target=run_once)
+    thread.start()
+    while not holder:
+        time.sleep(0.01)
+    assert holder[0].started.wait(timeout=2)
     with pytest.raises(RuntimeError, match="identity mismatch"):
-        session.cancel(task_identity="task-b")
-    assert session.poisoned is True
-    handle.released.set()
-    thread.join(timeout=2)
+        session.cancel(task_identity="wrong")
+    holder[0].release.set()
+    thread.join(timeout=3)
+    assert session.poisoned
 
 
-def test_cancel_and_release_transition_exactly_once(tmp_path: Path) -> None:
-    handle = _BlockingHandle()
-    session = PipEmbeddedSession(
-        _profile(tmp_path),
-        execution_factory=lambda _profile, _workflow, _staging: handle,
+def test_output_symlink_and_partial_copy_rollback(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    session = PipEmbeddedSession(profile)
+    source = Path(profile.scratch_root) / "source"
+    source.mkdir()
+    (source / "good").write_bytes(b"good")
+    (source / "escape").symlink_to(tmp_path / "outside")
+    handle = type("OutputHandle", (), {"output_dir": source})()
+    result = _ChildResult(
+        "n",
+        "r",
+        None,
+        (("good", 4, file_digest(source / "good")), ("missing", 1, "sha256:" + "0" * 64)),
     )
-    thread = threading.Thread(target=session.run, args=("workflow",))
-    thread.start()
-    assert handle.started.wait(timeout=2)
-    assert session.cancel()["status"] == "cancelled"
-    thread.join(timeout=2)
-    assert handle.calls == ["terminate", "reap", "cleanup"]
-    assert session.release()["status"] == "cancelled"
-    assert handle.calls == ["terminate", "reap", "cleanup"]
+    with pytest.raises(ValueError):
+        session._collect_outputs(handle, result, Path(profile.output_root))
+    assert not list(Path(profile.output_root).glob("pip-embedded-*"))
+    with pytest.raises(ValueError):
+        session._collect_outputs(
+            handle,
+            _ChildResult("n", "r", None, (("escape", 1, "sha256:" + "0" * 64),)),
+            Path(profile.output_root),
+        )
 
 
-@pytest.mark.parametrize("failure_method", ["run", "reap", "cleanup"])
-def test_lifecycle_failure_poisons_session_and_requires_clean_cold_recovery(
-    tmp_path: Path, failure_method: str
+def test_real_child_transport_argv_env_pgid_and_reap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class FailingHandle(_BlockingHandle):
-        def run(self) -> str:
-            if failure_method == "run":
-                raise RuntimeError("run failed")
-            return "ok"
+    from astrid.core.generation.backends import vibecomfy as backend
 
-        def terminate(self) -> None:
-            super().terminate()
-            if failure_method == "terminate":
-                raise RuntimeError("terminate failed")
-
-        def reap(self) -> None:
-            super().reap()
-            if failure_method == "reap":
-                raise RuntimeError("reap failed")
-
-        def cleanup(self) -> None:
-            super().cleanup()
-            if failure_method == "cleanup":
-                raise RuntimeError("cleanup failed")
-
-    session = PipEmbeddedSession(
-        _profile(tmp_path),
-        execution_factory=lambda _profile, _workflow, _staging: FailingHandle(),
+    script = r"""import hashlib,json,os,time
+from pathlib import Path
+request=json.loads(Path(__import__("sys").argv[1]).read_text()); a=__import__("sys").argv
+ready={"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"ok":True,"interpreter":{"executable":__import__("sys").executable,"prefix":os.environ["VIRTUAL_ENV"],"version":"3.11.11"},"flags":["-I","-B"],"pythonpath":os.environ.get("PYTHONPATH"),"pgid":os.getpgid(os.getpid())}; Path(a[2]).write_text(json.dumps(ready,separators=(",",":")))
+while not Path(a[3]).exists(): time.sleep(.01)
+out=Path(request["config"]["extra"]["output_directory"]); out.mkdir(parents=True,exist_ok=True); p=out/"child.bin"; p.write_bytes(b"child"); payload={"schema":"astrid.vibecomfy.result.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"status":"succeeded","run_id":"child-run","prompt_id":None,"outputs":[{"relative_path":"child.bin","size_bytes":5,"sha256":"sha256:"+hashlib.sha256(b"child").hexdigest()}]}; Path(a[4]).write_text(json.dumps(payload,separators=(",",":")))"""
+    monkeypatch.setattr(backend, "_PIP_EMBEDDED_SCRIPT", script)
+    profile = make_profile(tmp_path)
+    staging = Path(profile.scratch_root) / "transport"
+    staging.mkdir()
+    handle = backend._SubprocessEmbeddedExecution(
+        profile,
+        {
+            "schema": "astrid.vibecomfy.request.v1",
+            "nonce": "transport",
+            "profile_digest": profile.profile_digest,
+            "workflow": {},
+            "workflow_digest": digest({}),
+        },
+        staging,
     )
-    if failure_method == "run":
-        with pytest.raises(RuntimeError, match="run failed"):
-            session.run("workflow")
-    else:
-        with pytest.raises(RuntimeError):
-            session.run("workflow")
-    assert session.poisoned is True
-    with pytest.raises(RuntimeError, match="new cold instance"):
-        session.run("retry")
-    recovered = PipEmbeddedSession(_profile(tmp_path), execution_factory=lambda *_args: FailingHandle())
-    assert recovered.poisoned is False
-
-
-def test_terminate_failure_poisons_cancel_and_requires_a_new_instance(tmp_path: Path) -> None:
-    class FailingTerminate(_BlockingHandle):
-        def terminate(self) -> None:
-            super().terminate()
-            raise RuntimeError("terminate failed")
-
-    handle = FailingTerminate()
-    session = PipEmbeddedSession(
-        _profile(tmp_path),
-        execution_factory=lambda _profile, _workflow, _staging: handle,
+    handle.start()
+    assert handle._process is not None and os.getpgid(handle._process.pid) == handle._process.pid
+    handle.wait_ready(2)
+    ready = json.loads(handle.ready_path.read_text())
+    assert (
+        ready["flags"] == ["-I", "-B"]
+        and ready["pythonpath"] is None
+        and ready["pgid"] == handle._process.pid
     )
-    thread = threading.Thread(target=session.run, args=("workflow",))
-    thread.start()
-    assert handle.started.wait(timeout=2)
-    with pytest.raises(RuntimeError, match="cleanup failed"):
-        session.cancel()
-    thread.join(timeout=2)
-    assert session.poisoned is True
+    handle.go()
+    assert handle.run(2).run_id == "child-run"
+    handle.terminate(1, 1, 1)
+    handle.cleanup()
 
 
-def test_backend_requires_typed_profile_and_validates_output_root(tmp_path: Path) -> None:
-    backend = VibeComfyBackend()
+def test_missing_profile_and_nonfinite_timeout_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="explicit PipEmbeddedProfile"):
-        backend._run_workflow(object())
-    session = PipEmbeddedSession(_profile(tmp_path))
+        VibeComfyBackend()._run_workflow(object())
+    with pytest.raises(ValueError):
+        PipEmbeddedTimeouts(execution_seconds=float("inf"))
+    session = PipEmbeddedSession(make_profile(tmp_path))
     with pytest.raises(ValueError, match="outside"):
         session.validate_output_dir(tmp_path / "elsewhere")
 
 
-def test_profile_command_has_no_download_or_backend_selector() -> None:
-    command = PipEmbeddedProfile.__dataclass_fields__
-    assert "python_executable" in command
-    # The executable command is deliberately a call description, not the
-    # legacy CLI and therefore carries no ensure/download/backend flags.
-    assert "--ensure-models" not in " ".join(("python", "-m", "vibecomfy.runtime.run", "run_sync"))
-    assert "--ensure-packs" not in " ".join(("python", "-m", "vibecomfy.runtime.run", "run_sync"))
-    assert "--backend" not in " ".join(("python", "-m", "vibecomfy.runtime.run", "run_sync"))
+def test_transport_is_strict_and_never_follows_result_symlinks(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text('{"ok":true}', encoding="utf-8")
+    link = tmp_path / "result.json"
+    link.symlink_to(target)
+    with pytest.raises(ValueError, match="safely openable"):
+        _strict_load_json(link, limit=1024)
+    with pytest.raises(ValueError, match="duplicate"):
+        duplicate = tmp_path / "duplicate.json"
+        duplicate.write_text('{"x":1,"x":2}', encoding="utf-8")
+        _strict_load_json(duplicate, limit=1024)
+    nested: object = "leaf"
+    for _ in range(66):
+        nested = [nested]
+    with pytest.raises(ValueError, match="nesting limit"):
+        _strict_json_value(nested)
+
+
+def test_destination_symlink_and_legacy_transport_are_rejected(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    session = PipEmbeddedSession(profile)
+    source = Path(profile.scratch_root) / "source"
+    source.mkdir()
+    output = source / "frame.bin"
+    output.write_bytes(b"frame")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination = Path(profile.output_root) / "alias"
+    destination.symlink_to(outside, target_is_directory=True)
+    handle = type("OutputHandle", (), {"output_dir": source})()
+    result = _ChildResult("n", "r", None, (("frame.bin", 5, file_digest(output)),))
+    with pytest.raises(ValueError, match="symlink"):
+        session._collect_outputs(handle, result, destination)
+    assert "run_embedded_sync" in _PIP_EMBEDDED_SCRIPT
+    assert "run_sync" not in _PIP_EMBEDDED_SCRIPT
+    assert "pickle" not in _PIP_EMBEDDED_SCRIPT

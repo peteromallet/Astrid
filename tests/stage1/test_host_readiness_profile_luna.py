@@ -180,9 +180,95 @@ def test_generic_host_forwards_exact_verified_facts(tmp_path: Path) -> None:
         client=runtime,
         readiness_profile_path=profile_path,
         readiness_profile_hash=profile_hash,
+        runtime_authority=True,
     )
     host.bind_readiness_profile(profile)
     host.discover()
     host.register()
     assert runtime.registration[1]["verified_facts"] == profile["verified_facts"]
     assert runtime.registration[1]["readiness"] == "ready"
+
+
+class _RuntimeAuthorityProbe:
+    worker_authority = True
+
+    def __init__(self, profile: dict[str, object]):
+        self.schema_digest = profile["runtime"]["schema_digest"]
+        self.registrations: list[object] = []
+        self.claims: list[object] = []
+
+    def health(self):
+        return {
+            "status": "ok",
+            "protocol": "workspace.v1",
+            "schema_digest": self.schema_digest,
+            "runtime_epoch": 1,
+        }
+
+    def register_capability(self, *_args, **_kwargs):
+        return None
+
+    def register_executor(self, *args, **kwargs):
+        self.registrations.append((args, kwargs))
+        return {"executor_id": args[0] if args else ""}
+
+    def claim_next(self, **kwargs):
+        self.claims.append(kwargs)
+        return None
+
+
+def test_runtime_host_requires_profile_before_registration_and_claim(tmp_path: Path) -> None:
+    context, _profile_path, _profile_hash = _fixture(tmp_path)
+    runtime = _RuntimeAuthorityProbe(_load(context, _profile_path, _profile_hash))
+    host = GenericPackHost(
+        pack_roots=[Path(context["pack_root"])],
+        client=runtime,
+        runtime_authority=True,
+    )
+
+    with pytest.raises(HostError, match="explicit Worker readiness profile path and hash"):
+        host.register()
+    with pytest.raises(HostError, match="explicit Worker readiness profile path and hash"):
+        host.claim_once()
+    assert runtime.registrations == []
+    assert runtime.claims == []
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    (
+        ("runtime", "port", 18766),
+        ("runtime", "credential_reference", "changed-worker.token"),
+        ("launch", "source_checkout", "/private/var/empty/changed-source"),
+    ),
+)
+def test_runtime_host_revalidates_nested_profile_against_immutable_context(
+    tmp_path: Path, section: str, key: str, value: object
+) -> None:
+    context, profile_path, profile_hash = _fixture(tmp_path)
+    profile = _load(context, profile_path, profile_hash)
+    runtime = _RuntimeAuthorityProbe(profile)
+    host = GenericPackHost(
+        pack_roots=[Path(context["pack_root"])],
+        client=runtime,
+        readiness_profile_path=profile_path,
+        readiness_profile_hash=profile_hash,
+        runtime_authority=True,
+    )
+    host.bind_readiness_profile(profile)
+    host.discover()
+
+    mutated = json.loads(profile_path.read_text(encoding="utf-8"))
+    mutated[section][key] = value
+    profile_path.write_text(json.dumps(mutated, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    profile_path.chmod(0o600)
+    # The supplied hash is recomputed, but the original validation context is
+    # intentionally immutable inside the host.
+    host.readiness_profile_hash = "sha256:" + hashlib.sha256(profile_path.read_bytes()).hexdigest()
+
+    with pytest.raises(HostError):
+        host.register()
+    with pytest.raises(HostError):
+        host.claim_once()
+    assert runtime.registrations == []
+    assert runtime.claims == []

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import hmac
 import importlib.util
@@ -86,6 +87,66 @@ _RUNTIME_SAFE_INTEGER_MAX = 2**53 - 1
 _PACK_HOST_SCOPES = (
     "handshake", "worker:register", "worker:execute", "tasks:read", "objects:read", "objects:write",
 )
+
+
+@dataclass(frozen=True)
+class _ReadinessValidationContext:
+    """Immutable launch context used for every host profile revalidation."""
+
+    support_root: str
+    source_checkout: str
+    pack_root: str
+    runtime_endpoint: str
+    runtime_instance_id: str
+    credential_path: str
+    ready_file: str
+    state_file: str
+    boot_manifest_path: str
+    boot_manifest_hash: str
+    host_interpreter: str
+
+    @classmethod
+    def from_profile(cls, profile: Mapping[str, Any]) -> "_ReadinessValidationContext":
+        try:
+            runtime = profile["runtime"]
+            launch = profile["launch"]
+            return cls(
+                support_root=str(launch["support_root"]),
+                source_checkout=str(launch["source_checkout"]),
+                pack_root=str(launch["pack_root"]),
+                runtime_endpoint=str(runtime["endpoint"]),
+                runtime_instance_id=str(runtime["runtime_instance_id"]),
+                credential_path=str(runtime["credential_reference"]),
+                ready_file=str(launch["ready_file"]),
+                state_file=str(launch["state_file"]),
+                boot_manifest_path=str(launch["boot_manifest_path"]),
+                boot_manifest_hash=str(launch["boot_manifest_hash"]),
+                host_interpreter=str(launch["host_interpreter"]),
+            )
+        except (KeyError, TypeError) as exc:
+            raise HostError("readiness profile launch context is incomplete") from exc
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "_ReadinessValidationContext":
+        try:
+            return cls(**{field: str(value[field]) for field in cls.__dataclass_fields__})
+        except (KeyError, TypeError) as exc:
+            raise HostError("readiness profile validation context is incomplete") from exc
+
+    def loader_kwargs(self) -> dict[str, str]:
+        return {
+            "support_root": self.support_root,
+            "source_checkout": self.source_checkout,
+            "pack_root": self.pack_root,
+            "runtime_endpoint": self.runtime_endpoint,
+            "runtime_instance_id": self.runtime_instance_id,
+            "credential_path": self.credential_path,
+            "ready_file": self.ready_file,
+            "state_file": self.state_file,
+            "boot_manifest_path": self.boot_manifest_path,
+            "boot_manifest_hash": self.boot_manifest_hash,
+            "host_interpreter": self.host_interpreter,
+        }
 
 
 def _profile_sha256(value: bytes) -> str:
@@ -981,13 +1042,14 @@ class RuntimeProtocolClient:
     # forbidden project association.
     INLINE_SETTLEMENT_OUTPUTS = True
 
-    def __init__(self, endpoint: str, credential: str, *, timeout: float = 30.0):
+    def __init__(self, endpoint: str, credential: str, *, timeout: float = 30.0, worker_authority: bool = False):
         try:
             self.endpoint = validate_runtime_endpoint(endpoint)
         except WorkspaceClientError as exc:
             raise HostError(f"runtime endpoint rejected: {exc}") from exc
         self.credential = credential
         self.timeout = timeout
+        self.worker_authority = bool(worker_authority)
         try:
             from banodoco_workspace_client import WorkspaceClient
             from banodoco_workspace_client.contract_metadata import SCHEMA_DIGEST
@@ -1220,6 +1282,8 @@ class GenericPackHost:
         boot_manifest_hash: str | None = None,
         readiness_profile_path: str | Path | None = None,
         readiness_profile_hash: str | None = None,
+        readiness_profile_context: Mapping[str, Any] | None = None,
+        runtime_authority: bool | None = None,
     ):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
@@ -1230,6 +1294,11 @@ class GenericPackHost:
                 configured_roots.append(Path(raw_root).expanduser().resolve())
         self.pack_roots = tuple(dict.fromkeys(configured_roots))
         self.client = client
+        self._runtime_authority = (
+            bool(runtime_authority)
+            if runtime_authority is not None
+            else bool(getattr(client, "worker_authority", False))
+        )
         self.executor_id = executor_id
         self.max_concurrency = max(1, int(max_concurrency))
         self.attempt_root = Path(attempt_root).expanduser().resolve() if attempt_root else None
@@ -1258,6 +1327,12 @@ class GenericPackHost:
         self.readiness_profile_path = Path(readiness_profile_path).expanduser() if readiness_profile_path else None
         self.readiness_profile_hash = readiness_profile_hash
         self.readiness_profile: dict[str, Any] | None = None
+        self._readiness_profile_context = (
+            _ReadinessValidationContext.from_mapping(readiness_profile_context)
+            if readiness_profile_context is not None
+            else None
+        )
+        self._expected_verified_facts: dict[str, Any] | None = None
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
@@ -1268,43 +1343,59 @@ class GenericPackHost:
 
     def bind_readiness_profile(self, profile: Mapping[str, Any]) -> None:
         """Bind the already verified Worker profile to this host instance."""
-        self.readiness_profile = dict(profile)
+        bound = copy.deepcopy(dict(profile))
+        context = _ReadinessValidationContext.from_profile(bound)
+        if self._readiness_profile_context is not None and self._readiness_profile_context != context:
+            raise HostError("readiness profile validation context changed after binding")
+        self._readiness_profile_context = self._readiness_profile_context or context
+        self.readiness_profile = bound
+        facts = bound.get("verified_facts")
+        self._expected_verified_facts = copy.deepcopy(facts) if isinstance(facts, Mapping) else None
 
     def _assert_readiness_profile(self) -> None:
+        if self._runtime_authority and (self.readiness_profile_path is None or self.readiness_profile_hash is None):
+            raise HostError("Runtime-backed GenericPackHost requires an explicit Worker readiness profile path and hash")
         if self.readiness_profile_path is None and self.readiness_profile_hash is None:
             return
         if self.readiness_profile_path is None or self.readiness_profile_hash is None:
             raise HostError("readiness profile path and hash must be bound together")
+        context = self._readiness_profile_context
+        if context is None:
+            if self.readiness_profile is None:
+                try:
+                    raw = self.readiness_profile_path.read_bytes()
+                    if not hmac.compare_digest(_profile_sha256(raw), self.readiness_profile_hash):
+                        raise HostError("readiness profile changed after verification")
+                    current = json.loads(raw.decode("utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise HostError("readiness profile became unavailable or malformed") from exc
+                if not isinstance(current, Mapping):
+                    raise HostError("readiness profile schema is invalid")
+                self.readiness_profile = copy.deepcopy(dict(current))
+            context = _ReadinessValidationContext.from_profile(self.readiness_profile)
+            self._readiness_profile_context = context
         try:
-            stat_result = self.readiness_profile_path.stat()
-            if (
-                not self.readiness_profile_path.is_absolute()
-                or self.readiness_profile_path.is_symlink()
-                or self.readiness_profile_path.resolve(strict=True) != self.readiness_profile_path
-                or stat_result.st_mode & 0o777 != 0o600
-                or (callable(getattr(os, "getuid", None)) and stat_result.st_uid != os.getuid())
-            ):
-                raise HostError("readiness profile ownership or canonical path changed")
-            raw = self.readiness_profile_path.read_bytes()
-        except OSError as exc:
-            raise HostError("readiness profile became unavailable") from exc
-        if not hmac.compare_digest(_profile_sha256(raw), self.readiness_profile_hash):
-            raise HostError("readiness profile changed after verification")
-        try:
-            current = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise HostError("readiness profile became malformed") from exc
-        if not isinstance(current, Mapping) or set(current) != _PROFILE_TOP_LEVEL_KEYS or current.get("status") != "ready":
-            raise HostError("readiness profile is not ready for tasks")
-        facts, digest = _validate_hc02_facts(current.get("verified_facts"))
-        if current.get("verified_facts_digest") != digest:
-            raise HostError("readiness profile verified_facts digest changed")
-        if self.readiness_profile is not None and facts != self.readiness_profile.get("verified_facts"):
+            credential_file = _owned_contained_file(
+                Path(context.credential_path),
+                Path(context.support_root),
+                label="Runtime credential",
+            )
+            credential = credential_file.read_text(encoding="utf-8").strip()
+            current = load_worker_readiness_profile(
+                self.readiness_profile_path,
+                self.readiness_profile_hash,
+                **context.loader_kwargs(),
+                credential=credential,
+            )
+        except (OSError, UnicodeDecodeError, HostError, TypeError, ValueError) as exc:
+            if isinstance(exc, HostError):
+                raise
+            raise HostError("readiness profile revalidation failed") from exc
+        facts = current["verified_facts"]
+        if self._expected_verified_facts is not None and facts != self._expected_verified_facts:
             raise HostError("readiness profile facts changed after verification")
-        if self.readiness_profile is None:
-            self.readiness_profile = dict(current)
-            self.readiness_profile["verified_facts"] = facts
-        if self.client is not None:
+        self.readiness_profile = current
+        if self._runtime_authority:
             validate_readiness_profile_health(current, self.client.health())
 
     def _track_process(self, process: subprocess.Popen) -> None:
@@ -3122,7 +3213,11 @@ def _cli() -> int:
     if args.readiness_profile_path or args.readiness_profile_hash:
         if not (args.readiness_profile_path and args.readiness_profile_hash and source_checkout and support_root and credential_path and args.runtime_endpoint and args.runtime_instance_id and args.ready_file):
             parser.error("readiness profile requires the complete Runtime host binding")
-    client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
+    client = (
+        RuntimeProtocolClient(args.runtime_endpoint, credential, worker_authority=True)
+        if args.runtime_endpoint
+        else None
+    )
     host = GenericPackHost(
         pack_roots=args.pack_root,
         client=client,
@@ -3134,6 +3229,7 @@ def _cli() -> int:
         boot_manifest_hash=boot_manifest_hash,
         readiness_profile_path=args.readiness_profile_path,
         readiness_profile_hash=args.readiness_profile_hash,
+        runtime_authority=bool(args.runtime_endpoint),
     )
     if args.readiness_profile_path:
         try:

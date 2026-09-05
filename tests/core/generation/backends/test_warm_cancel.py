@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import astrid.core.generation.backends.vibecomfy as backend_module
 from astrid.core.generation.backends.vibecomfy import (
     CheckoutServerAdapter,
     GenerationResult,
@@ -21,6 +22,39 @@ MODEL_DIGEST_B = "sha256:" + "b" * 64
 
 RUNTIME_A = "a1b2c3d4-e5f6-47ab-8c9d-0123456789ab"
 RUNTIME_B = "b2c3d4e5-f6a7-48bc-9d01-123456789abc"
+MODEL_DIGEST_C = "sha256:" + "c" * 64
+WARM_A = "sha256:" + "c" * 64
+PROFILE = {"profile": "warm-fixture", "engine": "pinned"}
+PROFILE_DIGEST = VibeComfyEngine._profile_identity(PROFILE, "profile")
+
+
+def _adapter() -> CheckoutServerAdapter:
+    binding = backend_module._CheckoutRuntimeBinding._fixture(
+        origin="http://gpu.example.test",
+        runtime_instance_id=RUNTIME_A,
+        checkout_root="/fixture/checkout",
+        listener_port=80,
+        profile_digest=PROFILE_DIGEST,
+    )
+    return CheckoutServerAdapter(
+        "http://gpu.example.test",
+        environment_fingerprint=PROFILE,
+        _managed_binding=binding,
+    )
+
+
+def _warmth(adapter: CheckoutServerAdapter, fingerprint: str, model: str = MODEL_DIGEST) -> str:
+    binding = adapter._managed_binding
+    assert binding is not None
+    return adapter.warmth_identity(
+        fingerprint=fingerprint,
+        model_bytes_digest=model,
+        environment_fingerprint=PROFILE,
+        server_url="http://gpu.example.test",
+        runtime_instance_id=binding.runtime_instance_id,
+        declared_root=binding.checkout_root,
+        declared_port=80,
+    )
 
 
 def _capture_error(target: list[BaseException], callback) -> None:
@@ -45,11 +79,11 @@ def test_runtime_identity_rejects_arbitrary_label() -> None:
 def _published_adapter(monkeypatch) -> CheckoutServerAdapter:
     _native_http(monkeypatch)
     _runtime(monkeypatch, GenerationResult(seed_used=1, model_actual="image/z_image"))
-    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter = _adapter()
     adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
     adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -65,7 +99,7 @@ def test_warm_session_probe_failure_fences_published_warmth(monkeypatch) -> None
     with pytest.raises(RuntimeError, match="probe down"):
         adapter.warm_session(
             "model-a",
-            "warm-a",
+            _warmth(adapter, "model-a"),
             runtime_instance_id=RUNTIME_A,
             model_bytes_digest=MODEL_DIGEST,
         )
@@ -76,7 +110,7 @@ def test_warm_session_probe_failure_fences_published_warmth(monkeypatch) -> None
     adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
     result = adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -88,21 +122,21 @@ def test_adapter_warm_session_reuses_published_warmth_and_recovers_cold(
 ) -> None:
     calls = _native_http(monkeypatch)
     _runtime(monkeypatch, GenerationResult(seed_used=1, model_actual="image/z_image"))
-    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter = _adapter()
     adapter._probe_system_stats = Mock(  # type: ignore[method-assign]
         side_effect=[None, None, RuntimeError("probe down"), None]
     )
 
     first = adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
     adapter._engine.run(object(), runtime_instance_id=RUNTIME_A)
     second = adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -115,7 +149,7 @@ def test_adapter_warm_session_reuses_published_warmth_and_recovers_cold(
     with pytest.raises(RuntimeError, match="probe down"):
         adapter.warm_session(
             "model-a",
-            "warm-a",
+            _warmth(adapter, "model-a"),
             runtime_instance_id=RUNTIME_A,
             model_bytes_digest=MODEL_DIGEST,
         )
@@ -129,7 +163,7 @@ def test_adapter_warm_session_reuses_published_warmth_and_recovers_cold(
 
     recovery = adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -172,10 +206,18 @@ def test_adapter_release_probe_failure_poison_clears_published_warmth(monkeypatc
 
 def test_warm_session_digest_change_cannot_reuse_warmth(monkeypatch) -> None:
     adapter = _published_adapter(monkeypatch)
+    adapter._managed_binding = backend_module._CheckoutRuntimeBinding._fixture(
+        origin="http://gpu.example.test",
+        runtime_instance_id=RUNTIME_A,
+        checkout_root="/fixture/checkout",
+        listener_port=80,
+        profile_digest=PROFILE_DIGEST,
+        model_bytes_digest=MODEL_DIGEST_B,
+    )
 
     second = adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a", MODEL_DIGEST_B),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST_B,
     )
@@ -211,7 +253,9 @@ def _native_http(monkeypatch, *, fail_paths: set[str] | None = None):
         calls.append((request.method, path, body))
         if path in failures:
             raise OSError(f"forced failure: {path}")
-        return _Response(b"{}")
+        response = _Response(b"{}")
+        response.headers = {"Content-Length": "2"}
+        return response
 
     monkeypatch.setattr(
         "astrid.core.generation.backends.vibecomfy._open_checkout_http",
@@ -231,11 +275,11 @@ def _runtime(monkeypatch, result: GenerationResult) -> Mock:
 
 def test_native_cancel_uses_pinned_api_free_and_allows_next_warm_session(monkeypatch) -> None:
     calls = _native_http(monkeypatch)
-    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter = _adapter()
     adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
     adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -259,7 +303,7 @@ def test_native_cancel_uses_pinned_api_free_and_allows_next_warm_session(monkeyp
     assert adapter.fence_pending is False
     assert adapter.warm_session(
         "model-a",
-        "warm-a",
+        _warmth(adapter, "model-a"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )["lifecycle"] == "cold"
@@ -282,7 +326,7 @@ def test_running_cancel_waits_for_remote_run_to_quiesce(monkeypatch) -> None:
     calls = _native_http(monkeypatch)
     engine = VibeComfyEngine("http://gpu.example.test")
     engine.prepare_session(
-        "model-a", runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
+        "model-a", WARM_A, runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
     )
 
     errors: list[BaseException] = []
@@ -318,7 +362,7 @@ def test_failed_cancel_poison_blocks_run_and_cold_prepare_proves_reset(monkeypat
     run_sync = _runtime(monkeypatch, GenerationResult(seed_used=11, model_actual="image/z_image"))
     engine = VibeComfyEngine("http://gpu.example.test")
     engine.prepare_session(
-        "model-a", runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
+        "model-a", WARM_A, runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
     )
 
     result = engine.cancel()
@@ -329,7 +373,7 @@ def test_failed_cancel_poison_blocks_run_and_cold_prepare_proves_reset(monkeypat
     assert engine.fence_pending is True
     with pytest.raises(RuntimeError, match="poisoned or fence-pending"):
         engine.prepare_session(
-            "model-a", runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
+            "model-a", WARM_A, runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
         )
     with pytest.raises(RuntimeError, match="poisoned or fence-pending"):
         engine.run(object(), runtime_instance_id=RUNTIME_A)
@@ -341,6 +385,7 @@ def test_failed_cancel_poison_blocks_run_and_cold_prepare_proves_reset(monkeypat
     failures.clear()
     cold = engine.prepare_session(
         "model-a",
+        WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
         cold=True,
@@ -364,7 +409,7 @@ def test_failed_release_poison_fences_prepare_until_cold_reset(monkeypatch) -> N
     _native_http(monkeypatch, fail_paths=failures)
     engine = VibeComfyEngine("http://gpu.example.test")
     engine.prepare_session(
-        "model-a", "warm-a", runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
+        "model-a", WARM_A, runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
     )
 
     result = engine.release(reason="idle drain")
@@ -375,14 +420,14 @@ def test_failed_release_poison_fences_prepare_until_cold_reset(monkeypatch) -> N
     with pytest.raises(RuntimeError):
         engine.warm_session(
             "model-a",
-            "warm-a",
+            WARM_A,
             runtime_instance_id=RUNTIME_A,
             model_bytes_digest=MODEL_DIGEST,
         )
     failures.clear()
     engine.warm_session(
         "model-a",
-        "warm-a",
+        WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
         cold=True,
@@ -413,6 +458,7 @@ def test_prepare_cannot_publish_warmth_during_inflight_cancel(monkeypatch) -> No
     with pytest.raises(RuntimeError, match="already in progress|poisoned or fence-pending"):
         engine.prepare_session(
             "model-a",
+            WARM_A,
             runtime_instance_id=RUNTIME_A,
             model_bytes_digest=MODEL_DIGEST,
         )
@@ -428,8 +474,7 @@ def test_run_preserves_vibecomfy_runresult_generation_result_contract(monkeypatc
     run_sync = _runtime(monkeypatch, result)
     engine = VibeComfyEngine("http://gpu.example.test")
     engine.prepare_session(
-        "model-a",
-        "warm-a",
+        "model-a", WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -437,7 +482,7 @@ def test_run_preserves_vibecomfy_runresult_generation_result_contract(monkeypatc
     cold_result = engine.run(object(), runtime_instance_id=RUNTIME_A)
     warm = engine.prepare_session(
         "model-a",
-        "warm-a",
+        WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -461,8 +506,7 @@ def test_post_release_subsequent_run_is_cold_and_executes(monkeypatch) -> None:
     engine = VibeComfyEngine("http://gpu.example.test")
 
     engine.prepare_session(
-        "model-a",
-        "warm-a",
+        "model-a", WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -470,7 +514,7 @@ def test_post_release_subsequent_run_is_cold_and_executes(monkeypatch) -> None:
     released = engine.release(reason="idle drain")
     reopened = engine.prepare_session(
         "model-a",
-        "warm-a",
+        WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -500,19 +544,26 @@ def test_model_byte_digest_isolation_for_same_model_id() -> None:
 def test_restarted_runtime_isolation_for_same_fingerprint(monkeypatch) -> None:
     calls = _native_http(monkeypatch)
     _runtime(monkeypatch, GenerationResult(seed_used=1, model_actual="image/z_image"))
-    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter = _adapter()
     adapter._probe_system_stats = Mock(side_effect=[None, None])  # type: ignore[method-assign]
 
     first = adapter.warm_session(
         "same-fingerprint",
-        "same-warmth",
+        _warmth(adapter, "same-fingerprint"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
     adapter._engine.run(object(), runtime_instance_id=RUNTIME_A)
+    adapter._managed_binding = backend_module._CheckoutRuntimeBinding._fixture(
+        origin="http://gpu.example.test",
+        runtime_instance_id=RUNTIME_B,
+        checkout_root="/fixture/checkout",
+        listener_port=80,
+        profile_digest=PROFILE_DIGEST,
+    )
     second = adapter.warm_session(
         "same-fingerprint",
-        "same-warmth",
+        _warmth(adapter, "same-fingerprint"),
         runtime_instance_id=RUNTIME_B,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -528,11 +579,11 @@ def test_restarted_runtime_isolation_for_same_fingerprint(monkeypatch) -> None:
 
 
 def test_warm_session_requires_model_digest_and_canonical_runtime_id(monkeypatch) -> None:
-    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter = _adapter()
     adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
-    with pytest.raises(ValueError, match="model_bytes_digest"):
+    with pytest.raises(ValueError, match="warmth_identity"):
         adapter.warm_session("model-a", runtime_instance_id=RUNTIME_A)
-    with pytest.raises(ValueError, match="canonical health/bootstrap"):
+    with pytest.raises(ValueError, match="warmth_identity"):
         adapter.warm_session(
             "model-a",
             runtime_instance_id="probe:" + "a" * 64,
@@ -545,7 +596,7 @@ def test_lone_free_does_not_clear_failed_containment_poison(monkeypatch) -> None
     calls = _native_http(monkeypatch, fail_paths=failures)
     engine = VibeComfyEngine("http://gpu.example.test")
     engine.prepare_session(
-        "model-a",
+        "model-a", WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )
@@ -559,7 +610,7 @@ def test_lone_free_does_not_clear_failed_containment_poison(monkeypatch) -> None
 
     failures.clear()
     engine.prepare_session(
-        "model-a",
+        "model-a", WARM_A,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
         cold=True,

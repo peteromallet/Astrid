@@ -4,7 +4,9 @@ import hashlib
 import io
 import json
 import sys
+import threading
 import types
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -22,8 +24,39 @@ from astrid.core.generation.backends.vibecomfy import (
 from astrid.core.model_catalog.schema import BackendSpec, ModelEntry, ModeSpec
 
 RUNTIME_A = "c3d4e5f6-a7b8-49cd-8e01-23456789abcd"
+PROFILE = {"profile": "checkout-fixture", "engine": "pinned"}
+PROFILE_DIGEST = backend_module.VibeComfyEngine._profile_identity(PROFILE, "profile")
 
 
+def _adapter(server_url: str, **kwargs: object) -> CheckoutServerAdapter:
+    origin = _validate_checkout_server_url(server_url)
+    binding = backend_module._CheckoutRuntimeBinding._fixture(
+        origin=origin,
+        runtime_instance_id=RUNTIME_A,
+        checkout_root="/fixture/checkout",
+        listener_port=backend_module._origin_port(origin),
+        profile_digest=PROFILE_DIGEST,
+    )
+    return CheckoutServerAdapter(
+        server_url,
+        environment_fingerprint=PROFILE,
+        _managed_binding=binding,
+        **kwargs,
+    )
+
+
+def _warmth(adapter: CheckoutServerAdapter, fingerprint: str, model: str = "sha256:" + "a" * 64) -> str:
+    binding = adapter._managed_binding
+    assert binding is not None
+    return adapter.warmth_identity(
+        fingerprint=fingerprint,
+        model_bytes_digest=model,
+        environment_fingerprint=PROFILE,
+        server_url=binding.origin,
+        runtime_instance_id=binding.runtime_instance_id,
+        declared_root=binding.checkout_root,
+        declared_port=binding.listener_port,
+    )
 class _Workflow:
     def __init__(self) -> None:
         self.metadata: dict[str, object] = {"unbound_inputs": {}}
@@ -39,6 +72,7 @@ class _Response(io.BytesIO):
     def __init__(self, body: bytes, *, payload: object | None = None) -> None:
         super().__init__(body)
         self._payload = payload
+        self.headers = {"Content-Length": str(len(body))}
 
     def __enter__(self) -> "_Response":
         return self
@@ -154,7 +188,7 @@ def test_repo_loader_requires_canonical_repo_record_and_verifies_hash(
     )
     calls = _patch_remote_open(monkeypatch)
     with patch.dict(sys.modules, modules):
-        adapter = CheckoutServerAdapter("HTTPS://GPU.EXAMPLE.TEST:8888/")
+        adapter = _adapter("HTTPS://GPU.EXAMPLE.TEST:8888/")
         generated = adapter.generate(
             entry=_entry(f"sha256:{digest}"),
             mode="t2i",
@@ -186,7 +220,7 @@ def test_repo_loader_rejects_wrong_hash_before_load(
     _patch_remote_open(monkeypatch)
     with patch.dict(sys.modules, modules):
         with pytest.raises(ValueError, match="sha256 pin"):
-            CheckoutServerAdapter("https://gpu.example.test").generate(
+            _adapter("https://gpu.example.test").generate(
                 entry=_entry("sha256:" + "0" * 64),
                 mode="t2i",
                 params={"prompt": "a cat"},
@@ -212,7 +246,7 @@ def test_repo_loader_rejects_non_category_record(
     _patch_remote_open(monkeypatch)
     with patch.dict(sys.modules, modules):
         with pytest.raises(ValueError, match="canonical repo template"):
-            CheckoutServerAdapter("https://gpu.example.test").generate(
+            _adapter("https://gpu.example.test").generate(
                 entry=_entry(f"sha256:{digest}"),
                 mode="t2i",
                 params={"prompt": "a cat"},
@@ -234,7 +268,7 @@ def test_repo_loader_rejects_dynamic_record(
     _patch_remote_open(monkeypatch)
     with patch.dict(sys.modules, modules):
         with pytest.raises(ValueError, match="canonical repo template"):
-            CheckoutServerAdapter("https://gpu.example.test").generate(
+            _adapter("https://gpu.example.test").generate(
                 entry=_entry(f"sha256:{digest}"),
                 mode="t2i",
                 params={"prompt": "a cat"},
@@ -267,7 +301,7 @@ def test_remote_output_custody_downloads_metadata_descriptors_atomically(
     from unittest.mock import patch
 
     with patch.dict(sys.modules, modules):
-        generated = CheckoutServerAdapter("https://GPU.EXAMPLE.TEST:8888/").generate(
+        generated = _adapter("https://GPU.EXAMPLE.TEST:8888/").generate(
             entry=_entry(f"sha256:{digest}"),
             mode="t2i",
             params={"prompt": "a cat"},
@@ -281,6 +315,7 @@ def test_remote_output_custody_downloads_metadata_descriptors_atomically(
     query = parse_qs(urlsplit(calls[2]).query, keep_blank_values=True)
     assert query == {"filename": ["remote.png"], "subfolder": [""], "type": ["output"]}
     assert generated.image_paths[0].read_bytes() == b"png"
+    assert generated.image_paths[0].parent.name.startswith("checkout-batch-")
     assert not list((tmp_path / "out").glob(".checkout-download-*"))
     assert modules["vibecomfy.runtime.run"].run_sync.call_args.kwargs == {
         "server_url": "https://gpu.example.test:8888"
@@ -312,7 +347,7 @@ def test_remote_output_custody_rejects_empty_or_malformed_descriptors(
 
     with patch.dict(sys.modules, modules):
         with pytest.raises(ValueError):
-            CheckoutServerAdapter("https://gpu.example.test").generate(
+            _adapter("https://gpu.example.test").generate(
                 entry=_entry(f"sha256:{digest}"),
                 mode="t2i",
                 params={"prompt": "a cat"},
@@ -387,7 +422,7 @@ def test_system_stats_probe_requires_exact_version_and_bounds_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = CheckoutServerAdapter("https://gpu.example.test")
+    adapter = _adapter("https://gpu.example.test")
     monkeypatch.setattr(
         backend_module,
         "_open_checkout_http",
@@ -446,7 +481,7 @@ def test_generate_requires_digest_and_canonical_runtime_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(sys.modules, "vibecomfy", types.ModuleType("vibecomfy"))
-    adapter = CheckoutServerAdapter("https://gpu.example.test")
+    adapter = _adapter("https://gpu.example.test")
     entry = _entry("sha256:" + "a" * 64)
     with pytest.raises(ValueError, match="model_bytes_digest"):
         adapter.generate(
@@ -471,7 +506,7 @@ def test_generate_rejects_unscoped_fingerprint_override(
 ) -> None:
     monkeypatch.setitem(sys.modules, "vibecomfy", types.ModuleType("vibecomfy"))
     with pytest.raises(ValueError, match="canonical session fingerprint"):
-        CheckoutServerAdapter("https://gpu.example.test").generate(
+        _adapter("https://gpu.example.test").generate(
             entry=_entry("sha256:" + "a" * 64),
             mode="t2i",
             params={"prompt": "a cat"},
@@ -489,7 +524,7 @@ def test_checkout_server_records_pinned_engine_contract() -> None:
 def test_generate_failure_discards_prepared_warmth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter = CheckoutServerAdapter("https://gpu.example.test")
+    adapter = _adapter("https://gpu.example.test")
     adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
     with patch.object(
         backend_module.VibeComfyBackend,
@@ -510,7 +545,7 @@ def test_generate_failure_discards_prepared_warmth(
     assert adapter._engine.last_warm_reused is False
     second = adapter._engine.prepare_session(
         "same-fingerprint",
-        "same-warmth",
+        "sha256:" + "c" * 64,
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest="sha256:" + "a" * 64,
     )
@@ -532,7 +567,7 @@ def test_remote_output_failure_poisons_and_cold_reset_recovers(
     result = SimpleNamespace(metadata_path=metadata_path)
     modules = _fake_vibe_modules(_Workflow(), result, record=record, discovery=object())
     calls = _patch_remote_open(monkeypatch)
-    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter = _adapter("http://gpu.example.test")
     with patch.dict(sys.modules, modules), patch.object(
         backend_module.CheckoutServerAdapter,
         "_collect_outputs",
@@ -552,6 +587,7 @@ def test_remote_output_failure_poisons_and_cold_reset_recovers(
 
     recovered = adapter.warm_session(
         "recovered",
+        _warmth(adapter, "recovered"),
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest="sha256:" + "a" * 64,
     )
@@ -562,3 +598,187 @@ def test_remote_output_failure_poisons_and_cold_reset_recovers(
         "/queue",
         "/api/free",
     ]
+
+
+def _prepared_adapter(monkeypatch: pytest.MonkeyPatch, *, fingerprint: str = "probe") -> CheckoutServerAdapter:
+    adapter = _adapter("http://gpu.example.test")
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter.warm_session(
+        fingerprint,
+        _warmth(adapter, fingerprint),
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest="sha256:" + "a" * 64,
+    )
+    return adapter
+
+
+def _output_metadata(tmp_path: Path) -> SimpleNamespace:
+    metadata_path = tmp_path / "metadata.json"
+    metadata_path.write_text(
+        json.dumps({"comfy_outputs": [{"filename": "x.png", "subfolder": "", "type": "output"}]}),
+        encoding="utf-8",
+    )
+    return SimpleNamespace(metadata_path=metadata_path)
+
+
+def test_correction_f01_omitted_warmth_identity_cannot_reuse_published_warmth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _prepared_adapter(monkeypatch)
+    engine = adapter._engine
+    engine._warm = True
+    engine._fingerprint = engine._prepared_fingerprint
+    engine._warmth_identity = engine._prepared_warmth_identity
+    engine._model_bytes_digest = engine._prepared_model_bytes_digest
+    engine._runtime_instance_id = engine._prepared_runtime_instance_id
+    engine._warm_declared_root = engine._prepared_declared_root
+    engine._warm_declared_port = engine._prepared_declared_port
+    with pytest.raises(ValueError, match="checkout_warmth_identity_incomplete"):
+        engine.prepare_session(
+            "probe", None, runtime_instance_id=RUNTIME_A, model_bytes_digest="sha256:" + "a" * 64
+        )
+    assert engine.warm is True
+    assert engine.last_warm_reused is False
+
+
+def test_correction_f02_secret_control_response_is_typed_and_not_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    response = _Response(b'{"nested":{"api_token":"CONTROL_SECRET_SENTINEL"}}')
+    monkeypatch.setattr(backend_module, "_open_checkout_http", lambda request, *, timeout: response)
+    with pytest.raises(ValueError) as caught:
+        adapter._engine._post("/queue", {"clear": True})
+    assert getattr(caught.value, "code", None) == "checkout_response_secret_shaped"
+    assert "CONTROL_SECRET_SENTINEL" not in str(caught.value)
+    assert "CONTROL_SECRET_SENTINEL" not in repr(caught.value.args)
+
+
+@pytest.mark.parametrize(
+    ("headers", "body"),
+    [
+        ({}, b"x"),
+        ({"Content-Length": "2"}, b"x"),
+        ({"Content-Length": ["1", "1"]}, b"x"),
+        ({"Content-Length": "1", "Transfer-Encoding": "chunked"}, b"x"),
+        ({"Content-Length": "1", "Content-Range": "bytes 0-0/1"}, b"x"),
+    ],
+)
+def test_correction_f03_view_requires_unambiguous_complete_framing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, object],
+    body: bytes,
+) -> None:
+    adapter = _prepared_adapter(monkeypatch)
+    result = _output_metadata(tmp_path)
+    response = _Response(body)
+    response.headers = headers
+    monkeypatch.setattr(backend_module, "_open_checkout_http", lambda request, *, timeout: response)
+    with pytest.raises(ValueError):
+        adapter._collect_outputs(result, tmp_path / "out")
+    assert not list((tmp_path / "out").glob("checkout-batch-*"))
+    assert adapter.poisoned is True
+
+
+def test_correction_f03_fragmented_exact_length_succeeds_and_deadline_expires(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _prepared_adapter(monkeypatch)
+    result = _output_metadata(tmp_path)
+
+    class Fragmented(_Response):
+        def read(self, size: int = -1) -> bytes:
+            return super().read(min(size, 1))
+
+    response = Fragmented(b"png")
+    response.headers = {"Content-Length": "3"}
+    monkeypatch.setattr(backend_module, "_open_checkout_http", lambda request, *, timeout: response)
+    paths = adapter._collect_outputs(result, tmp_path / "out")
+    assert paths[0].read_bytes() == b"png"
+    assert paths[0].parent.name.startswith("checkout-batch-")
+
+    slow = _Response(b"x")
+    slow.headers = {"Content-Length": "1"}
+    # The production reader's absolute deadline is exercised directly with a
+    # transport that never returns before the deadline.
+    with pytest.raises((TimeoutError, ValueError)):
+        backend_module._read_framed_response(slow, limit=8, timeout=0.0)
+
+
+def test_correction_f04_concurrent_publishers_have_one_atomic_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _prepared_adapter(monkeypatch)
+    second = _prepared_adapter(monkeypatch)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    metadata = _output_metadata(tmp_path)
+    monkeypatch.setattr(
+        backend_module,
+        "_open_checkout_http",
+        lambda request, *, timeout: _Response(b"png"),
+    )
+    barrier = threading.Barrier(2)
+    native = backend_module._publish_directory_noreplace
+
+    def gated(*args: object, **kwargs: object) -> None:
+        barrier.wait(timeout=2)
+        native(*args, **kwargs)
+
+    monkeypatch.setattr(backend_module, "_publish_directory_noreplace", gated)
+    outcomes: list[object] = []
+    def publish(adapter: CheckoutServerAdapter) -> None:
+        try:
+            outcomes.append(adapter._collect_outputs(metadata, out_dir))
+        except BaseException as exc:
+            outcomes.append(exc)
+    threads = [threading.Thread(target=publish, args=(first,)), threading.Thread(target=publish, args=(second,))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+    assert sum(isinstance(item, list) for item in outcomes) == 1, repr(outcomes)
+    conflicts = [item for item in outcomes if isinstance(item, ValueError)]
+    assert len(conflicts) == 1
+    assert getattr(conflicts[0], "code", None) == "publication_conflict"
+    batches = list(out_dir.glob("checkout-batch-*/x.png"))
+    assert len(batches) == 1 and batches[0].read_bytes() == b"png"
+
+
+def test_correction_f05_only_matching_independent_binding_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="checkout_runtime_binding_unproven"):
+        adapter.warm_session(
+            "probe",
+            "sha256:" + "c" * 64,
+            runtime_instance_id=RUNTIME_A,
+            model_bytes_digest="sha256:" + "a" * 64,
+        )
+    matching = _prepared_adapter(monkeypatch)
+    assert matching._engine.prepared_runtime_instance_id == RUNTIME_A
+    binding = matching._managed_binding
+    assert binding is not None
+    lie_root = "/caller/lie"
+    lied_warmth = matching.warmth_identity(
+        fingerprint="probe",
+        model_bytes_digest="sha256:" + "a" * 64,
+        environment_fingerprint=PROFILE,
+        server_url=binding.origin,
+        runtime_instance_id=binding.runtime_instance_id,
+        declared_root=lie_root,
+        declared_port=binding.listener_port,
+    )
+    with pytest.raises(ValueError, match="checkout_runtime_binding_mismatch"):
+        matching.warm_session(
+            "probe",
+            lied_warmth,
+            runtime_instance_id=RUNTIME_A,
+            model_bytes_digest="sha256:" + "a" * 64,
+            declared_root=lie_root,
+        )

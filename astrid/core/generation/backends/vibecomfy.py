@@ -209,6 +209,81 @@ _MAX_CHECKOUT_METADATA_BYTES = 1024 * 1024
 _MAX_CHECKOUT_RESPONSE_BYTES = 64 * 1024
 _MAX_CHECKOUT_OUTPUT_BYTES = 64 * 1024 * 1024
 _MAX_CHECKOUT_OUTPUT_COUNT = 1024
+_MAX_CHECKOUT_JSON_DEPTH = 64
+_MAX_CHECKOUT_JSON_NODES = 8192
+_MAX_CHECKOUT_JSON_STRING = 16 * 1024
+_CHECKOUT_BINDING_SOURCE = object()
+
+
+class _CheckoutProtocolError(ValueError):
+    """Fixed-code error for an untrusted checkout-server boundary."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckoutRuntimeBinding:
+    """Host-owned managed-session observations consumed by the adapter.
+
+    The private provenance marker is deliberately not serializable or
+    caller-selectable.  Production construction belongs to the host bootstrap
+    owner; ``_fixture`` is only an offline consumer-contract seam.
+    """
+
+    origin: str
+    runtime_instance_id: str
+    runtime_epoch: int
+    coordinator_epoch: int
+    engine_birth_id: str
+    engine_lifetime_id: str
+    checkout_root: str
+    listener_owner: str
+    listener_port: int
+    profile_digest: str
+    model_bytes_digest: str
+    transport_route: str
+    invocation_identity: str
+    engine_revision: str = VIBECOMFY_ENGINE_REVISION
+    comfyui_version: str = COMFYUI_VERSION
+    active: bool = True
+    _provenance: object = field(default=None, repr=False, compare=False)
+
+    @classmethod
+    def _fixture(
+        cls,
+        *,
+        origin: str,
+        runtime_instance_id: str,
+        checkout_root: str,
+        listener_port: int,
+        profile_digest: str,
+        model_bytes_digest: str = "sha256:" + "a" * 64,
+        invocation_identity: str = "fixture-invocation",
+        runtime_epoch: int = 1,
+        coordinator_epoch: int = 1,
+        engine_birth_id: str = "fixture-engine-birth-1",
+        engine_lifetime_id: str = "fixture-engine-life-1",
+        listener_owner: str = "fixture-managed-engine",
+    ) -> "_CheckoutRuntimeBinding":
+        """Create the bounded offline owner fixture, never a production fact."""
+        return cls(
+            origin=_validate_checkout_server_url(origin),
+            runtime_instance_id=VibeComfyEngine._runtime_identity(runtime_instance_id),
+            runtime_epoch=runtime_epoch,
+            coordinator_epoch=coordinator_epoch,
+            engine_birth_id=engine_birth_id,
+            engine_lifetime_id=engine_lifetime_id,
+            checkout_root=_normalize_remote_root(checkout_root),
+            listener_owner=listener_owner,
+            listener_port=listener_port,
+            profile_digest=profile_digest,
+            model_bytes_digest=model_bytes_digest,
+            transport_route=_validate_checkout_server_url(origin),
+            invocation_identity=invocation_identity,
+            _provenance=_CHECKOUT_BINDING_SOURCE,
+        )
 
 
 class _PipEmbeddedError(RuntimeError):
@@ -2864,6 +2939,15 @@ def _normalize_declared_root(value: str | Path | None) -> str | None:
     return str(path.resolve(strict=False))
 
 
+def _normalize_remote_root(value: str) -> str:
+    """Validate a producer-observed remote root lexically, without local IO."""
+    if not isinstance(value, str) or not value or not value.startswith("/"):
+        raise ValueError("checkout_server observed checkout root is invalid")
+    if "\\" in value or any(part in {"", ".", ".."} for part in value.split("/")[1:]):
+        raise ValueError("checkout_server observed checkout root is invalid")
+    return value.rstrip("/") or "/"
+
+
 def _origin_port(origin: str) -> int:
     parsed = urllib_parse.urlsplit(origin)
     return parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -2880,31 +2964,159 @@ def _normalize_declared_port(origin: str, value: int | None) -> int:
     return value
 
 
-def _read_response_bytes(response: Any, *, limit: int) -> bytes:
-    """Read a bounded response, checking an advertised length before bytes."""
+def _header_values(headers: Any, name: str) -> list[str]:
+    if headers is None:
+        return []
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        values = get_all(name)
+        if values is not None:
+            return [str(value) for value in values]
+    if isinstance(headers, Mapping):
+        for key, value in headers.items():
+            if str(key).lower() == name.lower():
+                if isinstance(value, (list, tuple)):
+                    return [str(item) for item in value]
+                return [str(value)]
+    get = getattr(headers, "get", None)
+    if callable(get):
+        value = get(name)
+        return [] if value is None else [str(value)]
+    return []
+
+
+def _read_framed_response(
+    response: Any,
+    *,
+    limit: int,
+    timeout: float,
+    require_length: bool = True,
+    sink: Any | None = None,
+    digest: Any | None = None,
+) -> bytes:
+    """Read one exact HTTP representation under an absolute monotonic deadline."""
     headers = getattr(response, "headers", None)
-    content_length = headers.get("Content-Length") if headers is not None else None
-    if content_length is not None:
-        try:
-            if int(content_length) > limit:
-                raise ValueError("checkout_server response is too large")
-        except (TypeError, ValueError) as exc:
-            if isinstance(exc, ValueError) and str(exc) == "checkout_server response is too large":
-                raise
-            raise ValueError("checkout_server response has an invalid content length") from exc
+    lengths = _header_values(headers, "Content-Length")
+    transfers = _header_values(headers, "Transfer-Encoding")
+    ranges = _header_values(headers, "Content-Range")
+    encodings = _header_values(headers, "Content-Encoding")
+    if transfers or ranges or any(value.strip().lower() not in {"", "identity"} for value in encodings):
+        raise ValueError("checkout_server response framing is ambiguous")
+    if not require_length and not lengths:
+        return b""
+    if len(lengths) != 1 or not re.fullmatch(r"[1-9][0-9]*", lengths[0].strip()):
+        raise ValueError("checkout_server response has invalid content length")
+    expected = int(lengths[0])
+    if expected > limit:
+        raise ValueError("checkout_server response is too large")
+    deadline = time.monotonic() + timeout
     chunks: list[bytes] = []
-    total = 0
-    while total <= limit:
-        chunk = response.read(min(1024 * 1024, limit + 1 - total))
-        if not chunk:
-            break
-        if not isinstance(chunk, bytes):
-            raise ValueError("checkout_server response did not return bytes")
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > limit:
-            raise ValueError("checkout_server response is too large")
+    received = 0
+    while received < expected:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("checkout_server response deadline expired")
+        chunk = response.read(min(1024 * 1024, expected - received))
+        if not isinstance(chunk, bytes) or not chunk:
+            raise ValueError("checkout_server response body is incomplete")
+        if len(chunk) > expected - received:
+            raise ValueError("checkout_server response body contradicts content length")
+        if sink is None:
+            chunks.append(chunk)
+        else:
+            written = sink.write(chunk)
+            if written != len(chunk):
+                raise ValueError("checkout_server response sink wrote incomplete bytes")
+        if digest is not None:
+            digest.update(chunk)
+        received += len(chunk)
+    if received != expected:
+        raise ValueError("checkout_server response body is incomplete")
+    if time.monotonic() > deadline:
+        raise TimeoutError("checkout_server response deadline expired")
     return b"".join(chunks)
+
+
+def _checkout_json(raw: bytes) -> Any:
+    """Strict, bounded, secret-rejecting decoder for checkout JSON responses."""
+    if len(raw) > _MAX_CHECKOUT_RESPONSE_BYTES:
+        raise _CheckoutProtocolError("checkout_response_malformed")
+    nodes = 0
+
+    def reject_constant(_value: str) -> Any:
+        raise _CheckoutProtocolError("checkout_response_malformed")
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise _CheckoutProtocolError("checkout_response_malformed")
+            result[key] = value
+        return result
+
+    try:
+        decoded = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
+    except _CheckoutProtocolError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise _CheckoutProtocolError("checkout_response_malformed") from None
+
+    def walk(value: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > _MAX_CHECKOUT_JSON_NODES or depth > _MAX_CHECKOUT_JSON_DEPTH:
+            raise _CheckoutProtocolError("checkout_response_malformed")
+        if isinstance(value, str):
+            if len(value) > _MAX_CHECKOUT_JSON_STRING:
+                raise _CheckoutProtocolError("checkout_response_malformed")
+            if _SECRET_VALUE_RE.search(value) or re.search(
+                r"(?i)bearer\s+[a-z0-9._~+/=-]+|-----begin [a-z ]+ key-----|https?://[^\s]*?(?:token|secret|password|credential|api[_-]?key)=",
+                value,
+            ):
+                raise _CheckoutProtocolError("checkout_response_secret_shaped")
+            return
+        if value is None or isinstance(value, (bool, int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise _CheckoutProtocolError("checkout_response_malformed")
+            return
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if not isinstance(key, str) or len(key) > _MAX_CHECKOUT_JSON_STRING:
+                    raise _CheckoutProtocolError("checkout_response_malformed")
+                normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+                if any(word in normalized for word in ("secret", "token", "password", "credential", "apikey", "privatekey")):
+                    raise _CheckoutProtocolError("checkout_response_secret_shaped")
+                walk(key, depth + 1)
+                walk(item, depth + 1)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item, depth + 1)
+            return
+        raise _CheckoutProtocolError("checkout_response_malformed")
+
+    walk(decoded, 0)
+    return decoded
+
+
+def _reject_secret_headers(headers: Any) -> None:
+    if headers is None:
+        return
+    items = getattr(headers, "items", None)
+    if not callable(items):
+        return
+    for key, value in items():
+        normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if any(word in normalized for word in ("secret", "token", "password", "credential", "apikey", "privatekey", "authorization")):
+            raise _CheckoutProtocolError("checkout_response_secret_shaped")
+        if _SECRET_VALUE_RE.search(str(value)) or re.search(
+            r"(?i)bearer\s+[a-z0-9._~+/=-]+|-----begin [a-z ]+ key-----|https?://[^\s]*?(?:token|secret|password|credential|api[_-]?key)=",
+            str(value),
+        ):
+            raise _CheckoutProtocolError("checkout_response_secret_shaped")
 
 
 def _load_json_bytes(raw: bytes, *, label: str) -> Any:
@@ -3373,7 +3585,7 @@ class VibeComfyEngine:
     def _warm_is_compatible(
         self,
         fingerprint: str,
-        warmth_identity: str | None,
+        warmth_identity: str,
         model_bytes_digest: str,
         runtime_instance_id: str,
         declared_root: str | None,
@@ -3383,7 +3595,8 @@ class VibeComfyEngine:
             self._warm
             and self._fingerprint == fingerprint
             and self._model_bytes_digest == model_bytes_digest
-            and (warmth_identity is None or self._warmth_identity in {None, warmth_identity})
+            and self._warmth_identity is not None
+            and self._warmth_identity == warmth_identity
             and self._runtime_instance_id == runtime_instance_id
             and self._warm_declared_root == declared_root
             and self._warm_declared_port == declared_port
@@ -3453,17 +3666,28 @@ class VibeComfyEngine:
                 paths = (("/interrupt", {}, "interrupt"), *paths)
         errors: list[str] = []
         results: dict[str, Any] = {}
+        binding_unavailable = False
+
+        def local_error(exc: BaseException) -> str:
+            code = getattr(exc, "code", None)
+            return code if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]+", code) else "checkout_transport_failed"
+
         try:
             if preflight is not None:
                 try:
                     preflight()
                 except BaseException as exc:
-                    errors.append(str(exc))
-            for path, payload, key in paths:
+                    code = local_error(exc)
+                    errors.append(code)
+                    binding_unavailable = code in {
+                        "checkout_runtime_binding_unproven",
+                        "checkout_runtime_binding_mismatch",
+                    }
+            for path, payload, key in () if binding_unavailable else paths:
                 try:
                     results[key] = self._post(path, payload)
                 except BaseException as exc:
-                    errors.append(str(exc))
+                    errors.append(local_error(exc))
             if not errors and running_at_start:
                 if not self._completion.wait(timeout=10.0):
                     errors.append("checkout_server run did not complete after containment")
@@ -3530,8 +3754,8 @@ class VibeComfyEngine:
     ) -> dict[str, Any]:
         """Fence incompatible warmth and report the lifecycle decision."""
         fingerprint = self._identity(fingerprint, "fingerprint")
-        if warmth_identity is not None:
-            warmth_identity = self._identity(warmth_identity, "warmth_identity")
+        if not isinstance(warmth_identity, str) or _SHA256_RE.fullmatch(warmth_identity) is None:
+            raise _CheckoutProtocolError("checkout_warmth_identity_incomplete")
         model_bytes = self._validate_model_bytes_digest(
             model_bytes_digest, model_digest, artifact_sha256
         )
@@ -3620,6 +3844,8 @@ class VibeComfyEngine:
         )
 
     def _post(self, path: str, payload: dict[str, Any]) -> Any:
+        if path not in {"/interrupt", "/queue", "/api/free"}:
+            raise _CheckoutProtocolError("checkout_endpoint_unavailable")
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         request = urllib_request.Request(
             f"{self._origin}{path}",
@@ -3631,19 +3857,24 @@ class VibeComfyEngine:
             with _open_checkout_http(request, timeout=10.0) as response:
                 status = getattr(response, "status", 200)
                 if not 200 <= status < 300:
-                    raise ValueError(f"checkout_server {path} returned a non-2xx status")
-                raw = _read_response_bytes(response, limit=_MAX_CHECKOUT_RESPONSE_BYTES)
-                if not raw:
-                    return {}
-                try:
-                    decoded = _load_json_bytes(raw, label=f"checkout_server {path} response")
-                    if not isinstance(decoded, dict):
-                        raise ValueError("control response must be an object")
-                    return decoded
-                except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError(f"checkout_server {path} response is malformed") from exc
-        except (OSError, urllib_error.URLError) as exc:
-            raise ValueError(f"checkout_server {path} request failed") from exc
+                    raise _CheckoutProtocolError("checkout_control_rejected")
+                _reject_secret_headers(getattr(response, "headers", None))
+                raw = _read_framed_response(
+                    response, limit=_MAX_CHECKOUT_RESPONSE_BYTES, timeout=10.0
+                )
+                decoded = _checkout_json(raw)
+                if not isinstance(decoded, dict) or set(decoded) - {"ok", "status"}:
+                    raise _CheckoutProtocolError("checkout_response_malformed")
+                if "ok" in decoded and not isinstance(decoded["ok"], bool):
+                    raise _CheckoutProtocolError("checkout_response_malformed")
+                if "status" in decoded and not isinstance(decoded["status"], str):
+                    raise _CheckoutProtocolError("checkout_response_malformed")
+                # Never project a remote control dictionary into lifecycle data.
+                return {}
+        except _CheckoutProtocolError:
+            raise
+        except (OSError, urllib_error.URLError, TimeoutError, ValueError):
+            raise _CheckoutProtocolError("checkout_transport_failed") from None
 
     def run(self, workflow: Any, *, runtime_instance_id: str | None = None) -> Any:
         """Run one workflow without allowing poisoned lifecycle reuse."""
@@ -3745,6 +3976,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
         environment_fingerprint: str | Mapping[str, Any] = "checkout_server",
         declared_root: str | Path | None = None,
         declared_port: int | None = None,
+        _managed_binding: _CheckoutRuntimeBinding | None = None,
     ) -> None:
         # Keep the validated origin private; the base class has no remote path.
         self._origin = _validate_checkout_server_url(server_url)
@@ -3761,6 +3993,12 @@ class CheckoutServerAdapter(VibeComfyBackend):
         self._system_stats_verified = False
         self._runtime_instance_id: str | None = None
         self._startup_probe_digest: str | None = None
+        self._managed_binding = _managed_binding
+        self._invocation_identity: str | None = None
+        self._admitted_runtime_instance_id: str | None = None
+        self._admitted_model_bytes_digest: str | None = None
+        self._admitted_declared_root: str | None = None
+        self._admitted_declared_port: int | None = None
 
     @property
     def runtime_instance_id(self) -> str | None:
@@ -3783,6 +4021,85 @@ class CheckoutServerAdapter(VibeComfyBackend):
     def declared_port(self) -> int:
         return self._declared_port
 
+    def _binding_for_operation(
+        self,
+        *,
+        runtime_instance_id: str,
+        model_bytes_digest: str,
+        environment_fingerprint: str,
+        declared_root: str | None,
+        declared_port: int,
+    ) -> _CheckoutRuntimeBinding:
+        binding = self._managed_binding
+        if (
+            not isinstance(binding, _CheckoutRuntimeBinding)
+            or binding._provenance is not _CHECKOUT_BINDING_SOURCE
+            or not binding.active
+        ):
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven")
+        try:
+            observed_id = VibeComfyEngine._runtime_identity(binding.runtime_instance_id)
+            observed_origin = _validate_checkout_server_url(binding.origin)
+            observed_route = _validate_checkout_server_url(binding.transport_route)
+            observed_root = _normalize_remote_root(binding.checkout_root)
+        except (TypeError, ValueError):
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven") from None
+        if environment_fingerprint == "checkout_server":
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven")
+        if (
+            observed_origin != self._origin
+            or observed_route != self._origin
+            or observed_id != runtime_instance_id
+            or observed_root != (declared_root or observed_root)
+            or binding.listener_port != declared_port
+            or binding.listener_port != _origin_port(self._origin)
+            or binding.profile_digest != environment_fingerprint
+            or binding.model_bytes_digest != model_bytes_digest
+        ):
+            raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
+        if (
+            isinstance(binding.runtime_epoch, bool)
+            or not isinstance(binding.runtime_epoch, int)
+            or binding.runtime_epoch <= 0
+            or isinstance(binding.coordinator_epoch, bool)
+            or not isinstance(binding.coordinator_epoch, int)
+            or binding.coordinator_epoch <= 0
+            or not binding.engine_birth_id.strip()
+            or not binding.engine_lifetime_id.strip()
+            or not binding.listener_owner.strip()
+            or binding.engine_revision != VIBECOMFY_ENGINE_REVISION
+            or binding.comfyui_version != COMFYUI_VERSION
+            or not binding.invocation_identity.strip()
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", model_bytes_digest)
+        ):
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven")
+        return binding
+
+    @staticmethod
+    def warmth_identity(
+        *,
+        fingerprint: str,
+        model_bytes_digest: str,
+        environment_fingerprint: str | Mapping[str, Any],
+        server_url: str,
+        runtime_instance_id: str,
+        declared_root: str,
+        declared_port: int,
+    ) -> str:
+        """Derive the complete, non-wildcard warmth identity."""
+        identity = {
+            "fingerprint": VibeComfyEngine._identity(fingerprint, "fingerprint"),
+            "model_bytes_digest": VibeComfyEngine._validate_model_bytes_digest(model_bytes_digest),
+            "environment": VibeComfyEngine._profile_identity(
+                environment_fingerprint, "environment_fingerprint"
+            ),
+            "origin": _validate_checkout_server_url(server_url),
+            "runtime_instance_id": VibeComfyEngine._runtime_identity(runtime_instance_id),
+            "declared_root": _normalize_remote_root(declared_root),
+            "declared_port": _normalize_declared_port(server_url, declared_port),
+        }
+        return _digest({"schema": "astrid.vibecomfy.warmth.v2", "identity": identity})
+
     def _probe_system_stats(self) -> None:
         """Verify the pinned ComfyUI version only.
 
@@ -3797,16 +4114,26 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 status = getattr(response, "status", 200)
                 if status != 200:
                     raise ValueError("checkout_server /system_stats returned a non-200 status")
-                body = _read_response_bytes(response, limit=_MAX_CHECKOUT_RESPONSE_BYTES)
-                payload = _load_json_bytes(body, label="checkout_server /system_stats response")
+                _reject_secret_headers(getattr(response, "headers", None))
+                body = _read_framed_response(
+                    response, limit=_MAX_CHECKOUT_RESPONSE_BYTES, timeout=5.0
+                )
+                payload = _checkout_json(body)
+        except _CheckoutProtocolError:
+            raise
         except ValueError:
             raise
-        except (OSError, urllib_error.URLError, UnicodeDecodeError) as exc:
-            raise ValueError("checkout_server /system_stats probe failed") from exc
+        except (OSError, urllib_error.URLError, TimeoutError):
+            raise _CheckoutProtocolError("checkout_transport_failed") from None
         if not isinstance(payload, dict):
             raise ValueError("checkout_server /system_stats response is not an object")
         system = payload.get("system")
-        if not isinstance(system, dict) or system.get("comfyui_version") != COMFYUI_VERSION:
+        if (
+            set(payload) != {"system"}
+            or not isinstance(system, dict)
+            or set(system) != {"comfyui_version"}
+            or system.get("comfyui_version") != COMFYUI_VERSION
+        ):
             raise ValueError(
                 f"checkout_server requires ComfyUI {COMFYUI_VERSION} according to /system_stats"
             )
@@ -3844,9 +4171,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 "port": _normalize_declared_port(origin, declared_port),
             },
         }
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        return _digest({"schema": "astrid.vibecomfy.session.v2", "identity": payload})
 
     def warm_session(
         self,
@@ -3857,14 +4182,15 @@ class CheckoutServerAdapter(VibeComfyBackend):
         model_bytes_digest: str | None = None,
         model_digest: str | None = None,
         artifact_sha256: str | None = None,
+        environment_fingerprint: str | Mapping[str, Any] | None = None,
         declared_root: str | Path | None = None,
         declared_port: int | None = None,
         cold: bool = False,
     ) -> dict[str, Any]:
-        """Fence warmth before probing caller-provided health and identity."""
+        """Fence warmth before probing the independently owned managed session."""
         fingerprint = VibeComfyEngine._identity(fingerprint, "fingerprint")
-        if warmth_identity is not None:
-            warmth_identity = VibeComfyEngine._identity(warmth_identity, "warmth_identity")
+        if not isinstance(warmth_identity, str) or _SHA256_RE.fullmatch(warmth_identity) is None:
+            raise _CheckoutProtocolError("checkout_warmth_identity_incomplete")
         model_bytes = VibeComfyEngine._validate_model_bytes_digest(
             model_bytes_digest, model_digest, artifact_sha256
         )
@@ -3873,14 +4199,35 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 "checkout_server runtime_instance_id is required from canonical health/bootstrap"
             )
         instance_id = VibeComfyEngine._runtime_identity(runtime_instance_id)
-        effective_root = (
-            self._declared_root
-            if declared_root is None
-            else _normalize_declared_root(declared_root)
-        )
+        environment = self._environment_fingerprint if environment_fingerprint is None else VibeComfyEngine._profile_identity(environment_fingerprint, "environment_fingerprint")
+        effective_root = self._declared_root if declared_root is None else _normalize_declared_root(declared_root)
         effective_port = _normalize_declared_port(
             self._origin, self._declared_port if declared_port is None else declared_port
         )
+        binding = self._binding_for_operation(
+            runtime_instance_id=instance_id,
+            model_bytes_digest=model_bytes,
+            environment_fingerprint=environment,
+            declared_root=effective_root,
+            declared_port=effective_port,
+        )
+        if effective_root is None:
+            effective_root = binding.checkout_root
+        expected_warmth = self.warmth_identity(
+            fingerprint=fingerprint,
+            model_bytes_digest=model_bytes,
+            environment_fingerprint=environment,
+            server_url=self._origin,
+            runtime_instance_id=instance_id,
+            declared_root=effective_root,
+            declared_port=effective_port,
+        )
+        if warmth_identity != expected_warmth:
+            raise _CheckoutProtocolError("checkout_warmth_identity_mismatch")
+        self._admitted_runtime_instance_id = instance_id
+        self._admitted_model_bytes_digest = model_bytes
+        self._admitted_declared_root = effective_root
+        self._admitted_declared_port = effective_port
         with self._engine._lock:
             was_blocked = self._engine._poisoned or self._engine._fence_pending
             requires_cold_reset = self._engine._prepare_for_warm_session()
@@ -3968,26 +4315,49 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 environment_fingerprint, "environment_fingerprint"
             )
         )
+        effective_root = self._declared_root if declared_root is None else _normalize_declared_root(declared_root)
+        effective_port = _normalize_declared_port(
+            self._origin, self._declared_port if declared_port is None else declared_port
+        )
+        binding = self._binding_for_operation(
+            runtime_instance_id=instance_id,
+            model_bytes_digest=model_bytes,
+            environment_fingerprint=environment,
+            declared_root=effective_root,
+            declared_port=effective_port,
+        )
+        if effective_root is None:
+            effective_root = binding.checkout_root
         canonical_fingerprint = self.session_fingerprint(
             model_fingerprint=model_fingerprint,
             model_bytes_digest=model_bytes,
             environment_fingerprint=environment,
             server_url=self._origin,
             runtime_instance_id=instance_id,
-            declared_root=self._declared_root if declared_root is None else declared_root,
-            declared_port=self._declared_port if declared_port is None else declared_port,
+            declared_root=effective_root,
+            declared_port=effective_port,
         )
         if fingerprint is not None and fingerprint != canonical_fingerprint:
             raise ValueError("checkout_server fingerprint must equal canonical session fingerprint")
         effective_fingerprint = canonical_fingerprint
         if warmth_identity is None:
-            warmth_identity = f"{model_fingerprint}:{model_bytes}:{environment}"
+            warmth_identity = self.warmth_identity(
+                fingerprint=effective_fingerprint,
+                model_bytes_digest=model_bytes,
+                environment_fingerprint=environment,
+                server_url=self._origin,
+                runtime_instance_id=instance_id,
+                declared_root=effective_root,
+                declared_port=effective_port,
+            )
+        self._invocation_identity = binding.invocation_identity
         try:
             self.warm_session(
                 effective_fingerprint,
                 warmth_identity,
                 runtime_instance_id=instance_id,
                 model_bytes_digest=model_bytes,
+                environment_fingerprint=environment,
                 declared_root=declared_root,
                 declared_port=declared_port,
             )
@@ -4006,19 +4376,48 @@ class CheckoutServerAdapter(VibeComfyBackend):
 
     def cancel(self, frame: object | None = None) -> dict[str, Any]:
         """Fence native work before probing or settling host cancellation."""
-        return self._engine.cancel(frame, preflight=self._probe_system_stats)
+        return self._engine.cancel(frame, preflight=self._bound_preflight)
 
     def release(self, frame: object | None = None, *, reason: str = "requested") -> dict[str, Any]:
         """Fence native state before probing and mark the adapter cold."""
         return self._engine.release(
             frame,
             reason=reason,
-            preflight=self._probe_system_stats,
+            preflight=self._bound_preflight,
         )
+
+    def _bound_preflight(self) -> None:
+        prepared_id = self._admitted_runtime_instance_id or self._engine.runtime_instance_id
+        prepared_model = self._admitted_model_bytes_digest or self._engine.model_bytes_digest
+        prepared_root = self._admitted_declared_root or self._engine.prepared_declared_root or self._declared_root
+        prepared_port = self._admitted_declared_port or self._engine.prepared_declared_port or self._declared_port
+        if prepared_id is None or prepared_model is None:
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven")
+        self._binding_for_operation(
+            runtime_instance_id=prepared_id,
+            model_bytes_digest=prepared_model,
+            environment_fingerprint=self._environment_fingerprint,
+            declared_root=prepared_root,
+            declared_port=prepared_port,
+        )
+        self._probe_system_stats()
 
     def _run_workflow(self, workflow: Any) -> Any:
         """Probe version and submit with the canonical runtime identity."""
         self._origin = _validate_checkout_server_url(self._origin)
+        prepared_id = self._engine.prepared_runtime_instance_id
+        prepared_model = self._engine.prepared_model_bytes_digest
+        prepared_root = self._engine.prepared_declared_root
+        prepared_port = self._engine.prepared_declared_port
+        if prepared_id is None or prepared_model is None or prepared_port is None:
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven")
+        self._binding_for_operation(
+            runtime_instance_id=prepared_id,
+            model_bytes_digest=prepared_model,
+            environment_fingerprint=self._environment_fingerprint,
+            declared_root=prepared_root,
+            declared_port=prepared_port,
+        )
         try:
             self._probe_system_stats()
         except BaseException:
@@ -4035,7 +4434,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
         return self._engine.run(workflow, runtime_instance_id=instance_id)
 
     def _collect_outputs(self, result: Any, out_dir: Path) -> list[Path]:
-        """Custody remote outputs through validated Comfy ``/view`` downloads."""
+        """Collect one complete output batch and commit it atomically."""
         metadata_path = getattr(result, "metadata_path", None)
         if not isinstance(metadata_path, (str, Path)) or not str(metadata_path):
             raise ValueError("checkout_server result has no metadata_path")
@@ -4075,93 +4474,196 @@ class CheckoutServerAdapter(VibeComfyBackend):
         if out_dir.is_symlink() or not out_dir.is_dir():
             raise ValueError("checkout_server output directory is not owned")
 
-        image_paths: list[Path] = []
-        staged: list[tuple[Path, Path]] = []
-        published: list[Path] = []
-        total_bytes = 0
+        prepared_id = self._engine.runtime_instance_id
+        prepared_model = self._engine.model_bytes_digest
+        prepared_root = self._engine.prepared_declared_root or self._declared_root
+        prepared_port = self._engine.prepared_declared_port or self._declared_port
+        if prepared_id is None or prepared_model is None:
+            raise _CheckoutProtocolError("checkout_runtime_binding_unproven")
+        binding = self._binding_for_operation(
+            runtime_instance_id=prepared_id,
+            model_bytes_digest=prepared_model,
+            environment_fingerprint=self._environment_fingerprint,
+            declared_root=prepared_root,
+            declared_port=prepared_port,
+        )
+        names: list[str] = []
+        descriptors_by_name: list[tuple[str, str, str]] = []
+        for descriptor in descriptors:
+            validated = _validate_output_descriptor(descriptor)
+            if validated[0] in names:
+                raise ValueError("checkout_server output descriptors contain duplicate filenames")
+            names.append(validated[0])
+            descriptors_by_name.append(validated)
+
         try:
-            for descriptor in descriptors:
-                filename, subfolder, output_type = _validate_output_descriptor(descriptor)
+            destination_fd = os.open(
+                out_dir,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+            )
+        except OSError:
+            raise _CheckoutProtocolError("checkout_output_destination_unavailable") from None
+        staging_name = f".checkout-stage-{uuid.uuid4().hex}"
+        batch_name = "checkout-batch-" + _digest({"invocation": binding.invocation_identity})[7:39]
+        staging_fd = -1
+        staging_identity: tuple[int, int] | None = None
+        cleanup_allowed = True
+        committed = False
+        try:
+            os.mkdir(staging_name, 0o700, dir_fd=destination_fd)
+            staging_fd = os.open(
+                staging_name,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                dir_fd=destination_fd,
+            )
+            stage_info = os.fstat(staging_fd)
+            staging_identity = (stage_info.st_dev, stage_info.st_ino)
+            if stat.S_IFMT(stage_info.st_mode) != stat.S_IFDIR or stage_info.st_nlink < 2:
+                raise _CheckoutProtocolError("checkout_staging_unowned")
+
+            total_bytes = 0
+            collection_deadline = time.monotonic() + 30.0
+            manifest_outputs: list[dict[str, Any]] = []
+            for filename, subfolder, output_type in descriptors_by_name:
                 query = urllib_parse.urlencode(
                     {"filename": filename, "subfolder": subfolder, "type": output_type}
                 )
-                request = urllib_request.Request(f"{self._origin}/view?{query}", method="GET")
-                destination = out_dir / filename
-                if destination.is_symlink():
-                    raise ValueError("checkout_server output destination is a symlink")
-                if destination.exists():
-                    stem = destination.stem
-                    suffix = destination.suffix
-                    counter = 1
-                    while destination.exists():
-                        destination = out_dir / f"{stem}_{counter}{suffix}"
-                        counter += 1
-                temporary_path: Path | None = None
+                request = urllib_request.Request(
+                    f"{self._origin}/view?{query}",
+                    headers={"Accept-Encoding": "identity"},
+                    method="GET",
+                )
                 try:
-                    with _open_checkout_http(request, timeout=30.0) as response:
-                        status = getattr(response, "status", 200)
-                        if status != 200:
-                            raise ValueError("checkout_server /view returned a non-200 status")
-                        with tempfile.NamedTemporaryFile(
-                            mode="wb",
-                            dir=out_dir,
-                            prefix=".checkout-download-",
-                            delete=False,
-                        ) as temporary:
-                            temporary_path = Path(temporary.name)
-                            while True:
-                                remaining = _MAX_CHECKOUT_OUTPUT_BYTES - total_bytes
-                                if remaining < 0:
-                                    raise ValueError("checkout_server output bytes are too large")
-                                chunk = response.read(min(1024 * 1024, remaining + 1))
-                                if not chunk:
-                                    break
-                                if not isinstance(chunk, bytes):
-                                    raise ValueError("checkout_server output response is malformed")
-                                total_bytes += len(chunk)
-                                if total_bytes > _MAX_CHECKOUT_OUTPUT_BYTES:
-                                    raise ValueError("checkout_server output bytes are too large")
-                                temporary.write(chunk)
-                            temporary.flush()
-                            os.fsync(temporary.fileno())
-                    staged.append((temporary_path, destination))
-                    temporary_path = None
-                except (OSError, urllib_error.URLError) as exc:
-                    raise ValueError(
-                        f"checkout_server could not download output {filename!r}"
-                    ) from exc
-                finally:
-                    if temporary_path is not None:
+                    remaining_deadline = collection_deadline - time.monotonic()
+                    if remaining_deadline <= 0:
+                        raise _CheckoutProtocolError("checkout_output_deadline_expired")
+                    with _open_checkout_http(request, timeout=remaining_deadline) as response:
+                        if getattr(response, "status", 200) != 200:
+                            raise _CheckoutProtocolError("checkout_output_rejected")
+                        _reject_secret_headers(getattr(response, "headers", None))
+                        headers = getattr(response, "headers", None)
+                        lengths = _header_values(headers, "Content-Length")
+                        if len(lengths) != 1 or not re.fullmatch(r"[1-9][0-9]*", lengths[0].strip()):
+                            raise _CheckoutProtocolError("checkout_output_framing_invalid")
+                        expected = int(lengths[0])
+                        if expected > _MAX_CHECKOUT_OUTPUT_BYTES or total_bytes + expected > _MAX_CHECKOUT_OUTPUT_BYTES:
+                            raise _CheckoutProtocolError("checkout_output_too_large")
+                        fd = os.open(
+                            filename,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                            0o600,
+                            dir_fd=staging_fd,
+                        )
                         try:
-                            temporary_path.unlink()
-                        except FileNotFoundError:
-                            pass
-        except BaseException:
-            for temporary_path, _destination in staged:
-                try:
-                    temporary_path.unlink()
-                except FileNotFoundError:
-                    pass
-            raise
-        try:
-            for temporary_path, destination in staged:
-                if destination.exists() or destination.is_symlink():
-                    raise ValueError("checkout_server output destination changed during publication")
-                os.replace(temporary_path, destination)
-                published.append(destination)
-                image_paths.append(destination)
-        except BaseException:
-            for destination in published:
-                try:
-                    destination.unlink()
-                except FileNotFoundError:
-                    pass
-            raise
-        finally:
-            for temporary_path, _destination in staged:
-                if temporary_path.exists():
+                            with os.fdopen(fd, "wb", closefd=True) as sink:
+                                fd = -1
+                                digest_state = hashlib.sha256()
+                                _read_framed_response(
+                                    response,
+                                    limit=_MAX_CHECKOUT_OUTPUT_BYTES - total_bytes,
+                                    timeout=remaining_deadline,
+                                    sink=sink,
+                                    digest=digest_state,
+                                )
+                                sink.flush()
+                                os.fsync(sink.fileno())
+                            info = os.stat(filename, dir_fd=staging_fd, follow_symlinks=False)
+                            if stat.S_IFMT(info.st_mode) != stat.S_IFREG or info.st_nlink != 1 or info.st_size != expected:
+                                raise _CheckoutProtocolError("checkout_staging_unowned")
+                        finally:
+                            if fd >= 0:
+                                os.close(fd)
+                    digest = "sha256:" + digest_state.hexdigest()
+                    total_bytes += expected
+                    manifest_outputs.append(
+                        {"filename": filename, "size_bytes": expected, "sha256": digest}
+                    )
+                except _CheckoutProtocolError:
+                    raise
+                except (OSError, urllib_error.URLError, TimeoutError, ValueError):
+                    raise _CheckoutProtocolError("checkout_transport_failed") from None
+
+            manifest = _canonical_json(
+                {
+                    "schema": "astrid.vibecomfy.output-batch.v1",
+                    "invocation_identity": binding.invocation_identity,
+                    "outputs": manifest_outputs,
+                }
+            ).encode("utf-8")
+            if len(manifest) > _MAX_CHECKOUT_METADATA_BYTES:
+                raise _CheckoutProtocolError("checkout_output_metadata_too_large")
+            manifest_fd = os.open(
+                ".manifest.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=staging_fd,
+            )
+            try:
+                os.write(manifest_fd, manifest)
+                os.fsync(manifest_fd)
+            finally:
+                os.close(manifest_fd)
+            os.fsync(staging_fd)
+
+            # The native rename is the commit point.  Nothing may clean the
+            # retained staging namespace after entering it.
+            self._binding_for_operation(
+                runtime_instance_id=prepared_id,
+                model_bytes_digest=prepared_model,
+                environment_fingerprint=self._environment_fingerprint,
+                declared_root=prepared_root,
+                declared_port=prepared_port,
+            )
+            cleanup_allowed = False
+            try:
+                _publish_directory_noreplace(
+                    destination_fd, staging_name, destination_fd, batch_name
+                )
+            except FileExistsError:
+                cleanup_allowed = True
+                raise _CheckoutProtocolError("publication_conflict")
+            except _CheckoutProtocolError:
+                raise
+            except BaseException:
+                raise _CheckoutProtocolError("publication_indeterminate") from None
+            committed = True
+            try:
+                os.fsync(destination_fd)
+            except OSError:
+                raise _CheckoutProtocolError("publication_committed_durability_unconfirmed") from None
+            batch_path = out_dir / batch_name
+            return [batch_path / filename for filename in names]
+        except BaseException as exc:
+            if isinstance(exc, _CheckoutProtocolError) and exc.code == "publication_conflict":
+                if staging_identity is not None:
                     try:
-                        temporary_path.unlink()
-                    except FileNotFoundError:
-                        pass
-        return image_paths
+                        _remove_tree_at(
+                            destination_fd,
+                            staging_name,
+                            timeout=5.0,
+                            expected=staging_identity,
+                        )
+                    except (OSError, ValueError, TimeoutError):
+                        raise _CheckoutProtocolError("checkout_staging_cleanup_pending") from None
+            elif cleanup_allowed and not committed and staging_identity is not None:
+                try:
+                    _remove_tree_at(
+                        destination_fd,
+                        staging_name,
+                        timeout=5.0,
+                        expected=staging_identity,
+                    )
+                except (OSError, ValueError, TimeoutError):
+                    raise _CheckoutProtocolError("checkout_staging_cleanup_pending") from None
+            if isinstance(exc, _CheckoutProtocolError):
+                if exc.code != "publication_conflict":
+                    with self._engine._lock:
+                        self._engine._poison()
+                raise
+            with self._engine._lock:
+                self._engine._poison()
+            raise _CheckoutProtocolError("checkout_output_failed") from None
+        finally:
+            if staging_fd >= 0:
+                os.close(staging_fd)
+            os.close(destination_fd)

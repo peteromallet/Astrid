@@ -4,6 +4,7 @@ import io
 import json
 import sys
 import threading
+import time
 import types
 from unittest.mock import Mock
 
@@ -20,6 +21,13 @@ MODEL_DIGEST_B = "sha256:" + "b" * 64
 
 RUNTIME_A = "a1b2c3d4-e5f6-47ab-8c9d-0123456789ab"
 RUNTIME_B = "b2c3d4e5-f6a7-48bc-9d01-123456789abc"
+
+
+def _capture_error(target: list[BaseException], callback) -> None:
+    try:
+        callback()
+    except BaseException as exc:
+        target.append(exc)
 
 
 def test_runtime_identity_rejects_arbitrary_label() -> None:
@@ -255,6 +263,53 @@ def test_native_cancel_uses_pinned_api_free_and_allows_next_warm_session(monkeyp
         runtime_instance_id=RUNTIME_A,
         model_bytes_digest=MODEL_DIGEST,
     )["lifecycle"] == "cold"
+
+
+def test_running_cancel_waits_for_remote_run_to_quiesce(monkeypatch) -> None:
+    entered = threading.Event()
+    allow_run = threading.Event()
+    run_sync = Mock(
+        side_effect=lambda _workflow, **_kwargs: (
+            entered.set(),
+            allow_run.wait(timeout=2),
+            GenerationResult(seed_used=1, model_actual="image/z_image"),
+        )[-1]
+    )
+    runtime = types.ModuleType("vibecomfy.runtime.run")
+    runtime.run_sync = run_sync  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vibecomfy.runtime.run", runtime)
+    monkeypatch.setitem(sys.modules, "vibecomfy", types.ModuleType("vibecomfy"))
+    calls = _native_http(monkeypatch)
+    engine = VibeComfyEngine("http://gpu.example.test")
+    engine.prepare_session(
+        "model-a", runtime_instance_id=RUNTIME_A, model_bytes_digest=MODEL_DIGEST
+    )
+
+    errors: list[BaseException] = []
+    run_thread = threading.Thread(
+        target=lambda: _capture_error(errors, lambda: engine.run(object(), runtime_instance_id=RUNTIME_A))
+    )
+    run_thread.start()
+    assert entered.wait(timeout=2)
+
+    cancel_result: list[dict[str, object]] = []
+    cancel_thread = threading.Thread(target=lambda: cancel_result.append(engine.cancel()))
+    cancel_thread.start()
+    time.sleep(0.05)
+    assert cancel_thread.is_alive()
+    allow_run.set()
+    cancel_thread.join(timeout=2)
+    run_thread.join(timeout=2)
+
+    assert not errors
+    assert cancel_result and cancel_result[0]["ok"] is True
+    assert [path for _method, path, _body in calls] == [
+        "/interrupt",
+        "/queue",
+        "/api/free",
+    ]
+    assert engine.poisoned is False
+    assert engine.fence_pending is False
 
 
 def test_failed_cancel_poison_blocks_run_and_cold_prepare_proves_reset(monkeypatch) -> None:

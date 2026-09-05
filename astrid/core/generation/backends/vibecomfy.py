@@ -198,10 +198,17 @@ _SECRET_KEY_WORDS = (
     "api_key",
     "private_key",
 )
+_SECRET_VALUE_RE = re.compile(
+    r"(?:secret|token|password|credential|api[_-]?key)\s*[:=]", re.IGNORECASE
+)
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _MAX_JSON_BYTES = 16 * 1024 * 1024
 _MAX_RESULT_BYTES = 1024 * 1024
 _MAX_OUTPUT_BYTES = 16 * 1024 * 1024 * 1024
+_MAX_CHECKOUT_METADATA_BYTES = 1024 * 1024
+_MAX_CHECKOUT_RESPONSE_BYTES = 64 * 1024
+_MAX_CHECKOUT_OUTPUT_BYTES = 64 * 1024 * 1024
+_MAX_CHECKOUT_OUTPUT_COUNT = 1024
 
 
 class _PipEmbeddedError(RuntimeError):
@@ -2842,6 +2849,82 @@ def _parse_resolution(res: str) -> tuple[int, int] | None:
     return parse_dimension_pair(res)
 
 
+def _normalize_declared_root(value: str | Path | None) -> str | None:
+    """Normalize an explicitly declared host root without discovering one."""
+    if value is None:
+        return None
+    if not isinstance(value, (str, Path)) or not str(value).strip():
+        raise ValueError("checkout_server declared_root must be a non-empty absolute path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError("checkout_server declared_root must be an absolute path")
+    _reject_symlink_ancestors(path)
+    if path.is_symlink():
+        raise ValueError("checkout_server declared_root must not be a symlink")
+    return str(path.resolve(strict=False))
+
+
+def _origin_port(origin: str) -> int:
+    parsed = urllib_parse.urlsplit(origin)
+    return parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
+def _normalize_declared_port(origin: str, value: int | None) -> int:
+    expected = _origin_port(origin)
+    if value is None:
+        return expected
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+        raise ValueError("checkout_server declared_port must be an integer in 1..65535")
+    if value != expected:
+        raise ValueError("checkout_server declared_port does not match server_url")
+    return value
+
+
+def _read_response_bytes(response: Any, *, limit: int) -> bytes:
+    """Read a bounded response, checking an advertised length before bytes."""
+    headers = getattr(response, "headers", None)
+    content_length = headers.get("Content-Length") if headers is not None else None
+    if content_length is not None:
+        try:
+            if int(content_length) > limit:
+                raise ValueError("checkout_server response is too large")
+        except (TypeError, ValueError) as exc:
+            if isinstance(exc, ValueError) and str(exc) == "checkout_server response is too large":
+                raise
+            raise ValueError("checkout_server response has an invalid content length") from exc
+    chunks: list[bytes] = []
+    total = 0
+    while total <= limit:
+        chunk = response.read(min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        if not isinstance(chunk, bytes):
+            raise ValueError("checkout_server response did not return bytes")
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise ValueError("checkout_server response is too large")
+    return b"".join(chunks)
+
+
+def _load_json_bytes(raw: bytes, *, label: str) -> Any:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate keys")
+            result[key] = value
+        return result
+
+    return json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicates,
+        parse_constant=lambda value: (_ for _ in ()).throw(
+            ValueError(f"{label} contains non-finite JSON: {value}")
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # VibeComfyBackend
 # ---------------------------------------------------------------------------
@@ -3124,8 +3207,16 @@ class VibeComfyEngine:
     succeeds.
     """
 
-    def __init__(self, server_url: str) -> None:
+    def __init__(
+        self,
+        server_url: str,
+        *,
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
+    ) -> None:
         self._origin = _validate_checkout_server_url(server_url)
+        self._declared_root = _normalize_declared_root(declared_root)
+        self._declared_port = _normalize_declared_port(self._origin, declared_port)
         self._lock = threading.RLock()
         self._operation: str | None = None
         self._running = False
@@ -3137,11 +3228,17 @@ class VibeComfyEngine:
         self._warmth_identity: str | None = None
         self._model_bytes_digest: str | None = None
         self._runtime_instance_id: str | None = None
+        self._warm_declared_root: str | None = None
+        self._warm_declared_port: int | None = None
         self._prepared_fingerprint: str | None = None
         self._prepared_warmth_identity: str | None = None
         self._prepared_model_bytes_digest: str | None = None
         self._prepared_runtime_instance_id: str | None = None
+        self._prepared_declared_root: str | None = None
+        self._prepared_declared_port: int | None = None
         self._lifecycle_generation = 0
+        self._completion = threading.Event()
+        self._completion.set()
         self.last_lifecycle = "cold"
         self.last_warm_reused = False
 
@@ -3178,6 +3275,14 @@ class VibeComfyEngine:
         return self._prepared_warmth_identity
 
     @property
+    def prepared_declared_root(self) -> str | None:
+        return self._prepared_declared_root
+
+    @property
+    def prepared_declared_port(self) -> int | None:
+        return self._prepared_declared_port
+
+    @property
     def runtime_instance_id(self) -> str | None:
         return self._runtime_instance_id or self._prepared_runtime_instance_id
 
@@ -3189,11 +3294,29 @@ class VibeComfyEngine:
     def fence_pending(self) -> bool:
         return self._fence_pending
 
+    @property
+    def declared_root(self) -> str | None:
+        return self._declared_root
+
+    @property
+    def declared_port(self) -> int:
+        return self._declared_port
+
     @staticmethod
     def _identity(value: object, field: str) -> str:
         if not isinstance(value, str) or not value:
             raise ValueError(f"checkout_server {field} must be a non-empty string")
+        if _SECRET_VALUE_RE.search(value):
+            raise ValueError(f"checkout_server {field} must not contain secret-shaped data")
         return value
+
+    @staticmethod
+    def _profile_identity(value: object, field: str) -> str:
+        if isinstance(value, Mapping):
+            normalized = _strict_json_value(value)
+            _assert_secret_free(normalized, path=field)
+            return _digest(normalized)
+        return VibeComfyEngine._identity(value, field)
 
     @staticmethod
     def _runtime_identity(value: object) -> str:
@@ -3221,13 +3344,9 @@ class VibeComfyEngine:
             raise ValueError("checkout_server requires model_bytes_digest for production warmth")
         normalized: list[str] = []
         for value in candidates:
-            if not isinstance(value, str) or not re.fullmatch(
-                r"(?:sha256:)?[0-9a-fA-F]{64}", value
-            ):
-                raise ValueError(
-                    "checkout_server model_bytes_digest must be sha256:<64hex> or raw 64hex"
-                )
-            normalized.append("sha256:" + value.removeprefix("sha256:").lower())
+            if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+                raise ValueError("checkout_server model_bytes_digest must be sha256:<64hex>")
+            normalized.append(value)
         if len(set(normalized)) != 1:
             raise ValueError("checkout_server model digest aliases do not match")
         return normalized[0]
@@ -3237,6 +3356,8 @@ class VibeComfyEngine:
         self._prepared_warmth_identity = None
         self._prepared_model_bytes_digest = None
         self._prepared_runtime_instance_id = None
+        self._prepared_declared_root = None
+        self._prepared_declared_port = None
 
     def _clear_warm(self) -> None:
         self._warm = False
@@ -3244,6 +3365,8 @@ class VibeComfyEngine:
         self._warmth_identity = None
         self._model_bytes_digest = None
         self._runtime_instance_id = None
+        self._warm_declared_root = None
+        self._warm_declared_port = None
         self.last_lifecycle = "cold"
         self.last_warm_reused = False
 
@@ -3253,6 +3376,8 @@ class VibeComfyEngine:
         warmth_identity: str | None,
         model_bytes_digest: str,
         runtime_instance_id: str,
+        declared_root: str | None,
+        declared_port: int,
     ) -> bool:
         return (
             self._warm
@@ -3260,6 +3385,8 @@ class VibeComfyEngine:
             and self._model_bytes_digest == model_bytes_digest
             and (warmth_identity is None or self._warmth_identity in {None, warmth_identity})
             and self._runtime_instance_id == runtime_instance_id
+            and self._warm_declared_root == declared_root
+            and self._warm_declared_port == declared_port
         )
 
     def _abort_preparation(self) -> None:
@@ -3321,19 +3448,25 @@ class VibeComfyEngine:
             self._clear_warm()
             self._clear_prepared()
             self._lifecycle_generation += 1
+            running_at_start = self._running
+            if running_at_start and paths[0][0] != "/interrupt":
+                paths = (("/interrupt", {}, "interrupt"), *paths)
         errors: list[str] = []
         results: dict[str, Any] = {}
         try:
             if preflight is not None:
                 try:
                     preflight()
-                except Exception as exc:
+                except BaseException as exc:
                     errors.append(str(exc))
             for path, payload, key in paths:
                 try:
                     results[key] = self._post(path, payload)
-                except Exception as exc:
+                except BaseException as exc:
                     errors.append(str(exc))
+            if not errors and running_at_start:
+                if not self._completion.wait(timeout=10.0):
+                    errors.append("checkout_server run did not complete after containment")
             with self._lock:
                 if errors:
                     # Any failed step keeps the fence.  A successful free
@@ -3391,6 +3524,8 @@ class VibeComfyEngine:
         model_bytes_digest: str | None = None,
         model_digest: str | None = None,
         artifact_sha256: str | None = None,
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
         cold: bool = False,
     ) -> dict[str, Any]:
         """Fence incompatible warmth and report the lifecycle decision."""
@@ -3405,6 +3540,14 @@ class VibeComfyEngine:
                 "checkout_server runtime_instance_id is required from canonical health/bootstrap"
             )
         runtime_instance_id = self._runtime_identity(runtime_instance_id)
+        effective_root = (
+            self._declared_root
+            if declared_root is None
+            else _normalize_declared_root(declared_root)
+        )
+        effective_port = _normalize_declared_port(
+            self._origin, self._declared_port if declared_port is None else declared_port
+        )
         with self._lock:
             if self._operation is not None:
                 raise RuntimeError(f"checkout_server {self._operation} is already in progress")
@@ -3422,15 +3565,17 @@ class VibeComfyEngine:
                 warmth_identity,
                 model_bytes,
                 runtime_instance_id,
+                effective_root,
+                effective_port,
             )
             if self._warm and not compatible:
-                released = self.release(reason="incompatible fingerprint")
-                if not released.get("ok", False):
-                    raise ValueError("checkout_server could not release incompatible warmth")
+                self._cold_free()
             self._prepared_fingerprint = fingerprint
             self._prepared_warmth_identity = warmth_identity
             self._prepared_model_bytes_digest = model_bytes
             self._prepared_runtime_instance_id = runtime_instance_id
+            self._prepared_declared_root = effective_root
+            self._prepared_declared_port = effective_port
             self.last_lifecycle = "warm" if compatible else "cold"
             self.last_warm_reused = compatible
             return {
@@ -3442,6 +3587,8 @@ class VibeComfyEngine:
                 "warmth_identity": warmth_identity,
                 "model_bytes_digest": model_bytes,
                 "runtime_instance_id": runtime_instance_id,
+                "declared_root": effective_root,
+                "declared_port": effective_port,
                 "poisoned": self._poisoned,
                 "fence_pending": self._fence_pending,
             }
@@ -3455,6 +3602,8 @@ class VibeComfyEngine:
         model_bytes_digest: str | None = None,
         model_digest: str | None = None,
         artifact_sha256: str | None = None,
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
         cold: bool = False,
     ) -> dict[str, Any]:
         """M2 host-ABI spelling for :meth:`prepare_session`."""
@@ -3465,6 +3614,8 @@ class VibeComfyEngine:
             model_bytes_digest=model_bytes_digest,
             model_digest=model_digest,
             artifact_sha256=artifact_sha256,
+            declared_root=declared_root,
+            declared_port=declared_port,
             cold=cold,
         )
 
@@ -3481,15 +3632,16 @@ class VibeComfyEngine:
                 status = getattr(response, "status", 200)
                 if not 200 <= status < 300:
                     raise ValueError(f"checkout_server {path} returned a non-2xx status")
-                raw = response.read(64 * 1024 + 1)
-                if len(raw) > 64 * 1024:
-                    raise ValueError(f"checkout_server {path} response is too large")
+                raw = _read_response_bytes(response, limit=_MAX_CHECKOUT_RESPONSE_BYTES)
                 if not raw:
                     return {}
                 try:
-                    return json.loads(raw.decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    return {"acknowledged": True}
+                    decoded = _load_json_bytes(raw, label=f"checkout_server {path} response")
+                    if not isinstance(decoded, dict):
+                        raise ValueError("control response must be an object")
+                    return decoded
+                except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(f"checkout_server {path} response is malformed") from exc
         except (OSError, urllib_error.URLError) as exc:
             raise ValueError(f"checkout_server {path} request failed") from exc
 
@@ -3515,6 +3667,7 @@ class VibeComfyEngine:
                 raise RuntimeError("checkout_server runtime instance changed")
             run_generation = self._lifecycle_generation
             self._running = True
+            self._completion.clear()
 
         try:
             from vibecomfy.runtime.run import run_sync
@@ -3528,6 +3681,8 @@ class VibeComfyEngine:
                     self._warmth_identity = self._prepared_warmth_identity
                     self._model_bytes_digest = self._prepared_model_bytes_digest
                     self._runtime_instance_id = self._prepared_runtime_instance_id
+                    self._warm_declared_root = self._prepared_declared_root
+                    self._warm_declared_port = self._prepared_declared_port
                     self._clear_prepared()
             return result
         except BaseException:
@@ -3541,6 +3696,7 @@ class VibeComfyEngine:
         finally:
             with self._lock:
                 self._running = False
+                self._completion.set()
 
     def cancel(
         self,
@@ -3586,14 +3742,22 @@ class CheckoutServerAdapter(VibeComfyBackend):
         self,
         server_url: str,
         *,
-        environment_fingerprint: str = "checkout_server",
+        environment_fingerprint: str | Mapping[str, Any] = "checkout_server",
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
     ) -> None:
         # Keep the validated origin private; the base class has no remote path.
         self._origin = _validate_checkout_server_url(server_url)
-        self._environment_fingerprint = VibeComfyEngine._identity(
+        self._environment_fingerprint = VibeComfyEngine._profile_identity(
             environment_fingerprint, "environment_fingerprint"
         )
-        self._engine = VibeComfyEngine(self._origin)
+        self._declared_root = _normalize_declared_root(declared_root)
+        self._declared_port = _normalize_declared_port(self._origin, declared_port)
+        self._engine = VibeComfyEngine(
+            self._origin,
+            declared_root=self._declared_root,
+            declared_port=self._declared_port,
+        )
         self._system_stats_verified = False
         self._runtime_instance_id: str | None = None
         self._startup_probe_digest: str | None = None
@@ -3611,6 +3775,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
     def fence_pending(self) -> bool:
         return self._engine.fence_pending
 
+    @property
+    def declared_root(self) -> str | None:
+        return self._declared_root
+
+    @property
+    def declared_port(self) -> int:
+        return self._declared_port
+
     def _probe_system_stats(self) -> None:
         """Verify the pinned ComfyUI version only.
 
@@ -3618,17 +3790,18 @@ class CheckoutServerAdapter(VibeComfyBackend):
         health/bootstrap; a system-stats digest is never an identity fence.
         """
         self._system_stats_verified = False
+        self._startup_probe_digest = None
         request = urllib_request.Request(f"{self._origin}/system_stats", method="GET")
         try:
             with _open_checkout_http(request, timeout=5.0) as response:
                 status = getattr(response, "status", 200)
                 if status != 200:
                     raise ValueError("checkout_server /system_stats returned a non-200 status")
-                body = response.read(64 * 1024 + 1)
-                if len(body) > 64 * 1024:
-                    raise ValueError("checkout_server /system_stats response is too large")
-                payload = json.loads(body.decode("utf-8"))
-        except (OSError, urllib_error.URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                body = _read_response_bytes(response, limit=_MAX_CHECKOUT_RESPONSE_BYTES)
+                payload = _load_json_bytes(body, label="checkout_server /system_stats response")
+        except ValueError:
+            raise
+        except (OSError, urllib_error.URLError, UnicodeDecodeError) as exc:
             raise ValueError("checkout_server /system_stats probe failed") from exc
         if not isinstance(payload, dict):
             raise ValueError("checkout_server /system_stats response is not an object")
@@ -3647,22 +3820,29 @@ class CheckoutServerAdapter(VibeComfyBackend):
         *,
         model_fingerprint: str,
         model_bytes_digest: str,
-        environment_fingerprint: str,
+        environment_fingerprint: str | Mapping[str, Any],
         server_url: str,
         runtime_instance_id: str,
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
     ) -> str:
-        """Derive a fingerprint bound to model bytes and runtime instance."""
+        """Derive a fingerprint bound to every checkout host identity fact."""
+        origin = _validate_checkout_server_url(server_url)
         payload = {
             "schema": "astrid.vibecomfy.session.v2",
             "engine_revision": VIBECOMFY_ENGINE_REVISION,
             "comfyui_version": COMFYUI_VERSION,
             "model": VibeComfyEngine._identity(model_fingerprint, "model_fingerprint"),
             "model_bytes": VibeComfyEngine._validate_model_bytes_digest(model_bytes_digest),
-            "environment": VibeComfyEngine._identity(
+            "environment": VibeComfyEngine._profile_identity(
                 environment_fingerprint, "environment_fingerprint"
             ),
-            "server": _validate_checkout_server_url(server_url),
+            "server": origin,
             "runtime_instance": VibeComfyEngine._runtime_identity(runtime_instance_id),
+            "host": {
+                "root": _normalize_declared_root(declared_root),
+                "port": _normalize_declared_port(origin, declared_port),
+            },
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -3677,6 +3857,8 @@ class CheckoutServerAdapter(VibeComfyBackend):
         model_bytes_digest: str | None = None,
         model_digest: str | None = None,
         artifact_sha256: str | None = None,
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
         cold: bool = False,
     ) -> dict[str, Any]:
         """Fence warmth before probing caller-provided health and identity."""
@@ -3691,6 +3873,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 "checkout_server runtime_instance_id is required from canonical health/bootstrap"
             )
         instance_id = VibeComfyEngine._runtime_identity(runtime_instance_id)
+        effective_root = (
+            self._declared_root
+            if declared_root is None
+            else _normalize_declared_root(declared_root)
+        )
+        effective_port = _normalize_declared_port(
+            self._origin, self._declared_port if declared_port is None else declared_port
+        )
         with self._engine._lock:
             was_blocked = self._engine._poisoned or self._engine._fence_pending
             requires_cold_reset = self._engine._prepare_for_warm_session()
@@ -3704,6 +3894,8 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 warmth_identity,
                 model_bytes,
                 instance_id,
+                effective_root,
+                effective_port,
             )
             if compatible and not cold and not was_blocked:
                 # Only the probe fence is transient; retain the published
@@ -3716,6 +3908,8 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 warmth_identity,
                 runtime_instance_id=instance_id,
                 model_bytes_digest=model_bytes,
+                declared_root=effective_root,
+                declared_port=effective_port,
                 cold=cold or requires_cold_reset,
             )
 
@@ -3748,11 +3942,13 @@ class CheckoutServerAdapter(VibeComfyBackend):
         *,
         fingerprint: str | None = None,
         warmth_identity: str | None = None,
-        environment_fingerprint: str | None = None,
+        environment_fingerprint: str | Mapping[str, Any] | None = None,
         model_bytes_digest: str | None = None,
         model_digest: str | None = None,
         artifact_sha256: str | None = None,
         runtime_instance_id: str | None = None,
+        declared_root: str | Path | None = None,
+        declared_port: int | None = None,
     ) -> GenerationResult:
         """Generate with disposable warm reuse and host-compatible identities."""
         backend_spec = entry.modes[mode].backends["local"]
@@ -3768,7 +3964,9 @@ class CheckoutServerAdapter(VibeComfyBackend):
         environment = (
             self._environment_fingerprint
             if environment_fingerprint is None
-            else VibeComfyEngine._identity(environment_fingerprint, "environment_fingerprint")
+            else VibeComfyEngine._profile_identity(
+                environment_fingerprint, "environment_fingerprint"
+            )
         )
         canonical_fingerprint = self.session_fingerprint(
             model_fingerprint=model_fingerprint,
@@ -3776,6 +3974,8 @@ class CheckoutServerAdapter(VibeComfyBackend):
             environment_fingerprint=environment,
             server_url=self._origin,
             runtime_instance_id=instance_id,
+            declared_root=self._declared_root if declared_root is None else declared_root,
+            declared_port=self._declared_port if declared_port is None else declared_port,
         )
         if fingerprint is not None and fingerprint != canonical_fingerprint:
             raise ValueError("checkout_server fingerprint must equal canonical session fingerprint")
@@ -3788,10 +3988,20 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 warmth_identity,
                 runtime_instance_id=instance_id,
                 model_bytes_digest=model_bytes,
+                declared_root=declared_root,
+                declared_port=declared_port,
             )
             return super().generate(entry, mode, params, out_dir)
         except BaseException:
-            self._engine._abort_preparation()
+            with self._engine._lock:
+                # Template validation can fail before the host is touched;
+                # retain the accepted discard-only behavior for that case.
+                # Once a remote run has started, every ambiguous result,
+                # output, or transport failure poisons the host lifecycle.
+                if self._engine.warm or self._engine.poisoned or self._engine.fence_pending:
+                    self._engine._poison()
+                else:
+                    self._engine._abort_preparation()
             raise
 
     def cancel(self, frame: object | None = None) -> dict[str, Any]:
@@ -3809,7 +4019,12 @@ class CheckoutServerAdapter(VibeComfyBackend):
     def _run_workflow(self, workflow: Any) -> Any:
         """Probe version and submit with the canonical runtime identity."""
         self._origin = _validate_checkout_server_url(self._origin)
-        self._probe_system_stats()
+        try:
+            self._probe_system_stats()
+        except BaseException:
+            with self._engine._lock:
+                self._engine._poison()
+            raise
         instance_id = self._engine.prepared_runtime_instance_id
         if instance_id is None:
             instance_id = self._engine.runtime_instance_id
@@ -3824,55 +4039,129 @@ class CheckoutServerAdapter(VibeComfyBackend):
         metadata_path = getattr(result, "metadata_path", None)
         if not isinstance(metadata_path, (str, Path)) or not str(metadata_path):
             raise ValueError("checkout_server result has no metadata_path")
+        metadata_file = Path(metadata_path).expanduser()
+        if not metadata_file.is_absolute():
+            raise ValueError("checkout_server result metadata path must be absolute")
+        _reject_symlink_ancestors(metadata_file)
         try:
-            metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            fd = os.open(metadata_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if stat.S_IFMT(info.st_mode) != stat.S_IFREG or info.st_nlink != 1:
+                    raise ValueError("checkout_server result metadata is not a private file")
+                with os.fdopen(fd, "rb", closefd=True) as stream:
+                    fd = -1
+                    raw_metadata = stream.read(_MAX_CHECKOUT_METADATA_BYTES + 1)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+            if len(raw_metadata) > _MAX_CHECKOUT_METADATA_BYTES:
+                raise ValueError("checkout_server result metadata is too large")
+            metadata = _load_json_bytes(
+                raw_metadata, label="checkout_server result metadata"
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("checkout_server result metadata is unreadable") from exc
         outputs = metadata.get("comfy_outputs") if isinstance(metadata, dict) else None
         descriptors = _extract_output_descriptors(outputs)
-        if not descriptors:
+        if not descriptors or len(descriptors) > _MAX_CHECKOUT_OUTPUT_COUNT:
             raise ValueError("checkout_server result metadata has no comfy_outputs")
 
+        out_dir = out_dir.expanduser()
+        if not out_dir.is_absolute():
+            raise ValueError("checkout_server output directory must be absolute")
+        _reject_symlink_ancestors(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if out_dir.is_symlink() or not out_dir.is_dir():
+            raise ValueError("checkout_server output directory is not owned")
+
         image_paths: list[Path] = []
-        for descriptor in descriptors:
-            filename, subfolder, output_type = _validate_output_descriptor(descriptor)
-            query = urllib_parse.urlencode(
-                {"filename": filename, "subfolder": subfolder, "type": output_type}
-            )
-            request = urllib_request.Request(f"{self._origin}/view?{query}", method="GET")
-            destination = out_dir / filename
-            if destination.exists():
-                stem = destination.stem
-                suffix = destination.suffix
-                counter = 1
-                while destination.exists():
-                    destination = out_dir / f"{stem}_{counter}{suffix}"
-                    counter += 1
-            temporary_path: Path | None = None
-            try:
-                with _open_checkout_http(request, timeout=30.0) as response:
-                    status = getattr(response, "status", 200)
-                    if status != 200:
-                        raise ValueError("checkout_server /view returned a non-200 status")
-                    with tempfile.NamedTemporaryFile(
-                        mode="wb",
-                        dir=out_dir,
-                        prefix=".checkout-download-",
-                        delete=False,
-                    ) as temporary:
-                        temporary_path = Path(temporary.name)
-                        shutil.copyfileobj(response, temporary)
-                        temporary.flush()
-                        os.fsync(temporary.fileno())
+        staged: list[tuple[Path, Path]] = []
+        published: list[Path] = []
+        total_bytes = 0
+        try:
+            for descriptor in descriptors:
+                filename, subfolder, output_type = _validate_output_descriptor(descriptor)
+                query = urllib_parse.urlencode(
+                    {"filename": filename, "subfolder": subfolder, "type": output_type}
+                )
+                request = urllib_request.Request(f"{self._origin}/view?{query}", method="GET")
+                destination = out_dir / filename
+                if destination.is_symlink():
+                    raise ValueError("checkout_server output destination is a symlink")
+                if destination.exists():
+                    stem = destination.stem
+                    suffix = destination.suffix
+                    counter = 1
+                    while destination.exists():
+                        destination = out_dir / f"{stem}_{counter}{suffix}"
+                        counter += 1
+                temporary_path: Path | None = None
+                try:
+                    with _open_checkout_http(request, timeout=30.0) as response:
+                        status = getattr(response, "status", 200)
+                        if status != 200:
+                            raise ValueError("checkout_server /view returned a non-200 status")
+                        with tempfile.NamedTemporaryFile(
+                            mode="wb",
+                            dir=out_dir,
+                            prefix=".checkout-download-",
+                            delete=False,
+                        ) as temporary:
+                            temporary_path = Path(temporary.name)
+                            while True:
+                                remaining = _MAX_CHECKOUT_OUTPUT_BYTES - total_bytes
+                                if remaining < 0:
+                                    raise ValueError("checkout_server output bytes are too large")
+                                chunk = response.read(min(1024 * 1024, remaining + 1))
+                                if not chunk:
+                                    break
+                                if not isinstance(chunk, bytes):
+                                    raise ValueError("checkout_server output response is malformed")
+                                total_bytes += len(chunk)
+                                if total_bytes > _MAX_CHECKOUT_OUTPUT_BYTES:
+                                    raise ValueError("checkout_server output bytes are too large")
+                                temporary.write(chunk)
+                            temporary.flush()
+                            os.fsync(temporary.fileno())
+                    staged.append((temporary_path, destination))
+                    temporary_path = None
+                except (OSError, urllib_error.URLError) as exc:
+                    raise ValueError(
+                        f"checkout_server could not download output {filename!r}"
+                    ) from exc
+                finally:
+                    if temporary_path is not None:
+                        try:
+                            temporary_path.unlink()
+                        except FileNotFoundError:
+                            pass
+        except BaseException:
+            for temporary_path, _destination in staged:
+                try:
+                    temporary_path.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
+        try:
+            for temporary_path, destination in staged:
+                if destination.exists() or destination.is_symlink():
+                    raise ValueError("checkout_server output destination changed during publication")
                 os.replace(temporary_path, destination)
-                temporary_path = None
-            except (OSError, urllib_error.URLError) as exc:
-                raise ValueError(f"checkout_server could not download output {filename!r}") from exc
-            finally:
-                if temporary_path is not None:
+                published.append(destination)
+                image_paths.append(destination)
+        except BaseException:
+            for destination in published:
+                try:
+                    destination.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
+        finally:
+            for temporary_path, _destination in staged:
+                if temporary_path.exists():
                     try:
                         temporary_path.unlink()
                     except FileNotFoundError:
                         pass
-            image_paths.append(destination)
         return image_paths

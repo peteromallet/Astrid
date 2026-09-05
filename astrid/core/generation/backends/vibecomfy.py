@@ -12,14 +12,18 @@ import hashlib
 import json
 import logging
 import os
+import pickle
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -43,6 +47,550 @@ VIBECOMFY_ENGINE_REVISION = (
     "dc8d962a8e330015bbb209080292fad248f1ceb3"
 )
 COMFYUI_VERSION = "0.26.0"
+
+_PIP_EMBEDDED_PROFILE_SCHEMA = "astrid.vibecomfy.pip_embedded.v1"
+_PIP_EMBEDDED_SCRIPT = (
+    "import pickle,sys\n"
+    "from pathlib import Path\n"
+    "from vibecomfy.runtime.run import run_sync\n"
+    "workflow=pickle.loads(Path(sys.argv[1]).read_bytes())\n"
+    "result=run_sync(workflow)\n"
+    "result.outputs=[str(Path(item).resolve()) for item in result.outputs]\n"
+    "Path(sys.argv[2]).write_bytes(pickle.dumps(result, protocol=5))\n"
+)
+_SECRET_KEY_WORDS = (
+    "secret",
+    "token",
+    "password",
+    "credential",
+    "api_key",
+    "private_key",
+)
+_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _digest(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _require_digest(value: object, field: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise ValueError(f"pip_embedded {field} must be sha256:<64 lowercase hex>")
+    return value
+
+
+def _require_absolute_path(value: str | Path, field: str, *, directory: bool = False) -> str:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"pip_embedded {field} must be an explicit absolute path")
+    if path.is_symlink():
+        raise ValueError(f"pip_embedded {field} must not be a symlink")
+    resolved = path.resolve(strict=False)
+    if directory:
+        if path.exists() and not path.is_dir():
+            raise ValueError(f"pip_embedded {field} must be a directory")
+    elif path.exists() and not path.is_file():
+        raise ValueError(f"pip_embedded {field} must be a file")
+    return str(resolved)
+
+
+def _assert_secret_free(value: Any, *, path: str = "profile") -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if any(word in key_text for word in _SECRET_KEY_WORDS):
+                raise ValueError(f"pip_embedded profile contains secret-shaped field {path}.{key}")
+            _assert_secret_free(item, path=f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _assert_secret_free(item, path=f"{path}[{index}]")
+
+
+def _normalize_hc03_profile(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a validated T03 HC-03 profile without bearer material.
+
+    T03 remains the authority for loading and validating the profile.  This
+    consumer only copies the immutable, non-secret identity needed to fence
+    an embedded execution; the credential reference is deliberately omitted.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError("pip_embedded requires a validated HC-03 readiness profile")
+    for key, item in value.items():
+        # T03 may carry this non-secret locator; it is intentionally omitted
+        # from the child profile.  Every other input field is checked before
+        # projection so secrets cannot disappear through field filtering.
+        if key == "runtime" and isinstance(item, Mapping):
+            safe_runtime = {name: child for name, child in item.items() if name != "credential_reference"}
+            _assert_secret_free({key: safe_runtime})
+        else:
+            _assert_secret_free({key: item})
+    if value.get("schema_version") != "hc03-worker-readiness.v1" or value.get("status") != "ready":
+        raise ValueError("pip_embedded requires a ready HC-03 readiness profile")
+    facts = value.get("verified_facts")
+    runtime = value.get("runtime")
+    launch = value.get("launch")
+    if not isinstance(facts, Mapping) or not isinstance(runtime, Mapping) or not isinstance(launch, Mapping):
+        raise ValueError("pip_embedded HC-03 readiness profile is incomplete")
+    exact = facts.get("exact")
+    minimum = facts.get("minimum")
+    if not isinstance(exact, Mapping) or not isinstance(minimum, Mapping):
+        raise ValueError("pip_embedded HC-03 verified facts are incomplete")
+    expected_exact = {
+        "interpreter",
+        "runtime_lock",
+        "engine_lock",
+        "model_digest",
+        "custom_node_digest",
+        "driver",
+        "root",
+        "port",
+    }
+    expected_minimum = {"vram_bytes", "scratch_bytes"}
+    if set(exact) != expected_exact or set(minimum) != expected_minimum:
+        raise ValueError("pip_embedded HC-03 verified facts have an invalid schema")
+    if not isinstance(exact.get("port"), int) or isinstance(exact.get("port"), bool) or not 1 <= exact["port"] <= 65535:
+        raise ValueError("pip_embedded HC-03 port is invalid")
+    if any(not isinstance(item, str) or not item.strip() for key, item in exact.items() if key != "port"):
+        raise ValueError("pip_embedded HC-03 exact facts are invalid")
+    if any(
+        isinstance(item, bool) or not isinstance(item, int) or item < 0
+        for item in minimum.values()
+    ):
+        raise ValueError("pip_embedded HC-03 minimum facts are invalid")
+
+    # Keep runtime/process/launch facts, but never copy a credential locator or
+    # any unknown field that could smuggle a secret into this profile.
+    runtime_keys = {
+        "endpoint",
+        "port",
+        "pid",
+        "process_birth_id",
+        "runtime_instance_id",
+        "runtime_epoch",
+        "schema_digest",
+        "coordinator_epoch",
+        "active_realm",
+        "discovery_digest",
+    }
+    launch_keys = {
+        "host_interpreter",
+        "source_checkout",
+        "engine_interpreter",
+        "output_root",
+        "pack_root",
+        "support_root",
+        "ready_file",
+        "state_file",
+        "boot_manifest_path",
+        "boot_manifest_hash",
+    }
+    if not runtime_keys.issubset(runtime) or not launch_keys.issubset(launch):
+        raise ValueError("pip_embedded HC-03 readiness binding is incomplete")
+    normalized_facts = {
+        "exact": dict(sorted(exact.items())),
+        "minimum": dict(sorted(minimum.items())),
+    }
+    expected_facts_digest = _digest(normalized_facts)
+    if value.get("verified_facts_digest") != expected_facts_digest:
+        raise ValueError("pip_embedded HC-03 verified facts digest is invalid")
+    projection = {
+        "schema_version": value["schema_version"],
+        "status": value["status"],
+        "verified_facts": normalized_facts,
+        "verified_facts_digest": expected_facts_digest,
+        "runtime": {key: runtime[key] for key in sorted(runtime_keys)},
+        "launch": {key: launch[key] for key in sorted(launch_keys)},
+        "worker_actor": value.get("worker_actor"),
+        "worker_scopes": list(value.get("worker_scopes") or ()),
+    }
+    _assert_secret_free(projection)
+    return projection
+
+
+@dataclass(frozen=True, slots=True)
+class PipEmbeddedProfile:
+    """Explicit, secret-free identity for one pip-embedded execution."""
+
+    python_executable: str | Path
+    python_environment: str | Path
+    vibecomfy_revision: str
+    package_lock_digest: str
+    astrid_source_root: str | Path
+    astrid_pack_root: str | Path
+    engine_root: str | Path
+    custom_nodes_root: str | Path
+    model_root: str | Path
+    output_root: str | Path
+    scratch_root: str | Path
+    cas_root: str | Path
+    hc03_profile: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "python_executable", _require_absolute_path(self.python_executable, "python_executable"))
+        object.__setattr__(self, "python_environment", _require_absolute_path(self.python_environment, "python_environment", directory=True))
+        for field in (
+            "astrid_source_root",
+            "astrid_pack_root",
+            "engine_root",
+            "custom_nodes_root",
+            "model_root",
+            "output_root",
+            "scratch_root",
+            "cas_root",
+        ):
+            object.__setattr__(self, field, _require_absolute_path(getattr(self, field), field, directory=True))
+        if not isinstance(self.vibecomfy_revision, str) or not self.vibecomfy_revision.strip():
+            raise ValueError("pip_embedded vibecomfy_revision must be explicit")
+        object.__setattr__(self, "package_lock_digest", _require_digest(self.package_lock_digest, "package_lock_digest"))
+        readiness = _normalize_hc03_profile(self.hc03_profile)
+        if readiness["verified_facts"]["exact"]["interpreter"] != self.python_executable:
+            raise ValueError("pip_embedded interpreter does not match HC-03 readiness")
+        if readiness["launch"]["engine_interpreter"] != self.python_executable:
+            raise ValueError("pip_embedded engine interpreter does not match HC-03 readiness")
+        if readiness["launch"]["source_checkout"] != self.astrid_source_root:
+            raise ValueError("pip_embedded source root does not match HC-03 readiness")
+        if readiness["launch"]["pack_root"] != self.astrid_pack_root:
+            raise ValueError("pip_embedded pack root does not match HC-03 readiness")
+        if readiness["launch"]["output_root"] != self.output_root:
+            raise ValueError("pip_embedded output root does not match HC-03 readiness")
+        if readiness["verified_facts"]["exact"]["engine_lock"] != self.package_lock_digest:
+            raise ValueError("pip_embedded package lock does not match HC-03 readiness")
+        object.__setattr__(self, "hc03_profile", readiness)
+
+    @classmethod
+    def from_hc03(cls, **kwargs: Any) -> "PipEmbeddedProfile":
+        """Construct a profile from the already validated T03 HC-03 mapping."""
+        return cls(**kwargs)
+
+    @property
+    def command(self) -> tuple[str, ...]:
+        return (str(self.python_executable), "-c", _PIP_EMBEDDED_SCRIPT, "<workflow>", "<result>")
+
+    @property
+    def identity(self) -> dict[str, Any]:
+        return {
+            "schema": _PIP_EMBEDDED_PROFILE_SCHEMA,
+            "profile": "pip_embedded",
+            "python_executable": self.python_executable,
+            "python_environment": self.python_environment,
+            "vibecomfy_revision": self.vibecomfy_revision,
+            "package_lock_digest": self.package_lock_digest,
+            "astrid_source_root": self.astrid_source_root,
+            "astrid_pack_root": self.astrid_pack_root,
+            "engine_root": self.engine_root,
+            "custom_nodes_root": self.custom_nodes_root,
+            "model_root": self.model_root,
+            "output_root": self.output_root,
+            "scratch_root": self.scratch_root,
+            "cas_root": self.cas_root,
+            "hc03": self.hc03_profile,
+        }
+
+    @property
+    def identity_digest(self) -> str:
+        return _digest(self.identity)
+
+    @property
+    def command_digest(self) -> str:
+        return _digest({"argv": list(self.command), "cwd": self.engine_root})
+
+    @property
+    def readiness_digest(self) -> str:
+        return _digest(self.hc03_profile)
+
+    @property
+    def profile_digest(self) -> str:
+        return _digest(
+            {
+                "identity": self.identity,
+                "command_digest": self.command_digest,
+                "readiness_digest": self.readiness_digest,
+                "policy": {"execution": "isolated_cold", "warm_reuse": False},
+            }
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        value = {
+            "schema": _PIP_EMBEDDED_PROFILE_SCHEMA,
+            "profile": "pip_embedded",
+            "identity": self.identity,
+            "command": {"argv": list(self.command), "cwd": self.engine_root},
+            "readiness": self.hc03_profile,
+            "policy": {"execution": "isolated_cold", "warm_reuse": False},
+            "digests": {
+                "identity": self.identity_digest,
+                "command": self.command_digest,
+                "readiness": self.readiness_digest,
+                "profile": self.profile_digest,
+            },
+        }
+        _assert_secret_free(value)
+        return value
+
+
+class PipEmbeddedExecution(Protocol):
+    """Owned execution handle used by :class:`PipEmbeddedSession`."""
+
+    def run(self) -> Any: ...
+
+    def terminate(self) -> None: ...
+
+    def reap(self) -> None: ...
+
+    def cleanup(self) -> None: ...
+
+
+class _SubprocessEmbeddedExecution:
+    """Run one workflow under the profile's interpreter and process group."""
+
+    def __init__(self, profile: PipEmbeddedProfile, workflow: Any, staging: Path) -> None:
+        from astrid.core.execution.process_group import popen_owned_group
+
+        self._staging = staging
+        self._request = staging / "workflow.pickle"
+        self._result = staging / "result.pickle"
+        self._log = staging / "embedded.log"
+        self._request.write_bytes(pickle.dumps(workflow, protocol=5))
+        environment = {
+            "PATH": str(Path(profile.python_executable).parent),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "VIRTUAL_ENV": str(profile.python_environment),
+        }
+        self._log_handle = self._log.open("wb")
+        try:
+            self._process = popen_owned_group(
+                [
+                    str(profile.python_executable),
+                    "-c",
+                    _PIP_EMBEDDED_SCRIPT,
+                    str(self._request),
+                    str(self._result),
+                ],
+                cwd=str(profile.engine_root),
+                env=environment,
+                stdout=self._log_handle,
+                stderr=subprocess.STDOUT,
+            )
+        except BaseException:
+            self._log_handle.close()
+            raise
+
+    def run(self) -> Any:
+        returncode = self._process.wait()
+        if returncode != 0:
+            raise RuntimeError(f"pip_embedded execution exited with status {returncode}")
+        try:
+            return pickle.loads(self._result.read_bytes())
+        except (OSError, pickle.PickleError, EOFError) as exc:
+            raise RuntimeError("pip_embedded execution returned no valid result") from exc
+
+    def terminate(self) -> None:
+        if self._process.poll() is None:
+            from astrid.core.execution.process_group import terminate_group
+
+            terminate_group(self._process)
+
+    def reap(self) -> None:
+        self._process.wait()
+
+    def cleanup(self) -> None:
+        self._log_handle.close()
+        for path in (self._request, self._result, self._log):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+ExecutionFactory = Callable[[PipEmbeddedProfile, Any, Path], PipEmbeddedExecution]
+
+
+class PipEmbeddedSession:
+    """Cold-only, disposable lifecycle for a typed pip-embedded profile."""
+
+    def __init__(
+        self,
+        profile: PipEmbeddedProfile,
+        *,
+        execution_factory: ExecutionFactory | None = None,
+    ) -> None:
+        if not isinstance(profile, PipEmbeddedProfile):
+            raise TypeError("pip_embedded requires a PipEmbeddedProfile")
+        self.profile = profile
+        self._execution_factory = execution_factory or (
+            lambda selected_profile, workflow, staging: _SubprocessEmbeddedExecution(
+                selected_profile, workflow, staging
+            )
+        )
+        self._active: PipEmbeddedExecution | None = None
+        self._active_identity: str | None = None
+        self._cleaned_handles: list[PipEmbeddedExecution] = []
+        self._poisoned = False
+        self._transition: str | None = None
+        self.last_lifecycle = "cold"
+        self.last_warm_reused = False
+
+    @property
+    def warm(self) -> bool:
+        return False
+
+    @property
+    def poisoned(self) -> bool:
+        return self._poisoned
+
+    @property
+    def fence_pending(self) -> bool:
+        return self._poisoned
+
+    def _ensure_usable(self) -> None:
+        if self._poisoned:
+            raise RuntimeError("pip_embedded session is poisoned; create a new cold instance")
+        if self._transition in {"cancelled", "released"}:
+            raise RuntimeError("pip_embedded session was disposed; create a new cold instance")
+
+    @staticmethod
+    def _task_identity(value: str | None) -> str:
+        if value is None:
+            return "task-unspecified"
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("pip_embedded task identity must be a non-empty string")
+        return value
+
+    def _cleanup_handle(self, handle: PipEmbeddedExecution, *, terminate: bool) -> None:
+        if any(existing is handle for existing in self._cleaned_handles):
+            return
+        # Mark before invoking user/runtime code: even a failing cleanup is a
+        # terminal attempt and must never be retried on the same handle.
+        self._cleaned_handles.append(handle)
+        errors: list[str] = []
+        if terminate:
+            try:
+                handle.terminate()
+            except BaseException as exc:  # noqa: BLE001 - lifecycle fences include cancellation
+                errors.append(str(exc))
+        try:
+            handle.reap()
+        except BaseException as exc:  # noqa: BLE001 - lifecycle fences include cancellation
+            errors.append(str(exc))
+        try:
+            handle.cleanup()
+        except BaseException as exc:  # noqa: BLE001 - lifecycle fences include cancellation
+            errors.append(str(exc))
+        if errors:
+            self._poisoned = True
+            self._transition = "poisoned"
+            raise RuntimeError("pip_embedded lifecycle cleanup failed: " + "; ".join(errors))
+
+    def run(
+        self,
+        workflow: Any,
+        *,
+        task_identity: str | None = None,
+    ) -> Any:
+        self._ensure_usable()
+        identity = self._task_identity(task_identity)
+        if self._active is not None:
+            if self._active_identity != identity:
+                self._poisoned = True
+                try:
+                    self._cleanup_handle(self._active, terminate=True)
+                except BaseException:  # noqa: BLE001 - preserve the identity fence
+                    pass
+                self._active = None
+                self._active_identity = None
+                raise RuntimeError("pip_embedded active handle identity mismatch")
+            raise RuntimeError("pip_embedded execution is already in progress")
+        scratch_root = Path(self.profile.scratch_root)
+        scratch_root.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(dir=scratch_root, prefix="pip-embedded-"))
+        handle: PipEmbeddedExecution | None = None
+        self._active = handle
+        self._active_identity = identity
+        try:
+            handle = self._execution_factory(self.profile, workflow, staging)
+            self._active = handle
+            result = handle.run()
+            try:
+                self._cleanup_handle(handle, terminate=False)
+            finally:
+                # The handle's lifecycle methods are exactly-once operations;
+                # never retry them merely because staging cleanup failed.
+                self._active = None
+                self._active_identity = None
+            shutil.rmtree(staging)
+            return result
+        except BaseException:
+            self._poisoned = True
+            self._transition = "poisoned"
+            if handle is not None and self._active is handle:
+                try:
+                    self._cleanup_handle(handle, terminate=True)
+                except BaseException:  # noqa: BLE001 - best effort after poisoning
+                    pass
+            try:
+                shutil.rmtree(staging)
+            except OSError:
+                pass
+            raise
+        finally:
+            self._active = None
+            self._active_identity = None
+
+    def _finish_transition(self, name: str, *, task_identity: str | None) -> dict[str, Any]:
+        if self._transition is not None:
+            if self._transition == "poisoned":
+                self._ensure_usable()
+            return {"ok": True, "status": self._transition, "transition": self._transition}
+        self._ensure_usable()
+        if self._active is None:
+            self._transition = name
+            return {"ok": True, "status": "cold", "transition": name, "terminated": False, "reaped": True}
+        if task_identity is not None and self._active_identity != self._task_identity(task_identity):
+            self._poisoned = True
+            self._transition = "poisoned"
+            handle = self._active
+            try:
+                self._cleanup_handle(handle, terminate=True)
+            except BaseException:  # noqa: BLE001 - preserve the identity fence
+                pass
+            self._active = None
+            self._active_identity = None
+            raise RuntimeError("pip_embedded active handle identity mismatch")
+        handle = self._active
+        try:
+            self._cleanup_handle(handle, terminate=True)
+        except BaseException:
+            self._poisoned = True
+            self._transition = "poisoned"
+            raise
+        finally:
+            self._active = None
+            self._active_identity = None
+        self._transition = name
+        return {"ok": True, "status": name, "transition": name, "terminated": True, "reaped": True}
+
+    def cancel(self, *, task_identity: str | None = None) -> dict[str, Any]:
+        return self._finish_transition("cancelled", task_identity=task_identity)
+
+    def release(self, *, task_identity: str | None = None) -> dict[str, Any]:
+        return self._finish_transition("released", task_identity=task_identity)
+
+    def validate_output_dir(self, out_dir: Path) -> Path:
+        candidate = Path(out_dir).expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("pip_embedded output directory must be explicit and absolute")
+        resolved = candidate.resolve(strict=False)
+        root = Path(self.profile.output_root).resolve(strict=False)
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("pip_embedded output directory is outside the profile output root") from exc
+        return resolved
 
 
 class _NoRedirectHandler(urllib_request.HTTPRedirectHandler):
@@ -199,14 +747,34 @@ class VibeComfyBackend(BackendAdapter):
     the explicit remote-only subclass and owns all remote HTTP behavior.
     """
 
+    def __init__(
+        self,
+        *,
+        profile: PipEmbeddedProfile | None = None,
+        execution_factory: ExecutionFactory | None = None,
+    ) -> None:
+        self._pip_embedded_profile = profile
+        self._pip_embedded_session = (
+            PipEmbeddedSession(profile, execution_factory=execution_factory)
+            if profile is not None
+            else None
+        )
+
     def _run_workflow(self, workflow: Any) -> Any:
         """Run a workflow through the local embedded VibeComfy runtime."""
-        from vibecomfy.runtime.run import run_sync
-
-        return run_sync(workflow)
+        session = getattr(self, "_pip_embedded_session", None)
+        if session is None:
+            raise ValueError(
+                "pip_embedded requires an explicit PipEmbeddedProfile; "
+                "ambient interpreter/package discovery is disabled"
+            )
+        return session.run(workflow)
 
     def _collect_outputs(self, result: Any, out_dir: Path) -> list[Path]:
         """Preserve the embedded runtime's local path-copy semantics."""
+        session = getattr(self, "_pip_embedded_session", None)
+        if session is not None:
+            out_dir = session.validate_output_dir(out_dir)
         image_paths: list[Path] = []
         for output_path_str in result.outputs:
             src = Path(output_path_str)
@@ -296,6 +864,14 @@ class VibeComfyBackend(BackendAdapter):
         params: dict[str, Any],
         out_dir: Path,
     ) -> GenerationResult:
+        if type(self) is VibeComfyBackend and self._pip_embedded_session is None:
+            raise ValueError(
+                "pip_embedded requires an explicit PipEmbeddedProfile; "
+                "ambient interpreter/package discovery is disabled"
+            )
+        pip_session = getattr(self, "_pip_embedded_session", None)
+        if pip_session is not None:
+            out_dir = pip_session.validate_output_dir(out_dir)
         # Lazy-import VibeComfy (SD-009), and snapshot only its repository
         # template corpus.  Dynamic/user template discovery is forbidden.
         import vibecomfy  # noqa: F401

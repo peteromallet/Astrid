@@ -738,3 +738,217 @@ def _capture_error(target: list[BaseException], callback: Any) -> None:
         callback()
     except BaseException as exc:
         target.append(exc)
+
+
+def test_wrong_nonce_at_committing_barrier_cannot_relabel_frozen_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from astrid.core.generation.backends import vibecomfy as backend
+
+    profile = make_profile(tmp_path)
+    session = PipEmbeddedSession(
+        profile, execution_factory=lambda _p, request, staging: _request_handle(request, staging)
+    )
+    entered, allow = threading.Event(), threading.Event()
+    original_publish = backend._publish_directory_noreplace
+
+    def barrier(*args: Any, **kwargs: Any) -> None:
+        entered.set()
+        assert allow.wait(timeout=3)
+        original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "_publish_directory_noreplace", barrier)
+    errors: list[BaseException] = []
+    run_thread = threading.Thread(
+        target=lambda: _capture_error(
+            errors,
+            lambda: session.run(
+                workflow(), task_identity="post-commit", out_dir=Path(profile.output_root)
+            ),
+        )
+    )
+    run_thread.start()
+    assert entered.wait(timeout=3)
+    assert session.active_invocation()["phase"] == "COLLECTING"
+    assert session.active_invocation()["stop_reason"] is None
+
+    wrong: list[BaseException] = []
+    observed: list[dict[str, Any]] = []
+    wrong_thread = threading.Thread(
+        target=lambda: _capture_error(
+            wrong,
+            lambda: session.cancel(task_identity="post-commit", invocation_nonce="wrong"),
+        )
+    )
+    valid_thread = threading.Thread(
+        target=lambda: observed.append(
+            session.release(
+                task_identity="post-commit",
+                invocation_nonce=session.active_invocation()["nonce"],
+            )
+        )
+    )
+    wrong_thread.start()
+    valid_thread.start()
+    time.sleep(0.05)
+    assert session.active_invocation()["stop_reason"] is None
+    allow.set()
+    wrong_thread.join(timeout=3)
+    valid_thread.join(timeout=3)
+    run_thread.join(timeout=3)
+
+    assert not errors
+    assert len(wrong) == 1 and isinstance(wrong[0], _PipEmbeddedError)
+    assert wrong[0].code == "identity_mismatch"
+    assert observed and observed[0]["status"] == "succeeded"
+    final = session.release(task_identity="post-commit", invocation_nonce=session._cached_binding.nonce)
+    assert wrong[0].outcome == observed[0] == final
+    assert final["status"] == "succeeded" and final["ok"] is True
+    assert final["publication"]["phase"] == "DURABLE"
+
+
+def test_bootstrap_not_ready_has_non_success_typed_terminal_outcome(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+
+    class NotReady(Handle):
+        def wait_ready(self, timeout: float) -> None:
+            raise _PipEmbeddedError("not_ready", "fixture_not_ready", phase="ready")
+
+    def factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> NotReady:
+        handle = NotReady(staging)
+        handle.nonce = request["nonce"]
+        return handle
+
+    with pytest.raises(_PipEmbeddedError) as raised:
+        PipEmbeddedSession(profile, execution_factory=factory).run(
+            workflow(), out_dir=Path(profile.output_root)
+        )
+    error = raised.value
+    assert error.code == "not_ready"
+    assert error.outcome is not None
+    assert error.outcome["status"] == "not_ready"
+    assert error.outcome["ok"] is False
+    assert error.outcome["status"] != "succeeded"
+
+
+def test_active_record_source_fd_identity_substitution_is_rejected_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = make_profile(tmp_path)
+    sentinel = Path(profile.output_root) / "outside-sentinel"
+    sentinel.write_bytes(b"keep me")
+    session = PipEmbeddedSession(
+        profile, execution_factory=lambda _p, request, staging: _request_handle(request, staging)
+    )
+    alternate = Path(profile.scratch_root) / "alternate"
+    alternate.mkdir()
+    alternate_fd = os.open(alternate, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    original_collect = session._collect_outputs
+
+    def substitute(record: dict[str, Any], result: _ChildResult, destination: Path) -> list[Path]:
+        record["source_dir_fd"] = alternate_fd
+        record["source_identity"] = (os.fstat(alternate_fd).st_dev, os.fstat(alternate_fd).st_ino)
+        return original_collect(record, result, destination)
+
+    monkeypatch.setattr(session, "_collect_outputs", substitute)
+    with pytest.raises(_PipEmbeddedError) as raised:
+        session.run(workflow(), out_dir=Path(profile.output_root))
+    os.close(alternate_fd)
+    assert "admission custody" in raised.value.outcome["error"]
+    assert list(Path(profile.output_root).glob("pip-embedded-*")) == []
+    assert sentinel.read_bytes() == b"keep me"
+    assert raised.value.outcome["publication"] is None
+
+
+def test_destination_parent_fsync_after_real_rename_is_typed_and_rolled_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from astrid.core.generation.backends import vibecomfy as backend
+
+    profile = make_profile(tmp_path)
+    sentinel = Path(profile.output_root) / "outside-sentinel"
+    sentinel.write_bytes(b"keep me")
+    session = PipEmbeddedSession(
+        profile, execution_factory=lambda _p, request, staging: _request_handle(request, staging)
+    )
+    real_fsync = backend.os.fsync
+    failed = False
+
+    def fail_destination_fsync(fd: int) -> None:
+        nonlocal failed
+        record = session._record
+        if (
+            not failed
+            and record is not None
+            and fd == record.get("destination_fd")
+            and (record.get("publication_state") or {}).get("phase") == "RENAMED"
+        ):
+            failed = True
+            raise OSError("destination fsync fixture failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(backend.os, "fsync", fail_destination_fsync)
+    with pytest.raises(_PipEmbeddedError) as raised:
+        session.run(workflow(), out_dir=Path(profile.output_root))
+    outcome = raised.value.outcome
+    assert failed and outcome is not None
+    assert outcome["status"] == "publication_failure"
+    assert outcome["ok"] is False
+    assert outcome["status"] != "succeeded"
+    assert outcome["publication"]["phase"] == "ROLLED_BACK"
+    assert outcome["fence_pending"] is False
+    assert list(Path(profile.output_root).glob("pip-embedded-*")) == []
+    assert sentinel.read_bytes() == b"keep me"
+
+
+def test_rollback_failure_retains_final_custody_and_fence_in_structured_outcome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from astrid.core.generation.backends import vibecomfy as backend
+
+    profile = make_profile(tmp_path)
+    sentinel = Path(profile.output_root) / "outside-sentinel"
+    sentinel.write_bytes(b"keep me")
+    session = PipEmbeddedSession(
+        profile, execution_factory=lambda _p, request, staging: _request_handle(request, staging)
+    )
+    real_fsync = backend.os.fsync
+    real_remove = backend._remove_tree_at
+    failed_fsync = False
+
+    def fail_after_rename(fd: int) -> None:
+        nonlocal failed_fsync
+        record = session._record
+        if (
+            not failed_fsync
+            and record is not None
+            and fd == record.get("destination_fd")
+            and (record.get("publication_state") or {}).get("phase") == "RENAMED"
+        ):
+            failed_fsync = True
+            raise OSError("destination fsync fixture failure")
+        real_fsync(fd)
+
+    def fail_rollback(parent_fd: int, name: str, **kwargs: Any) -> None:
+        state = (session._record or {}).get("publication_state") or {}
+        if state.get("phase") == "RENAMED" and name == state.get("final_name"):
+            raise OSError("rollback fixture failure")
+        real_remove(parent_fd, name, **kwargs)
+
+    monkeypatch.setattr(backend.os, "fsync", fail_after_rename)
+    monkeypatch.setattr(backend, "_remove_tree_at", fail_rollback)
+    with pytest.raises(_PipEmbeddedError) as raised:
+        session.run(workflow(), out_dir=Path(profile.output_root))
+    outcome = raised.value.outcome
+    record = session._record
+    assert failed_fsync and outcome is not None and record is not None
+    assert outcome["status"] == "publication_failure"
+    assert outcome["ok"] is False
+    assert outcome["fence_pending"] is True
+    assert outcome["publication"]["phase"] == "FENCE_PENDING"
+    final_name = outcome["publication"]["unresolved_name"]
+    final_dir = Path(profile.output_root) / final_name
+    assert final_dir.is_dir() and (final_dir / "frame.bin").read_bytes() == b"frame"
+    assert session.poisoned and session.fence_pending
+    assert os.fstat(record["publication_fd"]).st_ino == outcome["publication"]["final_identity"][1]
+    assert sentinel.read_bytes() == b"keep me"

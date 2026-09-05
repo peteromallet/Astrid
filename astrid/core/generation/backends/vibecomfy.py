@@ -222,7 +222,7 @@ class _PipEmbeddedError(RuntimeError):
         self.phase = phase
         self.nonce = nonce
         self.go_sent = go_sent
-        self.outcome = dict(outcome) if outcome is not None else None
+        self.outcome = _thaw_json(outcome) if outcome is not None else None
         super().__init__(f"{code}:{reason}")
 
 
@@ -611,6 +611,35 @@ class _ChildResult:
     prompt_id: str | None
     outputs: tuple[tuple[str, int, str], ...]
     published_outputs: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _InvocationBinding:
+    """Immutable identity captured when one invocation is admitted."""
+
+    nonce: str
+    identity: str
+    profile_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class _OutputCustody:
+    """Admission-owned descriptors for the one source tree we may collect."""
+
+    binding: _InvocationBinding
+    scratch_fd: int
+    scratch_identity: tuple[int, int]
+    staging_fd: int
+    staging_identity: tuple[int, int]
+    staging_name: str
+    staging_path: Path
+    source_fd: int
+    source_identity: tuple[int, int]
+    source_name: str
+    source_path: Path
+    destination_fd: int
+    destination_identity: tuple[int, int]
+    destination_path: Path
 
 
 def _hash_file(path: Path) -> str:
@@ -1813,6 +1842,8 @@ class PipEmbeddedSession:
         self._record: dict[str, Any] | None = None
         self._poisoned = False
         self._disposed: dict[str, Any] | None = None
+        self._cached_outcome: Mapping[str, Any] | None = None
+        self._cached_binding: _InvocationBinding | None = None
         self.last_lifecycle, self.last_warm_reused = "cold", False
 
     @property
@@ -1835,10 +1866,14 @@ class PipEmbeddedSession:
                 raise _PipEmbeddedError("containment_pending", "session_poisoned", phase="admission")
             if self._record is not None:
                 raise RuntimeError("pip_embedded execution is already in progress")
+            binding = _InvocationBinding(
+                uuid.uuid4().hex, identity, self.profile.profile_digest
+            )
             record = {
-                "nonce": uuid.uuid4().hex,
+                "binding": binding,
+                "nonce": binding.nonce,
                 "identity": identity,
-                "profile_digest": self.profile.profile_digest,
+                "profile_digest": binding.profile_digest,
                 "phase": "PREPARING",
                 "stop_reason": None,
                 "cancel_event": threading.Event(),
@@ -1854,6 +1889,7 @@ class PipEmbeddedSession:
                 "staging_fd": None,
                 "staging_name": None,
                 "staging_identity": None,
+                "custody": None,
                 "spawn_pending": False,
                 "start_finished": False,
                 "containment_state": "NOT_STARTED",
@@ -1877,8 +1913,8 @@ class PipEmbeddedSession:
             if self._record is None:
                 return None
             return {
-                "nonce": self._record["nonce"],
-                "identity": self._record["identity"],
+                "nonce": self._record["binding"].nonce,
+                "identity": self._record["binding"].identity,
                 "phase": self._record["phase"],
                 "stop_reason": self._record["stop_reason"],
             }
@@ -1891,24 +1927,69 @@ class PipEmbeddedSession:
             raise ValueError("pip_embedded task identity must be non-empty")
         return value
 
+    @staticmethod
+    def _outcome_copy(outcome: Mapping[str, Any] | None) -> dict[str, Any]:
+        return _thaw_json(outcome or {})
+
     def _finalize(
-        self, record: dict[str, Any], outcome: dict[str, Any], *, poison: bool = False
+        self,
+        record: dict[str, Any],
+        outcome: dict[str, Any],
+        *,
+        poison: bool = False,
+        error: BaseException | None = None,
     ) -> None:
         with self._lock:
             if record["outcome"] is not None:
                 return
+            binding: _InvocationBinding = record["binding"]
             frozen = dict(outcome)
-            frozen.setdefault("nonce", record["nonce"])
-            frozen.setdefault("identity", record["identity"])
-            frozen.setdefault("status", record["stop_reason"] or "succeeded")
+            frozen.setdefault("nonce", binding.nonce)
+            frozen.setdefault("identity", binding.identity)
+            status = frozen.get("status")
+            if not isinstance(status, str) or not status:
+                status = record["stop_reason"]
+            if not isinstance(status, str) or not status:
+                status = getattr(error, "code", None) or ("succeeded" if frozen.get("ok") else "failed")
+            if status == "succeeded" and frozen.get("ok") is not True:
+                status = getattr(error, "code", None) or "failed"
+            frozen["status"] = status
             frozen.setdefault("transition", frozen["status"])
             frozen.setdefault("terminated", frozen.get("termination_complete") is True)
             frozen.setdefault("reaped", frozen.get("direct_child_reaped") is True)
             frozen.setdefault("group_quiescent", frozen.get("group_quiescent") is True)
             frozen.setdefault("cleanup_complete", frozen.get("cleanup_complete") is True)
             frozen.setdefault("fence_pending", poison or frozen.get("fence_pending") is True)
-            frozen = MappingProxyType(frozen)
+            publication = record.get("publication_state")
+            frozen.setdefault("phase", record.get("phase"))
+            frozen.setdefault("publication", self._outcome_copy(publication) if publication else None)
+            frozen.setdefault(
+                "termination",
+                {
+                    "complete": frozen["terminated"],
+                    "reaped": frozen["reaped"],
+                    "group_quiescent": frozen["group_quiescent"],
+                },
+            )
+            frozen.setdefault(
+                "reap",
+                {
+                    "direct_child": frozen["reaped"],
+                    "group_quiescent": frozen["group_quiescent"],
+                },
+            )
+            frozen.setdefault(
+                "cleanup",
+                {
+                    "complete": frozen["cleanup_complete"],
+                    "state": record.get("cleanup_state"),
+                },
+            )
+            frozen.setdefault("fence", {"pending": frozen["fence_pending"]})
+            frozen = _freeze_json(frozen)
             record["outcome"] = frozen
+            self._cached_outcome = frozen
+            self._cached_binding = binding
             if poison or frozen["fence_pending"]:
                 self._poisoned = True
             if record["stop_reason"] is not None:
@@ -1920,11 +2001,19 @@ class PipEmbeddedSession:
 
     @staticmethod
     def _close_custody(record: dict[str, Any]) -> None:
-        for key in ("source_dir_fd", "staging_fd", "scratch_fd", "destination_fd"):
-            fd = record.get(key)
+        custody = record.get("custody")
+        if isinstance(custody, _OutputCustody):
+            fds = (custody.source_fd, custody.staging_fd, custody.scratch_fd, custody.destination_fd)
+        else:
+            fds = tuple(record.get(key) for key in ("source_dir_fd", "staging_fd", "scratch_fd", "destination_fd"))
+        for fd in fds:
             if isinstance(fd, int) and fd >= 0:
-                os.close(fd)
-                record[key] = None
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        for key in ("source_dir_fd", "staging_fd", "scratch_fd", "destination_fd"):
+            record[key] = None
 
     def _ensure_contained(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -2009,6 +2098,7 @@ class PipEmbeddedSession:
     ) -> Any:
         identity = self._task_identity(task_identity)
         record = self._reserve(identity)
+        binding: _InvocationBinding = record["binding"]
         handle: PipEmbeddedExecution | None = None
         staging: Path | None = None
         published: list[Path] = []
@@ -2038,9 +2128,9 @@ class PipEmbeddedSession:
                 raise ValueError("unsupported_workflow: missing VibeComfy format stamp")
             request = {
                 "schema": _REQUEST_SCHEMA,
-                "nonce": record["nonce"],
+                "nonce": binding.nonce,
                 "task_identity": identity,
-                "profile_digest": self.profile.profile_digest,
+                "profile_digest": binding.profile_digest,
                 "workflow": envelope,
                 "workflow_digest": _digest(envelope),
                 "config_digest": None,
@@ -2070,6 +2160,25 @@ class PipEmbeddedSession:
                 os.fstat(source_fd).st_dev,
                 os.fstat(source_fd).st_ino,
             )
+            record["custody"] = _OutputCustody(
+                binding=binding,
+                scratch_fd=scratch_fd,
+                scratch_identity=record["scratch_identity"],
+                staging_fd=staging_fd,
+                staging_identity=record["staging_identity"],
+                staging_name=staging_name,
+                staging_path=staging,
+                source_fd=source_fd,
+                source_identity=record["source_identity"],
+                source_name="engine-output",
+                source_path=engine_output,
+                destination_fd=destination_fd,
+                destination_identity=(
+                    os.fstat(destination_fd).st_dev,
+                    os.fstat(destination_fd).st_ino,
+                ),
+                destination_path=destination,
+            )
             (staging / "paths.yaml").write_text(
                 "vibecomfy:\n"
                 f"  base_path: {json.dumps(self.profile.model_root)}\n"
@@ -2088,7 +2197,7 @@ class PipEmbeddedSession:
             record["launch_facts"] = launch_facts
             with self._lock:
                 if record["stop_reason"] is not None:
-                    raise _PipEmbeddedError("cancelled", "before_spawn", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "before_spawn", nonce=binding.nonce)
                 record["phase"] = "SPAWNING"
                 record["spawn_pending"] = True
             handle = self._execution_factory(self.profile, request, staging)
@@ -2096,7 +2205,7 @@ class PipEmbeddedSession:
                 record["handle"] = handle
                 record["spawn_pending"] = False
                 if record["stop_reason"] is not None:
-                    raise _PipEmbeddedError("cancelled", "before_start", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "before_start", nonce=binding.nonce)
                 if time.monotonic() > record["pre_go_deadline"]:
                     raise _unavailable("pre_go_deadline", phase="spawn")
                 record["phase"] = "PREFLIGHT"
@@ -2104,7 +2213,7 @@ class PipEmbeddedSession:
             with self._lock:
                 record["start_finished"] = True
                 if record["stop_reason"] is not None:
-                    raise _PipEmbeddedError("cancelled", "before_ready", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "before_ready", nonce=binding.nonce)
                 record["ready_deadline"] = time.monotonic() + self.timeouts.ready_seconds
             handle.wait_ready(self.timeouts.ready_seconds)
             if time.monotonic() > record["pre_go_deadline"]:
@@ -2112,7 +2221,7 @@ class PipEmbeddedSession:
             _revalidate_launch_evidence(self.profile)
             with self._lock:
                 if record["stop_reason"] is not None:
-                    raise _PipEmbeddedError("cancelled", "before_go", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "before_go", nonce=binding.nonce)
                 record["phase"] = "RUNNING"
                 handle.go()
                 record["go_sent"] = True
@@ -2121,11 +2230,11 @@ class PipEmbeddedSession:
             if not containment.get("group_quiescent", False) or not containment.get("reaped", False):
                 raise _PipEmbeddedError("containment_pending", "normal_completion", phase="containment")
             result = handle.read_result()
-            if not isinstance(result, _ChildResult) or result.nonce != record["nonce"]:
+            if not isinstance(result, _ChildResult) or result.nonce != binding.nonce:
                 raise ValueError("embedded result nonce/type mismatch")
             with self._lock:
                 if record["stop_reason"] is not None:
-                    raise _PipEmbeddedError("cancelled", "during_execution", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "during_execution", nonce=binding.nonce)
                 record["phase"] = "COLLECTING"
             published = self._collect_outputs(record, result, destination)
             result = _ChildResult(
@@ -2133,12 +2242,16 @@ class PipEmbeddedSession:
             )
             with self._lock:
                 if record["stop_reason"] is not None:
-                    raise _PipEmbeddedError("cancelled", "during_collection", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "during_collection", nonce=binding.nonce)
             record["cleanup_state"] = "IN_PROGRESS"
             handle.cleanup()
+            custody = record.get("custody")
+            cleanup_parent = custody.scratch_fd if isinstance(custody, _OutputCustody) else record["scratch_fd"]
+            cleanup_name = custody.staging_name if isinstance(custody, _OutputCustody) else record["staging_name"]
+            cleanup_identity = custody.staging_identity if isinstance(custody, _OutputCustody) else record["staging_identity"]
             _remove_tree_at(
-                record["scratch_fd"], record["staging_name"],
-                timeout=self.timeouts.cleanup_seconds, expected=record["staging_identity"],
+                cleanup_parent, cleanup_name,
+                timeout=self.timeouts.cleanup_seconds, expected=cleanup_identity,
             )
             record["cleanup_state"] = "DONE"
             self._close_custody(record)
@@ -2154,6 +2267,7 @@ class PipEmbeddedSession:
                     "group_quiescent": True,
                     "cleanup_complete": True,
                 },
+                error=None,
             )
             return result
         except BaseException as exc:
@@ -2170,22 +2284,33 @@ class PipEmbeddedSession:
                     poison = True
             if staging is not None and not poison:
                 try:
-                    if record.get("scratch_fd") is not None and record.get("staging_name"):
+                    custody = record.get("custody")
+                    cleanup_parent = custody.scratch_fd if isinstance(custody, _OutputCustody) else record.get("scratch_fd")
+                    cleanup_name = custody.staging_name if isinstance(custody, _OutputCustody) else record.get("staging_name")
+                    cleanup_identity = custody.staging_identity if isinstance(custody, _OutputCustody) else record.get("staging_identity")
+                    if cleanup_parent is not None and cleanup_name:
                         _remove_tree_at(
-                            record["scratch_fd"], record["staging_name"],
+                            cleanup_parent, cleanup_name,
                             timeout=self.timeouts.cleanup_seconds,
-                            expected=record.get("staging_identity"),
+                            expected=cleanup_identity,
                         )
                     cleanup_complete = True
                 except BaseException:
                     poison = True
             if not poison:
                 self._close_custody(record)
+            terminal_exc = exc if isinstance(exc, _PipEmbeddedError) else _PipEmbeddedError(
+                "publication_failure" if record.get("publication_state") else "failed",
+                str(exc) or type(exc).__name__,
+                phase=record.get("phase", "admission"),
+                nonce=binding.nonce,
+            )
             self._finalize(
                 record,
                 {
                     "ok": False,
-                    "error": str(exc),
+                    "error": str(terminal_exc),
+                    "error_code": terminal_exc.code,
                     "termination_complete": containment.get("terminated", False),
                     "direct_child_reaped": containment.get("reaped", False),
                     "group_quiescent": containment.get("group_quiescent", False),
@@ -2193,61 +2318,97 @@ class PipEmbeddedSession:
                     "fence_pending": poison,
                 },
                 poison=poison,
+                error=terminal_exc,
             )
-            if isinstance(exc, _PipEmbeddedError):
-                exc.outcome = dict(record.get("outcome") or {})
+            terminal_exc.outcome = self._outcome_copy(record.get("outcome"))
+            if terminal_exc is not exc:
+                raise terminal_exc from exc
             raise
 
     def _collect_outputs(
         self, record: dict[str, Any], result: _ChildResult, destination: Path
     ) -> list[Path]:
-        source_fd = record.get("source_dir_fd")
-        destination_fd = record.get("destination_fd")
-        if record is not self._record or result.nonce != record.get("nonce"):
+        custody = record.get("custody")
+        if record is not self._record or not isinstance(custody, _OutputCustody):
             raise ValueError("embedded output custody is not bound to this invocation")
+        binding = custody.binding
+        if (
+            record.get("binding") != binding
+            or record.get("nonce") != binding.nonce
+            or record.get("identity") != binding.identity
+            or record.get("profile_digest") != binding.profile_digest
+            or result.nonce != binding.nonce
+        ):
+            raise ValueError("embedded output invocation identity changed")
         if record.get("phase") != "COLLECTING":
             raise ValueError("embedded output collection is outside the invocation phase")
-        if Path(destination).expanduser().resolve(strict=False) != record.get("destination"):
+        if Path(destination).expanduser().resolve(strict=False) != custody.destination_path:
             raise ValueError("embedded output destination is not the admitted directory")
-        if not isinstance(source_fd, int) or not isinstance(destination_fd, int):
+        if (
+            record.get("source_dir_fd") != custody.source_fd
+            or record.get("source_identity") != custody.source_identity
+            or record.get("staging_fd") != custody.staging_fd
+            or record.get("staging_identity") != custody.staging_identity
+            or record.get("scratch_fd") != custody.scratch_fd
+            or record.get("scratch_identity") != custody.scratch_identity
+            or record.get("destination_fd") != custody.destination_fd
+            or record.get("destination") != custody.destination_path
+            or record.get("staging") != custody.staging_path
+            or record.get("staging_name") != custody.staging_name
+        ):
+            raise ValueError("embedded output admission custody was substituted")
+        handle = record.get("handle")
+        if handle is not None and getattr(handle, "output_dir", custody.source_path) != custody.source_path:
+            raise ValueError("embedded output handle source was substituted")
+        source_fd = custody.source_fd
+        destination_fd = custody.destination_fd
+        staging_fd = custody.staging_fd
+        scratch_fd = custody.scratch_fd
+        if not all(isinstance(fd, int) and fd >= 0 for fd in (source_fd, destination_fd, staging_fd, scratch_fd)):
             raise RuntimeError("embedded output custody is unavailable")
         _reject_symlink_ancestors(destination)
         try:
             source_info = os.fstat(source_fd)
-            if (
-                (source_info.st_dev, source_info.st_ino) != record.get("source_identity")
-            ):
+            if stat.S_IFMT(source_info.st_mode) != stat.S_IFDIR or source_info.st_nlink < 1:
+                raise ValueError("embedded output source custody is not a directory")
+            if (source_info.st_dev, source_info.st_ino) != custody.source_identity:
                 raise ValueError("embedded output source custody changed")
-            staging_fd = record.get("staging_fd")
-            scratch_fd = record.get("scratch_fd")
-            if not isinstance(staging_fd, int) or not isinstance(scratch_fd, int):
-                raise ValueError("embedded output source custody unavailable")
             staging_info = os.fstat(staging_fd)
-            if (staging_info.st_dev, staging_info.st_ino) != record.get("staging_identity"):
+            if stat.S_IFMT(staging_info.st_mode) != stat.S_IFDIR or (
+                staging_info.st_dev, staging_info.st_ino
+            ) != custody.staging_identity:
                 raise ValueError("embedded output staging custody changed")
             scratch_info = os.fstat(scratch_fd)
-            if (scratch_info.st_dev, scratch_info.st_ino) != record.get("scratch_identity"):
+            if stat.S_IFMT(scratch_info.st_mode) != stat.S_IFDIR or (
+                scratch_info.st_dev, scratch_info.st_ino
+            ) != custody.scratch_identity:
                 raise ValueError("embedded output scratch custody changed")
             check_staging_fd = os.open(
-                record["staging_name"], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                custody.staging_name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
                 dir_fd=scratch_fd,
             )
             try:
-                if os.fstat(check_staging_fd).st_ino != staging_info.st_ino:
+                if (os.fstat(check_staging_fd).st_dev, os.fstat(check_staging_fd).st_ino) != (
+                    staging_info.st_dev, staging_info.st_ino
+                ):
                     raise ValueError("embedded output staging custody changed")
             finally:
                 os.close(check_staging_fd)
+            check_source_fd = os.open(
+                custody.source_name,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                dir_fd=staging_fd,
+            )
+            try:
+                if (os.fstat(check_source_fd).st_dev, os.fstat(check_source_fd).st_ino) != custody.source_identity:
+                    raise ValueError("embedded output source relationship changed")
+            finally:
+                os.close(check_source_fd)
             destination_info = os.fstat(destination_fd)
-            if stat.S_IFMT(destination_info.st_mode) != stat.S_IFDIR:
+            if stat.S_IFMT(destination_info.st_mode) != stat.S_IFDIR or (
+                destination_info.st_dev, destination_info.st_ino
+            ) != custody.destination_identity:
                 raise ValueError("embedded output destination custody changed")
-            recorded_destination = record.get("destination")
-            if recorded_destination is not None:
-                expected_destination_info = os.stat(recorded_destination, follow_symlinks=False)
-                if (destination_info.st_dev, destination_info.st_ino) != (
-                    expected_destination_info.st_dev,
-                    expected_destination_info.st_ino,
-                ):
-                    raise ValueError("embedded output destination custody changed")
         except OSError as exc:
             raise ValueError("embedded output custody unavailable") from exc
         publication_name = f".pip-embedded-staging-{uuid.uuid4().hex}"
@@ -2344,7 +2505,7 @@ class PipEmbeddedSession:
             record["publication_state"].update(final_name=final_name, phase="PREPARED")
             with self._lock:
                 if record.get("stop_reason") is not None:
-                    raise _PipEmbeddedError("cancelled", "before_commit", nonce=record["nonce"])
+                    raise _PipEmbeddedError("cancelled", "before_commit", nonce=binding.nonce)
                 record["publication_state"]["phase"] = "COMMITTING"
             _publish_directory_noreplace(destination_fd, publication_name, destination_fd, final_name)
             committed_name = final_name
@@ -2397,55 +2558,80 @@ class PipEmbeddedSession:
         invocation_nonce: str | None = None,
     ) -> dict[str, Any]:
         identity_bad = False
+        post_commit_identity_bad = False
         with self._lock:
             record = self._record
             if record is None:
+                cached = self._cached_outcome
+                cached_binding = self._cached_binding
+                if cached is not None and cached_binding is not None:
+                    supplied_identity = self._task_identity(task_identity) if task_identity is not None else None
+                    if (
+                        task_identity is not None or invocation_nonce is not None
+                    ) and (supplied_identity, invocation_nonce) != (
+                        cached_binding.identity, cached_binding.nonce
+                    ):
+                        error = _PipEmbeddedError(
+                            "identity_mismatch", "stale invocation identity", nonce=cached_binding.nonce
+                        )
+                        error.outcome = self._outcome_copy(cached)
+                        raise error
+                    return self._outcome_copy(cached)
                 if self._disposed is None:
-                    self._disposed = MappingProxyType({
+                    self._disposed = _freeze_json({
                         "ok": True,
                         "status": "disposed",
                         "transition": "disposed",
+                        "phase": "DISPOSED",
                         "terminated": False,
                         "reaped": True,
                         "group_quiescent": True,
                         "cleanup_complete": True,
                         "fence_pending": False,
+                        "termination": {"complete": False, "reaped": True, "group_quiescent": True},
+                        "reap": {"direct_child": True, "group_quiescent": True},
+                        "cleanup": {"complete": True, "state": "DONE"},
+                        "publication": None,
+                        "fence": {"pending": False},
                     })
                 if task_identity is not None or invocation_nonce is not None:
-                    if (
-                        task_identity != self._disposed.get("identity")
-                        or invocation_nonce != self._disposed.get("nonce")
-                    ):
-                        raise _PipEmbeddedError("identity_mismatch", "stale invocation identity")
-                return dict(self._disposed)
+                    error = _PipEmbeddedError("identity_mismatch", "stale invocation identity")
+                    error.outcome = self._outcome_copy(self._disposed)
+                    raise error
+                return self._outcome_copy(self._disposed)
             identity = self._task_identity(task_identity)
+            binding: _InvocationBinding = record["binding"]
+            publication_phase = (record.get("publication_state") or {}).get("phase")
+            post_commit = publication_phase in {"COMMITTING", "RENAMED", "DURABLE", "FENCE_PENDING"}
             if not isinstance(invocation_nonce, str) or not invocation_nonce.strip() or (
-                record["identity"], record["nonce"]
+                binding.identity, binding.nonce
             ) != (identity, invocation_nonce):
                 identity_bad = True
-                if record["stop_reason"] is None:
-                    record["stop_reason"] = "identity-mismatch"
-                record["control_fault"] = "active invocation identity mismatch"
-                record["failure"] = "active invocation identity mismatch"
-                record["cancel_event"].set()
+                post_commit_identity_bad = post_commit
+                if not post_commit:
+                    if record["stop_reason"] is None:
+                        record["stop_reason"] = "identity-mismatch"
+                    record["control_fault"] = "active invocation identity mismatch"
+                    record["failure"] = "active invocation identity mismatch"
+                    record["cancel_event"].set()
                 event = record["done"]
             else:
-                publication_phase = (record.get("publication_state") or {}).get("phase")
-                if publication_phase not in {"COMMITTING", "RENAMED", "DURABLE"} and record["stop_reason"] is None:
+                if not post_commit and record["stop_reason"] is None:
                     record["stop_reason"] = reason
                 event = record["done"]
-            if not identity_bad and (record.get("publication_state") or {}).get("phase") not in {
-                "COMMITTING", "RENAMED", "DURABLE"
-            }:
+            if not identity_bad and not post_commit:
                 record["cancel_event"].set()
             handle_available = record.get("handle") is not None
-        if handle_available:
+        if handle_available and not post_commit_identity_bad:
             self._ensure_contained(record)
         if not event.wait(timeout=self.timeouts.control_seconds):
-            return {
+            timeout_outcome = {
                 "ok": False,
-                "status": record.get("stop_reason"),
-                "transition": record.get("stop_reason"),
+                "status": "containment_pending",
+                "transition": "containment_pending",
+                "nonce": record["binding"].nonce,
+                "identity": record["binding"].identity,
+                "phase": record.get("phase"),
                 "terminated": False,
                 "reaped": False,
                 "group_quiescent": False,
@@ -2453,16 +2639,30 @@ class PipEmbeddedSession:
                 "fence_pending": True,
                 "error_code": "containment_pending",
             }
+            if identity_bad:
+                error = _PipEmbeddedError(
+                    "identity_mismatch", "active invocation identity mismatch",
+                    nonce=record["binding"].nonce,
+                    outcome=timeout_outcome,
+                )
+                raise error
+            return timeout_outcome
         if identity_bad:
-            error = _PipEmbeddedError("identity_mismatch", "active invocation identity mismatch", nonce=record["nonce"])
+            error = _PipEmbeddedError(
+                "identity_mismatch", "active invocation identity mismatch",
+                nonce=record["binding"].nonce,
+            )
             with self._lock:
-                error.outcome = dict(record.get("outcome") or {})
+                error.outcome = self._outcome_copy(record.get("outcome"))
             raise error
         with self._lock:
-            return dict(record["outcome"] or {
+            return self._outcome_copy(record["outcome"] or {
                 "ok": False,
-                "status": record.get("stop_reason"),
-                "transition": record.get("stop_reason"),
+                "status": "containment_pending",
+                "transition": "containment_pending",
+                "nonce": record["binding"].nonce,
+                "identity": record["binding"].identity,
+                "phase": record.get("phase"),
                 "terminated": False,
                 "reaped": False,
                 "fence_pending": True,

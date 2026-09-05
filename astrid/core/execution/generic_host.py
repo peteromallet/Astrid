@@ -1042,14 +1042,14 @@ class RuntimeProtocolClient:
     # forbidden project association.
     INLINE_SETTLEMENT_OUTPUTS = True
 
-    def __init__(self, endpoint: str, credential: str, *, timeout: float = 30.0, worker_authority: bool = False):
+    def __init__(self, endpoint: str, credential: str, *, timeout: float = 30.0):
         try:
             self.endpoint = validate_runtime_endpoint(endpoint)
         except WorkspaceClientError as exc:
             raise HostError(f"runtime endpoint rejected: {exc}") from exc
         self.credential = credential
         self.timeout = timeout
-        self.worker_authority = bool(worker_authority)
+        self.worker_authority = True
         try:
             from banodoco_workspace_client import WorkspaceClient
             from banodoco_workspace_client.contract_metadata import SCHEMA_DIGEST
@@ -1295,9 +1295,9 @@ class GenericPackHost:
         self.pack_roots = tuple(dict.fromkeys(configured_roots))
         self.client = client
         self._runtime_authority = (
-            bool(runtime_authority)
-            if runtime_authority is not None
-            else bool(getattr(client, "worker_authority", False))
+            isinstance(client, RuntimeProtocolClient)
+            or bool(getattr(client, "worker_authority", False))
+            or bool(runtime_authority)
         )
         self.executor_id = executor_id
         self.max_concurrency = max(1, int(max_concurrency))
@@ -3213,11 +3213,7 @@ def _cli() -> int:
     if args.readiness_profile_path or args.readiness_profile_hash:
         if not (args.readiness_profile_path and args.readiness_profile_hash and source_checkout and support_root and credential_path and args.runtime_endpoint and args.runtime_instance_id and args.ready_file):
             parser.error("readiness profile requires the complete Runtime host binding")
-    client = (
-        RuntimeProtocolClient(args.runtime_endpoint, credential, worker_authority=True)
-        if args.runtime_endpoint
-        else None
-    )
+    client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
     host = GenericPackHost(
         pack_roots=args.pack_root,
         client=client,
@@ -3229,7 +3225,6 @@ def _cli() -> int:
         boot_manifest_hash=boot_manifest_hash,
         readiness_profile_path=args.readiness_profile_path,
         readiness_profile_hash=args.readiness_profile_hash,
-        runtime_authority=bool(args.runtime_endpoint),
     )
     if args.readiness_profile_path:
         try:

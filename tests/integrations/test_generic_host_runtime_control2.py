@@ -9,16 +9,27 @@ from pathlib import Path
 
 import pytest
 
-
 RUNTIME = Path("/Users/peteromalley/Documents/reigh-workspace/banodoco-workspace-runtime-fi6-identity-20260905")
 if RUNTIME.is_dir():
     sys.path.insert(0, str(RUNTIME))
 
 runtime_protocol = pytest.importorskip("runtime_protocol")
-from banodoco_workspace_client import ApiError, WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
 
 from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
+from banodoco_workspace_client import ApiError, WorkspaceClient  # noqa: E402
+
+
+class _ProfileFreeDaemonAdapter:
+    """Test-only adapter for daemon lifecycle coverage without Worker HC-03."""
+
+    worker_authority = False
+
+    def __init__(self, client: RuntimeProtocolClient):
+        self._client = client
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
 
 
 def _digest(value: str) -> str:
@@ -70,7 +81,7 @@ def test_generated_host_echo_claim_cas_settlement_and_restart(tmp_path: Path) ->
         generated.handshake("astrid-generic-host-test", "0.1.0", ["projects:read", "worker:execute"])
         host = GenericPackHost(
             pack_roots=[pack],
-            client=RuntimeProtocolClient(daemon.endpoint, daemon.token),
+            client=_ProfileFreeDaemonAdapter(RuntimeProtocolClient(daemon.endpoint, daemon.token)),
             executor_id="echo-host",
         )
         registration = host.register()
@@ -194,7 +205,7 @@ def test_provider_fixture_is_credential_gated_then_settles_offline(
         host = GenericPackHost(
             pack_roots=[pack],
             capability_matrix=matrix,
-            client=RuntimeProtocolClient(daemon.endpoint, daemon.token),
+            client=_ProfileFreeDaemonAdapter(RuntimeProtocolClient(daemon.endpoint, daemon.token)),
             executor_id="provider-fixture-host",
         )
         record = host.discover()[0]

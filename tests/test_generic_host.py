@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -925,7 +925,7 @@ def test_register_preserves_declared_dispositions_and_block_reasons(tmp_path, mo
     matrix = tmp_path / "matrix.json"
     matrix.write_text(json.dumps({"schema_version": 1, "capabilities": capabilities}), encoding="utf-8")
 
-    class CaptureRuntime(RuntimeProtocolClient):
+    class CaptureRuntime:
         schema_digest = FakeRuntime.schema_digest
 
         def __init__(self):

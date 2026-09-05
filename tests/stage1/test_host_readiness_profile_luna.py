@@ -11,6 +11,7 @@ import pytest
 from astrid.core.execution.generic_host import (
     GenericPackHost,
     HostError,
+    RuntimeProtocolClient,
     _process_birth_identity,
     load_worker_readiness_profile,
     validate_readiness_profile_health,
@@ -223,7 +224,7 @@ def test_runtime_host_requires_profile_before_registration_and_claim(tmp_path: P
     host = GenericPackHost(
         pack_roots=[Path(context["pack_root"])],
         client=runtime,
-        runtime_authority=True,
+        runtime_authority=False,
     )
 
     with pytest.raises(HostError, match="explicit Worker readiness profile path and hash"):
@@ -232,6 +233,38 @@ def test_runtime_host_requires_profile_before_registration_and_claim(tmp_path: P
         host.claim_once()
     assert runtime.registrations == []
     assert runtime.claims == []
+
+
+def test_default_runtime_protocol_client_cannot_be_downgraded_before_registration_and_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Generated:
+        def __init__(self, *_args):
+            self.registrations = []
+            self.claims = []
+
+        def register_executor(self, *args, **kwargs):
+            self.registrations.append((args, kwargs))
+
+        def claim_task(self, **kwargs):
+            self.claims.append(kwargs)
+
+    monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", Generated)
+    client = RuntimeProtocolClient("http://127.0.0.1:18765", "worker-token")
+    host = GenericPackHost(
+        pack_roots=[tmp_path],
+        client=client,
+        runtime_authority=False,
+    )
+
+    assert client.worker_authority is True
+    assert host._runtime_authority is True
+    with pytest.raises(HostError, match="explicit Worker readiness profile path and hash"):
+        host.register()
+    with pytest.raises(HostError, match="explicit Worker readiness profile path and hash"):
+        host.claim_once()
+    assert client.generated.registrations == []
+    assert client.generated.claims == []
 
 
 @pytest.mark.parametrize(

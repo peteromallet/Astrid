@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -28,6 +28,13 @@ PACK_HOST_SCOPES = (
     "tasks:read",
     "objects:read",
     "objects:write",
+)
+HOST_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH", "LANG", "LC_ALL", "LC_CTYPE", "PYTHONIOENCODING", "PYTHONUNBUFFERED",
+        "TMPDIR", "TEMP", "TMP", "XDG_RUNTIME_DIR", "CUDA_VISIBLE_DEVICES", "NVIDIA_VISIBLE_DEVICES",
+        "ASTRID_HOST_READINESS_PROFILE_PATH", "ASTRID_HOST_READINESS_PROFILE_HASH",
+    }
 )
 
 
@@ -122,6 +129,8 @@ def _host_identity_matches(state: Mapping[str, Any]) -> bool:
         str(state.get("endpoint") or ""),
         str(state.get("boot_manifest_path") or ""),
         str(state.get("boot_manifest_hash") or ""),
+        str(state.get("readiness_profile_path") or ""),
+        str(state.get("readiness_profile_hash") or ""),
     )
     return all(value and value in command for value in required)
 
@@ -337,7 +346,12 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
     # Bind the process to the exact source and runtime instance it registered
     # against.  The health read is intentionally performed with the worker
     # credential, never the owner credential or an ambient environment token.
-    from astrid.core.execution.generic_host import RuntimeProtocolClient, source_checkout_digest
+    from astrid.core.execution.generic_host import (
+        RuntimeProtocolClient,
+        load_worker_readiness_profile,
+        source_checkout_digest,
+        validate_readiness_profile_health,
+    )
 
     try:
         source_digest = source_checkout_digest(source_path)
@@ -345,55 +359,64 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
         raise PackHostBootstrapError(
             f"generic Astrid pack source tree is not a safe checkout; {reconfigure_action}"
         ) from exc
+    runtime_instance_id = value.get("runtime_instance_id")
+    if not isinstance(runtime_instance_id, str) or not runtime_instance_id.strip():
+        raise PackHostBootstrapError(f"generic Astrid pack host Runtime instance is missing; {reconfigure_action}")
+    runtime_support = worker_path.parent.parent
+    host_root = runtime_support / "astrid-host"
+    boot_manifest_path = host_root / "boot-manifest.json"
+    state_path = runtime_support / "generic-host.json"
+    ready_path = runtime_support / "generic-host.ready.json"
+    lock_path = runtime_support / "generic-host.lock"
+    endpoint = str(value["endpoint"]).rstrip("/")
+    try:
+        from astrid.core.gateway.dispatch import compose_profile_handoff
+        boot_handoff = compose_profile_handoff(
+            boot_manifest_path, support_root=runtime_support
+        )
+        boot_manifest_hash = str(boot_handoff["sha256"])
+    except Exception as exc:
+        raise PackHostBootstrapError(
+            f"generic Astrid pack boot manifest could not be composed; {reconfigure_action}"
+        ) from exc
+    profile_path = value.get("readiness_profile_path")
+    profile_hash = value.get("readiness_profile_hash")
+    if not isinstance(profile_path, str) or not isinstance(profile_hash, str):
+        raise PackHostBootstrapError(f"Worker readiness profile handoff is missing; {reconfigure_action}")
+    try:
+        profile = load_worker_readiness_profile(
+            profile_path,
+            profile_hash,
+            support_root=runtime_support,
+            source_checkout=source_path,
+            pack_root=pack_root.resolve(),
+            runtime_endpoint=endpoint,
+            runtime_instance_id=runtime_instance_id,
+            credential_path=worker_path,
+            ready_file=ready_path,
+            state_file=state_path,
+            boot_manifest_path=boot_manifest_path,
+            boot_manifest_hash=boot_manifest_hash,
+            host_interpreter=sys.executable,
+            credential=worker_path.read_text(encoding="utf-8").strip(),
+        )
+    except Exception as exc:
+        raise PackHostBootstrapError(f"Worker readiness profile is invalid; {reconfigure_action}") from exc
     try:
         worker_token = worker_path.read_text(encoding="utf-8").strip()
         if not worker_token:
             raise ValueError("worker credential is empty")
         runtime_client = RuntimeProtocolClient(str(value["endpoint"]).rstrip("/"), worker_token)
         health = runtime_client.health()
+        validate_readiness_profile_health(profile, health)
     except Exception as exc:
         raise PackHostBootstrapError(
             f"generic Astrid pack host could not verify runtime identity; {reconfigure_action}"
         ) from exc
     finally:
         worker_token = ""
-    health_value = dict(health) if isinstance(health, Mapping) else {
-        "runtime_epoch": getattr(health, "runtime_epoch", None),
-        "schema_digest": getattr(health, "schema_digest", None),
-        "runtime_instance_id": getattr(health, "runtime_instance_id", None),
-        "coordinator_epoch": getattr(health, "coordinator_epoch", None),
-    }
-    runtime_epoch = health_value.get("runtime_epoch", value.get("runtime_epoch"))
-    runtime_instance_id = (
-        value.get("runtime_instance_id")
-        or health_value.get("runtime_instance_id")
-        or value.get("coordinator_epoch")
-        or health_value.get("coordinator_epoch")
-        or (f"epoch:{runtime_epoch}" if runtime_epoch is not None else None)
-    )
-    schema_digest = health_value.get("schema_digest") or value.get("schema_digest")
-    if runtime_epoch is None or runtime_instance_id is None:
-        raise PackHostBootstrapError(
-            f"generic Astrid pack host runtime identity is incomplete; {reconfigure_action}"
-        )
-
-    runtime_support = worker_path.parent.parent
-    host_root = runtime_support / "astrid-host"
-    boot_manifest_path = host_root / "boot-manifest.json"
-    from astrid.core.gateway.dispatch import compose_profile_handoff
-    try:
-        boot_handoff = compose_profile_handoff(
-            boot_manifest_path, support_root=runtime_support
-        )
-    except Exception as exc:
-        raise PackHostBootstrapError(
-            f"generic Astrid pack boot manifest could not be composed; {reconfigure_action}"
-        ) from exc
-    boot_manifest_hash = str(boot_handoff["sha256"])
-    state_path = runtime_support / "generic-host.json"
-    ready_path = runtime_support / "generic-host.ready.json"
-    lock_path = runtime_support / "generic-host.lock"
-    endpoint = str(value["endpoint"]).rstrip("/")
+    runtime_epoch = profile["runtime"]["runtime_epoch"]
+    schema_digest = profile["runtime"]["schema_digest"]
     try:
         lock_handle = lock_path.open("a+")
         os.fchmod(lock_handle.fileno(), 0o600)
@@ -420,6 +443,8 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "schema_digest": schema_digest,
             "boot_manifest_path": str(boot_manifest_path),
             "boot_manifest_hash": boot_manifest_hash,
+            "readiness_profile_path": str(profile["_profile_path"]),
+            "readiness_profile_hash": str(profile["_profile_hash"]),
         }
         if (current and ready
                 and all(current.get(key) == expected_value for key, expected_value in expected.items())
@@ -439,6 +464,8 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
                 "host_source_checkout_digest": source_digest,
                 "host_boot_manifest_path": str(boot_manifest_path),
                 "host_boot_manifest_hash": boot_manifest_hash,
+                "host_readiness_profile_path": str(profile["_profile_path"]),
+                "host_readiness_profile_hash": str(profile["_profile_hash"]),
             }
         if current:
             _terminate_old_host(current)
@@ -459,10 +486,12 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "--register",
             "--boot-manifest-path", str(boot_manifest_path),
             "--boot-manifest-hash", boot_manifest_hash,
+            "--readiness-profile-path", str(profile["_profile_path"]),
+            "--readiness-profile-hash", str(profile["_profile_hash"]),
         ]
         if matrix.is_file():
             argv.extend(("--capability-matrix", str(matrix)))
-        child_env = dict(os.environ)
+        child_env = {key: value for key, value in os.environ.items() if key in HOST_ENV_ALLOWLIST}
         # The selected source profile is the complete pack-discovery fence;
         # ambient pack roots/PYTHONPATH entries must not silently add another
         # checkout to this host.
@@ -470,6 +499,8 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
         child_env["PYTHONPATH"] = os.pathsep.join(
             (str(source_path), *_dependency_pythonpath())
         )
+        child_env["ASTRID_HOST_READINESS_PROFILE_PATH"] = str(profile["_profile_path"])
+        child_env["ASTRID_HOST_READINESS_PROFILE_HASH"] = str(profile["_profile_hash"])
         _provision_render_runtime_env(source_path, child_env)
         try:
             log = log_path.open("ab")
@@ -527,6 +558,8 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "host_source_checkout_digest": source_digest,
             "host_boot_manifest_path": str(boot_manifest_path),
             "host_boot_manifest_hash": boot_manifest_hash,
+            "host_readiness_profile_path": str(profile["_profile_path"]),
+            "host_readiness_profile_hash": str(profile["_profile_hash"]),
         }
     finally:
         try:

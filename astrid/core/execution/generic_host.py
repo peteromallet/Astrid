@@ -14,17 +14,17 @@ import hmac
 import importlib.util
 import json
 import os
-import shutil
 import secrets as secrets_module
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from types import SimpleNamespace
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlsplit
 
@@ -33,19 +33,27 @@ from astrid.core.env_vars import (
     ASTRID_PACKS_PATH,
 )
 from astrid.core.execution.capability_ledger import load_capability_ledger
-from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.core.execution.process_group import (
     _process_snapshot,
-    group_exists as _owned_group_exists,
     popen_owned_group,
+)
+from astrid.core.execution.process_group import (
+    group_exists as _owned_group_exists,
+)
+from astrid.core.execution.process_group import (
     release_group as _release_owned_group,
+)
+from astrid.core.execution.process_group import (
     signal_group as _signal_owned_group,
+)
+from astrid.core.execution.process_group import (
     terminate_group as _terminate_owned_group,
 )
 from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantAuthority,
     ProviderRouteGrantError,
 )
+from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -58,6 +66,260 @@ class HostError(RuntimeError):
 
 class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
+
+
+READINESS_PROFILE_SCHEMA = "hc03-worker-readiness.v1"
+_PROFILE_TOP_LEVEL_KEYS = frozenset(
+    {"schema_version", "status", "verified_facts", "verified_facts_digest", "runtime", "launch", "worker_actor", "worker_scopes"}
+)
+_PROFILE_RUNTIME_KEYS = frozenset(
+    {"endpoint", "port", "pid", "process_birth_id", "runtime_instance_id", "runtime_epoch", "schema_digest", "coordinator_epoch", "active_realm", "credential_reference", "discovery_digest"}
+)
+_PROFILE_LAUNCH_KEYS = frozenset(
+    {"host_interpreter", "source_checkout", "engine_interpreter", "output_root", "pack_root", "support_root", "ready_file", "state_file", "boot_manifest_path", "boot_manifest_hash"}
+)
+_HC02_EXACT_KEYS = frozenset(
+    {"interpreter", "runtime_lock", "engine_lock", "model_digest", "custom_node_digest", "driver", "root", "port"}
+)
+_HC02_MINIMUM_KEYS = frozenset({"vram_bytes", "scratch_bytes"})
+_RUNTIME_SAFE_INTEGER_MAX = 2**53 - 1
+_PACK_HOST_SCOPES = (
+    "handshake", "worker:register", "worker:execute", "tasks:read", "objects:read", "objects:write",
+)
+
+
+def _profile_sha256(value: bytes) -> str:
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(char in "0123456789abcdef" for char in value[7:])
+    )
+
+
+def _process_birth_identity(pid: int) -> str | None:
+    """Use the same PID-reuse marker as the Worker/Runtime boundary."""
+    if pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = raw.rsplit(")", 1)[-1].split()
+        if len(fields) >= 20:
+            return f"proc-start-ticks:{fields[19]}"
+    except (OSError, ValueError):
+        pass
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True, text=True, check=False, timeout=1.0,
+        )
+        rendered = result.stdout.strip()
+        if result.returncode == 0 and rendered:
+            return f"ps-lstart:{rendered}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _owned_contained_file(path: Path, root: Path, *, label: str) -> Path:
+    """Resolve one owner-only regular file without crossing *root*."""
+    if not path.is_absolute() or not root.is_absolute():
+        raise HostError(f"{label} must be an absolute path")
+    lexical_root = root
+    try:
+        root = root.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise HostError(f"{label} is unavailable") from exc
+    if root != lexical_root or resolved != path:
+        raise HostError(f"{label} has a symlink or non-canonical path")
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise HostError(f"{label} is outside the trusted support root") from exc
+    if not resolved.is_file() or resolved.is_symlink():
+        raise HostError(f"{label} must be an owner-only regular file")
+    stat_result = resolved.stat()
+    if stat_result.st_mode & 0o777 != 0o600:
+        raise HostError(f"{label} must be owner-only")
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid) and stat_result.st_uid != getuid():
+        raise HostError(f"{label} is not owned by the current user")
+    return resolved
+
+
+def _profile_required_string(value: Mapping[str, Any], key: str, *, label: str) -> str:
+    item = value.get(key)
+    if not isinstance(item, str) or not item.strip():
+        raise HostError(f"readiness profile {label}.{key} is required")
+    return item
+
+
+def _validate_hc02_facts(value: Any) -> tuple[dict[str, dict[str, str | int]], str]:
+    if not isinstance(value, Mapping) or set(value) != {"exact", "minimum"}:
+        raise HostError("readiness profile verified_facts schema is invalid")
+    exact = value.get("exact")
+    minimum = value.get("minimum")
+    if not isinstance(exact, Mapping) or not isinstance(minimum, Mapping):
+        raise HostError("readiness profile verified_facts sections are invalid")
+    if set(exact) != _HC02_EXACT_KEYS or set(minimum) != _HC02_MINIMUM_KEYS:
+        raise HostError("readiness profile verified_facts are incomplete")
+    normalized_exact: dict[str, str | int] = {}
+    for key, item in exact.items():
+        if key == "port":
+            if isinstance(item, bool) or not isinstance(item, int) or not 1 <= item <= 65535:
+                raise HostError("readiness profile verified_facts port is invalid")
+        elif not isinstance(item, str) or not item.strip():
+            raise HostError(f"readiness profile verified_facts {key} is invalid")
+        normalized_exact[str(key)] = item
+    normalized_minimum: dict[str, int] = {}
+    for key, item in minimum.items():
+        if isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= _RUNTIME_SAFE_INTEGER_MAX:
+            raise HostError(f"readiness profile verified_facts {key} is invalid")
+        normalized_minimum[str(key)] = item
+    facts = {
+        "exact": dict(sorted(normalized_exact.items())),
+        "minimum": dict(sorted(normalized_minimum.items())),
+    }
+    expected_digest = _profile_sha256(json.dumps(facts, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return facts, expected_digest
+
+
+def load_worker_readiness_profile(
+    path: str | Path,
+    expected_hash: str,
+    *,
+    support_root: str | Path,
+    source_checkout: str | Path,
+    pack_root: str | Path,
+    runtime_endpoint: str,
+    runtime_instance_id: str,
+    credential_path: str | Path,
+    ready_file: str | Path,
+    state_file: str | Path,
+    boot_manifest_path: str | Path,
+    boot_manifest_hash: str,
+    host_interpreter: str | Path | None = None,
+    credential: str | None = None,
+) -> dict[str, Any]:
+    """Read and verify the Worker-owned HC-03 profile before host discovery."""
+    support = Path(support_root).expanduser()
+    profile_path = _owned_contained_file(Path(path).expanduser(), support, label="readiness profile")
+    if not _is_sha256(expected_hash):
+        raise HostError("readiness profile hash is invalid")
+    raw = profile_path.read_bytes()
+    if not hmac.compare_digest(_profile_sha256(raw), expected_hash):
+        raise HostError("readiness profile hash does not match the Worker handoff")
+    if credential and credential.encode("utf-8") in raw:
+        raise HostError("readiness profile contains credential material")
+    try:
+        profile = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HostError("readiness profile is malformed") from exc
+    if not isinstance(profile, Mapping) or set(profile) != _PROFILE_TOP_LEVEL_KEYS:
+        raise HostError("readiness profile schema is invalid")
+    if profile.get("schema_version") != READINESS_PROFILE_SCHEMA or profile.get("status") != "ready":
+        raise HostError("readiness profile is not ready for tasks")
+
+    facts, facts_digest = _validate_hc02_facts(profile.get("verified_facts"))
+    if profile.get("verified_facts_digest") != facts_digest:
+        raise HostError("readiness profile verified_facts digest is invalid")
+
+    runtime = profile.get("runtime")
+    launch = profile.get("launch")
+    if not isinstance(runtime, Mapping) or set(runtime) != _PROFILE_RUNTIME_KEYS:
+        raise HostError("readiness profile Runtime schema is invalid")
+    if not isinstance(launch, Mapping) or set(launch) != _PROFILE_LAUNCH_KEYS:
+        raise HostError("readiness profile launch schema is invalid")
+    endpoint = _profile_required_string(runtime, "endpoint", label="runtime")
+    parsed = urlsplit(endpoint)
+    port = runtime.get("port")
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.username or parsed.password:
+        raise HostError("readiness profile Runtime endpoint is not canonical loopback")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535 or parsed.port != port:
+        raise HostError("readiness profile Runtime port is invalid")
+    pid = runtime.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise HostError("readiness profile Runtime pid is invalid")
+    for key in ("process_birth_id", "runtime_instance_id", "coordinator_epoch", "active_realm", "schema_digest", "credential_reference", "discovery_digest"):
+        _profile_required_string(runtime, key, label="runtime")
+    if runtime.get("protocol", "workspace.v1") != "workspace.v1":
+        raise HostError("readiness profile Runtime protocol is invalid")
+    epoch = runtime.get("runtime_epoch")
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or not 1 <= epoch <= _RUNTIME_SAFE_INTEGER_MAX:
+        raise HostError("readiness profile Runtime epoch is invalid")
+    schema_digest = str(runtime["schema_digest"])
+    if not _is_sha256(schema_digest):
+        raise HostError("readiness profile Runtime schema digest is invalid")
+    if not _is_sha256(runtime["discovery_digest"]):
+        raise HostError("readiness profile discovery digest is invalid")
+
+    source = Path(source_checkout).expanduser().resolve()
+    pack = Path(pack_root).expanduser().resolve()
+    credential_file = _owned_contained_file(
+        Path(credential_path).expanduser(), support, label="Runtime credential"
+    )
+    if facts["exact"]["port"] != port:
+        raise HostError("readiness profile HC-02 port conflicts with Runtime binding")
+    expected_launch = {
+        "source_checkout": str(source),
+        "pack_root": str(pack),
+        "support_root": str(support.resolve()),
+        "ready_file": str(Path(ready_file).expanduser().resolve()),
+        "state_file": str(Path(state_file).expanduser().resolve()),
+        "boot_manifest_path": str(Path(boot_manifest_path).expanduser().resolve()),
+        "boot_manifest_hash": str(boot_manifest_hash),
+    }
+    for key, value in expected_launch.items():
+        if launch.get(key) != value:
+            raise HostError(f"readiness profile launch binding conflicts with {key}")
+    if endpoint.rstrip("/") != str(runtime_endpoint).rstrip("/"):
+        raise HostError("readiness profile Runtime endpoint conflicts with launch")
+    if runtime["runtime_instance_id"] != runtime_instance_id:
+        raise HostError("readiness profile Runtime instance conflicts with launch")
+    if str(runtime["credential_reference"]) != str(credential_file):
+        raise HostError("readiness profile credential reference conflicts with launch")
+    if host_interpreter is not None and launch.get("host_interpreter") != str(Path(host_interpreter).expanduser().resolve()):
+        raise HostError("readiness profile host interpreter conflicts with launch")
+    for key in ("host_interpreter", "engine_interpreter", "output_root"):
+        item = _profile_required_string(launch, key, label="launch")
+        candidate = Path(item).expanduser()
+        if not candidate.is_absolute() or candidate != candidate.resolve(strict=False):
+            raise HostError(f"readiness profile launch.{key} is not canonical")
+    if profile.get("worker_actor") != "astrid-pack-host" or tuple(profile.get("worker_scopes") or ()) != _PACK_HOST_SCOPES:
+        raise HostError("readiness profile worker identity is invalid")
+    process = _process_snapshot().get(pid)
+    if process is None or _process_birth_identity(pid) != runtime["process_birth_id"]:
+        raise HostError("readiness profile Runtime process identity is stale")
+    result = dict(profile)
+    result["verified_facts"] = facts
+    result["verified_facts_digest"] = facts_digest
+    result["_profile_path"] = str(profile_path)
+    result["_profile_hash"] = expected_hash
+    return result
+
+
+def validate_readiness_profile_health(profile: Mapping[str, Any], health: Any) -> None:
+    """Bind the profile to the authenticated, current Runtime health read."""
+    value = dict(health) if isinstance(health, Mapping) else {
+        "status": getattr(health, "status", None),
+        "protocol": getattr(health, "protocol", None),
+        "schema_digest": getattr(health, "schema_digest", None),
+        "runtime_epoch": getattr(health, "runtime_epoch", None),
+    }
+    runtime = profile["runtime"]
+    expected = {
+        "status": "ok",
+        "protocol": "workspace.v1",
+        "schema_digest": runtime["schema_digest"],
+        "runtime_epoch": runtime["runtime_epoch"],
+    }
+    if any(value.get(key) != expected_value for key, expected_value in expected.items()):
+        raise HostError("readiness profile Runtime health is stale or mismatched")
 
 
 def _dependency_pythonpath() -> tuple[str, ...]:
@@ -756,7 +1018,7 @@ class RuntimeProtocolClient:
             raise HostError("runtime health returned no runtime_epoch")
         return int(epoch)
 
-    def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None):
+    def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None, verified_facts: Mapping[str, Any] | None = None, readiness: str | None = None, readiness_reason: str | None = None):
         # Runtime schema identity is negotiated through health/compatibility;
         # source, dependency, and source-epoch identity remain part of the
         # executor registration admission envelope.  ``schema_digest`` is
@@ -773,6 +1035,10 @@ class RuntimeProtocolClient:
             "dependency_digest": dependency_digest,
             "runtime_epoch": runtime_epoch,
         }
+        if verified_facts is not None:
+            payload["verified_facts"] = dict(verified_facts)
+            payload["readiness"] = readiness or "ready"
+            payload["readiness_reason"] = readiness_reason
         return self.generated.register_executor(
             payload,
             idempotency_key=f"executor-{executor_id}-{_canonical_digest(payload)}",
@@ -952,6 +1218,8 @@ class GenericPackHost:
         credential_source: Mapping[str, str] | None = None,
         boot_manifest_path: str | Path | None = None,
         boot_manifest_hash: str | None = None,
+        readiness_profile_path: str | Path | None = None,
+        readiness_profile_hash: str | None = None,
     ):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
@@ -987,6 +1255,9 @@ class GenericPackHost:
             else None
         )
         self.boot_manifest_hash = boot_manifest_hash
+        self.readiness_profile_path = Path(readiness_profile_path).expanduser() if readiness_profile_path else None
+        self.readiness_profile_hash = readiness_profile_hash
+        self.readiness_profile: dict[str, Any] | None = None
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
@@ -994,6 +1265,47 @@ class GenericPackHost:
         self._active_processes: set[subprocess.Popen] = set()
         self._process_lock = threading.RLock()
         self._shutdown = threading.Event()
+
+    def bind_readiness_profile(self, profile: Mapping[str, Any]) -> None:
+        """Bind the already verified Worker profile to this host instance."""
+        self.readiness_profile = dict(profile)
+
+    def _assert_readiness_profile(self) -> None:
+        if self.readiness_profile_path is None and self.readiness_profile_hash is None:
+            return
+        if self.readiness_profile_path is None or self.readiness_profile_hash is None:
+            raise HostError("readiness profile path and hash must be bound together")
+        try:
+            stat_result = self.readiness_profile_path.stat()
+            if (
+                not self.readiness_profile_path.is_absolute()
+                or self.readiness_profile_path.is_symlink()
+                or self.readiness_profile_path.resolve(strict=True) != self.readiness_profile_path
+                or stat_result.st_mode & 0o777 != 0o600
+                or (callable(getattr(os, "getuid", None)) and stat_result.st_uid != os.getuid())
+            ):
+                raise HostError("readiness profile ownership or canonical path changed")
+            raw = self.readiness_profile_path.read_bytes()
+        except OSError as exc:
+            raise HostError("readiness profile became unavailable") from exc
+        if not hmac.compare_digest(_profile_sha256(raw), self.readiness_profile_hash):
+            raise HostError("readiness profile changed after verification")
+        try:
+            current = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HostError("readiness profile became malformed") from exc
+        if not isinstance(current, Mapping) or set(current) != _PROFILE_TOP_LEVEL_KEYS or current.get("status") != "ready":
+            raise HostError("readiness profile is not ready for tasks")
+        facts, digest = _validate_hc02_facts(current.get("verified_facts"))
+        if current.get("verified_facts_digest") != digest:
+            raise HostError("readiness profile verified_facts digest changed")
+        if self.readiness_profile is not None and facts != self.readiness_profile.get("verified_facts"):
+            raise HostError("readiness profile facts changed after verification")
+        if self.readiness_profile is None:
+            self.readiness_profile = dict(current)
+            self.readiness_profile["verified_facts"] = facts
+        if self.client is not None:
+            validate_readiness_profile_health(current, self.client.health())
 
     def _track_process(self, process: subprocess.Popen) -> None:
         with self._process_lock:
@@ -1079,6 +1391,7 @@ class GenericPackHost:
         return result
 
     def discover(self) -> tuple[CapabilityRecord, ...]:
+        self._assert_readiness_profile()
         # Folder/schema modules are runtime discovery dependencies.  Keeping
         # them behind the discovery operation prevents their timeline/project
         # compatibility imports from leaking into the host process boundary.
@@ -1268,6 +1581,7 @@ class GenericPackHost:
         return tuple(updated[key] for key in sorted(updated) if capability_id is None or key == capability_id)
 
     def register(self, *, deliberate: bool = False) -> dict[str, Any]:
+        self._assert_readiness_profile()
         if not self.capabilities:
             self.discover()
         self.preflight()
@@ -1360,6 +1674,14 @@ class GenericPackHost:
             "schema_digest": runtime_state.get("schema_digest"),
             "runtime_epoch": runtime_state.get("runtime_epoch"),
         }
+        if self.readiness_profile is not None:
+            registration_kwargs.update(
+                {
+                    "verified_facts": self.readiness_profile["verified_facts"],
+                    "readiness": "ready",
+                    "readiness_reason": None,
+                }
+            )
         registration = self.client.register_executor(self.executor_id, **registration_kwargs)
         self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
         self._registered_state = state
@@ -2522,6 +2844,7 @@ class GenericPackHost:
 
     def claim_once(self) -> Mapping[str, Any] | None:
         """Claim and execute one queued task through the generated boundary."""
+        self._assert_readiness_profile()
         if self._shutdown.is_set():
             return None
         claim_next = self._client_operation("claim_next")
@@ -2764,6 +3087,8 @@ def _cli() -> int:
     parser.add_argument("--runtime-instance-id", help="runtime instance identity bound to this host")
     parser.add_argument("--boot-manifest-path", help="existing explicit boot-manifest path")
     parser.add_argument("--boot-manifest-hash", help="expected SHA-256 hash of the boot manifest")
+    parser.add_argument("--readiness-profile-path", help="explicit Worker HC-03 readiness profile")
+    parser.add_argument("--readiness-profile-hash", help="SHA-256 hash of the Worker HC-03 readiness profile")
     args = parser.parse_args()
     credential = None
     credential_path = None
@@ -2780,19 +3105,6 @@ def _cli() -> int:
         if not credential:
             parser.error("credential file is empty")
     boot_manifest, boot_manifest_hash = _compose_cli_boot_manifest(args, parser)
-    client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
-    host = GenericPackHost(
-        pack_roots=args.pack_root,
-        client=client,
-        executor_id=args.executor_id,
-        max_concurrency=args.max_concurrency,
-        attempt_root=args.attempt_root,
-        capability_matrix=args.capability_matrix,
-        boot_manifest_path=boot_manifest,
-        boot_manifest_hash=boot_manifest_hash,
-    )
-    host.discover()
-    host.preflight()
     if args.source_checkout:
         source_checkout = Path(args.source_checkout).expanduser()
         if not source_checkout.is_absolute() or source_checkout.is_symlink() or not source_checkout.is_dir():
@@ -2805,6 +3117,48 @@ def _cli() -> int:
             parser.error("--support-root must be an absolute non-symlink directory")
     else:
         support_root = None
+    if args.runtime_endpoint and (not args.readiness_profile_path or not args.readiness_profile_hash):
+        parser.error("Runtime-backed GenericPackHost requires an explicit Worker readiness profile")
+    if args.readiness_profile_path or args.readiness_profile_hash:
+        if not (args.readiness_profile_path and args.readiness_profile_hash and source_checkout and support_root and credential_path and args.runtime_endpoint and args.runtime_instance_id and args.ready_file):
+            parser.error("readiness profile requires the complete Runtime host binding")
+    client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
+    host = GenericPackHost(
+        pack_roots=args.pack_root,
+        client=client,
+        executor_id=args.executor_id,
+        max_concurrency=args.max_concurrency,
+        attempt_root=args.attempt_root,
+        capability_matrix=args.capability_matrix,
+        boot_manifest_path=boot_manifest,
+        boot_manifest_hash=boot_manifest_hash,
+        readiness_profile_path=args.readiness_profile_path,
+        readiness_profile_hash=args.readiness_profile_hash,
+    )
+    if args.readiness_profile_path:
+        try:
+            profile = load_worker_readiness_profile(
+                args.readiness_profile_path,
+                args.readiness_profile_hash,
+                support_root=support_root,
+                source_checkout=source_checkout,
+                pack_root=Path(args.pack_root[0]).expanduser().resolve(),
+                runtime_endpoint=args.runtime_endpoint,
+                runtime_instance_id=args.runtime_instance_id,
+                credential_path=credential_path,
+                ready_file=args.ready_file,
+                state_file=Path(args.support_root).expanduser() / "generic-host.json",
+                boot_manifest_path=boot_manifest,
+                boot_manifest_hash=boot_manifest_hash,
+                host_interpreter=sys.executable,
+                credential=credential,
+            )
+            validate_readiness_profile_health(profile, client.health())
+            host.bind_readiness_profile(profile)
+        except (HostError, OSError, TypeError, ValueError) as exc:
+            parser.error(f"readiness profile validation failed: {exc}")
+    host.discover()
+    host.preflight()
 
     def handle_shutdown(_signum, _frame):
         host.shutdown()
@@ -2841,6 +3195,8 @@ def _cli() -> int:
             "runtime_instance_id": args.runtime_instance_id,
             "runtime_epoch": host.runtime_state.get("runtime_epoch"),
             "schema_digest": host.runtime_state.get("schema_digest"),
+            "readiness_profile_path": str(host.readiness_profile_path) if host.readiness_profile_path else None,
+            "readiness_profile_hash": host.readiness_profile_hash,
         }
         temporary = ready_path.with_name(f".{ready_path.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(ready_payload, sort_keys=True, default=_json_safe), encoding="utf-8")

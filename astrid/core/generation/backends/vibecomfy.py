@@ -1844,6 +1844,7 @@ class PipEmbeddedSession:
         self._disposed: dict[str, Any] | None = None
         self._cached_outcome: Mapping[str, Any] | None = None
         self._cached_binding: _InvocationBinding | None = None
+        self._seen_bindings: set[tuple[str, str]] = set()
         self.last_lifecycle, self.last_warm_reused = "cold", False
 
     @property
@@ -1869,6 +1870,7 @@ class PipEmbeddedSession:
             binding = _InvocationBinding(
                 uuid.uuid4().hex, identity, self.profile.profile_digest
             )
+            self._seen_bindings.add((binding.identity, binding.nonce))
             record = {
                 "binding": binding,
                 "nonce": binding.nonce,
@@ -2558,23 +2560,25 @@ class PipEmbeddedSession:
         invocation_nonce: str | None = None,
     ) -> dict[str, Any]:
         identity_bad = False
-        post_commit_identity_bad = False
+        identity_error: _PipEmbeddedError | None = None
         with self._lock:
             record = self._record
             if record is None:
                 cached = self._cached_outcome
                 cached_binding = self._cached_binding
                 if cached is not None and cached_binding is not None:
-                    supplied_identity = self._task_identity(task_identity) if task_identity is not None else None
-                    if (
-                        task_identity is not None or invocation_nonce is not None
-                    ) and (supplied_identity, invocation_nonce) != (
+                    try:
+                        supplied_identity = (
+                            self._task_identity(task_identity) if task_identity is not None else None
+                        )
+                    except ValueError:
+                        supplied_identity = None
+                    if (supplied_identity, invocation_nonce) != (
                         cached_binding.identity, cached_binding.nonce
                     ):
                         error = _PipEmbeddedError(
-                            "identity_mismatch", "stale invocation identity", nonce=cached_binding.nonce
+                            "identity_mismatch", "stale invocation identity"
                         )
-                        error.outcome = self._outcome_copy(cached)
                         raise error
                     return self._outcome_copy(cached)
                 if self._disposed is None:
@@ -2596,24 +2600,36 @@ class PipEmbeddedSession:
                     })
                 if task_identity is not None or invocation_nonce is not None:
                     error = _PipEmbeddedError("identity_mismatch", "stale invocation identity")
-                    error.outcome = self._outcome_copy(self._disposed)
                     raise error
                 return self._outcome_copy(self._disposed)
-            identity = self._task_identity(task_identity)
+            try:
+                identity = self._task_identity(task_identity) if task_identity is not None else ""
+            except ValueError:
+                identity = ""
+                identity_error = _PipEmbeddedError(
+                    "identity_mismatch", "active invocation identity mismatch"
+                )
             binding: _InvocationBinding = record["binding"]
             publication_phase = (record.get("publication_state") or {}).get("phase")
             post_commit = publication_phase in {"COMMITTING", "RENAMED", "DURABLE", "FENCE_PENDING"}
-            if not isinstance(invocation_nonce, str) or not invocation_nonce.strip() or (
+            if identity_error is not None or not isinstance(invocation_nonce, str) or not invocation_nonce.strip() or (
                 binding.identity, binding.nonce
             ) != (identity, invocation_nonce):
                 identity_bad = True
-                post_commit_identity_bad = post_commit
-                if not post_commit:
-                    if record["stop_reason"] is None:
-                        record["stop_reason"] = "identity-mismatch"
-                    record["control_fault"] = "active invocation identity mismatch"
-                    record["failure"] = "active invocation identity mismatch"
-                    record["cancel_event"].set()
+                supplied_pair = (
+                    identity,
+                    invocation_nonce,
+                ) if identity and isinstance(invocation_nonce, str) and invocation_nonce.strip() else None
+                stale_pair = supplied_pair in self._seen_bindings and supplied_pair != (
+                    binding.identity, binding.nonce
+                )
+                if identity_error is None:
+                    identity_error = _PipEmbeddedError(
+                        "identity_mismatch", "active invocation identity mismatch",
+                        nonce=binding.nonce,
+                    )
+                if not post_commit or stale_pair:
+                    raise identity_error
                 event = record["done"]
             else:
                 if not post_commit and record["stop_reason"] is None:
@@ -2622,7 +2638,7 @@ class PipEmbeddedSession:
             if not identity_bad and not post_commit:
                 record["cancel_event"].set()
             handle_available = record.get("handle") is not None
-        if handle_available and not post_commit_identity_bad:
+        if handle_available and not identity_bad:
             self._ensure_contained(record)
         if not event.wait(timeout=self.timeouts.control_seconds):
             timeout_outcome = {
@@ -2640,21 +2656,12 @@ class PipEmbeddedSession:
                 "error_code": "containment_pending",
             }
             if identity_bad:
-                error = _PipEmbeddedError(
-                    "identity_mismatch", "active invocation identity mismatch",
-                    nonce=record["binding"].nonce,
-                    outcome=timeout_outcome,
-                )
-                raise error
+                raise identity_error
             return timeout_outcome
         if identity_bad:
-            error = _PipEmbeddedError(
-                "identity_mismatch", "active invocation identity mismatch",
-                nonce=record["binding"].nonce,
-            )
             with self._lock:
-                error.outcome = self._outcome_copy(record.get("outcome"))
-            raise error
+                identity_error.outcome = self._outcome_copy(record.get("outcome"))
+            raise identity_error
         with self._lock:
             return self._outcome_copy(record["outcome"] or {
                 "ok": False,

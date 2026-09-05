@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -297,9 +298,10 @@ def test_active_controls_require_exact_task_and_nonce(tmp_path: Path) -> None:
             session.cancel(task_identity=identity, invocation_nonce=supplied_nonce)
     outcome = session.cancel(task_identity="exact", invocation_nonce=nonce)
     thread.join(timeout=3)
-    assert outcome["status"] == "identity-mismatch"
+    assert outcome["status"] == "cancelled"
     assert holder[0].calls.count("terminate") == 1
-    assert errors
+    assert errors and isinstance(errors[0], _PipEmbeddedError)
+    assert errors[0].outcome == outcome
 
 
 def test_normal_session_uses_admitted_custody_and_publishes_durable_output(tmp_path: Path) -> None:
@@ -417,11 +419,10 @@ def test_wrong_identity_and_repeated_control_are_deterministic(tmp_path: Path) -
 
     session = PipEmbeddedSession(profile, execution_factory=factory)
 
+    errors: list[BaseException] = []
+
     def run_once() -> None:
-        try:
-            session.run(workflow(), out_dir=Path(profile.output_root))
-        except RuntimeError:
-            pass
+        _capture_error(errors, lambda: session.run(workflow(), out_dir=Path(profile.output_root)))
 
     thread = threading.Thread(target=run_once)
     thread.start()
@@ -430,9 +431,12 @@ def test_wrong_identity_and_repeated_control_are_deterministic(tmp_path: Path) -
     assert holder[0].started.wait(timeout=2)
     with pytest.raises(RuntimeError, match="identity mismatch"):
         session.cancel(task_identity="wrong", invocation_nonce="wrong")
+    assert session.active_invocation()["stop_reason"] is None
+    assert not session.poisoned
     holder[0].release.set()
     thread.join(timeout=3)
-    assert session.poisoned
+    assert not errors
+    assert not session.poisoned
 
 
 def test_output_symlink_and_partial_copy_rollback(tmp_path: Path) -> None:
@@ -738,6 +742,248 @@ def _capture_error(target: list[BaseException], callback: Any) -> None:
         callback()
     except BaseException as exc:
         target.append(exc)
+
+
+def _snapshot_record_value(value: Any) -> Any:
+    if isinstance(value, threading.Event):
+        return ("event", value.is_set())
+    if isinstance(value, Handle):
+        return (
+            "handle",
+            id(value),
+            tuple(value.calls),
+            value.started.is_set(),
+            value.release.is_set(),
+            str(value.output_dir),
+        )
+    if dataclasses.is_dataclass(value):
+        return (
+            type(value).__name__,
+            tuple(
+                (field.name, _snapshot_record_value(getattr(value, field.name)))
+                for field in dataclasses.fields(value)
+            ),
+        )
+    if isinstance(value, Mapping):
+        return tuple(
+            (str(key), _snapshot_record_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_snapshot_record_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_snapshot_record_value(item) for item in value))
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def _snapshot_active_record(session: PipEmbeddedSession) -> dict[str, Any]:
+    with session._lock:
+        assert session._record is not None
+        return {
+            key: _snapshot_record_value(value)
+            for key, value in session._record.items()
+        }
+
+
+def test_stale_controls_are_side_effect_free_across_two_invocations(
+    tmp_path: Path,
+) -> None:
+    profile = make_profile(tmp_path)
+    holder: list[Handle] = []
+
+    def factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> Handle:
+        handle = Handle(staging, block=len(holder) == 1)
+        handle.nonce = request["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+    finalized: list[str] = []
+    original_finalize = session._finalize
+
+    def count_finalize(record: dict[str, Any], outcome: dict[str, Any], **kwargs: Any) -> None:
+        finalized.append(record["binding"].nonce)
+        original_finalize(record, outcome, **kwargs)
+
+    session._finalize = count_finalize  # type: ignore[method-assign]
+
+    first_errors: list[BaseException] = []
+    first = threading.Thread(
+        target=lambda: _capture_error(
+            first_errors,
+            lambda: session.run(
+                workflow(), task_identity="reused-task", out_dir=Path(profile.output_root)
+            ),
+        )
+    )
+    first.start()
+    while not holder or not holder[0].started.wait(timeout=0.02):
+        pass
+    nonce_one = session.active_invocation()["nonce"]
+    first.join(timeout=3)
+    assert not first_errors and session.active_invocation() is None
+    assert finalized == [nonce_one]
+
+    second_errors: list[BaseException] = []
+    second = threading.Thread(
+        target=lambda: _capture_error(
+            second_errors,
+            lambda: session.run(
+                workflow(), task_identity="reused-task", out_dir=Path(profile.output_root)
+            ),
+        )
+    )
+    second.start()
+    while len(holder) < 2 or not holder[1].started.wait(timeout=0.02):
+        pass
+    nonce_two = session.active_invocation()["nonce"]
+    before = _snapshot_active_record(session)
+    before_calls = tuple(holder[1].calls)
+    before_cached = _snapshot_record_value(session._cached_outcome)
+
+    rejected = (
+        ("reused-task", None),
+        (None, nonce_two),
+        ("wrong-task", nonce_two),
+        ("reused-task", "wrong-nonce"),
+        ("reused-task", nonce_one),
+        ("stale-task", nonce_one),
+    )
+    for identity, supplied_nonce in rejected:
+        with pytest.raises(_PipEmbeddedError) as raised:
+            session.cancel(task_identity=identity, invocation_nonce=supplied_nonce)
+        assert raised.value.code == "identity_mismatch"
+        assert raised.value.outcome is None
+        assert _snapshot_active_record(session) == before
+        assert tuple(holder[1].calls) == before_calls
+        assert session.poisoned is False
+        assert session._disposed is None
+        assert _snapshot_record_value(session._cached_outcome) == before_cached
+
+    control_outcome = session.cancel(task_identity="reused-task", invocation_nonce=nonce_two)
+    second.join(timeout=3)
+    assert len(second_errors) == 1 and isinstance(second_errors[0], _PipEmbeddedError)
+    assert second_errors[0].outcome == control_outcome
+    assert control_outcome["status"] == "cancelled"
+    assert control_outcome["reaped"] is True
+    assert control_outcome["cleanup_complete"] is True
+    assert holder[1].calls.count("terminate") == 1
+    assert holder[1].calls.count("cleanup") == 1
+    assert finalized == [nonce_one, nonce_two]
+
+    repeated = session.release(task_identity="reused-task", invocation_nonce=nonce_two)
+    assert repeated == control_outcome
+    assert holder[1].calls.count("terminate") == 1
+    assert holder[1].calls.count("cleanup") == 1
+
+
+def test_stale_controls_after_commit_cannot_affect_third_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from astrid.core.generation.backends import vibecomfy as backend
+
+    profile = make_profile(tmp_path)
+    holder: list[Handle] = []
+
+    def factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> Handle:
+        handle = Handle(staging, block=len(holder) == 2)
+        handle.nonce = request["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+    entered, allow = threading.Event(), threading.Event()
+    original_publish = backend._publish_directory_noreplace
+
+    def barrier(*args: Any, **kwargs: Any) -> None:
+        if len(holder) < 2:
+            original_publish(*args, **kwargs)
+            return
+        entered.set()
+        assert allow.wait(timeout=3)
+        original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "_publish_directory_noreplace", barrier)
+
+    def run_and_wait(index: int, errors: list[BaseException]) -> threading.Thread:
+        thread = threading.Thread(
+            target=lambda: _capture_error(
+                errors,
+                lambda: session.run(
+                    workflow(), task_identity="reused-task", out_dir=Path(profile.output_root)
+                ),
+            )
+        )
+        thread.start()
+        while len(holder) <= index or not holder[index].started.wait(timeout=0.02):
+            pass
+        return thread
+
+    first_errors: list[BaseException] = []
+    first = run_and_wait(0, first_errors)
+    nonce_one = session.active_invocation()["nonce"]
+    first.join(timeout=3)
+    assert not first_errors
+
+    second_errors: list[BaseException] = []
+    second = run_and_wait(1, second_errors)
+    nonce_two = session.active_invocation()["nonce"]
+    assert entered.wait(timeout=3)
+    assert session._record["publication_state"]["phase"] == "COMMITTING"
+    before = _snapshot_active_record(session)
+    with pytest.raises(_PipEmbeddedError) as stale:
+        session.cancel(task_identity="reused-task", invocation_nonce=nonce_one)
+    assert stale.value.code == "identity_mismatch" and stale.value.outcome is None
+    assert _snapshot_active_record(session) == before
+    with pytest.raises(_PipEmbeddedError) as repeated:
+        session.release(task_identity="reused-task", invocation_nonce=nonce_one)
+    assert repeated.value.code == "identity_mismatch" and repeated.value.outcome is None
+    assert _snapshot_active_record(session) == before
+
+    wrong_after_commit: list[BaseException] = []
+    wrong_thread = threading.Thread(
+        target=lambda: _capture_error(
+            wrong_after_commit,
+            lambda: session.cancel(task_identity="wrong-task", invocation_nonce=nonce_two),
+        )
+    )
+    wrong_thread.start()
+    time.sleep(0.05)
+    assert _snapshot_active_record(session) == before
+    allow.set()
+    wrong_thread.join(timeout=3)
+    second.join(timeout=3)
+    assert not second_errors
+    assert len(wrong_after_commit) == 1
+    assert isinstance(wrong_after_commit[0], _PipEmbeddedError)
+    assert wrong_after_commit[0].code == "identity_mismatch"
+    assert wrong_after_commit[0].outcome["status"] == "succeeded"
+    with pytest.raises(_PipEmbeddedError) as stale_after_completion:
+        session.cancel(task_identity="reused-task", invocation_nonce=nonce_one)
+    assert stale_after_completion.value.code == "identity_mismatch"
+    assert stale_after_completion.value.outcome is None
+
+    third_errors: list[BaseException] = []
+    third = run_and_wait(2, third_errors)
+    nonce_three = session.active_invocation()["nonce"]
+    before_third = _snapshot_active_record(session)
+    for stale_nonce in (nonce_one, nonce_two, nonce_two):
+        with pytest.raises(_PipEmbeddedError) as raised:
+            session.cancel(task_identity="reused-task", invocation_nonce=stale_nonce)
+        assert raised.value.code == "identity_mismatch"
+        assert raised.value.outcome is None
+        assert _snapshot_active_record(session) == before_third
+        assert holder[2].calls.count("terminate") == 0
+
+    third_outcome = session.cancel(task_identity="reused-task", invocation_nonce=nonce_three)
+    third.join(timeout=3)
+    assert len(third_errors) == 1 and isinstance(third_errors[0], _PipEmbeddedError)
+    assert third_errors[0].outcome == third_outcome
+    assert third_outcome["status"] == "cancelled"
+    assert holder[2].calls.count("terminate") == 1
+    assert holder[2].calls.count("cleanup") == 1
 
 
 def test_wrong_nonce_at_committing_barrier_cannot_relabel_frozen_commit(

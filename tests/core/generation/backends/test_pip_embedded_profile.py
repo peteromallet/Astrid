@@ -20,6 +20,8 @@ from astrid.core.generation.backends.vibecomfy import (
     PipEmbeddedTimeouts,
     VibeComfyBackend,
     _ChildResult,
+    _normalize_hc03_profile,
+    _PipEmbeddedError,
     _strict_json_value,
     _strict_load_json,
 )
@@ -57,6 +59,7 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
     root = tmp_path / "layout"
     env, exe = root / "venv", root / "venv" / "bin" / "python"
     source, pack, engine = root / "Astrid", root / "Astrid" / "astrid" / "packs", root / "vibecomfy"
+    producer_source = root / "producer-repo"
     nodes, models, output, scratch, cas, support = (
         engine / "custom_nodes",
         root / "models",
@@ -65,7 +68,7 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
         root / "cas",
         root / "support",
     )
-    for path in (pack, nodes, models, output, scratch, cas, support):
+    for path in (pack, nodes, models, output, scratch, cas, support, producer_source):
         path.mkdir(parents=True, exist_ok=True)
     exe.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(sys.executable, exe)
@@ -79,7 +82,7 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
     roots = {
         name: digest({"path": str(path)})
         for name, path in (
-            ("source", source),
+            ("source", producer_source),
             ("model", models),
             ("custom_node", nodes),
             ("scratch", scratch),
@@ -88,19 +91,21 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
     }
     host, child = str(Path(sys.executable).resolve()), str(exe.resolve())
     version = ".".join(str(x) for x in sys.version_info[:3])
+    model_digest = digest({"files": []})
+    node_digest = digest({"files": []})
     facts = {
         "exact": {
             "interpreter": json.dumps(
                 [
-                    {"path": host, "version": version, "sha256": file_digest(Path(sys.executable))},
-                    {"path": child, "version": version, "sha256": file_digest(exe)},
+                    json.dumps({"path": host, "version": version, "sha256": file_digest(Path(sys.executable))}, separators=(",", ":")),
+                    json.dumps({"path": child, "version": version, "sha256": file_digest(exe)}, separators=(",", ":")),
                 ],
                 separators=(",", ":"),
             ),
             "runtime_lock": "sha256:" + "1" * 64,
             "engine_lock": file_digest(lock),
-            "model_digest": "sha256:" + "3" * 64,
-            "custom_node_digest": "sha256:" + "4" * 64,
+            "model_digest": model_digest,
+            "custom_node_digest": node_digest,
             "driver": "fixture-driver",
             "root": digest(dict(sorted(roots.items()))),
             "port": 18765,
@@ -157,15 +162,27 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
         "root_map": roots,
         "model_manifest": {
             "path": str(model_manifest),
-            "digest": facts["exact"]["model_digest"],
+            "digest": model_digest,
             "sha256": file_digest(model_manifest),
         },
         "custom_node_manifest": {
             "path": str(node_manifest),
-            "digest": facts["exact"]["custom_node_digest"],
+            "digest": node_digest,
             "sha256": file_digest(node_manifest),
         },
+        "producer_source_root": str(producer_source),
+        "package_inventory": [
+            {"path": str(exe), "sha256": file_digest(exe)},
+            {"path": str(lock), "sha256": file_digest(lock)},
+        ],
+        "resolver_roots": [str(models), str(nodes)],
+        "resolver_digest": digest({"roots": [str(models), str(nodes)]}),
     }
+    handoff = root / "hc03-handoff.json"
+    handoff.write_bytes(json.dumps(readiness, sort_keys=True, separators=(",", ":")).encode())
+    normalized = _normalize_hc03_profile(readiness)
+    normalized.pop("_interpreter_identities")
+    handoff_hash = file_digest(handoff)
     return PipEmbeddedProfile.from_hc03(
         python_executable=exe,
         python_environment=env,
@@ -181,7 +198,13 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
         cas_root=cas,
         hc03_profile=readiness,
         installation_evidence=evidence,
-        hc03_handoff_hash="sha256:" + "9" * 64,
+        hc03_handoff_hash=handoff_hash,
+        hc03_handoff_path=handoff,
+        hc03_trust={
+            "source": "trusted-host-readiness",
+            "handoff_hash": handoff_hash,
+            "projection_digest": digest(normalized),
+        },
     )
 
 
@@ -194,7 +217,7 @@ class Handle:
 
     def start(self) -> None:
         self.calls.append("start")
-        self.output_dir.mkdir()
+        self.output_dir.mkdir(exist_ok=True)
 
     def wait_ready(self, timeout: float) -> None:
         self.calls.append("ready")
@@ -203,10 +226,14 @@ class Handle:
         self.calls.append("go")
         self.started.set()
 
-    def run(self, timeout: float) -> _ChildResult:
-        self.calls.append("run")
+    def wait_completed(self, timeout: float, cancel_event: threading.Event | None = None) -> None:
+        self.calls.append("wait")
         if self.block:
-            self.release.wait(timeout=timeout)
+            while not self.release.wait(timeout=0.01):
+                if cancel_event is not None and cancel_event.is_set():
+                    continue
+
+    def read_result(self) -> _ChildResult:
         path = self.output_dir / "frame.bin"
         path.write_bytes(b"frame")
         return _ChildResult(self.nonce, "run", None, ((path.name, 5, file_digest(path)),))
@@ -280,7 +307,7 @@ def test_reservation_busy_and_factory_cancel_race(tmp_path: Path) -> None:
     thread.join(timeout=3)
     assert run_error and "cancelled" in str(run_error[0])
     assert control_result and control_result[0]["reaped"] is True
-    assert holder[0].calls == ["terminate", "cleanup"]
+    assert holder[0].calls[-2:] == ["terminate", "cleanup"]
 
 
 def test_wrong_identity_and_repeated_control_are_deterministic(tmp_path: Path) -> None:
@@ -316,11 +343,20 @@ def test_wrong_identity_and_repeated_control_are_deterministic(tmp_path: Path) -
 def test_output_symlink_and_partial_copy_rollback(tmp_path: Path) -> None:
     profile = make_profile(tmp_path)
     session = PipEmbeddedSession(profile)
-    source = Path(profile.scratch_root) / "source"
+    source = Path(profile.scratch_root) / "source" / "engine-output"
+    source.parent.mkdir()
     source.mkdir()
     (source / "good").write_bytes(b"good")
     (source / "escape").symlink_to(tmp_path / "outside")
-    handle = type("OutputHandle", (), {"output_dir": source})()
+    source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    destination = Path(profile.output_root)
+    destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    record = {
+        "staging": source.parent,
+        "source_dir_fd": source_fd,
+        "source_identity": (os.fstat(source_fd).st_dev, os.fstat(source_fd).st_ino),
+        "destination_fd": destination_fd,
+    }
     result = _ChildResult(
         "n",
         "r",
@@ -328,14 +364,16 @@ def test_output_symlink_and_partial_copy_rollback(tmp_path: Path) -> None:
         (("good", 4, file_digest(source / "good")), ("missing", 1, "sha256:" + "0" * 64)),
     )
     with pytest.raises(ValueError):
-        session._collect_outputs(handle, result, Path(profile.output_root))
+        session._collect_outputs(record, result, destination)
     assert not list(Path(profile.output_root).glob("pip-embedded-*"))
     with pytest.raises(ValueError):
         session._collect_outputs(
-            handle,
+            record,
             _ChildResult("n", "r", None, (("escape", 1, "sha256:" + "0" * 64),)),
-            Path(profile.output_root),
+            destination,
         )
+    os.close(source_fd)
+    os.close(destination_fd)
 
 
 def test_real_child_transport_argv_env_pgid_and_reap(
@@ -346,13 +384,14 @@ def test_real_child_transport_argv_env_pgid_and_reap(
     script = r"""import hashlib,json,os,time
 from pathlib import Path
 request=json.loads(Path(__import__("sys").argv[1]).read_text()); a=__import__("sys").argv
-ready={"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"ok":True,"interpreter":{"executable":__import__("sys").executable,"prefix":os.environ["VIRTUAL_ENV"],"version":"3.11.11"},"flags":["-I","-B"],"pythonpath":os.environ.get("PYTHONPATH"),"pgid":os.getpgid(os.getpid())}; Path(a[2]).write_text(json.dumps(ready,separators=(",",":")))
+ready={"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"launch_digest":request["launch_digest"],"ok":True,"interpreter":{"executable":__import__("sys").executable,"prefix":os.environ["VIRTUAL_ENV"],"version":"3.11.11"},"package":request["package_facts"],"resolver":request["resolver_facts"]}; Path(a[2]).write_text(json.dumps(ready,separators=(",",":")))
 while not Path(a[3]).exists(): time.sleep(.01)
 out=Path(request["config"]["extra"]["output_directory"]); out.mkdir(parents=True,exist_ok=True); p=out/"child.bin"; p.write_bytes(b"child"); payload={"schema":"astrid.vibecomfy.result.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"status":"succeeded","run_id":"child-run","prompt_id":None,"outputs":[{"relative_path":"child.bin","size_bytes":5,"sha256":"sha256:"+hashlib.sha256(b"child").hexdigest()}]}; Path(a[4]).write_text(json.dumps(payload,separators=(",",":")))"""
     monkeypatch.setattr(backend, "_PIP_EMBEDDED_SCRIPT", script)
     profile = make_profile(tmp_path)
     staging = Path(profile.scratch_root) / "transport"
     staging.mkdir()
+    (staging / "paths.yaml").write_text("vibecomfy: {}\n", encoding="utf-8")
     handle = backend._SubprocessEmbeddedExecution(
         profile,
         {
@@ -369,9 +408,8 @@ out=Path(request["config"]["extra"]["output_directory"]); out.mkdir(parents=True
     handle.wait_ready(2)
     ready = json.loads(handle.ready_path.read_text())
     assert (
-        ready["flags"] == ["-I", "-B"]
-        and ready["pythonpath"] is None
-        and ready["pgid"] == handle._process.pid
+        ready["package"] == handle._measured_package_facts()
+        and ready["resolver"]["roots"] == list(profile.installation_evidence["resolver_roots"])
     )
     handle.go()
     assert handle.run(2).run_id == "child-run"
@@ -410,7 +448,8 @@ def test_transport_is_strict_and_never_follows_result_symlinks(tmp_path: Path) -
 def test_destination_symlink_and_legacy_transport_are_rejected(tmp_path: Path) -> None:
     profile = make_profile(tmp_path)
     session = PipEmbeddedSession(profile)
-    source = Path(profile.scratch_root) / "source"
+    source = Path(profile.scratch_root) / "source" / "engine-output"
+    source.parent.mkdir()
     source.mkdir()
     output = source / "frame.bin"
     output.write_bytes(b"frame")
@@ -418,10 +457,182 @@ def test_destination_symlink_and_legacy_transport_are_rejected(tmp_path: Path) -
     outside.mkdir()
     destination = Path(profile.output_root) / "alias"
     destination.symlink_to(outside, target_is_directory=True)
-    handle = type("OutputHandle", (), {"output_dir": source})()
+    source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    destination_fd = os.open(Path(profile.output_root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    record = {
+        "staging": source.parent,
+        "source_dir_fd": source_fd,
+        "source_identity": (os.fstat(source_fd).st_dev, os.fstat(source_fd).st_ino),
+        "destination_fd": destination_fd,
+    }
     result = _ChildResult("n", "r", None, (("frame.bin", 5, file_digest(output)),))
     with pytest.raises(ValueError, match="symlink"):
-        session._collect_outputs(handle, result, destination)
+        session._collect_outputs(record, result, destination)
+    os.close(source_fd)
+    os.close(destination_fd)
     assert "run_embedded_sync" in _PIP_EMBEDDED_SCRIPT
     assert "run_sync" not in _PIP_EMBEDDED_SCRIPT
     assert "pickle" not in _PIP_EMBEDDED_SCRIPT
+
+
+def test_simultaneous_cancel_release_share_first_terminal_outcome(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    holder: list[Handle] = []
+
+    def factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> Handle:
+        handle = Handle(staging, block=True)
+        handle.nonce = request["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+    errors: list[BaseException] = []
+
+    def run_once() -> None:
+        try:
+            session.run(workflow(), task_identity="racing", out_dir=Path(profile.output_root))
+        except BaseException as exc:
+            errors.append(exc)
+
+    run_thread = threading.Thread(target=run_once)
+    run_thread.start()
+    while not holder or not holder[0].started.wait(timeout=0.02):
+        pass
+    results: list[dict[str, Any]] = []
+    controls = [
+        threading.Thread(target=lambda: results.append(session.cancel(task_identity="racing"))),
+        threading.Thread(target=lambda: results.append(session.release(task_identity="racing"))),
+    ]
+    for thread in controls:
+        thread.start()
+    for thread in controls:
+        thread.join(timeout=3)
+    run_thread.join(timeout=3)
+    assert len(results) == 2
+    assert {item["status"] for item in results} == {results[0]["status"]}
+    assert holder[0].calls.count("terminate") == 1
+    assert errors and "cancelled" in str(errors[0])
+
+
+def test_executable_replacement_after_profile_construction_fails_before_factory(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    executable = Path(profile.python_executable)
+    with executable.open("ab") as stream:
+        stream.write(b"drift")
+    called = []
+
+    def factory(_p: PipEmbeddedProfile, _r: Any, _s: Path) -> Handle:
+        called.append(True)
+        raise AssertionError("factory must not run after executable drift")
+
+    with pytest.raises(_PipEmbeddedError, match="interpreter_bytes"):
+        PipEmbeddedSession(profile, execution_factory=factory).run(
+            workflow(), out_dir=Path(profile.output_root)
+        )
+    assert not called
+
+
+def test_unbound_and_mismatched_hc03_hashes_fail_closed(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    raw = kwargs(profile)
+    raw["hc03_trust"] = None
+    with pytest.raises(_PipEmbeddedError, match="hc03_unbound"):
+        PipEmbeddedProfile.from_hc03(**raw)
+    raw = kwargs(profile)
+    raw["hc03_handoff_hash"] = "sha256:" + "a" * 64
+    with pytest.raises(_PipEmbeddedError, match="hc03_trust_hash"):
+        PipEmbeddedProfile.from_hc03(**raw)
+
+
+def test_outside_hardlink_and_traversal_sources_fail_closed(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    session = PipEmbeddedSession(profile)
+    staging = Path(profile.scratch_root) / "owned"
+    source = staging / "engine-output"
+    source.mkdir(parents=True)
+    original = source / "frame.bin"
+    original.write_bytes(b"frame")
+    hardlink = source / "hardlink.bin"
+    hardlink.hardlink_to(original)
+    source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    destination = Path(profile.output_root)
+    destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    record = {
+        "staging": staging,
+        "source_dir_fd": source_fd,
+        "source_identity": (os.fstat(source_fd).st_dev, os.fstat(source_fd).st_ino),
+        "destination_fd": destination_fd,
+    }
+    with pytest.raises(ValueError):
+        session._collect_outputs(
+            record,
+            _ChildResult("n", "r", None, (("hardlink.bin", 5, file_digest(original)),)),
+            destination,
+        )
+    with pytest.raises(ValueError):
+        session._collect_outputs(
+            record,
+            _ChildResult("n", "r", None, (("../escape", 1, "sha256:" + "0" * 64),)),
+            destination,
+        )
+    os.close(source_fd)
+    os.close(destination_fd)
+
+
+def test_ready_package_resolver_mismatch_blocks_go_and_unknown_census_poison(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    holder: list[Handle] = []
+
+    class BadReady(Handle):
+        def wait_ready(self, timeout: float) -> None:
+            self.calls.append("ready")
+            raise _PipEmbeddedError("readiness_mismatch", "resolver_facts", phase="ready")
+
+    def factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> BadReady:
+        handle = BadReady(staging)
+        handle.nonce = request["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+    with pytest.raises(_PipEmbeddedError, match="resolver_facts"):
+        session.run(workflow(), out_dir=Path(profile.output_root))
+    assert "go" not in holder[0].calls
+
+    def poisoned_factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> Handle:
+        class UnknownCensus(Handle):
+            def wait_completed(self, timeout: float, cancel_event: threading.Event | None = None) -> None:
+                while cancel_event is None or not cancel_event.is_set():
+                    time.sleep(0.005)
+                raise RuntimeError("cancelled")
+
+            def terminate(self, term: float, kill: float, reap: float) -> None:
+                raise _PipEmbeddedError("containment_pending", "unknown-census", phase="containment")
+
+        handle = UnknownCensus(staging)
+        handle.nonce = request["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=poisoned_factory)
+    errors: list[BaseException] = []
+    thread = threading.Thread(
+        target=lambda: _capture_error(
+            errors, lambda: session.run(workflow(), out_dir=Path(profile.output_root))
+        )
+    )
+    thread.start()
+    while len(holder) < 2:
+        time.sleep(0.005)
+    outcome = session.cancel()
+    thread.join(timeout=3)
+    assert outcome["fence_pending"] is True
+    assert session.poisoned
+    assert errors
+
+
+def _capture_error(target: list[BaseException], callback: Any) -> None:
+    try:
+        callback()
+    except BaseException as exc:
+        target.append(exc)

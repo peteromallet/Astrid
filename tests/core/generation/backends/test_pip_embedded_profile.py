@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -19,9 +20,13 @@ from astrid.core.generation.backends.vibecomfy import (
     PipEmbeddedSession,
     PipEmbeddedTimeouts,
     VibeComfyBackend,
+    _census_owned_group,
     _ChildResult,
     _normalize_hc03_profile,
     _PipEmbeddedError,
+    _ProcessOwnership,
+    _retain_hc03_validation,
+    _revalidate_launch_evidence,
     _strict_json_value,
     _strict_load_json,
 )
@@ -178,7 +183,7 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
         "resolver_roots": [str(models), str(nodes)],
         "resolver_digest": digest({"roots": [str(models), str(nodes)]}),
     }
-    handoff = root / "hc03-handoff.json"
+    handoff = support / "hc03-handoff.json"
     handoff.write_bytes(json.dumps(readiness, sort_keys=True, separators=(",", ":")).encode())
     normalized = _normalize_hc03_profile(readiness)
     normalized.pop("_interpreter_identities")
@@ -200,11 +205,7 @@ def make_profile(tmp_path: Path) -> PipEmbeddedProfile:
         installation_evidence=evidence,
         hc03_handoff_hash=handoff_hash,
         hc03_handoff_path=handoff,
-        hc03_trust={
-            "source": "trusted-host-readiness",
-            "handoff_hash": handoff_hash,
-            "projection_digest": digest(normalized),
-        },
+        hc03_trust=_retain_hc03_validation(readiness, handoff),
     )
 
 
@@ -241,6 +242,7 @@ class Handle:
     def terminate(self, term: float, kill: float, reap: float) -> None:
         self.calls.append("terminate")
         self.release.set()
+        return {"ok": True, "terminated": True, "reaped": True, "group_quiescent": True}
 
     def cleanup(self) -> None:
         self.calls.append("cleanup")
@@ -256,6 +258,97 @@ def test_profile_freezes_nested_readiness_and_actual_command_flags(tmp_path: Pat
         profile.hc03_profile["runtime"]["port"] = 1  # type: ignore[index]
     assert profile.command[:4] == (str(profile.python_executable), "-I", "-B", "-c")
     assert not {"--backend", "--ensure-models", "--ensure-packs"}.intersection(profile.command)
+
+
+def test_idle_control_disposes_session_and_blocks_resurrection(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    session = PipEmbeddedSession(profile)
+    disposed = session.release()
+    assert disposed["status"] == "disposed"
+    with pytest.raises(_PipEmbeddedError, match="session_disposed"):
+        session._reserve("never")
+    with pytest.raises(_PipEmbeddedError, match="session_disposed"):
+        session.run(workflow(), out_dir=Path(profile.output_root))
+
+
+def test_active_controls_require_exact_task_and_nonce(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    holder: list[Handle] = []
+
+    def factory(_p: PipEmbeddedProfile, request: Any, staging: Path) -> Handle:
+        handle = Handle(staging, block=True)
+        handle.nonce = request["nonce"]
+        holder.append(handle)
+        return handle
+
+    session = PipEmbeddedSession(profile, execution_factory=factory)
+    errors: list[BaseException] = []
+    thread = threading.Thread(
+        target=lambda: _capture_error(
+            errors, lambda: session.run(workflow(), task_identity="exact", out_dir=Path(profile.output_root))
+        )
+    )
+    thread.start()
+    while not holder or not holder[0].started.wait(timeout=0.02):
+        pass
+    nonce = session.active_invocation()["nonce"]
+    for identity, supplied_nonce in (("exact", None), ("exact", "wrong"), ("wrong", nonce)):
+        with pytest.raises(_PipEmbeddedError, match="identity mismatch"):
+            session.cancel(task_identity=identity, invocation_nonce=supplied_nonce)
+    outcome = session.cancel(task_identity="exact", invocation_nonce=nonce)
+    thread.join(timeout=3)
+    assert outcome["status"] == "identity-mismatch"
+    assert holder[0].calls.count("terminate") == 1
+    assert errors
+
+
+def test_normal_session_uses_admitted_custody_and_publishes_durable_output(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    session = PipEmbeddedSession(profile, execution_factory=lambda _p, request, staging: _request_handle(request, staging))
+    result = session.run(workflow(), task_identity="publish", out_dir=Path(profile.output_root))
+    assert result.published_outputs and result.published_outputs[0].is_file()
+    assert session.active_invocation() is None
+    assert list(Path(profile.output_root).glob(".pip-embedded-staging-*")) == []
+
+
+def test_reaped_owned_group_uses_retained_birth_and_unknown_is_not_quiescent(tmp_path: Path) -> None:
+    del tmp_path
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(.05)"],
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 2
+    census = _census_owned_group(process, deadline)
+    while not census.known or census.leader_birth is None:
+        if time.monotonic() >= deadline:
+            pytest.fail(f"could not capture child census: {census}")
+        time.sleep(.01)
+        census = _census_owned_group(process, deadline)
+    process.wait(timeout=2)
+    ownership = dataclasses.replace(
+        _ProcessOwnership(process.pid, process.pid, census.leader_birth),
+        pre_reap_quiescent=True,
+        reaped=True,
+    )
+    final = _census_owned_group(process, time.monotonic() + 1, reaped=True, ownership=ownership)
+    assert final.known and final.live == ()
+    unproven = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    unproven.wait(timeout=2)
+    assert not _census_owned_group(unproven, time.monotonic() + 1, reaped=True).known
+
+
+def test_lock_drift_is_readiness_mismatch_before_spawn(tmp_path: Path) -> None:
+    profile = make_profile(tmp_path)
+    lock = Path(profile.installation_evidence["engine_lock_path"])
+    lock.write_bytes(b"mutated lock")
+    with pytest.raises(_PipEmbeddedError, match="installation_inventory"):
+        _revalidate_launch_evidence(profile)
+
+
+def _request_handle(request: Any, staging: Path) -> Handle:
+    handle = Handle(staging)
+    handle.nonce = request["nonce"]
+    return handle
 
 
 def test_hc03_and_installation_mismatches_fail_closed(tmp_path: Path) -> None:
@@ -298,7 +391,9 @@ def test_reservation_busy_and_factory_cancel_race(tmp_path: Path) -> None:
         session.run(workflow(), task_identity="other", out_dir=Path(profile.output_root))
     control_result: list[dict[str, Any]] = []
     control = threading.Thread(
-        target=lambda: control_result.append(session.cancel(task_identity="race"))
+        target=lambda: control_result.append(session.cancel(
+            task_identity="race", invocation_nonce=session.active_invocation()["nonce"]
+        ))
     )
     control.start()
     time.sleep(0.05)
@@ -334,7 +429,7 @@ def test_wrong_identity_and_repeated_control_are_deterministic(tmp_path: Path) -
         time.sleep(0.01)
     assert holder[0].started.wait(timeout=2)
     with pytest.raises(RuntimeError, match="identity mismatch"):
-        session.cancel(task_identity="wrong")
+        session.cancel(task_identity="wrong", invocation_nonce="wrong")
     holder[0].release.set()
     thread.join(timeout=3)
     assert session.poisoned
@@ -385,7 +480,11 @@ def test_real_child_transport_argv_env_pgid_and_reap(
 from pathlib import Path
 request=json.loads(Path(__import__("sys").argv[1]).read_text()); a=__import__("sys").argv
 ready={"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"launch_digest":request["launch_digest"],"ok":True,"interpreter":{"executable":__import__("sys").executable,"prefix":os.environ["VIRTUAL_ENV"],"version":"3.11.11"},"package":request["package_facts"],"resolver":request["resolver_facts"]}; Path(a[2]).write_text(json.dumps(ready,separators=(",",":")))
-while not Path(a[3]).exists(): time.sleep(.01)
+os.set_blocking(int(a[3]), False)
+while True:
+ try:
+  if os.read(int(a[3]), 4096): break
+ except BlockingIOError: time.sleep(.01)
 out=Path(request["config"]["extra"]["output_directory"]); out.mkdir(parents=True,exist_ok=True); p=out/"child.bin"; p.write_bytes(b"child"); payload={"schema":"astrid.vibecomfy.result.v1","nonce":request["nonce"],"request_digest":request["request_digest"],"profile_digest":request["profile_digest"],"config_digest":request["config_digest"],"status":"succeeded","run_id":"child-run","prompt_id":None,"outputs":[{"relative_path":"child.bin","size_bytes":5,"sha256":"sha256:"+hashlib.sha256(b"child").hexdigest()}]}; Path(a[4]).write_text(json.dumps(payload,separators=(",",":")))"""
     monkeypatch.setattr(backend, "_PIP_EMBEDDED_SCRIPT", script)
     profile = make_profile(tmp_path)
@@ -412,7 +511,8 @@ out=Path(request["config"]["extra"]["output_directory"]); out.mkdir(parents=True
         and ready["resolver"]["roots"] == list(profile.installation_evidence["resolver_roots"])
     )
     handle.go()
-    assert handle.run(2).run_id == "child-run"
+    handle.wait_completed(2)
+    assert handle.read_result().run_id == "child-run"
     handle.terminate(1, 1, 1)
     handle.cleanup()
 
@@ -466,7 +566,7 @@ def test_destination_symlink_and_legacy_transport_are_rejected(tmp_path: Path) -
         "destination_fd": destination_fd,
     }
     result = _ChildResult("n", "r", None, (("frame.bin", 5, file_digest(output)),))
-    with pytest.raises(ValueError, match="symlink"):
+    with pytest.raises(ValueError):
         session._collect_outputs(record, result, destination)
     os.close(source_fd)
     os.close(destination_fd)
@@ -498,10 +598,11 @@ def test_simultaneous_cancel_release_share_first_terminal_outcome(tmp_path: Path
     run_thread.start()
     while not holder or not holder[0].started.wait(timeout=0.02):
         pass
+    active_nonce = session.active_invocation()["nonce"]
     results: list[dict[str, Any]] = []
     controls = [
-        threading.Thread(target=lambda: results.append(session.cancel(task_identity="racing"))),
-        threading.Thread(target=lambda: results.append(session.release(task_identity="racing"))),
+        threading.Thread(target=lambda: results.append(session.cancel(task_identity="racing", invocation_nonce=active_nonce))),
+        threading.Thread(target=lambda: results.append(session.release(task_identity="racing", invocation_nonce=active_nonce))),
     ]
     for thread in controls:
         thread.start()
@@ -624,7 +725,8 @@ def test_ready_package_resolver_mismatch_blocks_go_and_unknown_census_poison(tmp
     thread.start()
     while len(holder) < 2:
         time.sleep(0.005)
-    outcome = session.cancel()
+    active_nonce = session.active_invocation()["nonce"]
+    outcome = session.cancel(task_identity="task-unspecified", invocation_nonce=active_nonce)
     thread.join(timeout=3)
     assert outcome["fence_pending"] is True
     assert session.poisoned

@@ -26,7 +26,8 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -56,11 +57,8 @@ _REQUEST_SCHEMA = "astrid.vibecomfy.request.v1"
 _READY_SCHEMA = "astrid.vibecomfy.ready.v1"
 _RESULT_SCHEMA = "astrid.vibecomfy.result.v1"
 _PIP_EMBEDDED_SCRIPT = r"""
-import hashlib,json,os,sys,time
+import hashlib,json,os,select,sys,time
 from pathlib import Path
-from vibecomfy.runtime.run import run_embedded_sync
-from vibecomfy.runtime.session import SessionConfig
-from vibecomfy.workflow import FORMAT_VERSION,VibeWorkflow
 def pairs(items):
     result={}
     for key,value in items:
@@ -79,12 +77,45 @@ if set(request) != {"schema","nonce","task_identity","profile_digest","workflow"
                     "config_digest","profile_readiness_digest","config","policy","request_digest",
                     "launch_digest","package_facts","resolver_facts"}:
     raise SystemExit(2)
-if request.get("workflow",{}).get("vibecomfy_format_version")!=FORMAT_VERSION:
+def publish(value, directory_fd, name="ready.json"):
+    encoded=json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()
+    if len(encoded)>1024*1024: raise ValueError("bootstrap response too large")
+    temp=".ready-"+request["nonce"]
+    fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory_fd)
+    try:
+        os.write(fd,encoded); os.fsync(fd)
+    finally: os.close(fd)
+    try:
+        os.link(temp,name,src_dir_fd=directory_fd,dst_dir_fd=directory_fd,follow_symlinks=False)
+    finally:
+        try: os.unlink(temp,dir_fd=directory_fd)
+        except FileNotFoundError: pass
+def fail(code,reason):
+    publish({"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],
+        "request_digest":request["request_digest"],"profile_digest":request["profile_digest"],
+        "config_digest":request["config_digest"],"launch_digest":request["launch_digest"],
+        "ok":False,"error":{"code":code,"reason":reason}},int(sys.argv[5]))
+try:
+    staging_fd=int(sys.argv[5]); os.fstat(staging_fd)
+except Exception:
     raise SystemExit(2)
-workflow=VibeWorkflow.from_envelope(request["workflow"])
 def digest(value):
     return "sha256:"+hashlib.sha256(json.dumps(value,sort_keys=True,
         separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
+if digest({key:value for key,value in request.items() if key!="request_digest"}) != request["request_digest"]:
+    raise SystemExit(2)
+if request["config_digest"] != digest(request["config"]):
+    raise SystemExit(2)
+try:
+    from vibecomfy.runtime.run import run_embedded_sync
+    from vibecomfy.runtime.session import SessionConfig
+    from vibecomfy.workflow import FORMAT_VERSION,VibeWorkflow
+except Exception:
+    fail("not_ready","effective_resolver_unproven")
+    raise SystemExit(4)
+if request.get("workflow",{}).get("vibecomfy_format_version")!=FORMAT_VERSION:
+    raise SystemExit(2)
+workflow=VibeWorkflow.from_envelope(request["workflow"])
 if digest(request["workflow"]) != request.get("workflow_digest") or workflow.to_envelope()!=request["workflow"]:
     raise SystemExit(2)
 for node in workflow.nodes.values():
@@ -102,10 +133,17 @@ for item in request["package_facts"]["files"]:
     if measured["sha256"] != item["sha256"]: raise SystemExit(4)
     package_files.append(measured)
 package={"revision":request["package_facts"]["revision"],"digest":digest(package_files),"files":package_files}
-resolver_roots=request["resolver_facts"]["roots"]
-if any(Path(root).is_symlink() or not Path(root).is_dir() for root in resolver_roots): raise SystemExit(4)
-resolver={"roots":resolver_roots,"digest":"sha256:"+hashlib.sha256(json.dumps({"roots":resolver_roots},sort_keys=True,separators=(",",":")).encode()).hexdigest()}
-if resolver["digest"] != request["resolver_facts"]["digest"]: raise SystemExit(4)
+try:
+    # A requested root list is not an observation.  Only the fixed pinned
+    # runtime's own resolver machinery can establish effective paths.
+    import importlib.util
+    comfy_spec=importlib.util.find_spec("comfy")
+    if comfy_spec is None or not comfy_spec.origin:
+        raise RuntimeError("comfy resolver unavailable")
+    raise RuntimeError("effective resolver equivalence is not proven")
+except Exception:
+    fail("not_ready","effective_resolver_unproven")
+    raise SystemExit(4)
 ready={"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],
        "request_digest":request["request_digest"],"profile_digest":request["profile_digest"],
        "config_digest":request["config_digest"],"launch_digest":request["launch_digest"],"ok":True,
@@ -113,12 +151,19 @@ ready={"schema":"astrid.vibecomfy.ready.v1","nonce":request["nonce"],
                       "prefix":os.path.realpath(sys.prefix),
                       "version":".".join(str(x) for x in sys.version_info[:3])},
        "package":package,"resolver":resolver}
-Path(sys.argv[2]).write_text(json.dumps(ready,sort_keys=True,separators=(",",":")),encoding="utf-8")
+publish(ready,staging_fd)
+go_fd=int(sys.argv[3]); os.set_blocking(go_fd,False)
 deadline=time.monotonic()+float(request["policy"]["ready_seconds"])
-while not Path(sys.argv[3]).exists():
+frame=None
+while frame is None:
     if time.monotonic() >= deadline: raise SystemExit(3)
-    time.sleep(0.05)
-go=json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+    readable,_,_=select.select([go_fd],[],[],max(0.001,deadline-time.monotonic()))
+    if readable:
+        frame=os.read(go_fd,4096)
+        break
+if frame is None or len(frame)>4096: raise SystemExit(2)
+try: go=json.loads(frame.decode("utf-8"),object_pairs_hook=pairs)
+except Exception: raise SystemExit(2)
 if go != {"nonce":request["nonce"],"request_digest":request["request_digest"],"launch_digest":request["launch_digest"]}:
     raise SystemExit(2)
 cfg=SessionConfig(runtime_root=config["runtime_root"],cwd=config["cwd"],
@@ -139,7 +184,11 @@ payload={"schema":"astrid.vibecomfy.result.v1","nonce":request["nonce"],
     "request_digest":request["request_digest"],"profile_digest":request["profile_digest"],
     "config_digest":request["config_digest"],"status":"succeeded",
     "run_id":result.run_id,"prompt_id":result.prompt_id,"outputs":outputs}
-Path(sys.argv[4]).write_text(json.dumps(payload,sort_keys=True,separators=(",",":")),encoding="utf-8")
+fd=os.open(sys.argv[4],os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+try:
+    encoded=json.dumps(payload,sort_keys=True,separators=(",",":")).encode()
+    os.write(fd,encoded); os.fsync(fd)
+finally: os.close(fd)
 """
 _SECRET_KEY_WORDS = (
     "secret",
@@ -254,7 +303,7 @@ def _thaw_json(value: Any) -> Any:
 def _strict_load_json(path: Path, *, limit: int) -> dict[str, Any]:
     if not hasattr(os, "O_NOFOLLOW"):
         raise ValueError("pip_embedded requires no-follow file custody")
-    flags = os.O_RDONLY | os.O_NOFOLLOW
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
         fd = os.open(path, flags)
     except OSError as exc:
@@ -597,27 +646,83 @@ def _remove_tree(path: Path, *, timeout: float) -> None:
         path.rmdir()
 
 
+def _remove_tree_at(parent_fd: int, name: str, *, timeout: float, expected: tuple[int, int] | None = None) -> None:
+    """Remove one directory owned by this invocation, relative to its parent FD."""
+    if not name or Path(name).name != name or name in {".", ".."}:
+        raise ValueError("pip_embedded cleanup name is invalid")
+    deadline = time.monotonic() + timeout
+    child_fd = os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        info = os.fstat(child_fd)
+        if expected is not None and (info.st_dev, info.st_ino) != expected:
+            raise ValueError("pip_embedded cleanup custody changed")
+        for entry in os.listdir(child_fd):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("pip_embedded cleanup deadline exceeded")
+            if entry in {".", ".."} or Path(entry).name != entry:
+                raise ValueError("pip_embedded cleanup entry is invalid")
+            try:
+                leaf = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=child_fd)
+            except OSError as exc:
+                raise ValueError("pip_embedded cleanup custody unavailable") from exc
+            try:
+                leaf_info = os.fstat(leaf)
+                mode = stat.S_IFMT(leaf_info.st_mode)
+                if mode == stat.S_IFDIR:
+                    _remove_tree_at(child_fd, entry, timeout=max(0.001, deadline - time.monotonic()))
+                elif mode == stat.S_IFREG and leaf_info.st_nlink == 1:
+                    os.unlink(entry, dir_fd=child_fd)
+                else:
+                    raise ValueError("pip_embedded cleanup encountered unowned entry")
+            finally:
+                os.close(leaf)
+        os.fsync(child_fd)
+    finally:
+        os.close(child_fd)
+    os.rmdir(name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+
+
 @dataclass(frozen=True, slots=True)
 class _GroupCensus:
     known: bool
     members: tuple[tuple[int, int, int, str], ...] = ()
     reason: str | None = None
+    leader_birth: str | None = None
 
     @property
     def live(self) -> tuple[tuple[int, int, int, str], ...]:
         return tuple(item for item in self.members if "Z" not in item[3].upper())
 
 
+@dataclass(frozen=True, slots=True)
+class _ProcessOwnership:
+    pid: int
+    pgid: int
+    birth: str
+    dev: int | None = None
+    ino: int | None = None
+    pre_reap_quiescent: bool = False
+    reaped: bool = False
+
+
 def _census_owned_group(
-    process: subprocess.Popen[bytes], deadline: float, *, allow_reaped: bool = False
+    process: subprocess.Popen[bytes], deadline: float, *, reaped: bool = False,
+    ownership: _ProcessOwnership | None = None,
 ) -> _GroupCensus:
     """Bounded, state-bearing census; empty output is never positive proof."""
     if process.pid <= 0:
         return _GroupCensus(False, reason="invalid-leader")
-    try:
-        pgid = getattr(process, "_astrid_pgid", None) or os.getpgid(process.pid)
-    except OSError as exc:
-        return _GroupCensus(False, reason=f"leader-ownership:{exc.errno}")
+    owned = ownership or getattr(process, "_astrid_ownership", None)
+    if owned is not None:
+        if owned.pid != process.pid or owned.pgid <= 0 or not owned.birth:
+            return _GroupCensus(False, reason="ownership-mismatch")
+        pgid = owned.pgid
+    else:
+        try:
+            pgid = os.getpgid(process.pid)
+        except OSError as exc:
+            return _GroupCensus(False, reason=f"leader-ownership:{exc.errno}")
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return _GroupCensus(False, reason="deadline")
@@ -626,7 +731,7 @@ def _census_owned_group(
         return _GroupCensus(False, reason="ps-unavailable")
     try:
         completed = subprocess.run(
-            [ps, "-axo", "pid=,ppid=,pgid=,stat="],
+            [ps, "-axo", "pid=,ppid=,pgid=,stat=,lstart="],
             check=False,
             capture_output=True,
             text=True,
@@ -640,24 +745,36 @@ def _census_owned_group(
     rows: list[tuple[int, int, int, str]] = []
     observer_seen = False
     leader_seen = False
+    leader_birth: str | None = None
     try:
         for line in completed.stdout.splitlines():
             fields = line.split()
-            if len(fields) != 4:
+            if len(fields) < 9:
                 return _GroupCensus(False, reason="malformed-census-row")
             pid, ppid, row_pgid = (int(fields[0]), int(fields[1]), int(fields[2]))
             state = fields[3]
+            birth = " ".join(fields[4:])
             if pid == os.getpid():
                 observer_seen = True
             if pid == process.pid:
                 leader_seen = True
+                leader_birth = birth
             if row_pgid == pgid:
                 rows.append((pid, ppid, row_pgid, state))
     except (TypeError, ValueError):
         return _GroupCensus(False, reason="malformed-census-row")
-    if not observer_seen or (not leader_seen and not allow_reaped):
+    if not observer_seen:
         return _GroupCensus(False, reason="census-lost-owner")
-    return _GroupCensus(True, tuple(rows))
+    if owned is not None and leader_seen and leader_birth != owned.birth:
+        return _GroupCensus(False, reason="leader-birth-mismatch")
+    if not leader_seen and not (reaped and owned is not None and owned.reaped):
+        return _GroupCensus(False, reason="census-lost-owner")
+    if reaped and owned is not None and owned.reaped and rows:
+        # A post-reap group with any remaining member is not attributable to
+        # the old leader without an independent birth proof.
+        if not leader_seen:
+            return _GroupCensus(False, reason="post-reap-group-ambiguous")
+    return _GroupCensus(True, tuple(rows), None, leader_birth)
 
 
 def _publish_directory_noreplace(
@@ -850,37 +967,119 @@ def _validate_profile_evidence(
     return raw
 
 
-def _read_bound_handoff(
-    path: str | Path,
-    expected_hash: str,
-    expected_projection_digest: str,
-    expected_profile: Mapping[str, Any],
-) -> tuple[str, str]:
-    """Read and validate the exact externally-bound HC-03 bytes once."""
-    handoff = Path(path)
-    if not handoff.is_absolute() or handoff.is_symlink() or not handoff.is_file():
-        raise _unavailable("hc03_handoff_unavailable")
-    raw = handoff.read_bytes()
-    actual_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
-    if actual_hash != expected_hash:
-        raise _PipEmbeddedError("readiness_mismatch", "hc03_handoff_hash", phase="admission")
-    try:
-        decoded = json.loads(
-            raw.decode("utf-8"),
-            object_pairs_hook=lambda pairs: dict(pairs),
-            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        raise _unavailable("hc03_handoff_malformed") from exc
-    normalized = _normalize_hc03_profile(decoded)
-    normalized_public = {
+@dataclass(frozen=True, slots=True)
+class _HC03AdmissionBinding:
+    """A retained result of an external T03 validation, not a caller flag."""
+
+    support_root: str
+    handoff_name: str
+    support_dev: int
+    support_ino: int
+    raw_hash: str
+    facts_digest: str
+    projection_digest: str
+    expected_projection: Mapping[str, Any]
+    support_fd: int = field(repr=False, compare=False)
+
+
+def _retain_hc03_validation(
+    expected_context: Mapping[str, Any], handoff_path: str | Path
+) -> _HC03AdmissionBinding:
+    """Retain independently supplied T03 facts and support-root custody.
+
+    Production callers must pass the already validated host result.  This
+    helper deliberately does not derive its expectation from a submitted
+    ``PipEmbeddedProfile``; focused tests use it to model that external seam.
+    """
+    normalized = _normalize_hc03_profile(expected_context)
+    expected_projection = {
         key: value for key, value in normalized.items() if key != "_interpreter_identities"
     }
-    if _digest(normalized_public) != expected_projection_digest:
+    handoff = Path(handoff_path).expanduser()
+    if not handoff.is_absolute() or handoff.name in {".", ".."} or Path(handoff.name).name != handoff.name:
+        raise _unavailable("hc03_handoff_unavailable")
+    support_root = Path(normalized["launch"]["support_root"])
+    if handoff.parent != support_root or support_root.is_symlink() or not support_root.is_dir():
+        raise _unavailable("hc03_support_custody_unavailable")
+    _reject_symlink_ancestors(support_root)
+    support_fd = os.open(support_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW)
+    try:
+        support_info = os.fstat(support_fd)
+        fd = os.open(handoff.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=support_fd)
+        try:
+            info = os.fstat(fd)
+            if stat.S_IFMT(info.st_mode) != stat.S_IFREG or info.st_nlink != 1:
+                raise _unavailable("hc03_handoff_unavailable")
+            raw = b""
+            while len(raw) <= _MAX_JSON_BYTES:
+                part = os.read(fd, _MAX_JSON_BYTES + 1 - len(raw))
+                if not part:
+                    break
+                raw += part
+            if len(raw) > _MAX_JSON_BYTES:
+                raise _unavailable("hc03_handoff_too_large")
+        finally:
+            os.close(fd)
+    except BaseException:
+        os.close(support_fd)
+        raise
+    raw_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    # The independently retained bytes must themselves decode to the retained
+    # facts; a hash/projection asserted after profile construction is not enough.
+    try:
+        decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=lambda pairs: dict(pairs))
+        observed = _normalize_hc03_profile(decoded)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        os.close(support_fd)
+        raise _unavailable("hc03_handoff_malformed") from exc
+    observed_projection = {key: value for key, value in observed.items() if key != "_interpreter_identities"}
+    if observed_projection != expected_projection:
+        os.close(support_fd)
+        raise _PipEmbeddedError("readiness_mismatch", "hc03_independent_context", phase="admission")
+    return _HC03AdmissionBinding(
+        str(support_root), handoff.name, support_info.st_dev, support_info.st_ino,
+        raw_hash, observed_projection["verified_facts_digest"], _digest(observed_projection),
+        _freeze_json(expected_projection), support_fd,
+    )
+
+
+def _read_bound_handoff(
+    binding: _HC03AdmissionBinding, expected_profile: Mapping[str, Any]
+) -> tuple[str, str]:
+    """Read exact bytes through retained support-root custody at each edge."""
+    try:
+        support_info = os.fstat(binding.support_fd)
+        if (support_info.st_dev, support_info.st_ino) != (binding.support_dev, binding.support_ino):
+            raise _unavailable("hc03_support_custody_changed")
+        fd = os.open(binding.handoff_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=binding.support_fd)
+        try:
+            info = os.fstat(fd)
+            if stat.S_IFMT(info.st_mode) != stat.S_IFREG or info.st_nlink != 1:
+                raise _unavailable("hc03_handoff_unavailable")
+            raw = os.read(fd, _MAX_JSON_BYTES + 1)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise _unavailable("hc03_handoff_unavailable") from exc
+    if len(raw) > _MAX_JSON_BYTES:
+        raise _unavailable("hc03_handoff_too_large")
+    actual_hash = "sha256:" + hashlib.sha256(raw).hexdigest()
+    if actual_hash != binding.raw_hash:
+        raise _PipEmbeddedError("readiness_mismatch", "hc03_handoff_hash", phase="admission")
+    try:
+        decoded = json.loads(raw.decode("utf-8"), object_pairs_hook=lambda pairs: dict(pairs))
+        normalized = _normalize_hc03_profile(decoded)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise _unavailable("hc03_handoff_malformed") from exc
+    public = {key: value for key, value in normalized.items() if key != "_interpreter_identities"}
+    if public["verified_facts_digest"] != binding.facts_digest:
+        raise _PipEmbeddedError("readiness_mismatch", "hc03_facts_digest", phase="admission")
+    if _digest(public) != binding.projection_digest or public != _thaw_json(binding.expected_projection):
         raise _PipEmbeddedError("readiness_mismatch", "hc03_projection", phase="admission")
-    if _digest(normalized_public) != _digest(expected_profile):
+    expected = _strict_json_value(expected_profile)
+    if expected != public:
         raise _PipEmbeddedError("readiness_mismatch", "hc03_profile", phase="admission")
-    return actual_hash, _digest(normalized_public)
+    return actual_hash, binding.projection_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -901,7 +1100,8 @@ class PipEmbeddedProfile:
     installation_evidence: Mapping[str, Any] | None = None
     hc03_handoff_hash: str | None = None
     hc03_handoff_path: str | Path | None = None
-    hc03_trust: Mapping[str, Any] | None = None
+    hc03_trust: _HC03AdmissionBinding | None = None
+    root_identities: Mapping[str, tuple[int, int]] | None = None
     timeouts: PipEmbeddedTimeouts = PipEmbeddedTimeouts()
 
     def __post_init__(self) -> None:
@@ -984,27 +1184,36 @@ class PipEmbeddedProfile:
         evidence = _validate_profile_evidence(self, self.installation_evidence)
         if evidence["python_sha256"] != selected["sha256"]:
             raise ValueError("pip_embedded executable bytes do not match installation evidence")
-        if self.hc03_handoff_path is None or not isinstance(self.hc03_trust, Mapping):
+        if self.hc03_handoff_path is None or not isinstance(self.hc03_trust, _HC03AdmissionBinding):
             raise _unavailable("hc03_unbound")
         handoff_hash = _require_digest(self.hc03_handoff_hash, "hc03_handoff_hash")
-        if self.hc03_trust.get("source") != "trusted-host-readiness":
-            raise _unavailable("hc03_unbound")
-        if self.hc03_trust.get("handoff_hash") != handoff_hash:
+        if self.hc03_trust.raw_hash != handoff_hash:
             raise _PipEmbeddedError("readiness_mismatch", "hc03_trust_hash")
-        projection_digest = self.hc03_trust.get("projection_digest")
-        if not isinstance(projection_digest, str) or not _SHA256_RE.fullmatch(projection_digest):
-            raise _unavailable("hc03_unbound")
-        _read_bound_handoff(
-            self.hc03_handoff_path,
-            handoff_hash,
-            projection_digest,
-            readiness,
-        )
+        handoff_path = Path(self.hc03_handoff_path).expanduser().resolve(strict=False)
+        requested_handoff = Path(self.hc03_handoff_path).expanduser()
+        if requested_handoff.is_symlink() or handoff_path.parent != Path(self.hc03_trust.support_root) or handoff_path.name != self.hc03_trust.handoff_name:
+            raise _PipEmbeddedError("readiness_mismatch", "hc03_handoff_custody")
+        _read_bound_handoff(self.hc03_trust, readiness)
+        root_identities = {
+            name: (Path(path).stat().st_dev, Path(path).stat().st_ino)
+            for name, path in {
+                "environment": self.python_environment,
+                "engine": self.engine_root,
+                "custom_nodes": self.custom_nodes_root,
+                "models": self.model_root,
+                "output": self.output_root,
+                "scratch": self.scratch_root,
+                "cas": self.cas_root,
+                "source": self.astrid_source_root,
+                "pack": self.astrid_pack_root,
+            }.items()
+        }
         object.__setattr__(self, "hc03_profile", _freeze_json(readiness))
         object.__setattr__(self, "installation_evidence", _freeze_json(evidence))
         object.__setattr__(self, "hc03_handoff_hash", handoff_hash)
         object.__setattr__(self, "hc03_handoff_path", _require_absolute_path(self.hc03_handoff_path, "hc03_handoff_path"))
-        object.__setattr__(self, "hc03_trust", _freeze_json(self.hc03_trust))
+        object.__setattr__(self, "hc03_trust", self.hc03_trust)
+        object.__setattr__(self, "root_identities", MappingProxyType(root_identities))
 
     @classmethod
     def from_hc03(cls, **kwargs: Any) -> "PipEmbeddedProfile":
@@ -1129,11 +1338,10 @@ class _SubprocessEmbeddedExecution:
         for path in (self.runtime_dir, self.input_dir, self.output_dir, self.temp_dir):
             path.mkdir(exist_ok=True)
         self.request_path, self.ready_path = staging / "request.json", staging / "ready.json"
-        self.go_path, self.result_path, self.log_path = (
-            staging / "GO",
-            staging / "result.json",
-            staging / "embedded.log",
-        )
+        self.result_path, self.log_path = staging / "result.json", staging / "embedded.log"
+        self._go_read_fd, self._go_write_fd = os.pipe()
+        os.set_blocking(self._go_write_fd, False)
+        self._staging_fd = os.open(staging, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW)
         config = {
             "runtime_root": str(self.runtime_dir),
             "cwd": str(self.runtime_dir),
@@ -1149,7 +1357,8 @@ class _SubprocessEmbeddedExecution:
         self.launch_spec = {
             "argv": [
                 str(self.profile.python_executable), "-I", "-B", "-c", "<embedded-script>",
-                str(self.request_path), str(self.ready_path), str(self.go_path), str(self.result_path),
+                str(self.request_path), str(self.ready_path), str(self._go_read_fd), str(self.result_path),
+                str(self._staging_fd),
             ],
             "cwd": str(self.runtime_dir),
             "environment": {
@@ -1184,10 +1393,12 @@ class _SubprocessEmbeddedExecution:
         self._log_handle: Any = None
         self.measured_ready: dict[str, Any] | None = None
         self._completed = False
+        self._observed_exit = False
+        self._reaped = False
+        self.ownership: _ProcessOwnership | None = None
+        self._go_sent = False
 
     def start(self) -> None:
-        from astrid.core.execution.process_group import popen_owned_group
-
         argv = [
             str(self.profile.python_executable),
             "-I",
@@ -1196,8 +1407,9 @@ class _SubprocessEmbeddedExecution:
             _PIP_EMBEDDED_SCRIPT,
             str(self.request_path),
             str(self.ready_path),
-            str(self.go_path),
+            str(self._go_read_fd),
             str(self.result_path),
+            str(self._staging_fd),
         ]
         environment = {
             "PATH": str(Path(self.profile.python_executable).parent),
@@ -1208,7 +1420,7 @@ class _SubprocessEmbeddedExecution:
         }
         self._log_handle = self.log_path.open("wb")
         try:
-            process = popen_owned_group(
+            process = subprocess.Popen(
                 argv,
                 cwd=str(self.runtime_dir),
                 env=environment,
@@ -1216,12 +1428,34 @@ class _SubprocessEmbeddedExecution:
                 stdout=self._log_handle,
                 stderr=subprocess.STDOUT,
                 close_fds=True,
+                start_new_session=True,
+                pass_fds=(self._go_read_fd, self._staging_fd),
             )
             # Publish custody immediately after OS creation.  A later
             # provenance failure must still be able to terminate this process.
             self._process = process
-            self._process._astrid_pgid = os.getpgid(process.pid)  # type: ignore[attr-defined]
+            deadline = time.monotonic() + self.profile.timeouts.preparation_seconds
+            ownership = None
+            while time.monotonic() < deadline:
+                candidate = _census_owned_group(process, deadline)
+                if candidate.known:
+                    leaders = [row for row in candidate.members if row[0] == process.pid]
+                    if leaders:
+                        leader = leaders[0]
+                        # lstart is captured by the census parser and is kept
+                        # as immutable birth provenance by the process record.
+                        ownership = _ProcessOwnership(process.pid, process.pid, candidate.leader_birth or "")
+                        break
+                time.sleep(0.01)
+            if ownership is None:
+                raise _PipEmbeddedError("containment_pending", "leader-provenance-unavailable", phase="spawn")
+            self.ownership = ownership
+            process._astrid_ownership = ownership  # type: ignore[attr-defined]
+            os.close(self._go_read_fd)
+            self._go_read_fd = -1
         except BaseException:
+            if self._go_read_fd >= 0:
+                os.close(self._go_read_fd)
             self._log_handle.close()
             self._log_handle = None
             raise
@@ -1229,13 +1463,32 @@ class _SubprocessEmbeddedExecution:
     def wait_ready(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.ready_path.is_file():
+            try:
                 ready = _strict_load_json(self.ready_path, limit=_MAX_RESULT_BYTES)
+            except ValueError:
+                if os.path.lexists(self.ready_path):
+                    raise
+                ready = None
+            if ready is not None:
+                if set(ready) == {
+                    "schema", "nonce", "request_digest", "profile_digest", "config_digest",
+                    "launch_digest", "ok", "error",
+                } and ready.get("ok") is False:
+                    error = ready.get("error")
+                    if (
+                        isinstance(error, Mapping)
+                        and set(error) == {"code", "reason"}
+                        and error.get("code") in {"not_ready", "unsupported_installation"}
+                        and isinstance(error.get("reason"), str)
+                        and error.get("reason")
+                    ):
+                        raise _PipEmbeddedError("not_ready", str(error.get("reason") or "bootstrap_failed"), phase="ready")
+                    raise _PipEmbeddedError("readiness_mismatch", "bootstrap_rejected", phase="ready")
                 if set(ready) != {
                     "schema", "nonce", "request_digest", "profile_digest", "config_digest",
                     "launch_digest", "ok", "interpreter", "package", "resolver",
                 } or ready.get("schema") != _READY_SCHEMA or ready.get("ok") is not True:
-                    raise RuntimeError(str(ready.get("error") or "embedded child rejected request"))
+                    raise _PipEmbeddedError("readiness_mismatch", "ready_schema", phase="ready")
                 interpreter = ready.get("interpreter")
                 expected_interpreter = self.profile.installation_evidence
                 if (
@@ -1244,7 +1497,7 @@ class _SubprocessEmbeddedExecution:
                     or interpreter.get("prefix") != str(self.profile.python_environment)
                     or interpreter.get("version") != expected_interpreter["python_version"]
                 ):
-                    raise RuntimeError("embedded READY interpreter identity mismatch")
+                    raise _PipEmbeddedError("readiness_mismatch", "ready_interpreter", phase="ready")
                 package = ready.get("package")
                 resolver = ready.get("resolver")
                 if not isinstance(package, Mapping) or not isinstance(resolver, Mapping):
@@ -1266,24 +1519,33 @@ class _SubprocessEmbeddedExecution:
                     "launch_digest": self.request["launch_digest"],
                 }
                 if any(ready.get(key) != value for key, value in expected.items()):
-                    raise RuntimeError("embedded READY identity mismatch")
+                    raise _PipEmbeddedError("readiness_mismatch", "ready_identity", phase="ready")
                 self.measured_ready = ready
                 return
             if self._process is None or self._process.returncode is not None:
-                raise RuntimeError("embedded child exited before READY")
+                raise _PipEmbeddedError("not_ready", "bootstrap_failed", phase="ready")
             time.sleep(0.05)
-        raise TimeoutError("embedded child READY deadline exceeded")
+        raise _PipEmbeddedError("not_ready", "ready_deadline", phase="ready")
 
     def go(self) -> None:
-        self.go_path.write_bytes(
-            _canonical_json(
-                {
-                    "nonce": self.request["nonce"],
-                    "request_digest": self.request["request_digest"],
-                    "launch_digest": self.request["launch_digest"],
-                }
-            ).encode("utf-8")
-        )
+        if self._go_sent or self._go_write_fd < 0:
+            raise _PipEmbeddedError("go_failed", "go_already_sent", phase="go")
+        frame = _canonical_json({
+            "nonce": self.request["nonce"],
+            "request_digest": self.request["request_digest"],
+            "launch_digest": self.request["launch_digest"],
+        }).encode("utf-8")
+        try:
+            written = os.write(self._go_write_fd, frame)
+        except OSError as exc:
+            reason = "go_pipe_full" if exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK} else "go_pipe_closed"
+            raise _PipEmbeddedError("go_failed", reason, phase="go") from exc
+        finally:
+            os.close(self._go_write_fd)
+            self._go_write_fd = -1
+        if written != len(frame):
+            raise _PipEmbeddedError("go_failed", "go_pipe_short_write", phase="go")
+        self._go_sent = True
 
     def wait_completed(self, timeout: float, cancel_event: threading.Event | None = None) -> None:
         if self._process is None:
@@ -1295,15 +1557,15 @@ class _SubprocessEmbeddedExecution:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("embedded execution deadline exceeded")
-            try:
-                self._process.wait(timeout=min(0.05, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                continue
-        if self._process.returncode != 0:
-            raise RuntimeError(f"embedded execution exited with status {self._process.returncode}")
-        self._completed = True
-        return None
+            census = _census_owned_group(self._process, deadline, ownership=self.ownership)
+            if census.known:
+                leader = next((row for row in census.members if row[0] == self._process.pid), None)
+                if leader is not None and "Z" in leader[3].upper():
+                    self._observed_exit = True
+                    self._completed = True
+                    return None
+            time.sleep(min(0.05, remaining))
+        raise TimeoutError("embedded execution deadline exceeded")
 
     def read_result(self) -> _ChildResult:
         if self._process is None:
@@ -1372,11 +1634,6 @@ class _SubprocessEmbeddedExecution:
             )
         return _ChildResult(value["nonce"], value["run_id"], value["prompt_id"], tuple(outputs))
 
-    def run(self, timeout: float, cancel_event: threading.Event | None = None) -> _ChildResult:
-        """Compatibility shim for the synthetic transport test only."""
-        self.wait_completed(timeout, cancel_event)
-        return self.read_result()
-
     def _measured_package_facts(self) -> dict[str, Any]:
         inventory = self.profile.installation_evidence["package_inventory"]
         return {
@@ -1385,53 +1642,64 @@ class _SubprocessEmbeddedExecution:
             "files": _thaw_json(inventory),
         }
 
-    def terminate(self, term_seconds: float, kill_seconds: float, reap_seconds: float) -> None:
+    def terminate(self, term_seconds: float, kill_seconds: float, reap_seconds: float) -> Mapping[str, Any]:
         process = self._process
-        if process is None:
-            return
+        if process is None or self.ownership is None:
+            raise _PipEmbeddedError("containment_pending", "process-provenance-unavailable", phase="containment")
+        if self._reaped:
+            return {"ok": True, "terminated": self._go_sent, "reaped": True, "group_quiescent": True}
         term_deadline = time.monotonic() + term_seconds
-        census = _census_owned_group(process, term_deadline, allow_reaped=self._completed)
+        census = _census_owned_group(process, term_deadline, ownership=self.ownership)
         if not census.known:
             raise _PipEmbeddedError("containment_pending", census.reason or "unknown-census", phase="containment")
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        state = self._bounded_group_wait(process, term_deadline, signal.SIGTERM, allow_reaped=self._completed)
-        if state != "QUIESCENT":
-            kill_deadline = time.monotonic() + kill_seconds
-            census = _census_owned_group(process, kill_deadline)
-            if not census.known:
-                raise _PipEmbeddedError("containment_pending", census.reason or "unknown-census", phase="containment")
+        if census.live:
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                os.killpg(self.ownership.pgid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            state = self._bounded_group_wait(process, kill_deadline, signal.SIGKILL, allow_reaped=self._completed)
+        state = self._bounded_group_wait(process, term_deadline, signal.SIGTERM, ownership=self.ownership)
+        if state != "QUIESCENT":
+            kill_deadline = time.monotonic() + kill_seconds
+            census = _census_owned_group(process, kill_deadline, ownership=self.ownership)
+            if not census.known:
+                raise _PipEmbeddedError("containment_pending", census.reason or "unknown-census", phase="containment")
+            if census.live:
+                try:
+                    os.killpg(self.ownership.pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            state = self._bounded_group_wait(process, kill_deadline, signal.SIGKILL, ownership=self.ownership)
             if state != "QUIESCENT":
                 raise _PipEmbeddedError("containment_pending", "group-live-at-deadline", phase="containment")
         try:
             process.wait(timeout=reap_seconds)
+            self._reaped = True
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError("embedded child reap deadline exceeded") from exc
-        final = _census_owned_group(process, time.monotonic() + reap_seconds, allow_reaped=True)
+        ownership = dataclass_replace(self.ownership, pre_reap_quiescent=True, reaped=True)
+        self.ownership = ownership
+        final = _census_owned_group(process, time.monotonic() + reap_seconds, reaped=True, ownership=ownership)
         if not final.known:
             raise _PipEmbeddedError("containment_pending", final.reason or "unknown-census", phase="containment")
         if final.live:
             raise _PipEmbeddedError("containment_pending", "descendants-remain-live", phase="containment")
+        return {"ok": True, "terminated": self._go_sent, "reaped": True, "group_quiescent": True}
 
     @staticmethod
     def _bounded_group_wait(
-        process: subprocess.Popen[bytes], deadline: float, sig: int, *, allow_reaped: bool = False
+        process: subprocess.Popen[bytes], deadline: float, sig: int, *,
+        ownership: _ProcessOwnership | None = None,
     ) -> str:
         while time.monotonic() < deadline:
-            census = _census_owned_group(process, deadline, allow_reaped=allow_reaped)
+            census = _census_owned_group(process, deadline, ownership=ownership)
             if not census.known:
                 return "UNKNOWN"
             if not census.live:
                 return "QUIESCENT"
             try:
-                os.killpg(os.getpgid(process.pid), sig)
+                if ownership is None:
+                    return "UNKNOWN"
+                os.killpg(ownership.pgid, sig)
             except ProcessLookupError:
                 pass
             time.sleep(min(0.05, max(0.001, deadline - time.monotonic())))
@@ -1441,6 +1709,11 @@ class _SubprocessEmbeddedExecution:
         if self._log_handle is not None:
             self._log_handle.close()
             self._log_handle = None
+        for attr in ("_go_write_fd", "_go_read_fd", "_staging_fd"):
+            fd = getattr(self, attr, -1)
+            if isinstance(fd, int) and fd >= 0:
+                os.close(fd)
+                setattr(self, attr, -1)
 
 
 def _measure_executable(profile: PipEmbeddedProfile) -> dict[str, Any]:
@@ -1472,13 +1745,36 @@ def _measure_executable(profile: PipEmbeddedProfile) -> dict[str, Any]:
 def _revalidate_launch_evidence(profile: PipEmbeddedProfile) -> dict[str, Any]:
     """Re-measure mutable launch facts immediately before each admission edge."""
     executable = _measure_executable(profile)
-    _read_bound_handoff(
-        profile.hc03_handoff_path,
-        profile.hc03_handoff_hash,
-        profile.hc03_trust["projection_digest"],
-        _thaw_json(profile.hc03_profile),
-    )
+    if not isinstance(profile.hc03_trust, _HC03AdmissionBinding):
+        raise _unavailable("hc03_unbound")
+    _read_bound_handoff(profile.hc03_trust, _thaw_json(profile.hc03_profile))
     evidence = _thaw_json(profile.installation_evidence)
+    try:
+        current_ids = {
+            name: (Path(path).stat().st_dev, Path(path).stat().st_ino)
+            for name, path in {
+                "environment": profile.python_environment,
+                "engine": profile.engine_root,
+                "custom_nodes": profile.custom_nodes_root,
+                "models": profile.model_root,
+                "output": profile.output_root,
+                "scratch": profile.scratch_root,
+                "cas": profile.cas_root,
+                "source": profile.astrid_source_root,
+                "pack": profile.astrid_pack_root,
+            }.items()
+        }
+    except OSError as exc:
+        raise _unavailable("installation_custody_unproven") from exc
+    if current_ids != dict(profile.root_identities or {}):
+        raise _PipEmbeddedError("readiness_mismatch", "installation_root_identity")
+    try:
+        _validate_profile_evidence(profile, evidence)
+    except (OSError, ValueError) as exc:
+        message = str(exc)
+        if "unavailable" in message or "required" in message:
+            raise _unavailable("installation_custody_unproven") from exc
+        raise _PipEmbeddedError("readiness_mismatch", "installation_inventory") from exc
     if not evidence.get("package_inventory") or not evidence.get("resolver_roots"):
         raise _unavailable("effective_resolver_unproven")
     return {
@@ -1533,8 +1829,10 @@ class PipEmbeddedSession:
 
     def _reserve(self, identity: str) -> dict[str, Any]:
         with self._lock:
+            if self._disposed is not None:
+                raise _PipEmbeddedError("not_ready", "session_disposed", phase="admission")
             if self._poisoned:
-                raise RuntimeError("pip_embedded session is poisoned; create a new cold instance")
+                raise _PipEmbeddedError("containment_pending", "session_poisoned", phase="admission")
             if self._record is not None:
                 raise RuntimeError("pip_embedded execution is already in progress")
             record = {
@@ -1552,6 +1850,10 @@ class PipEmbeddedSession:
                 "destination": None,
                 "source_dir_fd": None,
                 "destination_fd": None,
+                "scratch_fd": None,
+                "staging_fd": None,
+                "staging_name": None,
+                "staging_identity": None,
                 "spawn_pending": False,
                 "start_finished": False,
                 "containment_state": "NOT_STARTED",
@@ -1562,8 +1864,10 @@ class PipEmbeddedSession:
                 "publication_state": None,
                 "go_sent": False,
                 "preparation_deadline": time.monotonic() + self.timeouts.preparation_seconds,
+                "pre_go_deadline": time.monotonic() + self.timeouts.preparation_seconds + self.timeouts.ready_seconds,
                 "ready_deadline": None,
                 "failure": None,
+                "control_fault": None,
             }
             self._record = record
             return record
@@ -1595,6 +1899,7 @@ class PipEmbeddedSession:
                 return
             frozen = dict(outcome)
             frozen.setdefault("nonce", record["nonce"])
+            frozen.setdefault("identity", record["identity"])
             frozen.setdefault("status", record["stop_reason"] or "succeeded")
             frozen.setdefault("transition", frozen["status"])
             frozen.setdefault("terminated", frozen.get("termination_complete") is True)
@@ -1602,22 +1907,24 @@ class PipEmbeddedSession:
             frozen.setdefault("group_quiescent", frozen.get("group_quiescent") is True)
             frozen.setdefault("cleanup_complete", frozen.get("cleanup_complete") is True)
             frozen.setdefault("fence_pending", poison or frozen.get("fence_pending") is True)
+            frozen = MappingProxyType(frozen)
             record["outcome"] = frozen
             if poison or frozen["fence_pending"]:
                 self._poisoned = True
             if record["stop_reason"] is not None:
-                self._disposed = {
-                    key: frozen[key]
-                    for key in (
-                        "ok", "status", "transition", "terminated", "reaped",
-                        "group_quiescent", "cleanup_complete", "fence_pending", "nonce",
-                    )
-                    if key in frozen
-                }
+                self._disposed = frozen
             record["owner_finished"] = True
             if not frozen["fence_pending"]:
                 self._record = None
             record["done"].set()
+
+    @staticmethod
+    def _close_custody(record: dict[str, Any]) -> None:
+        for key in ("source_dir_fd", "staging_fd", "scratch_fd", "destination_fd"):
+            fd = record.get(key)
+            if isinstance(fd, int) and fd >= 0:
+                os.close(fd)
+                record[key] = None
 
     def _ensure_contained(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -1649,27 +1956,40 @@ class PipEmbeddedSession:
             "error_code": None,
         }
         try:
+            if record.get("spawn_pending") and handle is None:
+                with self._lock:
+                    record["containment_state"] = "NOT_STARTED"
+                return {
+                    "ok": False, "terminated": False, "reaped": False,
+                    "group_quiescent": False, "cleanup_complete": False,
+                    "fence_pending": True, "error_code": "containment_pending",
+                }
+            if handle is None:
+                result["reaped"] = True
             if handle is not None:
                 if stop_reason is not None or record.get("go_sent"):
-                    handle.terminate(
+                    containment = handle.terminate(
                         self.timeouts.term_seconds,
                         self.timeouts.kill_seconds,
                         self.timeouts.reap_seconds,
                     )
-                    result["terminated"] = True
-                    result["reaped"] = True
+                    if not isinstance(containment, Mapping) or not containment.get("reaped"):
+                        raise _PipEmbeddedError("containment_pending", "handle-did-not-prove-reap", phase="containment")
+                    result.update(dict(containment))
                 else:
                     # A normal completion still needs the process handle's
                     # containment proof.  The protocol's terminate operation
                     # performs only the bounded census/reap; it does not imply
                     # a cancellation transition.
-                    handle.terminate(
+                    containment = handle.terminate(
                         self.timeouts.term_seconds,
                         self.timeouts.kill_seconds,
                         self.timeouts.reap_seconds,
                     )
-                    result["reaped"] = True
-            result["group_quiescent"] = True
+                    if not isinstance(containment, Mapping) or not containment.get("reaped"):
+                        raise _PipEmbeddedError("containment_pending", "handle-did-not-prove-reap", phase="containment")
+                    result.update(dict(containment))
+            result["group_quiescent"] = result.get("group_quiescent") is True
         except BaseException as exc:
             result.update(
                 ok=False,
@@ -1704,6 +2024,11 @@ class PipEmbeddedSession:
             )
             record["destination"] = destination
             record["destination_fd"] = destination_fd
+            scratch = Path(self.profile.scratch_root)
+            scratch_fd = os.open(scratch, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW)
+            record["scratch_fd"] = scratch_fd
+            scratch_info = os.fstat(scratch_fd)
+            record["scratch_identity"] = (scratch_info.st_dev, scratch_info.st_ino)
             from vibecomfy.workflow import VibeWorkflow
 
             if type(workflow) is not VibeWorkflow:
@@ -1725,12 +2050,20 @@ class PipEmbeddedSession:
                     "execution_seconds": self.timeouts.execution_seconds,
                 },
             }
-            staging = Path(tempfile.mkdtemp(dir=self.profile.scratch_root, prefix="pip-embedded-"))
+            staging_name = f"pip-embedded-{uuid.uuid4().hex}"
+            os.mkdir(staging_name, mode=0o700, dir_fd=scratch_fd)
+            staging = scratch / staging_name
             record["staging"] = staging
+            record["staging_name"] = staging_name
+            staging_fd = os.open(staging_name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW, dir_fd=scratch_fd)
+            record["staging_fd"] = staging_fd
+            staging_info = os.fstat(staging_fd)
+            record["staging_identity"] = (staging_info.st_dev, staging_info.st_ino)
             engine_output = staging / "engine-output"
-            engine_output.mkdir(mode=0o700)
+            os.mkdir("engine-output", mode=0o700, dir_fd=staging_fd)
             source_fd = os.open(
-                engine_output, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+                "engine-output", os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                dir_fd=staging_fd,
             )
             record["source_dir_fd"] = source_fd
             record["source_identity"] = (
@@ -1763,8 +2096,9 @@ class PipEmbeddedSession:
                 record["handle"] = handle
                 record["spawn_pending"] = False
                 if record["stop_reason"] is not None:
-                    # The handle now has an owner and control may contain it.
-                    pass
+                    raise _PipEmbeddedError("cancelled", "before_start", nonce=record["nonce"])
+                if time.monotonic() > record["pre_go_deadline"]:
+                    raise _unavailable("pre_go_deadline", phase="spawn")
                 record["phase"] = "PREFLIGHT"
             handle.start()
             with self._lock:
@@ -1773,6 +2107,8 @@ class PipEmbeddedSession:
                     raise _PipEmbeddedError("cancelled", "before_ready", nonce=record["nonce"])
                 record["ready_deadline"] = time.monotonic() + self.timeouts.ready_seconds
             handle.wait_ready(self.timeouts.ready_seconds)
+            if time.monotonic() > record["pre_go_deadline"]:
+                raise _unavailable("pre_go_deadline", phase="ready")
             _revalidate_launch_evidence(self.profile)
             with self._lock:
                 if record["stop_reason"] is not None:
@@ -1800,8 +2136,12 @@ class PipEmbeddedSession:
                     raise _PipEmbeddedError("cancelled", "during_collection", nonce=record["nonce"])
             record["cleanup_state"] = "IN_PROGRESS"
             handle.cleanup()
-            _remove_tree(staging, timeout=self.timeouts.cleanup_seconds)
+            _remove_tree_at(
+                record["scratch_fd"], record["staging_name"],
+                timeout=self.timeouts.cleanup_seconds, expected=record["staging_identity"],
+            )
             record["cleanup_state"] = "DONE"
+            self._close_custody(record)
             staging = None
             self._finalize(
                 record,
@@ -1818,7 +2158,7 @@ class PipEmbeddedSession:
             return result
         except BaseException as exc:
             containment = record.get("containment_result") or self._ensure_contained(record)
-            poison = bool(containment.get("fence_pending")) or record.get("stop_reason") == "identity-mismatch"
+            poison = bool(containment.get("fence_pending")) or record.get("stop_reason") == "identity-mismatch" or bool(record.get("publication_fence"))
             cleanup_complete = False
             if handle is not None and record.get("cleanup_state") != "DONE":
                 try:
@@ -1830,10 +2170,17 @@ class PipEmbeddedSession:
                     poison = True
             if staging is not None and not poison:
                 try:
-                    _remove_tree(staging, timeout=self.timeouts.cleanup_seconds)
+                    if record.get("scratch_fd") is not None and record.get("staging_name"):
+                        _remove_tree_at(
+                            record["scratch_fd"], record["staging_name"],
+                            timeout=self.timeouts.cleanup_seconds,
+                            expected=record.get("staging_identity"),
+                        )
                     cleanup_complete = True
                 except BaseException:
                     poison = True
+            if not poison:
+                self._close_custody(record)
             self._finalize(
                 record,
                 {
@@ -1847,6 +2194,8 @@ class PipEmbeddedSession:
                 },
                 poison=poison,
             )
+            if isinstance(exc, _PipEmbeddedError):
+                exc.outcome = dict(record.get("outcome") or {})
             raise
 
     def _collect_outputs(
@@ -1854,23 +2203,40 @@ class PipEmbeddedSession:
     ) -> list[Path]:
         source_fd = record.get("source_dir_fd")
         destination_fd = record.get("destination_fd")
-        source = record.get("staging", Path()) / "engine-output"
+        if record is not self._record or result.nonce != record.get("nonce"):
+            raise ValueError("embedded output custody is not bound to this invocation")
+        if record.get("phase") != "COLLECTING":
+            raise ValueError("embedded output collection is outside the invocation phase")
+        if Path(destination).expanduser().resolve(strict=False) != record.get("destination"):
+            raise ValueError("embedded output destination is not the admitted directory")
         if not isinstance(source_fd, int) or not isinstance(destination_fd, int):
             raise RuntimeError("embedded output custody is unavailable")
         _reject_symlink_ancestors(destination)
         try:
-            expected_source_fd = os.open(
-                source, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
-            )
             source_info = os.fstat(source_fd)
-            expected_source_info = os.fstat(expected_source_fd)
-            os.close(expected_source_fd)
             if (
                 (source_info.st_dev, source_info.st_ino) != record.get("source_identity")
-                or (source_info.st_dev, source_info.st_ino)
-                != (expected_source_info.st_dev, expected_source_info.st_ino)
             ):
                 raise ValueError("embedded output source custody changed")
+            staging_fd = record.get("staging_fd")
+            scratch_fd = record.get("scratch_fd")
+            if not isinstance(staging_fd, int) or not isinstance(scratch_fd, int):
+                raise ValueError("embedded output source custody unavailable")
+            staging_info = os.fstat(staging_fd)
+            if (staging_info.st_dev, staging_info.st_ino) != record.get("staging_identity"):
+                raise ValueError("embedded output staging custody changed")
+            scratch_info = os.fstat(scratch_fd)
+            if (scratch_info.st_dev, scratch_info.st_ino) != record.get("scratch_identity"):
+                raise ValueError("embedded output scratch custody changed")
+            check_staging_fd = os.open(
+                record["staging_name"], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+                dir_fd=scratch_fd,
+            )
+            try:
+                if os.fstat(check_staging_fd).st_ino != staging_info.st_ino:
+                    raise ValueError("embedded output staging custody changed")
+            finally:
+                os.close(check_staging_fd)
             destination_info = os.fstat(destination_fd)
             if stat.S_IFMT(destination_info.st_mode) != stat.S_IFDIR:
                 raise ValueError("embedded output destination custody changed")
@@ -1895,9 +2261,12 @@ class PipEmbeddedSession:
             "temp_name": publication_name,
             "final_name": None,
             "phase": "COPYING",
+            "temp_identity": (os.fstat(publication_fd).st_dev, os.fstat(publication_fd).st_ino),
         }
         created: list[Path] = []
         deadline = time.monotonic() + self.timeouts.collection_seconds
+        committed_name: str | None = None
+        fence = False
         try:
             names: set[str] = set()
             total_size = 0
@@ -1945,49 +2314,81 @@ class PipEmbeddedSession:
                         if copied > size:
                             raise ValueError("embedded output exceeded declared size")
                         digest.update(chunk)
-                        os.write(output_fd, chunk)
+                        written = 0
+                        while written < len(chunk):
+                            if time.monotonic() >= deadline:
+                                raise TimeoutError("embedded output collection deadline exceeded")
+                            count = os.write(output_fd, chunk[written:])
+                            if count <= 0:
+                                raise OSError("embedded output short write")
+                            written += count
                     if copied != size or os.read(leaf_fd, 1):
                         raise ValueError("embedded output size changed during custody")
                     os.fsync(output_fd)
+                    after = os.fstat(leaf_fd)
+                    if (
+                        after.st_dev, after.st_ino, after.st_nlink, after.st_size, after.st_mtime_ns
+                    ) != (
+                        before.st_dev, before.st_ino, before.st_nlink, before.st_size, before.st_mtime_ns
+                    ):
+                        raise ValueError("embedded output mutated during custody")
                 finally:
                     os.close(leaf_fd)
                     if output_fd is not None:
                         os.close(output_fd)
-                after = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
-                if (
-                    after.st_dev,
-                    after.st_ino,
-                    after.st_nlink,
-                    after.st_size,
-                    after.st_mtime_ns,
-                ) != (
-                    before.st_dev,
-                    before.st_ino,
-                    before.st_nlink,
-                    before.st_size,
-                    before.st_mtime_ns,
-                ):
-                    raise ValueError("embedded output mutated during custody")
                 if "sha256:" + digest.hexdigest() != expected:
                     raise ValueError("embedded output digest mismatch")
                 created.append(destination / publication_name / name)
             os.fsync(publication_fd)
             final_name = f"pip-embedded-{uuid.uuid4().hex}"
-            record["publication_state"].update(final_name=final_name, phase="PUBLISHING")
+            record["publication_state"].update(final_name=final_name, phase="PREPARED")
+            with self._lock:
+                if record.get("stop_reason") is not None:
+                    raise _PipEmbeddedError("cancelled", "before_commit", nonce=record["nonce"])
+                record["publication_state"]["phase"] = "COMMITTING"
             _publish_directory_noreplace(destination_fd, publication_name, destination_fd, final_name)
-            record["publication_state"].update(phase="PUBLISHED")
+            committed_name = final_name
+            record["publication_state"].update(
+                phase="RENAMED", current_name=final_name,
+                final_identity=record["publication_state"]["temp_identity"],
+            )
             os.fsync(destination_fd)
+            final_info = os.stat(final_name, dir_fd=destination_fd, follow_symlinks=False)
+            parent_info = os.stat(destination, follow_symlinks=False)
+            if (final_info.st_dev, final_info.st_ino) != record["publication_state"]["final_identity"]:
+                raise ValueError("embedded output publication custody changed")
+            if (parent_info.st_dev, parent_info.st_ino) != (
+                destination_info.st_dev, destination_info.st_ino
+            ):
+                raise ValueError("embedded output destination custody changed")
             record["publication_state"].update(phase="DURABLE")
             return [destination / final_name / Path(path).name for path in created]
-        except BaseException:
-            if record.get("publication_state", {}).get("phase") != "PUBLISHED":
-                try:
-                    _remove_tree(destination / publication_name, timeout=self.timeouts.cleanup_seconds)
-                except BaseException:
-                    record["publication_state"]["phase"] = "FENCE_PENDING"
+        except BaseException as exc:
+            state = record.get("publication_state", {})
+            current_name = committed_name or state.get("temp_name")
+            try:
+                if current_name:
+                    _remove_tree_at(
+                        destination_fd, current_name,
+                        timeout=self.timeouts.cleanup_seconds,
+                        expected=state.get("temp_identity") if committed_name is None else state.get("final_identity"),
+                    )
+                state["phase"] = "ROLLED_BACK"
+            except BaseException as rollback_exc:
+                state["phase"] = "FENCE_PENDING"
+                state["rollback_error"] = str(rollback_exc)
+                fence = True
+                record["publication_fence"] = True
+            if fence:
+                record["publication_state"]["unresolved_name"] = current_name
+            if isinstance(exc, _PipEmbeddedError):
+                raise
             raise
         finally:
-            os.close(publication_fd)
+            if not fence:
+                os.close(publication_fd)
+            else:
+                record["publication_fd"] = publication_fd
 
     def _control(
         self,
@@ -1995,34 +2396,48 @@ class PipEmbeddedSession:
         task_identity: str | None,
         invocation_nonce: str | None = None,
     ) -> dict[str, Any]:
-        identity = self._task_identity(task_identity)
         identity_bad = False
         with self._lock:
             record = self._record
             if record is None:
                 if self._disposed is None:
-                    self._disposed = {
+                    self._disposed = MappingProxyType({
                         "ok": True,
-                        "status": "cold",
-                        "transition": "cold",
+                        "status": "disposed",
+                        "transition": "disposed",
                         "terminated": False,
                         "reaped": True,
-                    }
+                        "group_quiescent": True,
+                        "cleanup_complete": True,
+                        "fence_pending": False,
+                    })
+                if task_identity is not None or invocation_nonce is not None:
+                    if (
+                        task_identity != self._disposed.get("identity")
+                        or invocation_nonce != self._disposed.get("nonce")
+                    ):
+                        raise _PipEmbeddedError("identity_mismatch", "stale invocation identity")
                 return dict(self._disposed)
-            if record["identity"] != identity or (
-                invocation_nonce is not None and invocation_nonce != record["nonce"]
-            ):
+            identity = self._task_identity(task_identity)
+            if not isinstance(invocation_nonce, str) or not invocation_nonce.strip() or (
+                record["identity"], record["nonce"]
+            ) != (identity, invocation_nonce):
                 identity_bad = True
                 if record["stop_reason"] is None:
                     record["stop_reason"] = "identity-mismatch"
+                record["control_fault"] = "active invocation identity mismatch"
                 record["failure"] = "active invocation identity mismatch"
                 record["cancel_event"].set()
                 event = record["done"]
             else:
-                if record["stop_reason"] is None:
+                publication_phase = (record.get("publication_state") or {}).get("phase")
+                if publication_phase not in {"COMMITTING", "RENAMED", "DURABLE"} and record["stop_reason"] is None:
                     record["stop_reason"] = reason
                 event = record["done"]
-            record["cancel_event"].set()
+            if not identity_bad and (record.get("publication_state") or {}).get("phase") not in {
+                "COMMITTING", "RENAMED", "DURABLE"
+            }:
+                record["cancel_event"].set()
             handle_available = record.get("handle") is not None
         if handle_available:
             self._ensure_contained(record)
@@ -2039,7 +2454,10 @@ class PipEmbeddedSession:
                 "error_code": "containment_pending",
             }
         if identity_bad:
-            raise RuntimeError("pip_embedded active handle identity mismatch")
+            error = _PipEmbeddedError("identity_mismatch", "active invocation identity mismatch", nonce=record["nonce"])
+            with self._lock:
+                error.outcome = dict(record.get("outcome") or {})
+            raise error
         with self._lock:
             return dict(record["outcome"] or {
                 "ok": False,

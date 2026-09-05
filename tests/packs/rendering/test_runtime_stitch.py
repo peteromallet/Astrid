@@ -41,3 +41,12 @@ def test_stitch_rejects_duplicate_or_unknown_identity():
             stitch_name="travel_stitch", stitch_digest=DIGEST, root_task_id="root",
             child_task_ids=["child", "child"], input_object_ids=["cas"], idempotency_key="key",
         )
+
+
+def test_stitch_requires_explicit_non_empty_settlement_effect():
+    with pytest.raises(OrchestrationContractError):
+        build_stitch_admission(
+            project="demo", stitch_name="travel_stitch", stitch_digest=DIGEST,
+            root_task_id="root", child_task_ids=["child"], input_object_ids=["cas"],
+            idempotency_key="key",
+        )

@@ -69,7 +69,7 @@ def build_stitch_admission(
                 },
             },
             "storage_estimate": {"estimated_scratch_bytes": 0, "estimated_output_bytes": 0},
-            "settlement_effect": dict(settlement_effect or {}),
+            "settlement_effect": _typed_settlement_effect(settlement_effect),
         },
         idempotency_key=idempotency_key,
     )
@@ -79,6 +79,12 @@ def _string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise OrchestrationContractError(f"{field} must be a non-empty string")
     return value
+
+
+def _typed_settlement_effect(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value:
+        raise OrchestrationContractError("settlement_effect must be a non-empty typed settlement effect")
+    return dict(value)
 
 
 __all__ = ["build_stitch_admission"]

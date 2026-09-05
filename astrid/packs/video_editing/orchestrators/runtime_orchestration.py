@@ -75,6 +75,12 @@ def _object_ids(value: Sequence[str], field: str) -> tuple[str, ...]:
     return result
 
 
+def _settlement_effect(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value:
+        raise OrchestrationContractError(f"{field} must be a non-empty typed settlement effect")
+    return dict(value)
+
+
 @dataclass(frozen=True)
 class CapabilityIdentity:
     capability_id: str
@@ -147,6 +153,8 @@ class RuntimeOrchestrationHandoff:
     stitch: CapabilityIdentity | None
     output_policy: Mapping[str, Any]
     settlement_effect: Mapping[str, Any]
+    child_settlement_effect: Mapping[str, Any] | None
+    stitch_settlement_effect: Mapping[str, Any] | None
 
     def __post_init__(self) -> None:
         _non_empty(self.project, "project")
@@ -159,13 +167,16 @@ class RuntimeOrchestrationHandoff:
             raise OrchestrationContractError("root_params must be an object")
         if not isinstance(self.output_policy, Mapping):
             raise OrchestrationContractError("output_policy must be an object")
-        if not isinstance(self.settlement_effect, Mapping):
-            raise OrchestrationContractError("settlement_effect must be an object")
+        _settlement_effect(self.settlement_effect, "settlement_effect")
+        if self.children and self.child_settlement_effect is None:
+            raise OrchestrationContractError("child_settlement_effect is required when children are admitted")
+        if self.child_settlement_effect is not None:
+            _settlement_effect(self.child_settlement_effect, "child_settlement_effect")
         allowed = _ALLOWED_CHILDREN[self.root_name]
         seen_slots: set[tuple[str, int]] = set()
         for child in self.children:
-            short_id = child.capability.capability_id.rsplit(".", 1)[-1]
-            if short_id not in CHILD_CAPABILITIES or short_id not in allowed:
+            allowed_ids = {CHILD_CAPABILITIES[short_id] for short_id in allowed}
+            if child.capability.capability_id not in allowed_ids:
                 raise OrchestrationContractError(
                     f"child {child.capability.capability_id!r} is not allowed for {self.root_name!r}"
                 )
@@ -179,6 +190,10 @@ class RuntimeOrchestrationHandoff:
                 raise OrchestrationContractError("childless edit root cannot declare a stitch")
         elif self.stitch is None or self.stitch.capability_id != STITCH_CAPABILITIES[expected_stitch]:
             raise OrchestrationContractError("stitch capability identity does not match root route")
+        if self.stitch is not None and self.stitch_settlement_effect is None:
+            raise OrchestrationContractError("stitch_settlement_effect is required when a stitch is admitted")
+        if self.stitch_settlement_effect is not None:
+            _settlement_effect(self.stitch_settlement_effect, "stitch_settlement_effect")
 
     @property
     def dependency_edges(self) -> tuple[dict[str, Any], ...]:
@@ -267,7 +282,7 @@ class RuntimeOrchestrationHandoff:
                             },
                         },
                         "storage_estimate": {"estimated_scratch_bytes": 0, "estimated_output_bytes": 0},
-                        "settlement_effect": {},
+                        "settlement_effect": dict(self.child_settlement_effect),
                     },
                     idempotency_key=key,
                 )
@@ -302,6 +317,12 @@ def derive_child_idempotency_key(root_task_id: str, role: str, index: int) -> st
     return f"{CHILD_KEY_PREFIX}:{root_task_id}:{role}:{index}"
 
 
+def derive_stitch_idempotency_key(root_task_id: str) -> str:
+    """Derive the stitch key; it is sent only as Runtime transport metadata."""
+
+    return f"{CHILD_KEY_PREFIX}:{_non_empty(root_task_id, 'root_task_id')}:stitch:0"
+
+
 def build_runtime_handoff(
     *,
     project: str,
@@ -313,11 +334,22 @@ def build_runtime_handoff(
     stitch_digest: str | None = None,
     output_policy: Mapping[str, Any] | None = None,
     settlement_effect: Mapping[str, Any] | None = None,
+    child_settlement_effect: Mapping[str, Any] | None = None,
+    stitch_settlement_effect: Mapping[str, Any] | None = None,
 ) -> RuntimeOrchestrationHandoff:
     """Build one producer-consumable HC-04 orchestration handoff."""
 
     if root_name not in ROOT_CAPABILITIES:
         raise OrchestrationContractError(f"unknown orchestration root {root_name!r}")
+    root_settlement_effect = _settlement_effect(settlement_effect, "settlement_effect")
+    child_settlement = (
+        _settlement_effect(child_settlement_effect, "child_settlement_effect")
+        if child_settlement_effect is not None else None
+    )
+    stitch_settlement = (
+        _settlement_effect(stitch_settlement_effect, "stitch_settlement_effect")
+        if stitch_settlement_effect is not None else None
+    )
     short_stitch = _ROOT_STITCH.get(root_name)
     stitch = (
         CapabilityIdentity(STITCH_CAPABILITIES[short_stitch], _digest(stitch_digest, "stitch_digest"))
@@ -333,7 +365,9 @@ def build_runtime_handoff(
         children=tuple(children),
         stitch=stitch,
         output_policy=dict(output_policy or {}),
-        settlement_effect=dict(settlement_effect or {}),
+        settlement_effect=root_settlement_effect,
+        child_settlement_effect=child_settlement,
+        stitch_settlement_effect=stitch_settlement,
     )
 
 
@@ -382,15 +416,45 @@ def admit_runtime_handoff(
     handoff: RuntimeOrchestrationHandoff,
     *,
     root_idempotency_key: str,
-) -> tuple[str, tuple[str, ...]]:
-    """Admit root then children in handoff order; Runtime gates dependencies."""
+) -> tuple[str, tuple[str, ...], str | None]:
+    """Admit root/children, aggregate Runtime outputs, then admit the stitch."""
 
     root_task_id = admit_runtime_task(client, handoff.root_admission(idempotency_key=root_idempotency_key))
     child_ids = tuple(
         admit_runtime_task(client, admission)
         for admission in handoff.child_admissions(root_task_id=root_task_id)
     )
-    return root_task_id, child_ids
+    if handoff.stitch is None:
+        return root_task_id, child_ids, None
+
+    events = read_runtime_events(client, handoff.project, root_task_id)
+    ordered = aggregate_child_outputs(handoff, events, child_task_ids=child_ids)
+    input_object_ids = tuple(
+        object_id
+        for row in ordered
+        for object_id in row["payload"]["outputs"]
+    )
+    stitch_name = next(
+        name for name, capability_id in STITCH_CAPABILITIES.items()
+        if capability_id == handoff.stitch.capability_id
+    )
+    from astrid.packs.rendering.finalizers.runtime_stitch import build_stitch_admission
+
+    stitch_id = admit_runtime_task(
+        client,
+        build_stitch_admission(
+            project=handoff.project,
+            stitch_name=stitch_name,
+            stitch_digest=handoff.stitch.capability_digest,
+            root_task_id=root_task_id,
+            child_task_ids=child_ids,
+            input_object_ids=input_object_ids,
+            output_policy=handoff.output_policy,
+            settlement_effect=handoff.stitch_settlement_effect,
+            idempotency_key=derive_stitch_idempotency_key(root_task_id),
+        ),
+    )
+    return root_task_id, child_ids, stitch_id
 
 
 def read_runtime_events(client: Any, project: str, run_id: str) -> tuple[Mapping[str, Any], ...]:
@@ -414,32 +478,50 @@ def read_runtime_events(client: Any, project: str, run_id: str) -> tuple[Mapping
 def aggregate_child_outputs(
     handoff: RuntimeOrchestrationHandoff,
     events: Sequence[Mapping[str, Any]],
+    *,
+    child_task_ids: Sequence[str],
 ) -> tuple[dict[str, Any], ...]:
     """Aggregate terminal Runtime event outputs in the declared child order."""
 
+    expected_ids = tuple(_non_empty(value, f"child_task_ids[{index}]") for index, value in enumerate(child_task_ids))
+    if len(expected_ids) != len(handoff.children) or len(set(expected_ids)) != len(expected_ids):
+        raise OrchestrationContractError("child_task_ids must match the admitted child list exactly")
     by_task: dict[str, Mapping[str, Any]] = {}
     for event in events:
-        if not isinstance(event, Mapping) or event.get("event_type") != "task.succeeded":
+        if not isinstance(event, Mapping):
+            raise OrchestrationContractError("Runtime events contain a malformed event")
+        if event.get("event_type") != "task.succeeded":
             continue
         payload = event.get("payload")
         if not isinstance(payload, Mapping):
-            continue
+            raise OrchestrationContractError("Runtime success event has a malformed payload")
         task_id = payload.get("task_id")
-        if isinstance(task_id, str) and task_id not in by_task:
-            by_task[task_id] = payload
-    # Runtime event reads identify task outputs.  Ordering remains explicit in
-    # the handoff; callers provide the task-id projection from Runtime.
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise OrchestrationContractError("Runtime success event has an invalid task_id")
+        if task_id not in expected_ids:
+            continue
+        if task_id in by_task:
+            raise OrchestrationContractError(f"Runtime emitted duplicate success events for {task_id!r}")
+        role = payload.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise OrchestrationContractError(f"Runtime success event for {task_id!r} has an invalid role")
+        index = payload.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise OrchestrationContractError(f"Runtime success event for {task_id!r} has an invalid index")
+        outputs = payload.get("outputs")
+        if isinstance(outputs, (str, bytes)) or not isinstance(outputs, Sequence) or not outputs:
+            raise OrchestrationContractError(f"Runtime success event for {task_id!r} has invalid outputs")
+        by_task[task_id] = {**payload, "outputs": list(_object_ids(outputs, f"outputs[{task_id}]"))}
+
     ordered: list[dict[str, Any]] = []
-    for child in handoff.children:
+    for child, task_id in zip(handoff.children, expected_ids):
         slot = f"{child.role}:{child.index}"
-        matches = [
-            dict(payload)
-            for payload in by_task.values()
-            if payload.get("role") == child.role and int(payload.get("index", -1)) == child.index
-        ]
-        if len(matches) != 1:
+        payload = by_task.get(task_id)
+        if payload is None:
             raise OrchestrationContractError(f"Runtime events do not contain one terminal output for {slot}")
-        ordered.append({"slot": slot, "payload": matches[0]})
+        if payload.get("role") != child.role or payload.get("index") != child.index:
+            raise OrchestrationContractError(f"Runtime output task {task_id!r} does not match child slot {slot}")
+        ordered.append({"slot": slot, "payload": dict(payload)})
     return tuple(ordered)
 
 
@@ -462,5 +544,6 @@ __all__ = [
     "admit_runtime_task",
     "build_runtime_handoff",
     "derive_child_idempotency_key",
+    "derive_stitch_idempotency_key",
     "read_runtime_events",
 ]

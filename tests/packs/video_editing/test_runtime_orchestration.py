@@ -14,6 +14,7 @@ from astrid.packs.video_editing.orchestrators.runtime_orchestration import (
     read_runtime_events,
     build_runtime_handoff,
     derive_child_idempotency_key,
+    derive_stitch_idempotency_key,
 )
 
 
@@ -43,6 +44,8 @@ def _travel_handoff():
         stitch_digest=STITCH_DIGEST,
         output_policy={"publish": "one_cas_object"},
         settlement_effect={"kind": "lineage", "source": "root_task"},
+        child_settlement_effect={"kind": "lineage", "source": "child_task"},
+        stitch_settlement_effect={"kind": "lineage", "source": "stitch_task"},
     )
 
 
@@ -69,6 +72,7 @@ def test_idempotency_is_attempt_independent_and_transport_only():
     assert first[0].idempotency_key == "astrid.orchestration:v1:runtime-root-1:segment:0"
     assert all("idempotency_key" not in item.body for item in first)
     assert json.loads(first[0].canonical_bytes)["input_object_ids"] == ["cas-first", "cas-last"]
+    assert first[0].body["settlement_effect"] == {"kind": "lineage", "source": "child_task"}
 
 
 def test_edit_root_is_explicitly_childless_and_stitchless():
@@ -78,6 +82,7 @@ def test_edit_root_is_explicitly_childless_and_stitchless():
         root_digest=ROOT_DIGEST,
         root_input_object_ids=["cas-video"],
         root_params={"edit": "replace"},
+        settlement_effect={"kind": "lineage", "source": "root_task"},
     )
     assert handoff.children == ()
     assert handoff.stitch is None
@@ -98,6 +103,29 @@ def test_unknown_child_and_digest_fail_closed():
             root_input_object_ids=[], root_params={},
             children=(ChildSpec("wrong", 0, CapabilityIdentity("video_editing.travel_segment", TRAVEL_DIGEST), (), {}),),
             stitch_digest=STITCH_DIGEST,
+            settlement_effect={"kind": "lineage", "source": "root_task"},
+            child_settlement_effect={"kind": "lineage", "source": "child_task"},
+            stitch_settlement_effect={"kind": "lineage", "source": "stitch_task"},
+        )
+
+    with pytest.raises(OrchestrationContractError):
+        build_runtime_handoff(
+            project="demo",
+            root_name="travel_orchestrator", root_digest=ROOT_DIGEST,
+            root_input_object_ids=[], root_params={}, stitch_digest=STITCH_DIGEST,
+            children=(ChildSpec(
+                "segment", 0,
+                CapabilityIdentity("evil.video_editing.travel_segment", TRAVEL_DIGEST), (), {},
+            ),),
+            settlement_effect={"kind": "lineage", "source": "root_task"},
+            child_settlement_effect={"kind": "lineage", "source": "child_task"},
+            stitch_settlement_effect={"kind": "lineage", "source": "stitch_task"},
+        )
+
+    with pytest.raises(OrchestrationContractError):
+        build_runtime_handoff(
+            project="demo", root_name="edit_video_orchestrator", root_digest=ROOT_DIGEST,
+            root_input_object_ids=[], root_params={},
         )
 
 
@@ -107,14 +135,25 @@ def test_aggregation_reads_runtime_events_in_declared_child_order():
         {"event_type": "task.succeeded", "payload": {"task_id": "child-2", "role": "individual", "index": 1, "outputs": ["cas-2"]}},
         {"event_type": "task.succeeded", "payload": {"task_id": "child-1", "role": "segment", "index": 0, "outputs": ["cas-1"]}},
     ]
-    result = aggregate_child_outputs(handoff, events)
+    result = aggregate_child_outputs(handoff, events, child_task_ids=["child-1", "child-2"])
     assert [row["slot"] for row in result] == ["segment:0", "individual:1"]
     assert [row["payload"]["task_id"] for row in result] == ["child-1", "child-2"]
+
+
+def test_aggregation_is_bound_to_admitted_ids_and_wraps_bad_events():
+    handoff = _travel_handoff()
+    unrelated = [{"event_type": "task.succeeded", "payload": {"task_id": "other", "role": "segment", "index": 0, "outputs": ["cas-other"]}}]
+    with pytest.raises(OrchestrationContractError):
+        aggregate_child_outputs(handoff, unrelated, child_task_ids=["child-1", "child-2"])
+    malformed = [{"event_type": "task.succeeded", "payload": {"task_id": "child-1", "role": "segment", "index": "bad", "outputs": ["cas-1"]}}]
+    with pytest.raises(OrchestrationContractError):
+        aggregate_child_outputs(handoff, malformed, child_task_ids=["child-1", "child-2"])
 
 
 def test_child_key_rejects_bad_index():
     with pytest.raises(OrchestrationContractError):
         derive_child_idempotency_key("root", "segment", -1)
+    assert derive_stitch_idempotency_key("root") == "astrid.orchestration:v1:root:stitch:0"
 
 
 def test_runtime_adapter_admits_root_and_children_and_reads_events():
@@ -130,16 +169,23 @@ def test_runtime_adapter_admits_root_and_children_and_reads_events():
 
     class Runs:
         def events(self, project, run_id):
-            assert (project, run_id) == ("demo", "run-1")
-            return [{"event_type": "task.succeeded", "payload": {"task_id": "task-2"}}]
+            assert (project, run_id) == ("demo", "task-1")
+            return [
+                {"event_type": "task.succeeded", "payload": {"task_id": "task-3", "role": "individual", "index": 1, "outputs": ["cas-2"]}},
+                {"event_type": "task.succeeded", "payload": {"task_id": "task-2", "role": "segment", "index": 0, "outputs": ["cas-1"]}},
+            ]
 
     class Client:
         tasks = Tasks()
         runs = Runs()
 
     client = Client()
-    root_id, child_ids = admit_runtime_handoff(client, handoff, root_idempotency_key="root-key")
-    assert (root_id, child_ids) == ("task-1", ("task-2", "task-3"))
-    assert [call["project_id"] for call in client.tasks.calls] == ["demo", "demo", "demo"]
+    root_id, child_ids, stitch_id = admit_runtime_handoff(client, handoff, root_idempotency_key="root-key")
+    assert (root_id, child_ids, stitch_id) == ("task-1", ("task-2", "task-3"), "task-4")
+    assert [call["project_id"] for call in client.tasks.calls] == ["demo", "demo", "demo", "demo"]
     assert client.tasks.calls[1]["capability_digest"] == TRAVEL_DIGEST
-    assert read_runtime_events(client, "demo", "run-1")[0]["event_type"] == "task.succeeded"
+    assert client.tasks.calls[0]["settlement_effect"] == {"kind": "lineage", "source": "root_task"}
+    assert client.tasks.calls[3]["capability"] == "rendering.travel_stitch"
+    assert client.tasks.calls[3]["input_manifest"] == ["cas-1", "cas-2"]
+    assert client.tasks.calls[3]["settlement_effect"] == {"kind": "lineage", "source": "stitch_task"}
+    assert read_runtime_events(client, "demo", "task-1")[0]["event_type"] == "task.succeeded"

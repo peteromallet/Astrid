@@ -228,4 +228,3 @@ def test_request_dataclass_remains_immutable() -> None:
     request = LtxRequest(**cast(dict[str, Any], request_for(SUPPORTED_ROUTE_KEYS[0])))
     with pytest.raises(FrozenInstanceError):
         request.route_key = "unsupported"  # type: ignore[misc]
-

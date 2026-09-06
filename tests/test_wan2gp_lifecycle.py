@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import platform
+import sys
+import threading
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from astrid.packs.wan2gp.src.compiler import (
+    WanExecutionIdentity,
     compile_from_inputs,
     portable_digest,
     runner_fingerprint,
@@ -16,6 +23,8 @@ from astrid.packs.wan2gp.src.driver import (
     CancellationToken,
     FakePersistentRunner,
     PersistentRunnerState,
+    PersistentWanSession,
+    WanLifecycleError,
 )
 
 
@@ -156,3 +165,299 @@ def test_one_shot_cancellation_is_structured_before_engine_lookup(
     assert result.success is False
     assert result.errors == ["cancelled: cancelled"]
     assert result.spool == (tmp_path / "attempt" / "outputs").resolve()
+
+
+class _NativeResult:
+    def __init__(self, success: bool, files: list[str] | None = None, errors: list[str] | None = None):
+        self.success = success
+        self.generated_files = files or []
+        self.errors = errors or []
+
+
+class _NativeJob:
+    def __init__(self, engine: "_NativeEngine", settings: dict[str, object], path: Path):
+        self.engine = engine
+        self.settings = settings
+        self.path = path
+        self.cancelled = threading.Event()
+        self.started = threading.Event()
+        self.finished = threading.Event()
+
+    def cancel(self) -> None:
+        self.engine.events.append("cancel")
+        self.cancelled.set()
+        self.finished.set()
+
+    def result(self, timeout: float | None = None) -> _NativeResult:
+        self.started.set()
+        if self.engine.block_execution:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while not self.engine.execution_gate.is_set() and not self.cancelled.is_set():
+                remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                if remaining == 0:
+                    break
+                self.engine.execution_gate.wait(0.01 if remaining is None else min(0.01, remaining))
+        if self.cancelled.is_set():
+            return _NativeResult(False, errors=["cancelled by fixture"])
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.settings, sort_keys=True), encoding="utf-8")
+        self.finished.set()
+        return _NativeResult(True, [str(self.path)])
+
+
+class _NativeEngine:
+    def __init__(self, spool: Path, events: list[str], *, block_execution: bool = False):
+        self.spool = spool
+        self.events = events
+        self.block_execution = block_execution
+        self.execution_gate = threading.Event()
+        self.closed = False
+        self.jobs: list[_NativeJob] = []
+
+    def submit_task(self, settings: dict[str, object]) -> _NativeJob:
+        job = _NativeJob(self, settings, self.spool / f"run-{len(self.jobs)}.json")
+        self.jobs.append(job)
+        self.events.append("submit")
+        return job
+
+    def close(self) -> None:
+        self.events.append("close")
+        self.closed = True
+
+    def is_alive(self) -> bool:
+        return not self.closed
+
+
+def _identity(tmp_path: Path, *, suffix: str = "a", model: str = "wan-2.2"):
+    executable = Path(sys.executable).resolve()
+    digest = "sha256:" + hashlib.sha256(executable.read_bytes()).hexdigest()
+    return WanExecutionIdentity.from_facts(
+        interpreter=str(executable),
+        interpreter_version=platform.python_version(),
+        interpreter_sha256=digest,
+        model=model,
+        model_template="vace_fun_14B_2_2",
+        model_bytes_digest="sha256:" + suffix * 64,
+        root=tmp_path / f"wan-root-{suffix}",
+        runtime_identity=f"runtime-{suffix}",
+        transport_identity="inproc:wan2gp-fixture",
+        process_identity=f"process-{suffix}",
+    )
+
+
+def _session(tmp_path: Path, events: list[str], *, block_execution: bool = False):
+    engines: list[_NativeEngine] = []
+
+    def factory(_identity, spool):
+        engine = _NativeEngine(spool, events, block_execution=block_execution)
+        engines.append(engine)
+        events.append("init")
+        return engine
+
+    return PersistentWanSession(output_root=tmp_path / "session-output", engine_factory=factory), engines
+
+
+def test_persistent_identity_requires_complete_exact_facts(tmp_path: Path, settings: dict[str, object]) -> None:
+    with pytest.raises(TypeError, match="complete WanExecutionIdentity"):
+        PersistentWanSession(output_root=tmp_path / "out").prepare(settings, identity={})  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        WanExecutionIdentity.from_facts(  # type: ignore[call-arg]
+            interpreter=str(Path(sys.executable).resolve()),
+            interpreter_version=platform.python_version(),
+            interpreter_sha256="sha256:" + "a" * 64,
+            model="wan-2.2",
+        )
+
+    events: list[str] = []
+    session, engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    prepared = session.prepare(settings, identity=identity)
+    assert prepared["status"] == "cold"
+    assert prepared["identity_digest"] == identity.digest
+    assert engines[0].spool == tmp_path / "session-output" / "generation-1"
+
+    changed_root = replace(identity, root=str((tmp_path / "different-root").resolve()))
+    drift = session.prepare(settings, identity=changed_root)
+    assert drift["status"] == "cold"
+    assert drift["warm_reused"] is False
+    assert events[:3] == ["init", "close", "init"]
+
+
+def test_persistent_warm_equivalence_and_identity_drift(tmp_path: Path, settings: dict[str, object]) -> None:
+    events: list[str] = []
+    session, engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+
+    first = session.prepare(settings, identity=identity)
+    first_job = session.submit_task(settings)
+    first_result = first_job.result()
+    assert first_result.success is True
+    second = session.prepare(settings, identity=identity)
+    assert first["warmth_identity"] == second["warmth_identity"]
+    assert second["status"] == "warm"
+    assert second["warm_reused"] is True
+    second_result = session.submit_task(settings).result()
+    assert second_result.success is True
+    assert first_result.generated_files[0] != second_result.generated_files[0]
+
+    changed_model_bytes = replace(identity, model_bytes_digest="sha256:" + "b" * 64)
+    third = session.prepare(settings, identity=changed_model_bytes)
+    assert third["status"] == "cold"
+    assert third["warm_reused"] is False
+    assert session.session_generation == 2
+    assert len(engines) == 2
+    assert events.count("close") == 1
+
+
+def test_persistent_cancel_during_preparation_is_terminal_and_recoverable(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    entered = threading.Event()
+    release_factory = threading.Event()
+    events: list[str] = []
+
+    def factory(_identity, spool):
+        entered.set()
+        release_factory.wait(2)
+        return _NativeEngine(spool, events)
+
+    session = PersistentWanSession(output_root=tmp_path / "out", engine_factory=factory)
+    job = session.submit_task(settings, identity=_identity(tmp_path))
+    assert entered.wait(2)
+    pending = session.cancel(timeout=0.01)
+    assert pending["ok"] is False
+    assert pending["status"] == "cancellation_pending"
+    assert session.fence_pending is True
+    release_factory.set()
+    result = job.result(2)
+    assert result.status == "cancelled"
+    assert job.thread is not None and job.thread.is_alive() is False
+    assert session.cold_reset()["recovered"] is True
+
+
+def test_persistent_cancel_active_execution_and_release_ordering(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events, block_execution=True)
+    identity = _identity(tmp_path)
+    session.prepare(settings, identity=identity)
+    job = session.submit_task(settings)
+    deadline = time.monotonic() + 2
+    while job._record["native_job"] is None and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert job._record["native_job"] is not None
+    assert job._record["native_job"].started.wait(2)
+    assert session.cancel()["status"] == "cancelled"
+    assert job.result().status == "cancelled"
+    released = session.release()
+    assert released["ok"] is True
+    assert events[-2:] == ["cancel", "close"]
+    assert session.warm is False
+    assert session.release()["ok"] is True
+
+
+def test_persistent_failure_poison_cold_reset_and_stale_generation_isolation(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    events: list[str] = []
+
+    class FailingEngine(_NativeEngine):
+        def submit_task(self, _settings):
+            events.append("submit-fail")
+            return type("Job", (), {"result": lambda _self: _NativeResult(False, errors=["engine failed"])})()
+
+    def factory(identity, spool):
+        if len([event for event in events if event == "init"]) == 0:
+            engine = FailingEngine(spool, events)
+        else:
+            engine = _NativeEngine(spool, events)
+        events.append("init")
+        return engine
+
+    session = PersistentWanSession(output_root=tmp_path / "out", engine_factory=factory)
+    identity = _identity(tmp_path)
+    session.prepare(settings, identity=identity)
+    failed = session.submit_task(settings).result()
+    assert failed.status == "failed"
+    assert session.poisoned is True
+    with pytest.raises(WanLifecycleError, match="cold reset"):
+        session.prepare(settings, identity=identity)
+    assert session.cold_reset()["ok"] is True
+    assert session.prepare(settings, identity=identity)["status"] == "cold"
+    fresh = session.submit_task(settings).result()
+    assert fresh.success is True
+    assert fresh.session_generation == 2
+
+
+def test_persistent_rejects_malformed_settings_route_and_model_without_factory_side_effect(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    with pytest.raises(ValueError, match="prompt is required"):
+        session.prepare({"model": "wan-2.2"}, identity=identity)
+    with pytest.raises(WanLifecycleError, match="model identity"):
+        session.prepare({**settings, "model": "other-model"}, identity=identity)
+    with pytest.raises(WanLifecycleError, match="route is not owned"):
+        session.prepare(settings, identity=replace(identity, route="unowned.route"))
+    assert events == []
+
+
+def test_persistent_output_custody_emits_cas_descriptors_and_poison_on_escape(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    events: list[str] = []
+    session, engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    session.prepare(settings, identity=identity)
+    result = session.submit_task(settings).result()
+    assert result.success is True
+    assert result.outputs[0]["relative_path"].startswith("published/")
+    assert result.outputs[0]["sha256"].startswith("sha256:")
+    assert Path(result.generated_files[0]).is_file()
+
+    escaped = tmp_path / "escaped.json"
+    escaped.write_text("escaped", encoding="utf-8")
+
+    class EscapingEngine(_NativeEngine):
+        def submit_task(self, _settings):
+            return type(
+                "Job",
+                (),
+                {"result": lambda _self: _NativeResult(True, [str(escaped)])},
+            )()
+
+    session.cold_reset()
+    session = PersistentWanSession(
+        output_root=tmp_path / "escape-output",
+        engine_factory=lambda _identity, spool: EscapingEngine(spool, events),
+    )
+    session.prepare(settings, identity=identity)
+    escaped_result = session.submit_task(settings).result()
+    assert escaped_result.success is False
+    assert session.poisoned is True
+    assert escaped.exists() is True
+    assert engines[0].closed is True
+
+
+def test_persistent_runs_have_no_orphan_threads_and_generation_fences_completion(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    session.prepare(settings, identity=identity)
+    old_job = session.submit_task(settings)
+    old_result = old_job.result(2)
+    assert old_job.thread is not None and old_job.thread.is_alive() is False
+    session.release()
+    new_identity = _identity(tmp_path, suffix="c")
+    session.prepare(settings, identity=new_identity)
+    new_job = session.submit_task(settings)
+    new_result = new_job.result(2)
+    assert old_result.session_generation == 1
+    assert new_result.session_generation == 2
+    assert session.identity == new_identity
+    assert session.snapshot()["active_invocation"] is None

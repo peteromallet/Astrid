@@ -1,4 +1,4 @@
-"""Native Wan2GP driver — private spool + one-shot runner.
+"""Native Wan2GP driver — private spool + persistent session owner.
 
 Owns the ``shared.api.init() → WanGPSession.submit_task() → GenerationResult``
 seam for the Astrid wan2gp pack.  The native path remains one-shot: a fresh
@@ -10,22 +10,31 @@ starts the native engine.
 
 This module deliberately avoids Worker/GW imports and does not depend on any
 runtime database.  Importing/initializing the real Wan2GP engine requires the
-pinned Wan2GP checkout on ``sys.path`` with ``cwd`` inside that checkout
+explicitly identified pinned Wan2GP checkout on ``sys.path`` with ``cwd`` inside that checkout
 (``Wan2GP/shared/api.py`` does ``_pushd(runtime.root)`` + ``import wgp``).
 When the checkout or heavy dependencies are absent, the driver surfaces a
 structured, disclosure-carrying failure rather than raising an opaque import
 error.
 """
 
+import hashlib
 import json
 import os
+import shutil
 import sys
 import threading
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .compiler import runner_fingerprint, warmth_identity
+from .compiler import (
+    WanExecutionIdentity,
+    compile_from_inputs,
+    runner_fingerprint,
+    warmth_identity,
+)
 
 # Pinned by M0 source custody: banodoco/Wan2GP @ 181bb71a, reigh-sprint-3
 WAN2GP_PIN_SHA = "181bb71a21008032e4771e11663f33e4489c4512"
@@ -420,6 +429,694 @@ class FakePersistentRunner:
         return self.state.close()
 
 
+class WanLifecycleError(RuntimeError):
+    """Typed failure for the persistent Wan lifecycle boundary."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = str(code)
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentWanResult:
+    """Stable terminal result returned by the persistent Wan driver."""
+
+    status: str
+    generated_files: tuple[str, ...]
+    errors: tuple[str, ...]
+    invocation_id: str
+    session_generation: int
+    warmth_identity: str
+    identity_digest: str
+    outputs: tuple[dict[str, Any], ...] = ()
+    cancelled: bool = False
+    poisoned: bool = False
+    fence_pending: bool = False
+
+    @property
+    def success(self) -> bool:
+        return self.status == "succeeded"
+
+    def __getitem__(self, key: str) -> Any:
+        return self.to_dict()[key]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "success": self.success,
+            "generated_files": list(self.generated_files),
+            "errors": list(self.errors),
+            "invocation_id": self.invocation_id,
+            "session_generation": self.session_generation,
+            "warmth_identity": self.warmth_identity,
+            "identity_digest": self.identity_digest,
+            "outputs": [dict(item) for item in self.outputs],
+            "cancelled": self.cancelled,
+            "poisoned": self.poisoned,
+            "fence_pending": self.fence_pending,
+        }
+
+
+class PersistentWanJob:
+    """Joinable, cancellation-aware wrapper around one native session job."""
+
+    def __init__(self, session: "PersistentWanSession", record: dict[str, Any]) -> None:
+        self._session = session
+        self._record = record
+
+    def cancel(self) -> bool:
+        return self._session._request_cancel(self._record)
+
+    def result(self, timeout: float | None = None) -> PersistentWanResult:
+        if not self._record["done"].wait(timeout):
+            raise TimeoutError("persistent Wan session job timed out")
+        result = self._record.get("result")
+        if not isinstance(result, PersistentWanResult):
+            raise WanLifecycleError("lifecycle_incomplete", "persistent Wan job completed without a result")
+        return result
+
+    join = result
+
+    @property
+    def done(self) -> bool:
+        return self._record["done"].is_set()
+
+    @property
+    def thread(self) -> threading.Thread | None:
+        return self._record.get("thread")
+
+
+def _hash_regular_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _native_wan_session_factory(
+    identity: WanExecutionIdentity, output_dir: Path
+) -> Any:
+    """Load only the explicitly identified native Wan2GP checkout.
+
+    No environment variable, PATH lookup, model download, route selector, or
+    alternate engine import is consulted here.  The identity was validated
+    before this function is called; these checks protect the side-effecting
+    import/init boundary as well.
+    """
+    root = Path(identity.root)
+    if identity.route != "wan2gp.generate_video":
+        raise WanLifecycleError("unsupported_route", "persistent Wan route is not owned")
+    if identity.engine_seam != "shared.api.init/WanGPSession.submit_task":
+        raise WanLifecycleError("unsupported_engine_seam", "persistent Wan engine seam is unsupported")
+    if not root.is_dir() or not (root / "shared" / "api.py").is_file():
+        raise WanLifecycleError("root_unavailable", "identified Wan2GP root is unavailable")
+    executable = Path(identity.interpreter)
+    if executable.resolve(strict=False) != Path(sys.executable).resolve(strict=False):
+        raise WanLifecycleError("interpreter_mismatch", "identified interpreter is not the active interpreter")
+    try:
+        if _hash_regular_file(executable) != identity.interpreter_sha256:
+            raise WanLifecycleError("interpreter_mismatch", "identified interpreter bytes changed")
+    except OSError as exc:
+        raise WanLifecycleError("interpreter_unavailable", "identified interpreter cannot be verified") from exc
+
+    original_path = list(sys.path)
+    original_cwd = Path.cwd()
+    try:
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        os.chdir(root)
+        import importlib
+
+        api = importlib.import_module("shared.api")
+        init_fn = getattr(api, "init", None)
+        if not callable(init_fn):
+            raise WanLifecycleError("engine_unavailable", "Wan2GP shared.api.init is unavailable")
+        return init_fn(root=root, output_dir=output_dir, console_output=False)
+    except WanLifecycleError:
+        raise
+    except Exception as exc:
+        raise WanLifecycleError("engine_init_failed", str(exc)) from exc
+    finally:
+        sys.path[:] = original_path
+        os.chdir(original_cwd)
+
+
+class PersistentWanSession:
+    """Serialized persistent owner of one native ``WanGPSession``.
+
+    The session latches an exact :class:`WanExecutionIdentity` and warmth key
+    before calling the native factory.  A task can reuse the engine only when
+    the complete identity and settings-derived warmth key are equal.  Native
+    or custody failures poison the owner; only a successful cold reset can
+    clear that fence.
+    """
+
+    def __init__(
+        self,
+        *,
+        output_root: str | os.PathLike[str],
+        engine_factory: Callable[[WanExecutionIdentity, Path], Any] | None = None,
+        warmth_profile: str = "default",
+    ) -> None:
+        root = Path(output_root).expanduser()
+        if not root.is_absolute():
+            raise ValueError("persistent Wan output_root must be explicit and absolute")
+        if str(root) != str(root.resolve(strict=False)):
+            raise ValueError("persistent Wan output_root must be canonical")
+        if not isinstance(warmth_profile, str) or not warmth_profile.strip():
+            raise ValueError("warmth_profile is required")
+        self.output_root = root.resolve(strict=False)
+        self._engine_factory = engine_factory or _native_wan_session_factory
+        self.warmth_profile = warmth_profile.strip()
+        self._lock = threading.RLock()
+        self._engine: Any | None = None
+        self._latched_identity: WanExecutionIdentity | None = None
+        self._latched_warmth: str | None = None
+        self._session_generation = 0
+        self._preparing = False
+        self._active: dict[str, Any] | None = None
+        self._poisoned = False
+        self._fence_pending = False
+        self._last_error: str | None = None
+        self.last_lifecycle = "cold"
+        self.last_warm_reused = False
+
+    @property
+    def warm(self) -> bool:
+        with self._lock:
+            return self._engine is not None and not self._poisoned and not self._fence_pending
+
+    @property
+    def poisoned(self) -> bool:
+        with self._lock:
+            return self._poisoned
+
+    @property
+    def fence_pending(self) -> bool:
+        with self._lock:
+            return self._fence_pending
+
+    @property
+    def session_generation(self) -> int:
+        with self._lock:
+            return self._session_generation
+
+    @property
+    def identity(self) -> WanExecutionIdentity | None:
+        with self._lock:
+            return self._latched_identity
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            active = self._active
+            return {
+                "lifecycle": "warm" if self.warm else "cold",
+                "warm": self.warm,
+                "poisoned": self._poisoned,
+                "fence_pending": self._fence_pending,
+                "session_generation": self._session_generation,
+                "identity_digest": self._latched_identity.digest if self._latched_identity else None,
+                "warmth_identity": self._latched_warmth,
+                "active_invocation": active["invocation_id"] if active else None,
+                "active_phase": active["phase"] if active else None,
+                "last_error": self._last_error,
+            }
+
+    @staticmethod
+    def _settings_identity(settings: dict[str, Any]) -> tuple[str, str]:
+        compiled = compile_from_inputs(settings)
+        model = str(compiled.get("model", "")).strip()
+        template = str(compiled.get("model_type", "")).strip()
+        if not model or not template:
+            raise ValueError("Wan settings must contain model and model template")
+        return model, template
+
+    @staticmethod
+    def _coerce_identity(identity: WanExecutionIdentity) -> WanExecutionIdentity:
+        if not isinstance(identity, WanExecutionIdentity):
+            raise TypeError("persistent Wan requires a complete WanExecutionIdentity")
+        return identity
+
+    def _validate_admission(
+        self, settings: dict[str, Any], identity: WanExecutionIdentity
+    ) -> tuple[dict[str, Any], str]:
+        if not isinstance(settings, dict):
+            raise ValueError("Wan settings must be a dict")
+        compiled = compile_from_inputs(settings)
+        validate_settings(compiled)
+        model, template = self._settings_identity(compiled)
+        if model != identity.model:
+            raise WanLifecycleError("model_identity_mismatch", "Wan model identity does not match settings")
+        if template != identity.model_template:
+            raise WanLifecycleError("model_template_mismatch", "Wan model template does not match settings")
+        if identity.route != "wan2gp.generate_video":
+            raise WanLifecycleError("unsupported_route", "persistent Wan route is not owned")
+        if identity.engine_seam != "shared.api.init/WanGPSession.submit_task":
+            raise WanLifecycleError("unsupported_engine_seam", "persistent Wan engine seam is unsupported")
+        return compiled, identity.warmth_key(compiled, self.warmth_profile)
+
+    @staticmethod
+    def _engine_alive(engine: Any) -> bool:
+        probe = getattr(engine, "is_alive", None)
+        if callable(probe):
+            try:
+                return bool(probe())
+            except Exception:
+                return False
+        if getattr(engine, "closed", False) is True:
+            return False
+        return True
+
+    def _poison(self, reason: str, *, fence: bool = True) -> None:
+        self._poisoned = True
+        self._fence_pending = fence
+        self._last_error = str(reason)
+        self.last_lifecycle = "cold"
+        self.last_warm_reused = False
+
+    def _close_engine_locked(self) -> None:
+        engine = self._engine
+        if engine is None:
+            return
+        close = getattr(engine, "close", None)
+        if not callable(close):
+            raise WanLifecycleError("release_unsupported", "Wan engine does not expose close/free")
+        close()
+
+    def _prepare(
+        self,
+        settings: dict[str, Any],
+        identity: WanExecutionIdentity,
+        token: CancellationToken | None = None,
+        active_record: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str, int, Path]:
+        compiled, warmth = self._validate_admission(settings, identity)
+        with self._lock:
+            if self._poisoned or self._fence_pending:
+                raise WanLifecycleError("session_poisoned", "persistent Wan session requires cold reset")
+            if self._active is not None and self._active is not active_record:
+                raise WanLifecycleError("session_busy", "persistent Wan session is already executing")
+            if self._preparing:
+                raise WanLifecycleError("session_busy", "persistent Wan session is already preparing")
+            if token is not None:
+                token.raise_if_cancelled()
+            same = (
+                self._engine is not None
+                and self._latched_identity == identity
+                and self._latched_warmth == warmth
+                and self._engine_alive(self._engine)
+            )
+            self.last_warm_reused = same
+            if same:
+                self.last_lifecycle = "warm"
+                return compiled, warmth, self._session_generation, self.output_root / f"generation-{self._session_generation}"
+            if self._engine is not None:
+                try:
+                    self._close_engine_locked()
+                except Exception as exc:
+                    self._poison(str(exc))
+                    raise WanLifecycleError("release_failed", str(exc)) from exc
+                self._engine = None
+                self._latched_identity = None
+                self._latched_warmth = None
+            if token is not None:
+                token.raise_if_cancelled()
+            self.output_root.mkdir(parents=True, exist_ok=True)
+            self._session_generation += 1
+            spool = self.output_root / f"generation-{self._session_generation}"
+            spool.mkdir(parents=True, exist_ok=False)
+            if active_record is not None:
+                active_record["session_generation"] = self._session_generation
+            self._preparing = True
+
+        # Engine import/initialization may block.  Do not hold the lifecycle
+        # lock across that side effect: cancel() must be able to fence the
+        # reserved generation while preparation is in flight.
+        engine: Any | None = None
+        engine_closed = False
+        try:
+            engine = self._engine_factory(identity, spool)
+            if engine is None:
+                raise WanLifecycleError("engine_unavailable", "Wan engine factory returned no session")
+            if token is not None:
+                token.raise_if_cancelled()
+            with self._lock:
+                cancelled = token is not None and token.cancelled
+                stale = active_record is not None and self._active is not active_record
+                if cancelled or stale:
+                    close = getattr(engine, "close", None)
+                    if callable(close):
+                        close()
+                    engine_closed = True
+                    raise RunCancelled(token.reason if token is not None else "cancelled")
+                self._engine = engine
+                self._latched_identity = identity
+                self._latched_warmth = warmth
+                self.last_lifecycle = "cold"
+                self.last_warm_reused = False
+                return compiled, warmth, self._session_generation, spool
+        except RunCancelled:
+            if engine is not None and not engine_closed:
+                close = getattr(engine, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception as exc:
+                        with self._lock:
+                            self._poison(str(exc))
+            raise
+        except Exception as exc:
+            with self._lock:
+                self._poison(str(exc))
+            raise WanLifecycleError(getattr(exc, "code", "engine_init_failed"), str(exc)) from exc
+        finally:
+            with self._lock:
+                self._preparing = False
+
+    def prepare(
+        self, settings: dict[str, Any], *, identity: WanExecutionIdentity
+    ) -> dict[str, Any]:
+        """Validate and latch identity, initializing or exactly reusing warmth."""
+        _compiled, warmth, generation, spool = self._prepare(
+            settings, self._coerce_identity(identity)
+        )
+        return {
+            "status": "warm" if self.last_warm_reused else "cold",
+            "warm_reused": self.last_warm_reused,
+            "session_generation": generation,
+            "warmth_identity": warmth,
+            "identity_digest": identity.digest,
+            "spool": str(spool),
+        }
+
+    def submit_task(
+        self,
+        settings: dict[str, Any],
+        *,
+        identity: WanExecutionIdentity | None = None,
+    ) -> PersistentWanJob:
+        """Submit one typed task to the latched native Wan session."""
+        if identity is not None:
+            identity = self._coerce_identity(identity)
+        selected_for_validation = identity or self._latched_identity
+        if selected_for_validation is None:
+            raise WanLifecycleError("identity_incomplete", "persistent Wan task requires complete identity facts")
+        # Validate settings and exact route/model/template ownership before
+        # reserving the active slot or touching the native engine.
+        self._validate_admission(settings, selected_for_validation)
+        with self._lock:
+            if self._active is not None:
+                raise WanLifecycleError("session_busy", "persistent Wan session is already executing")
+            selected = identity or self._latched_identity
+            if selected is None:
+                raise WanLifecycleError("identity_incomplete", "persistent Wan task requires complete identity facts")
+            record = {
+                "invocation_id": uuid.uuid4().hex,
+                "session_generation": self._session_generation,
+                "identity": selected,
+                "phase": "PREPARING",
+                "settings": dict(settings),
+                "token": CancellationToken(),
+                "native_job": None,
+                "result": None,
+                "done": threading.Event(),
+                "cancel_requested": False,
+                "thread": None,
+            }
+            self._active = record
+            thread = threading.Thread(
+                target=self._run_record,
+                args=(record, selected, True),
+                name=f"wan2gp-session-{record['invocation_id'][:8]}",
+                daemon=False,
+            )
+            record["thread"] = thread
+            thread.start()
+            return PersistentWanJob(self, record)
+
+    def _result(
+        self,
+        record: dict[str, Any],
+        *,
+        status: str,
+        errors: list[str] | tuple[str, ...] = (),
+        files: list[str] | tuple[str, ...] = (),
+        outputs: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+    ) -> PersistentWanResult:
+        identity: WanExecutionIdentity = record["identity"]
+        with self._lock:
+            return PersistentWanResult(
+                status=status,
+                generated_files=tuple(files),
+                errors=tuple(str(item) for item in errors),
+                invocation_id=record["invocation_id"],
+                session_generation=record["session_generation"],
+                warmth_identity=self._latched_warmth or identity.warmth_key(
+                    compile_from_inputs(record["settings"]), self.warmth_profile
+                ),
+                identity_digest=identity.digest,
+                outputs=tuple(dict(item) for item in outputs),
+                cancelled=status == "cancelled",
+                poisoned=self._poisoned,
+                fence_pending=self._fence_pending,
+            )
+
+    def _collect_outputs(
+        self, files: list[Any], spool: Path, invocation_id: str
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        collected: list[str] = []
+        descriptors: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        publication_root = spool / "published" / invocation_id
+        publication_root.mkdir(parents=True, exist_ok=False)
+        for raw in files:
+            if not isinstance(raw, (str, os.PathLike)):
+                raise WanLifecycleError("output_custody_failed", "Wan output path is not path-like")
+            path = Path(raw).expanduser()
+            resolved = path.resolve(strict=False)
+            try:
+                relative = resolved.relative_to(spool.resolve(strict=False))
+            except ValueError as exc:
+                raise WanLifecycleError("output_custody_failed", "Wan output escaped its owned spool") from exc
+            if (
+                not relative.parts
+                or str(relative) in seen
+                or path.is_symlink()
+                or not resolved.is_file()
+                or resolved.is_symlink()
+            ):
+                raise WanLifecycleError("output_custody_failed", "Wan output is not a private regular file")
+            seen.add(str(relative))
+            before = resolved.stat()
+            digest = _hash_regular_file(resolved)
+            after = resolved.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise WanLifecycleError("output_custody_failed", "Wan output changed during collection")
+            destination = publication_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                with resolved.open("rb") as source, temporary.open("xb") as target:
+                    shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.replace(temporary, destination)
+                directory_fd = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError as exc:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+                raise WanLifecycleError("output_custody_failed", "Wan output publication failed") from exc
+            if _hash_regular_file(destination) != digest:
+                raise WanLifecycleError("output_custody_failed", "Wan output changed during publication")
+            collected.append(str(destination))
+            descriptors.append(
+                {
+                    "relative_path": str(destination.relative_to(spool)),
+                    "size_bytes": before.st_size,
+                    "sha256": digest,
+                }
+            )
+        return collected, descriptors
+
+    def _run_record(
+        self, record: dict[str, Any], identity: WanExecutionIdentity, needs_prepare: bool
+    ) -> None:
+        result: PersistentWanResult
+        try:
+            if needs_prepare:
+                _settings, _warmth, generation, spool = self._prepare(
+                    record["settings"], identity, record["token"], record
+                )
+                record["session_generation"] = generation
+            else:
+                with self._lock:
+                    if self._latched_identity != identity or self._engine is None:
+                        raise WanLifecycleError("identity_mismatch", "latched Wan session identity changed")
+                    if not self._engine_alive(self._engine):
+                        self._poison("latched Wan engine is no longer alive")
+                        raise WanLifecycleError("engine_not_alive", "latched Wan engine is no longer alive")
+                    spool = self.output_root / f"generation-{self._session_generation}"
+            with self._lock:
+                if self._active is not record or self._session_generation != record["session_generation"]:
+                    raise WanLifecycleError("stale_generation", "stale Wan invocation cannot execute")
+                engine = self._engine
+                record["phase"] = "EXECUTING"
+            submit = getattr(engine, "submit_task", None)
+            if not callable(submit):
+                raise WanLifecycleError("engine_unsupported", "Wan engine does not expose submit_task")
+            native_job = submit(compile_from_inputs(record["settings"]))
+            with self._lock:
+                record["native_job"] = native_job
+                cancelled = record["cancel_requested"] or record["token"].cancelled
+            if cancelled:
+                cancel = getattr(native_job, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            native_result = native_job.result() if hasattr(native_job, "result") else native_job
+            with self._lock:
+                cancelled = record["cancel_requested"] or record["token"].cancelled
+            native_files = list(getattr(native_result, "generated_files", []) or [])
+            native_success = bool(getattr(native_result, "success", False))
+            native_errors = [str(item) for item in (getattr(native_result, "errors", []) or [])]
+            if cancelled:
+                result = self._result(record, status="cancelled", errors=native_errors or ["cancelled"])
+            elif not native_success:
+                reason = native_errors or ["Wan engine reported failure"]
+                with self._lock:
+                    self._poison("; ".join(reason))
+                result = self._result(record, status="failed", errors=reason)
+            else:
+                with self._lock:
+                    if self._active is not record or self._session_generation != record["session_generation"]:
+                        raise WanLifecycleError("stale_generation", "stale Wan invocation cannot publish outputs")
+                    files, outputs = self._collect_outputs(
+                        native_files, spool, record["invocation_id"]
+                    )
+                if not files:
+                    raise WanLifecycleError("output_custody_failed", "Wan engine produced no outputs")
+                result = self._result(record, status="succeeded", files=files, outputs=outputs)
+        except RunCancelled as exc:
+            result = self._result(record, status="cancelled", errors=[str(exc)])
+        except Exception as exc:
+            code = getattr(exc, "code", "engine_failed")
+            with self._lock:
+                if code not in {"identity_mismatch", "session_busy", "unsupported_route", "unsupported_engine_seam"}:
+                    self._poison(str(exc))
+            result = self._result(record, status="cancelled" if record["cancel_requested"] else "failed", errors=[f"{code}: {exc}"])
+        finally:
+            with self._lock:
+                if self._active is record and self._session_generation == record["session_generation"]:
+                    record["phase"] = "TERMINAL"
+                    record["result"] = result
+                    self._active = None
+                else:
+                    # A stale completion is observable by its caller but may
+                    # never clear a newer session's fence, identity, or owner.
+                    record["result"] = result
+                record["done"].set()
+
+    def _request_cancel(self, record: dict[str, Any]) -> bool:
+        with self._lock:
+            if self._active is not record:
+                return record["done"].is_set()
+            record["cancel_requested"] = True
+            record["phase"] = "CANCELLING"
+            record["token"].cancel("cancelled")
+            native_job = record.get("native_job")
+        cancel = getattr(native_job, "cancel", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception as exc:
+                with self._lock:
+                    self._poison(str(exc))
+        return True
+
+    def cancel(self, *, timeout: float = 5.0) -> dict[str, Any]:
+        with self._lock:
+            record = self._active
+        if record is None:
+            return {"ok": True, "status": "cold" if not self.warm else "warm", "active": False}
+        self._request_cancel(record)
+        if not record["done"].wait(timeout):
+            with self._lock:
+                self._poison("cancellation did not reach a terminal state")
+            return {"ok": False, "status": "cancellation_pending", "fence_pending": True}
+        result = record["result"]
+        return {"ok": result.status == "cancelled", **result.to_dict(), "active": False}
+
+    def release(self, *, timeout: float = 5.0) -> dict[str, Any]:
+        cancelled = self.cancel(timeout=timeout)
+        if cancelled.get("status") == "cancellation_pending":
+            return cancelled
+        with self._lock:
+            if self._active is not None:
+                return {"ok": False, "status": "release_pending", "fence_pending": True}
+            if self._engine is None:
+                self.last_lifecycle = "cold"
+                self.last_warm_reused = False
+                return {"ok": True, "status": "cold", "released": False}
+            try:
+                self._close_engine_locked()
+            except Exception as exc:
+                self._poison(str(exc))
+                return {"ok": False, "status": "release_failed", "error": str(exc), "fence_pending": True}
+            self._engine = None
+            self._latched_identity = None
+            self._latched_warmth = None
+            self.last_lifecycle = "cold"
+            self.last_warm_reused = False
+            return {"ok": True, "status": "cold", "released": True, "fence_pending": False}
+
+    def cold_reset(self, *, timeout: float = 5.0) -> dict[str, Any]:
+        """Release the exact owner, then clear a poison/fence for cold reuse."""
+        released = self.release(timeout=timeout)
+        if not released.get("ok"):
+            return {**released, "status": "cold_reset_failed"}
+        with self._lock:
+            self._poisoned = False
+            self._fence_pending = False
+            self._last_error = None
+            self.last_lifecycle = "cold"
+        return {"ok": True, "status": "cold", "recovered": True}
+
+    recover = cold_reset
+
+    def close(self, *, timeout: float = 5.0) -> dict[str, Any]:
+        return self.release(timeout=timeout)
+
+
+# Names used in handoffs and by pack authors.
+WanGPSession = PersistentWanSession
+WanGPSessionDriver = PersistentWanSession
+PersistentWanDriver = PersistentWanSession
+
+
+def persistent_run(
+    settings: dict[str, Any],
+    identity: WanExecutionIdentity,
+    *,
+    output_root: str | os.PathLike[str],
+    engine_factory: Callable[[WanExecutionIdentity, Path], Any] | None = None,
+) -> PersistentWanResult:
+    """Run one typed task through a disposable persistent-session owner."""
+    session = PersistentWanSession(output_root=output_root, engine_factory=engine_factory)
+    try:
+        return session.submit_task(settings, identity=identity).result()
+    finally:
+        session.release()
+
+
+run_persistent = persistent_run
+
+
 def fake_persistent_run(
     settings: dict[str, Any],
     state_path: str | os.PathLike[str],
@@ -512,34 +1209,15 @@ def _terminal_mapping(
 
 
 def resolve_wan2gp_root(explicit: str | os.PathLike[str] | None = None) -> Path | None:
-    """Resolve the pinned Wan2GP checkout root, if present.
-
-    Resolution order:
-    1. Explicit ``explicit`` path, if provided and exists.
-    2. ``WAN2GP_PATH`` env var (used by Worker substrate).
-    3. Sibling of the reigh-worker checkout when running inside that repo.
-    4. Not found → None (caller must treat as disclosure, not crash).
-    """
-    candidates: list[Path] = []
-    if explicit is not None:
-        candidates.append(Path(explicit).expanduser().resolve())
-    env_root = os.environ.get("WAN2GP_PATH")
-    if env_root:
-        candidates.append(Path(env_root).expanduser().resolve())
-    # Worker-relative fallback (reigh-worker/Wan2GP)
-    # Walk up from this file looking for a reigh-worker checkout
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "Wan2GP"
-        if candidate not in candidates:
-            candidates.append(candidate)
-        # Also check worker layout
-        worker_candidate = parent.parent / "reigh-worker" / "Wan2GP"
-        if worker_candidate not in candidates:
-            candidates.append(worker_candidate)
-    for candidate in candidates:
-        if candidate.is_dir() and (candidate / "shared" / "api.py").exists():
-            return candidate
+    """Resolve only an explicitly supplied pinned Wan2GP checkout root."""
+    if explicit is None:
+        return None
+    candidate = Path(explicit).expanduser()
+    if not candidate.is_absolute() or candidate.is_symlink():
+        return None
+    candidate = candidate.resolve(strict=False)
+    if candidate.is_dir() and (candidate / "shared" / "api.py").is_file():
+        return candidate
     return None
 
 def _cancellation_reason(

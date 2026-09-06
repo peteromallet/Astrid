@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -180,6 +182,154 @@ def compile_from_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 
 DEFAULT_ENGINE_IDENTITY = "wan2gp@181bb71a21008032e4771e11663f33e4489c4512"
 
+_SHA256_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+
+
+def _required_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is required and must be a non-empty string")
+    return value.strip()
+
+
+def _required_digest(value: Any, field: str) -> str:
+    text = _required_text(value, field).lower()
+    if not _SHA256_RE.fullmatch(text):
+        raise ValueError(f"{field} must be sha256:<64hex>")
+    return text if text.startswith("sha256:") else f"sha256:{text}"
+
+
+def _canonical_root(value: Any, field: str = "root") -> str:
+    if isinstance(value, (str, Path)):
+        text = str(value).strip()
+    else:
+        raise ValueError(f"{field} is required and must be a non-empty string")
+    if not text:
+        raise ValueError(f"{field} is required and must be a non-empty string")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{field} must be an explicit absolute path")
+    return str(path.resolve(strict=False))
+
+
+@dataclass(frozen=True, slots=True)
+class WanExecutionIdentity:
+    """Complete, exact identity for a reusable native Wan session.
+
+    This is deliberately separate from the portable settings digest.  The
+    latter describes task meaning; this record describes the interpreter,
+    engine, model bytes, roots, transport, and process owner that may execute
+    it.  Omitting any field is an admission error, never a warm match.
+    """
+
+    interpreter: str
+    interpreter_version: str
+    interpreter_sha256: str
+    model: str
+    model_template: str
+    model_bytes_digest: str
+    root: str
+    runtime_identity: str
+    transport_identity: str
+    process_identity: str
+    engine_identity: str = DEFAULT_ENGINE_IDENTITY
+    route: str = "wan2gp.generate_video"
+    engine_seam: str = "shared.api.init/WanGPSession.submit_task"
+
+    def __post_init__(self) -> None:
+        values = {
+            "interpreter": self.interpreter,
+            "interpreter_version": self.interpreter_version,
+            "model": self.model,
+            "model_template": self.model_template,
+            "root": self.root,
+            "runtime_identity": self.runtime_identity,
+            "transport_identity": self.transport_identity,
+            "process_identity": self.process_identity,
+            "engine_identity": self.engine_identity,
+            "route": self.route,
+            "engine_seam": self.engine_seam,
+        }
+        for field, value in values.items():
+            _required_text(value, field)
+        if not Path(self.interpreter).is_absolute():
+            raise ValueError("interpreter must be an explicit absolute path")
+        if str(Path(self.interpreter).resolve(strict=False)) != self.interpreter:
+            raise ValueError("interpreter must be canonical absolute path")
+        if not Path(self.root).is_absolute() or str(Path(self.root).resolve(strict=False)) != self.root:
+            raise ValueError("root must be canonical absolute path")
+        for field in ("interpreter_sha256", "model_bytes_digest"):
+            normalized = _required_digest(getattr(self, field), field)
+            object.__setattr__(self, field, normalized)
+
+    @classmethod
+    def from_facts(
+        cls,
+        *,
+        interpreter: str,
+        interpreter_version: str,
+        interpreter_sha256: str,
+        model: str,
+        model_template: str,
+        model_bytes_digest: str,
+        root: str | Path,
+        runtime_identity: str,
+        transport_identity: str,
+        process_identity: str,
+        engine_identity: str = DEFAULT_ENGINE_IDENTITY,
+        route: str = "wan2gp.generate_video",
+        engine_seam: str = "shared.api.init/WanGPSession.submit_task",
+    ) -> "WanExecutionIdentity":
+        return cls(
+            interpreter=_canonical_root(interpreter, "interpreter"),
+            interpreter_version=_required_text(interpreter_version, "interpreter_version"),
+            interpreter_sha256=_required_digest(interpreter_sha256, "interpreter_sha256"),
+            model=_required_text(model, "model"),
+            model_template=_required_text(model_template, "model_template"),
+            model_bytes_digest=_required_digest(model_bytes_digest, "model_bytes_digest"),
+            root=_canonical_root(root),
+            runtime_identity=_required_text(runtime_identity, "runtime_identity"),
+            transport_identity=_required_text(transport_identity, "transport_identity"),
+            process_identity=_required_text(process_identity, "process_identity"),
+            engine_identity=_required_text(engine_identity, "engine_identity"),
+            route=_required_text(route, "route"),
+            engine_seam=_required_text(engine_seam, "engine_seam"),
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "engine_identity": self.engine_identity,
+            "engine_seam": self.engine_seam,
+            "interpreter": self.interpreter,
+            "interpreter_sha256": self.interpreter_sha256,
+            "interpreter_version": self.interpreter_version,
+            "model": self.model,
+            "model_bytes_digest": self.model_bytes_digest,
+            "model_template": self.model_template,
+            "process_identity": self.process_identity,
+            "root": self.root,
+            "route": self.route,
+            "runtime_identity": self.runtime_identity,
+            "transport_identity": self.transport_identity,
+        }
+
+    @property
+    def digest(self) -> str:
+        encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def warmth_key(self, settings: dict[str, Any], warmth_profile: str = "default") -> str:
+        return warmth_identity(
+            settings,
+            runner_kind="wan2gp-persistent",
+            warmth_profile=warmth_profile,
+            engine_identity=self.engine_identity,
+            execution_identity=self,
+        )
+
+
+# Short descriptive alias for callers that use the phrase from the handoff.
+WanEngineIdentity = WanExecutionIdentity
+
 
 def runner_fingerprint(
     settings: dict[str, Any],
@@ -212,6 +362,7 @@ def warmth_identity(
     runner_kind: str = "wan2gp",
     warmth_profile: str = "default",
     engine_identity: str = DEFAULT_ENGINE_IDENTITY,
+    execution_identity: WanExecutionIdentity | None = None,
 ) -> str:
     """Return a stable identity for a warm reusable runner profile."""
     if not warmth_profile:
@@ -224,6 +375,10 @@ def warmth_identity(
         ),
         "warmth_profile": str(warmth_profile),
     }
+    if execution_identity is not None:
+        if not isinstance(execution_identity, WanExecutionIdentity):
+            raise TypeError("execution_identity must be a WanExecutionIdentity")
+        canonical["execution_identity"] = execution_identity.to_dict()
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "receipt_type": "R1-B02-T04b-correction-3-luna-implementation",
+  "status": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "required_parent": {
+    "commit": "364000b5cbdcc513e24c534ed6bb7d3dfe4a4362",
+    "tree": "3b43d6dcc99588a6318ff81136eb3db5c47263f1"
+  },
+  "owned_files": [
+    "astrid/core/generation/backends/vibecomfy.py",
+    "tests/core/generation/backends/test_checkout_server.py",
+    "tests/core/generation/backends/test_warm_cancel.py"
+  ],
+  "run_artifacts": [
+    "evidence/R1-B02-T04b-correction-3.md",
+    "receipts/R1-B02-T04b-correction-3.json"
+  ],
+  "fresh_verification": {
+    "focused": {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest -q -p no:cacheprovider tests/core/generation/backends/test_checkout_server.py tests/core/generation/backends/test_warm_cancel.py tests/core/generation/backends/test_pip_embedded_profile.py",
+      "passed": 105,
+      "failed": 0
+    },
+    "frozen": {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3.11 -m pytest -q tests/test_generic_host.py tests/test_generic_host_persistent.py tests/test_b6_boot_manifest.py tests/test_wan2gp_lifecycle.py tests/core/generation/backends/test_checkout_server.py tests/core/generation/backends/test_warm_cancel.py tests/integrations/test_generic_host_runtime_control2.py",
+      "passed": 151,
+      "failed": 0
+    },
+    "ruff": "passed",
+    "direct_compile": "passed",
+    "diff_check": "passed",
+    "process_check": "no pytest/helper/orphan process; unrelated generic-host and ComfyUI infrastructure preserved"
+  },
+  "finding_dispositions": {
+    "F01": "PASS_OFFLINE_DIRECT_ONLY",
+    "F02": "PASS_OFFLINE_DIRECT_ONLY",
+    "F03": "PASS_OFFLINE_DIRECT_ONLY",
+    "F05": "PASS_OFFLINE_DIRECT_ONLY"
+  },
+  "owned_file_sha256": {
+    "astrid/core/generation/backends/vibecomfy.py": "9b81d5921e2a732999c293b52af9016d9a4663d117798715d57001615c072bc4",
+    "tests/core/generation/backends/test_checkout_server.py": "b149ab18568ba315236d262bb95b6bffa5fe84f2eda01d90a0fa6b57dec51a1b",
+    "tests/core/generation/backends/test_warm_cancel.py": "2a1f51a821c7f269726f1abe57f6a55f7579ed6a15ba413682b75a7f4683e82b"
+  },
+  "review_gate": "Fresh independent review required; no acceptance or ledger update claimed.",
+  "side_effects": {
+    "push": false,
+    "merge": false,
+    "deploy": false,
+    "downstream_dispatch": false
+  }
+}

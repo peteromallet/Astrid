@@ -273,6 +273,7 @@ class _CheckoutIdentity:
     listener_address: str
     listener_port: int
     network_namespace: str
+    invocation_identity: str
     origin: str
     transport_route: str
     transport_generation: str
@@ -297,6 +298,7 @@ class _CheckoutIdentity:
             "listener_address": self.listener_address,
             "listener_port": self.listener_port,
             "network_namespace": self.network_namespace,
+            "invocation_identity": self.invocation_identity,
             "origin": self.origin,
             "transport_route": self.transport_route,
             "transport_generation": self.transport_generation,
@@ -305,6 +307,28 @@ class _CheckoutIdentity:
 
 def _identity_digest(domain: str, identity: _CheckoutIdentity) -> str:
     return _digest({"schema": domain, "identity": identity.record()})
+
+
+def _fresh_checkout_error(code: str) -> _CheckoutProtocolError:
+    """Create a fixed local error with no inherited exception information."""
+    error = _CheckoutProtocolError(
+        code if code in _CHECKOUT_LOCAL_ERROR_CODES else "checkout_transport_failed"
+    )
+    error.__context__ = None
+    error.__cause__ = None
+    error.__suppress_context__ = True
+    return error
+
+
+def _checkout_error_code(exc: BaseException, fallback: str) -> str:
+    """Map an untrusted failure to the small local checkout error vocabulary."""
+    try:
+        code = getattr(exc, "code", None)
+    except BaseException:
+        code = None
+    if isinstance(code, str) and code in _CHECKOUT_LOCAL_ERROR_CODES:
+        return code
+    return fallback
 
 
 def _checkout_identity_from_binding(
@@ -387,6 +411,7 @@ def _checkout_identity_from_binding(
         listener_address=binding.listener_address,
         listener_port=binding.listener_port,
         network_namespace=binding.network_namespace,
+        invocation_identity=binding.invocation_identity,
         origin=origin,
         transport_route=route,
         transport_generation=binding.transport_generation,
@@ -472,6 +497,31 @@ class _CheckoutRuntimeBinding:
             invocation_identity=invocation_identity,
             _provenance=_CHECKOUT_BINDING_SOURCE,
         )
+
+
+def _binding_matches_identity(
+    binding: object, identity: _CheckoutIdentity | None
+) -> bool:
+    """Re-observe a binding and compare the complete latched attestation."""
+    if identity is None or not isinstance(binding, _CheckoutRuntimeBinding):
+        return False
+    if binding._provenance is not _CHECKOUT_BINDING_SOURCE:
+        return False
+    try:
+        observed = _checkout_identity_from_binding(
+            binding,
+            origin=identity.origin,
+            runtime_instance_id=identity.runtime_instance_id,
+            model_bytes_digest=identity.model_bytes_digest,
+            environment=_thaw_json(identity.profile),
+            model_id=identity.model_id,
+            template_id=identity.template_id,
+            declared_root=identity.checkout_root,
+            declared_port=identity.listener_port,
+        )
+    except BaseException:
+        return False
+    return observed == identity
 
 
 class _PipEmbeddedError(RuntimeError):
@@ -3085,44 +3135,58 @@ def _deadline_wait(selector: selectors.BaseSelector, sock: socket.socket, events
 
 
 def _open_deadline_socket(host: str, port: int, deadline_ns: int) -> tuple[socket.socket, selectors.BaseSelector]:
+    # The supported transport deliberately accepts numeric addresses only.
+    # Python's getaddrinfo() has no portable deadline API, and running it in a
+    # helper would introduce an unbounded thread/process and FD lifecycle.
     try:
         import ipaddress
-        ipaddress.ip_address(host)
-    except ValueError:
-        if host != "localhost":
-            raise _CheckoutProtocolError("checkout_deadline_transport_unavailable")
-        host = "127.0.0.1"
+        address = ipaddress.ip_address(host)
+    except (TypeError, ValueError):
+        raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    sockaddr: tuple[Any, ...] = (
+        (host, port, 0, 0) if family == socket.AF_INET6 else (host, port)
+    )
     try:
-        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError:
-        raise _CheckoutProtocolError("checkout_deadline_transport_unavailable") from None
-    selector = selectors.DefaultSelector()
+        selector = selectors.DefaultSelector()
+    except BaseException:
+        raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
     last_error: OSError | None = None
-    for family, socktype, proto, _canonname, sockaddr in addresses:
-        sock = socket.socket(family, socktype, proto)
-        try:
-            sock.setblocking(False)
-            error = sock.connect_ex(sockaddr)
-            if error not in (0, errno.EISCONN, errno.EINPROGRESS, errno.EWOULDBLOCK,
-                             errno.EALREADY):
-                raise OSError(error, os.strerror(error))
-            selector.register(sock, selectors.EVENT_WRITE)
-            if error != 0:
-                _deadline_wait(selector, sock, selectors.EVENT_WRITE, deadline_ns)
-                if sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR):
-                    raise OSError(sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR), "connect")
-            return sock, selector
-        except (_CheckoutProtocolError, OSError) as exc:
-            last_error = exc if isinstance(exc, OSError) else OSError(str(exc))
+    protocol_error: _CheckoutProtocolError | None = None
+    sock: socket.socket | None = None
+    try:
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.setblocking(False)
+        error = sock.connect_ex(sockaddr)
+        if error not in (0, errno.EISCONN, errno.EINPROGRESS, errno.EWOULDBLOCK,
+                         errno.EALREADY):
+            raise OSError(error, os.strerror(error))
+        selector.register(sock, selectors.EVENT_WRITE)
+        if error != 0:
+            _deadline_wait(selector, sock, selectors.EVENT_WRITE, deadline_ns)
+            socket_error = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            if socket_error:
+                raise OSError(socket_error, "connect")
+        return sock, selector
+    except _CheckoutProtocolError as exc:
+        protocol_error = exc
+    except OSError as exc:
+        last_error = exc
+    except BaseException:
+        protocol_error = _fresh_checkout_error("checkout_transport_failed")
+    finally:
+        if sock is not None and (protocol_error is not None or last_error is not None):
             try:
                 selector.unregister(sock)
-            except (OSError, KeyError):
+            except (OSError, KeyError, ValueError):
                 pass
             sock.close()
     selector.close()
+    if protocol_error is not None:
+        raise protocol_error
     if isinstance(last_error, _CheckoutProtocolError):
         raise last_error
-    raise _CheckoutProtocolError("checkout_transport_failed") from None
+    raise _fresh_checkout_error("checkout_transport_failed")
 
 
 def _open_checkout_http(request: urllib_request.Request, *, timeout: float,
@@ -3212,12 +3276,20 @@ def _open_checkout_http_bounded(request: urllib_request.Request, deadline_ns: in
     remaining = max(0.0, (deadline_ns - time.monotonic_ns()) / 1_000_000_000)
     try:
         return _open_checkout_http(request, timeout=remaining, deadline_ns=deadline_ns)
-    except TypeError as exc:
+    except TypeError:
         # Existing offline fixtures expose only the old keyword.  They must
         # explicitly advertise the deadline capability on their response.
-        if "deadline_ns" not in str(exc):
+        try:
+            import inspect
+            parameters = inspect.signature(_open_checkout_http).parameters
+        except (TypeError, ValueError):
             raise
-        return _open_checkout_http(request, timeout=remaining)
+        if "deadline_ns" not in parameters and not any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        ):
+            return _open_checkout_http(request, timeout=remaining)
+        raise
 
 
 def _validate_checkout_server_url(server_url: str) -> str:
@@ -3497,78 +3569,86 @@ def _scan_json_depth(raw: bytes, maximum: int) -> None:
 
 def _checkout_json(raw: bytes) -> Any:
     """Strict, bounded, secret-rejecting decoder for checkout JSON responses."""
-    if len(raw) > _MAX_CHECKOUT_RESPONSE_BYTES:
-        raise _CheckoutProtocolError("checkout_response_malformed")
-    nodes = 0
-
-    # Do this before json.loads: CPython's decoder can recurse before a
-    # post-parse walk gets a chance to enforce the bound.
+    decoded: Any = None
+    pending: list[tuple[Any, int]] = []
+    failure: _CheckoutProtocolError | None = None
     try:
+        if not isinstance(raw, bytes) or len(raw) > _MAX_CHECKOUT_RESPONSE_BYTES:
+            raise ValueError
+        nodes = 0
+
+        # Do this before json.loads: CPython's decoder can recurse before a
+        # post-parse walk gets a chance to enforce the bound.
         _scan_json_depth(raw, _MAX_CHECKOUT_JSON_DEPTH)
-    except (TypeError, ValueError):
-        raise _CheckoutProtocolError("checkout_response_malformed")
 
-    def reject_constant(_value: str) -> Any:
-        raise _CheckoutProtocolError("checkout_response_malformed")
+        def reject_constant(_value: str) -> Any:
+            raise _CheckoutProtocolError("checkout_response_malformed")
 
-    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise _CheckoutProtocolError("checkout_response_malformed")
-            result[key] = value
-        return result
+        def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise _CheckoutProtocolError("checkout_response_malformed")
+                result[key] = value
+            return result
 
-    try:
         decoded = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=reject_duplicates,
             parse_constant=reject_constant,
         )
-    except _CheckoutProtocolError:
-        raise
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError,
-            RecursionError, MemoryError, OverflowError):
-        raise _CheckoutProtocolError("checkout_response_malformed") from None
-
-    pending: list[tuple[Any, int]] = [(decoded, 0)]
-    while pending:
-        value, current_depth = pending.pop()
-        nodes += 1
-        if nodes > _MAX_CHECKOUT_JSON_NODES or current_depth > _MAX_CHECKOUT_JSON_DEPTH:
-            raise _CheckoutProtocolError("checkout_response_malformed")
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if len(value) > _MAX_CHECKOUT_JSON_STRING:
-                raise _CheckoutProtocolError("checkout_response_malformed")
-            if lowered in {"[redacted]", "<redacted>", "***", "[secret]", "<secret>"}:
-                raise _CheckoutProtocolError("checkout_response_secret_shaped")
-            if _SECRET_VALUE_RE.search(value) or re.search(
-                r"(?i)bearer\s+[a-z0-9._~+/=-]+|-----begin [a-z ]+ key-----|https?://[^\s]*?(?:token|secret|password|credential|api[_-]?key)=",
-                value,
-            ):
-                raise _CheckoutProtocolError("checkout_response_secret_shaped")
-            continue
-        if value is None or isinstance(value, (bool, int, float)):
-            if isinstance(value, float) and not math.isfinite(value):
-                raise _CheckoutProtocolError("checkout_response_malformed")
-            continue
-        if isinstance(value, Mapping):
-            for key, item in value.items():
-                if not isinstance(key, str) or len(key) > _MAX_CHECKOUT_JSON_STRING:
-                    raise _CheckoutProtocolError("checkout_response_malformed")
-                normalized = re.sub(r"[^a-z0-9]", "", key.lower())
-                if lowered_key := normalized:
-                    if any(word in lowered_key for word in ("secret", "token", "password", "credential", "apikey", "privatekey")):
+        pending.append((decoded, 0))
+        while pending:
+            value, current_depth = pending.pop()
+            nodes += 1
+            if nodes > _MAX_CHECKOUT_JSON_NODES or current_depth > _MAX_CHECKOUT_JSON_DEPTH:
+                raise ValueError
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if len(value) > _MAX_CHECKOUT_JSON_STRING:
+                    raise ValueError
+                if lowered in {"[redacted]", "<redacted>", "***", "[secret]", "<secret>"}:
+                    raise _CheckoutProtocolError("checkout_response_secret_shaped")
+                if _SECRET_VALUE_RE.search(value) or re.search(
+                    r"(?i)bearer\s+[a-z0-9._~+/=-]+|-----begin [a-z ]+ key-----|https?://[^\s]*?(?:token|secret|password|credential|api[_-]?key)=",
+                    value,
+                ):
+                    raise _CheckoutProtocolError("checkout_response_secret_shaped")
+                continue
+            if value is None or isinstance(value, (bool, int, float)):
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError
+                continue
+            if isinstance(value, Mapping):
+                for key, item in value.items():
+                    if not isinstance(key, str) or len(key) > _MAX_CHECKOUT_JSON_STRING:
+                        raise ValueError
+                    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+                    if normalized and any(
+                        word in normalized
+                        for word in ("secret", "token", "password", "credential", "apikey", "privatekey")
+                    ):
                         raise _CheckoutProtocolError("checkout_response_secret_shaped")
-                pending.append((item, current_depth + 1))
-                pending.append((key, current_depth + 1))
-            continue
-        if isinstance(value, list):
-            pending.extend((item, current_depth + 1) for item in value)
-            continue
-        raise _CheckoutProtocolError("checkout_response_malformed")
-    return decoded
+                    pending.append((item, current_depth + 1))
+                    pending.append((key, current_depth + 1))
+                continue
+            if isinstance(value, list):
+                pending.extend((item, current_depth + 1) for item in value)
+                continue
+            raise ValueError
+        result = decoded
+    except BaseException as exc:
+        code = _checkout_error_code(exc, "checkout_response_malformed")
+        del exc
+        failure = _fresh_checkout_error(code)
+        result = None
+    finally:
+        raw = b""
+        decoded = None
+        pending.clear()
+    if failure is not None:
+        raise failure
+    return result
 
 
 def _reject_secret_headers(headers: Any) -> None:
@@ -3928,6 +4008,7 @@ class VibeComfyEngine:
         self._prepared_identity: _CheckoutIdentity | None = None
         self._warm_identity_record: _CheckoutIdentity | None = None
         self._latched_binding: _CheckoutRuntimeBinding | None = None
+        self._latched_identity: _CheckoutIdentity | None = None
         self._latched_invocation_identity: str | None = None
         self._lifecycle_generation = 0
         self._completion = threading.Event()
@@ -4114,6 +4195,7 @@ class VibeComfyEngine:
             self._fence_pending = True
             return
         self._latched_binding = None
+        self._latched_identity = None
         self._latched_invocation_identity = None
         self._lifecycle_generation += 1
 
@@ -4137,6 +4219,25 @@ class VibeComfyEngine:
         *,
         preflight: Any | None = None,
     ) -> dict[str, Any]:
+        # Validate the adapter owner before changing lifecycle state.  A
+        # failed attestation must not even begin containment.
+        if preflight is not None:
+            try:
+                preflight()
+            except BaseException as exc:
+                code = _checkout_error_code(exc, "checkout_transport_failed")
+                del exc
+                with self._lock:
+                    self._poison()
+                return {
+                    "ok": False,
+                    "status": "requires_fence",
+                    "contained": False,
+                    "cancelled": False,
+                    "released": False,
+                    "error_code": code,
+                    "results": {},
+                }
         with self._lock:
             if self._operation is not None:
                 raise RuntimeError(f"checkout_server {self._operation} is already in progress")
@@ -4158,24 +4259,11 @@ class VibeComfyEngine:
                 paths = (("/interrupt", {}, "interrupt"), *paths)
         errors: list[str] = []
         results: dict[str, Any] = {}
-        binding_unavailable = False
-
         def local_error(exc: BaseException) -> str:
-            code = getattr(exc, "code", None)
-            return code if isinstance(code, str) and code in _CHECKOUT_LOCAL_ERROR_CODES else "checkout_transport_failed"
+            return _checkout_error_code(exc, "checkout_transport_failed")
 
         try:
-            if preflight is not None:
-                try:
-                    preflight()
-                except BaseException as exc:
-                    code = local_error(exc)
-                    errors.append(code)
-                    binding_unavailable = code in {
-                        "checkout_runtime_binding_unproven",
-                        "checkout_runtime_binding_mismatch",
-                    }
-            for path, payload, key in () if binding_unavailable else paths:
+            for path, payload, key in paths:
                 try:
                     results[key] = self._post(path, payload)
                 except BaseException as exc:
@@ -4292,7 +4380,9 @@ class VibeComfyEngine:
         if warmth_identity != expected_warmth:
             raise _CheckoutProtocolError("checkout_warmth_identity_mismatch")
         with self._lock:
-            if self._latched_binding is not None and managed_binding != self._latched_binding:
+            if self._latched_binding is not None and (
+                not _binding_matches_identity(managed_binding, self._latched_identity)
+            ):
                 self._poison()
                 raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
             if self._operation is not None:
@@ -4330,6 +4420,7 @@ class VibeComfyEngine:
             self._prepared_declared_port = effective_port
             self._prepared_identity = identity
             self._latched_binding = managed_binding
+            self._latched_identity = identity
             self._latched_invocation_identity = managed_binding.invocation_identity
             self.last_lifecycle = "warm" if compatible else "cold"
             self.last_warm_reused = compatible
@@ -4394,6 +4485,7 @@ class VibeComfyEngine:
         )
         deadline_ns = time.monotonic_ns() + 10_000_000_000
         response = None
+        headers = None
         raw = None
         decoded = None
         failure: str | None = None
@@ -4404,7 +4496,8 @@ class VibeComfyEngine:
                 if status != 200:
                     failure = "checkout_control_rejected"
                 else:
-                    _reject_secret_headers(getattr(response, "headers", None))
+                    headers = getattr(response, "headers", None)
+                    _reject_secret_headers(headers)
                     raw = _read_framed_response(
                         response, limit=_MAX_CHECKOUT_RESPONSE_BYTES, timeout=10.0,
                         deadline_ns=deadline_ns,
@@ -4422,10 +4515,11 @@ class VibeComfyEngine:
             failure = "checkout_transport_failed"
         finally:
             decoded = None
+            headers = None
             raw = None
             response = None
         if failure is not None:
-            raise _CheckoutProtocolError(failure) from None
+            raise _fresh_checkout_error(failure)
         return {}
 
     def run(
@@ -4456,7 +4550,11 @@ class VibeComfyEngine:
             if self._prepared_runtime_instance_id != runtime_instance_id:
                 self._poison()
                 raise RuntimeError("checkout_server runtime instance changed")
-            if managed_binding is not self._latched_binding or self._latched_binding._provenance is not _CHECKOUT_BINDING_SOURCE:
+            if (
+                managed_binding is not self._latched_binding
+                or self._latched_binding._provenance is not _CHECKOUT_BINDING_SOURCE
+                or not _binding_matches_identity(managed_binding, self._latched_identity)
+            ):
                 self._poison()
                 raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
             run_generation = self._lifecycle_generation
@@ -4474,6 +4572,9 @@ class VibeComfyEngine:
             with self._lock:
                 # A containment transition may have superseded this run.
                 if self._lifecycle_generation == run_generation:
+                    if not _binding_matches_identity(self._latched_binding, self._latched_identity):
+                        self._poison()
+                        raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
                     self._warm = True
                     self._fingerprint = self._prepared_fingerprint
                     self._warmth_identity = self._prepared_warmth_identity
@@ -4623,7 +4724,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
         if _digest(_strict_json_value(environment_fingerprint)) != binding.profile_digest:
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
         try:
-            _checkout_identity_from_binding(
+            identity = _checkout_identity_from_binding(
                 binding,
                 origin=self._origin,
                 runtime_instance_id=runtime_instance_id,
@@ -4638,7 +4739,10 @@ class CheckoutServerAdapter(VibeComfyBackend):
             raise
         except (TypeError, ValueError):
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch") from None
-        if self._engine._latched_binding is not None and binding != self._engine._latched_binding:
+        if self._engine._latched_binding is not None and (
+            binding is not self._engine._latched_binding
+            or identity != self._engine._latched_identity
+        ):
             with self._engine._lock:
                 self._engine._poison()
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
@@ -4991,7 +5095,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
         )
 
     def _bound_preflight(self) -> None:
-        if self._managed_binding is None or self._engine._latched_binding is not None and self._managed_binding != self._engine._latched_binding:
+        if (
+            self._managed_binding is None
+            or self._engine._latched_binding is None
+            or self._managed_binding is not self._engine._latched_binding
+            or not _binding_matches_identity(
+                self._managed_binding, self._engine._latched_identity
+            )
+        ):
             with self._engine._lock:
                 self._engine._poison()
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
@@ -5009,7 +5120,12 @@ class CheckoutServerAdapter(VibeComfyBackend):
             declared_port=prepared_port,
         )
         self._probe_system_stats()
-        if self._managed_binding != self._engine._latched_binding:
+        if (
+            self._managed_binding is not self._engine._latched_binding
+            or not _binding_matches_identity(
+                self._managed_binding, self._engine._latched_identity
+            )
+        ):
             with self._engine._lock:
                 self._engine._poison()
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
@@ -5036,7 +5152,12 @@ class CheckoutServerAdapter(VibeComfyBackend):
             with self._engine._lock:
                 self._engine._poison()
             raise
-        if self._managed_binding != self._engine._latched_binding:
+        if (
+            self._managed_binding is not self._engine._latched_binding
+            or not _binding_matches_identity(
+                self._managed_binding, self._engine._latched_identity
+            )
+        ):
             with self._engine._lock:
                 self._engine._poison()
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
@@ -5058,7 +5179,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
 
     def _collect_outputs(self, result: Any, out_dir: Path) -> list[Path]:
         """Collect one complete output batch and commit it atomically."""
-        if self._managed_binding is None or self._engine._latched_binding is None or self._managed_binding != self._engine._latched_binding:
+        if (
+            self._managed_binding is None
+            or self._engine._latched_binding is None
+            or self._managed_binding is not self._engine._latched_binding
+            or not _binding_matches_identity(
+                self._managed_binding, self._engine._latched_identity
+            )
+        ):
             with self._engine._lock:
                 self._engine._poison()
             raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")
@@ -5246,7 +5374,12 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 declared_root=prepared_root,
                 declared_port=prepared_port,
             )
-            if self._managed_binding != self._engine._latched_binding:
+            if (
+                self._managed_binding is not self._engine._latched_binding
+                or not _binding_matches_identity(
+                    self._managed_binding, self._engine._latched_identity
+                )
+            ):
                 with self._engine._lock:
                     self._engine._poison()
                 raise _CheckoutProtocolError("checkout_runtime_binding_mismatch")

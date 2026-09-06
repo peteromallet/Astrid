@@ -7,6 +7,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -668,6 +669,145 @@ def test_correction_f01_omitted_warmth_identity_cannot_reuse_published_warmth(
         )
     assert engine.warm is True
     assert engine.last_warm_reused is False
+
+
+def test_correction_f01_invocation_identity_is_in_both_direct_digests_and_prepare_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding_one = backend_module._CheckoutRuntimeBinding._fixture(
+        origin="http://gpu.example.test",
+        runtime_instance_id=RUNTIME_A,
+        checkout_root="/fixture/checkout",
+        listener_port=80,
+        profile_digest=PROFILE_DIGEST,
+        profile=PROFILE,
+        invocation_identity="invocation-one",
+    )
+    binding_two = replace(binding_one, invocation_identity="invocation-two")
+
+    session_one = CheckoutServerAdapter.session_fingerprint(
+        model_fingerprint="z-image:image/z_image",
+        model_bytes_digest="sha256:" + "a" * 64,
+        environment_fingerprint=PROFILE,
+        server_url=binding_one.origin,
+        runtime_instance_id=RUNTIME_A,
+        declared_root=binding_one.checkout_root,
+        declared_port=80,
+        managed_binding=binding_one,
+    )
+    adapter_one = CheckoutServerAdapter(
+        binding_one.origin, environment_fingerprint=PROFILE, _managed_binding=binding_one
+    )
+    warmth_one = adapter_one.warmth_identity(
+        fingerprint=session_one,
+        model_bytes_digest="sha256:" + "a" * 64,
+        environment_fingerprint=PROFILE,
+        server_url=binding_one.origin,
+        runtime_instance_id=RUNTIME_A,
+        declared_root=binding_one.checkout_root,
+        declared_port=80,
+    )
+    session_two = CheckoutServerAdapter.session_fingerprint(
+        model_fingerprint="z-image:image/z_image",
+        model_bytes_digest="sha256:" + "a" * 64,
+        environment_fingerprint=PROFILE,
+        server_url=binding_two.origin,
+        runtime_instance_id=RUNTIME_A,
+        declared_root=binding_two.checkout_root,
+        declared_port=80,
+        managed_binding=binding_two,
+    )
+    adapter_two = CheckoutServerAdapter(
+        binding_two.origin, environment_fingerprint=PROFILE, _managed_binding=binding_two
+    )
+    warmth_two = adapter_two.warmth_identity(
+        fingerprint=session_two,
+        model_bytes_digest="sha256:" + "a" * 64,
+        environment_fingerprint=PROFILE,
+        server_url=binding_two.origin,
+        runtime_instance_id=RUNTIME_A,
+        declared_root=binding_two.checkout_root,
+        declared_port=80,
+    )
+    assert session_one != session_two
+    assert warmth_one != warmth_two
+
+    engine = backend_module.VibeComfyEngine(binding_one.origin)
+    engine.prepare_session(
+        session_one,
+        warmth_one,
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest="sha256:" + "a" * 64,
+        environment_fingerprint=PROFILE,
+        managed_binding=binding_one,
+        model_id="z-image",
+        template_id="image/z_image",
+        declared_root=binding_one.checkout_root,
+        declared_port=80,
+    )
+    with pytest.raises(ValueError, match="checkout_session_identity_mismatch"):
+        engine.prepare_session(
+            session_one,
+            warmth_one,
+            runtime_instance_id=RUNTIME_A,
+            model_bytes_digest="sha256:" + "a" * 64,
+            environment_fingerprint=PROFILE,
+            managed_binding=binding_two,
+            model_id="z-image",
+            template_id="image/z_image",
+            declared_root=binding_two.checkout_root,
+            declared_port=80,
+        )
+    assert engine.prepared_fingerprint == session_one
+
+
+@pytest.mark.parametrize("failure", ["scan", "parser"])
+def test_correction_f02_decoder_failures_are_fresh_fixed_errors(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    canary = "SECRET_CANARY_SHOULD_NOT_ESCAPE"
+    if failure == "scan":
+        monkeypatch.setattr(
+            backend_module,
+            "_scan_json_depth",
+            Mock(side_effect=MemoryError(canary)),
+        )
+    else:
+        monkeypatch.setattr(
+            backend_module.json,
+            "loads",
+            Mock(side_effect=RecursionError(canary)),
+        )
+    with pytest.raises(ValueError) as caught:
+        backend_module._checkout_json(b"{}")
+    error = caught.value
+    assert getattr(error, "code", None) == "checkout_response_malformed"
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    assert canary not in repr(error.args)
+    assert canary not in traceback.format_exc()
+
+
+def test_correction_f03_hostname_resolution_fails_closed_before_unbounded_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolver_called = False
+
+    def slow_getaddrinfo(*_args: object, **_kwargs: object) -> object:
+        nonlocal resolver_called
+        resolver_called = True
+        time.sleep(0.2)
+        return []
+
+    monkeypatch.setattr(socket, "getaddrinfo", slow_getaddrinfo)
+    request = backend_module.urllib_request.Request("http://slow.example.test/view")
+    deadline = time.monotonic_ns() + 20_000_000
+    started = time.monotonic()
+    with pytest.raises(ValueError) as caught:
+        backend_module._open_checkout_http_bounded(request, deadline)
+    assert getattr(caught.value, "code", None) == "checkout_deadline_transport_unavailable"
+    assert resolver_called is False
+    assert time.monotonic() - started < 0.1
 
 
 @pytest.mark.parametrize(

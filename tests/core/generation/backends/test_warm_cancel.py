@@ -291,6 +291,30 @@ def test_warm_session_digest_change_cannot_reuse_warmth(monkeypatch) -> None:
     assert adapter._engine.poisoned or adapter._engine.fence_pending
 
 
+@pytest.mark.parametrize("operation", ["cancel", "release"])
+def test_adapter_control_requires_exact_latched_binding_object_before_requests(
+    monkeypatch, operation: str
+) -> None:
+    calls = _native_http(monkeypatch)
+    adapter = _adapter()
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter.warm_session(
+        "model-a",
+        _warmth(adapter, "model-a"),
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest=MODEL_DIGEST,
+    )
+    binding = adapter._managed_binding
+    assert binding is not None
+    adapter._managed_binding = replace(binding)
+
+    result = getattr(adapter, operation)()
+
+    assert result["ok"] is False
+    assert result["error_code"] == "checkout_runtime_binding_mismatch"
+    assert calls == []
+
+
 class _Response(io.BytesIO):
     status = 200
     _deadline_capable = True

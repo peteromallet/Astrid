@@ -68,7 +68,10 @@ _REQUEST_KEYS = frozenset(
 
 _AUTHORIZED_OBJECT_ID_SCHEMES = frozenset({"cas", "sha256"})
 _URI_SCHEME_RE = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*):")
-_ENDPOINT_RE = re.compile(r"^(?:localhost|127(?:\.\d{1,3}){3}):\d+$", re.IGNORECASE)
+_ENDPOINT_RE = re.compile(
+    r"^(?:(?:localhost|(?:\d{1,3}\.){3}\d{1,3})|\[[0-9A-Fa-f:.]+\]|[0-9A-Fa-f:]+):\d+$",
+    re.IGNORECASE,
+)
 _RELATIVE_FILENAME_RE = re.compile(r"^[^./\\]+\.[^./\\]+$")
 
 

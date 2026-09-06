@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import sys
 import threading
 import time
+import types
 from dataclasses import replace
 from pathlib import Path
 
@@ -569,6 +571,125 @@ def test_fixture_identity_digest_and_warmth_are_recomputed_from_actual_bytes(
     assert session.prepare(settings, identity=identity)["status"] == "warm"
     assert session.submit_task(settings).result().success is True
     assert session.submit_task(settings).result().success is True
+
+
+def test_native_factory_restoration_failure_is_fixed_closed_and_fenced(
+    tmp_path: Path, settings: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = _identity(tmp_path)
+    root = Path(identity.root)
+    original_cwd = Path.cwd()
+    canary = "native cwd text secret-token https://user:pass@example.invalid/private"
+    chdir_calls: list[Path] = []
+    close_calls: list[str] = []
+    restore_fail = True
+    original_sys_path = list(sys.path)
+
+    shared = types.ModuleType("shared")
+    shared.__path__ = [str(root / "shared")]  # type: ignore[attr-defined]
+    api = types.ModuleType("shared.api")
+    api.__file__ = str(root / "shared" / "api.py")
+    monkeypatch.setitem(sys.modules, "shared", shared)
+    monkeypatch.setitem(sys.modules, "shared.api", api)
+
+    class InstrumentedEngine:
+        def close(self) -> None:
+            close_calls.append("close")
+
+    engine = InstrumentedEngine()
+
+    def fake_chdir(path: str | os.PathLike[str]) -> None:
+        target = Path(path)
+        chdir_calls.append(target)
+        if target == original_cwd and restore_fail:
+            raise OSError(canary)
+
+    # The factory must restore a valid cwd before returning a usable engine.
+    api.init = lambda **_kwargs: engine  # type: ignore[attr-defined]
+    monkeypatch.setattr(driver_module.os, "chdir", fake_chdir)
+    with pytest.raises(WanLifecycleError) as restored:
+        driver_module._native_wan_session_factory(identity, tmp_path / "spool")
+    assert restored.value.code == "cleanup_failed"
+    assert restored.value.args == ("Wan cleanup failed.",)
+    assert restored.value.__context__ is None
+    assert restored.value.__cause__ is None
+    assert canary not in repr(restored.value)
+    assert str(root) not in repr(restored.value)
+    assert chdir_calls == [root, original_cwd]
+    assert close_calls == ["close"]
+    assert sys.path == original_sys_path
+
+    # A primary init failure remains primary when cwd restoration also fails;
+    # the typed fence records that cleanup ownership is still uncertain.
+    chdir_calls.clear()
+    close_calls.clear()
+
+    def init_failure(**_kwargs):
+        raise RuntimeError(canary)
+
+    api.init = init_failure  # type: ignore[attr-defined]
+    with pytest.raises(WanLifecycleError) as init_error:
+        driver_module._native_wan_session_factory(identity, tmp_path / "spool")
+    assert init_error.value.code == "engine_init_failed"
+    assert init_error.value.fence_required is True
+    assert init_error.value.__context__ is None
+    assert init_error.value.__cause__ is None
+    assert canary not in repr(init_error.value)
+    assert chdir_calls == [root, original_cwd]
+    assert close_calls == []
+
+    # A close failure after failed restoration stays a fixed cleanup failure,
+    # with one and only one attempted close.
+    chdir_calls.clear()
+    close_calls.clear()
+
+    class CloseFailureEngine:
+        def close(self) -> None:
+            close_calls.append("close")
+            raise RuntimeError(canary)
+
+    api.init = lambda **_kwargs: CloseFailureEngine()  # type: ignore[attr-defined]
+    with pytest.raises(WanLifecycleError) as close_error:
+        driver_module._native_wan_session_factory(identity, tmp_path / "spool")
+    assert close_error.value.code == "cleanup_failed"
+    assert close_error.value.fence_required is True
+    assert close_error.value.__context__ is None
+    assert close_error.value.__cause__ is None
+    assert canary not in repr(close_error.value)
+    assert chdir_calls == [root, original_cwd]
+    assert close_calls == ["close"]
+
+    # A valid restoration still returns the created engine, and leaves close
+    # ownership to the caller exactly as before this correction.
+    restore_fail = False
+    chdir_calls.clear()
+    close_calls.clear()
+    api.init = lambda **_kwargs: engine  # type: ignore[attr-defined]
+    assert driver_module._native_wan_session_factory(identity, tmp_path / "spool") is engine
+    assert chdir_calls == [root, original_cwd]
+    assert close_calls == []
+
+    # The direct session boundary retains the poison/fence and cannot warm,
+    # submit, publish, settle, or falsely reset an uncertain native owner.
+    chdir_calls.clear()
+    close_calls.clear()
+    restore_fail = True
+    api.init = lambda **_kwargs: CloseFailureEngine()  # type: ignore[attr-defined]
+    session = PersistentWanSession(
+        output_root=tmp_path / "session-out",
+        engine_factory=driver_module._native_wan_session_factory,
+    )
+    with pytest.raises(WanLifecycleError) as session_error:
+        session.prepare(settings, identity=identity)
+    assert session_error.value.code == "cleanup_failed"
+    assert session.poisoned is True
+    assert session.fence_pending is True
+    assert session.warm is False
+    assert session.cold_reset()["ok"] is False
+    with pytest.raises(WanLifecycleError) as fenced:
+        session.prepare(settings, identity=identity)
+    assert fenced.value.code == "session_poisoned"
+    assert canary not in repr(session.snapshot())
 
 
 def test_native_exception_and_result_text_are_fixed_and_context_free(

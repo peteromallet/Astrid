@@ -494,10 +494,17 @@ class FakePersistentRunner:
 class WanLifecycleError(RuntimeError):
     """Typed failure for the persistent Wan lifecycle boundary."""
 
-    def __init__(self, code: str, _message: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        _message: str | None = None,
+        *,
+        fence_required: bool = False,
+    ) -> None:
         selected = code if isinstance(code, str) and code in _ERROR_MESSAGES else "unknown_failure"
         super().__init__(_safe_error(selected))
         self.code = selected
+        self.fence_required = bool(fence_required)
 
 
 @dataclass(frozen=True, slots=True)
@@ -751,38 +758,64 @@ def _native_wan_session_factory(
 
     original_path = list(sys.path)
     original_cwd = Path.cwd()
-    failure_code: str | None = None
+    engine: Any | None = None
+    engine_closed = False
+    primary_code: str | None = None
+    restoration_ok = True
     try:
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
         ok, _ = _safe_call(lambda: os.chdir(root))
         if not ok:
-            raise WanLifecycleError("root_unavailable")
-        import importlib
+            primary_code = "root_unavailable"
+        else:
+            import importlib
 
-        ok, api = _safe_call(lambda: importlib.import_module("shared.api"))
-        if not ok:
-            raise WanLifecycleError("engine_init_failed")
-        ok, api_file = _safe_attr(api, "__file__")
-        api_path = _path_from_evidence(api_file) if ok else None
-        if api_path != (root / "shared" / "api.py").resolve(strict=False):
-            raise WanLifecycleError("engine_init_failed")
-        ok, init_fn = _safe_attr(api, "init")
-        if not ok or not callable(init_fn):
-            raise WanLifecycleError("engine_unavailable")
-        ok, engine = _safe_call(lambda: init_fn(root=root, output_dir=output_dir, console_output=False))
-        if not ok:
-            raise WanLifecycleError("engine_init_failed")
-        return engine
-    except WanLifecycleError:
-        raise
+            ok, api = _safe_call(lambda: importlib.import_module("shared.api"))
+            if not ok:
+                primary_code = "engine_init_failed"
+            else:
+                ok, api_file = _safe_attr(api, "__file__")
+                api_path = _path_from_evidence(api_file) if ok else None
+                if api_path != (root / "shared" / "api.py").resolve(strict=False):
+                    primary_code = "engine_init_failed"
+                else:
+                    ok, init_fn = _safe_attr(api, "init")
+                    if not ok or not callable(init_fn):
+                        primary_code = "engine_unavailable"
+                    else:
+                        ok, engine = _safe_call(
+                            lambda: init_fn(
+                                root=root,
+                                output_dir=output_dir,
+                                console_output=False,
+                            )
+                        )
+                        if not ok:
+                            primary_code = "engine_init_failed"
     except Exception:
-        failure_code = "engine_init_failed"
+        primary_code = "engine_init_failed"
     finally:
         sys.path[:] = original_path
-        _safe_call(lambda: os.chdir(original_cwd))
-    if failure_code is not None:
-        raise WanLifecycleError(failure_code)
+        restoration_ok = _safe_call(lambda: os.chdir(original_cwd))[0]
+        if not restoration_ok and engine is not None and not engine_closed:
+            ok, close = _safe_attr(engine, "close")
+            if ok and callable(close):
+                _safe_call(lambda: close())
+            engine_closed = True
+
+    if not restoration_ok:
+        if primary_code is None:
+            primary_code = "cleanup_failed"
+        raise WanLifecycleError(
+            primary_code,
+            fence_required=True,
+        )
+    if primary_code is not None:
+        raise WanLifecycleError(primary_code)
+    if engine is None:
+        raise WanLifecycleError("engine_unavailable")
+    return engine
 
 
 class PersistentWanSession:
@@ -821,6 +854,7 @@ class PersistentWanSession:
         self._active: dict[str, Any] | None = None
         self._poisoned = False
         self._fence_pending = False
+        self._cleanup_fence = False
         self._last_error: str | None = None
         self.last_lifecycle = "cold"
         self.last_warm_reused = False
@@ -985,12 +1019,22 @@ class PersistentWanSession:
         engine_closed = False
         cancellation_after_factory = False
         failure_code: str | None = None
+        factory_fence = False
         try:
-            ok, engine = _safe_call(lambda: self._engine_factory(expected, spool))
-            if not ok:
-                with self._lock:
-                    self._poison("engine_init_failed")
-                raise WanLifecycleError("engine_init_failed")
+            engine = self._engine_factory(expected, spool)
+        except WanLifecycleError as exc:
+            failure_code = exc.code
+            factory_fence = bool(getattr(exc, "fence_required", False))
+        except Exception:
+            failure_code = "engine_init_failed"
+        if failure_code is not None:
+            with self._lock:
+                self._poison(failure_code)
+                if factory_fence:
+                    self._cleanup_fence = True
+                self._preparing = False
+            raise WanLifecycleError(failure_code)
+        try:
             if engine is None:
                 raise WanLifecycleError("engine_unavailable")
             if token is not None:
@@ -1415,6 +1459,13 @@ class PersistentWanSession:
         if not released.get("ok"):
             return {**released, "status": "cold_reset_failed"}
         with self._lock:
+            if self._cleanup_fence:
+                return {
+                    "ok": False,
+                    "status": "cold_reset_failed",
+                    "error": _safe_error("cleanup_failed"),
+                    "fence_pending": True,
+                }
             self._poisoned = False
             self._fence_pending = False
             self._last_error = None
@@ -1695,9 +1746,15 @@ def one_shot_run(
     final_result: DriverResult | None = None
     cleanup_failed = False
     try:
-        ok, session = _safe_call(lambda: _native_wan_session_factory(identity, spool))
-        if not ok or session is None:
-            primary_code = "engine_init_failed"
+        factory_error: str | None = None
+        try:
+            session = _native_wan_session_factory(identity, spool)
+        except WanLifecycleError as exc:
+            factory_error = exc.code
+        except Exception:
+            factory_error = "engine_init_failed"
+        if factory_error is not None or session is None:
+            primary_code = factory_error or "engine_init_failed"
             final_result = DriverResult(False, [], [_driver_error(primary_code)], 0, 0, 1, disclosed, spool)
         else:
             ok, submit = _safe_attr(session, "submit_task")
@@ -1769,7 +1826,7 @@ def one_shot_run(
             cleanup_failed = True
     if final_result is None:
         final_result = DriverResult(False, [], [_driver_error("unknown_failure")], 0, 0, 1, disclosed, spool)
-    if cleanup_failed:
+    if cleanup_failed and final_result.success:
         return DriverResult(
             success=False,
             generated_files=[],

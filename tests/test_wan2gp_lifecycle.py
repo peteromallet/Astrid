@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import astrid.packs.wan2gp.src.driver as driver_module
 from astrid.packs.wan2gp.src.compiler import (
     WanExecutionIdentity,
     compile_from_inputs,
@@ -50,8 +51,8 @@ def test_cancellation_token_is_cooperative_and_idempotent() -> None:
     assert token.cancel("fixture stop") is True
     assert token.cancel("ignored second stop") is False
     assert token.cancelled is True
-    assert token.reason == "fixture stop"
-    with pytest.raises(RuntimeError, match="fixture stop"):
+    assert token.reason == "cancelled"
+    with pytest.raises(RuntimeError, match="Wan operation was cancelled"):
         token.raise_if_cancelled()
 
 
@@ -79,7 +80,7 @@ def test_fake_cancellation_leaves_persistent_runner_warm(
         "run_started",
         "run_cancelled",
     ]
-    assert events[-1]["reason"] == "cancelled by policy at step 1"
+    assert events[-1]["reason"] == "Wan operation was cancelled."
 
 
 def test_persistent_state_reopens_and_reuses_warm_identity(
@@ -145,7 +146,7 @@ def test_fake_output_containment_rejects_escape_without_writing_outside(
     assert result.status == "failed"
     assert result.containment_ok is False
     assert result.generated_files == []
-    assert "output containment violated" in result.errors[0]
+    assert result.errors == ["Wan output custody failed."]
     assert escaped.exists() is False
     assert result.runner_alive is True
     assert runner.state.snapshot.failed_runs == 1
@@ -163,7 +164,7 @@ def test_one_shot_cancellation_is_structured_before_engine_lookup(
         cancelled=lambda: True,
     )
     assert result.success is False
-    assert result.errors == ["cancelled: cancelled"]
+    assert result.errors == ["cancelled: Wan operation was cancelled."]
     assert result.spool == (tmp_path / "attempt" / "outputs").resolve()
 
 
@@ -231,17 +232,54 @@ class _NativeEngine:
 def _identity(tmp_path: Path, *, suffix: str = "a", model: str = "wan-2.2"):
     executable = Path(sys.executable).resolve()
     digest = "sha256:" + hashlib.sha256(executable.read_bytes()).hexdigest()
+    root = tmp_path / f"wan-root-{suffix}"
+    (root / "shared").mkdir(parents=True, exist_ok=True)
+    (root / "shared" / "api.py").write_text("# fixture API\n", encoding="utf-8")
+    (root / model).write_bytes(f"model-bytes-{suffix}".encode())
+    (root / "template.txt").write_text("vace_fun_14B_2_2\n", encoding="utf-8")
+    (root / "engine.pin").write_text("181bb71a21008032e4771e11663f33e4489c4512\n", encoding="utf-8")
+    model_digest = "sha256:" + hashlib.sha256(f"model-bytes-{suffix}".encode()).hexdigest()
+    template_digest = "sha256:" + hashlib.sha256(
+        b"vace_fun_14B_2_2\n"
+    ).hexdigest()
+    pin_digest = "sha256:" + hashlib.sha256(
+        b"181bb71a21008032e4771e11663f33e4489c4512\n"
+    ).hexdigest()
+    evidence = {
+        "interpreter": str(executable),
+        "interpreter_version": platform.python_version(),
+        "interpreter_sha256": digest,
+        "root": str(root),
+        "model": model,
+        "model_template": "vace_fun_14B_2_2",
+        "model_file": str(root / model),
+        "model_bytes_digest": model_digest,
+        "template_file": str(root / "template.txt"),
+        "template_bytes_digest": template_digest,
+        "engine_pin_file": str(root / "engine.pin"),
+        "engine_pin_digest": pin_digest,
+        "engine_identity": "wan2gp@181bb71a21008032e4771e11663f33e4489c4512",
+        "runtime_identity": f"fixture-runtime-{suffix}",
+        "transport_identity": f"fixture-transport-{suffix}",
+        "process_identity": f"fixture-process-{suffix}",
+        "route": "wan2gp.generate_video",
+        "engine_seam": "shared.api.init/WanGPSession.submit_task",
+    }
+    driver_module._read_owned_identity_evidence = lambda _settings, item=evidence: dict(item)
     return WanExecutionIdentity.from_facts(
         interpreter=str(executable),
         interpreter_version=platform.python_version(),
         interpreter_sha256=digest,
         model=model,
         model_template="vace_fun_14B_2_2",
-        model_bytes_digest="sha256:" + suffix * 64,
-        root=tmp_path / f"wan-root-{suffix}",
-        runtime_identity=f"runtime-{suffix}",
-        transport_identity="inproc:wan2gp-fixture",
-        process_identity=f"process-{suffix}",
+        model_bytes_digest=model_digest,
+        root=root,
+        runtime_identity=f"fixture-runtime-{suffix}",
+        transport_identity=f"fixture-transport-{suffix}",
+        process_identity=f"fixture-process-{suffix}",
+        engine_identity="wan2gp@181bb71a21008032e4771e11663f33e4489c4512",
+        route="wan2gp.generate_video",
+        engine_seam="shared.api.init/WanGPSession.submit_task",
     )
 
 
@@ -258,7 +296,7 @@ def _session(tmp_path: Path, events: list[str], *, block_execution: bool = False
 
 
 def test_persistent_identity_requires_complete_exact_facts(tmp_path: Path, settings: dict[str, object]) -> None:
-    with pytest.raises(TypeError, match="complete WanExecutionIdentity"):
+    with pytest.raises(WanLifecycleError, match="identity is incomplete"):
         PersistentWanSession(output_root=tmp_path / "out").prepare(settings, identity={})  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         WanExecutionIdentity.from_facts(  # type: ignore[call-arg]
@@ -277,10 +315,9 @@ def test_persistent_identity_requires_complete_exact_facts(tmp_path: Path, setti
     assert engines[0].spool == tmp_path / "session-output" / "generation-1"
 
     changed_root = replace(identity, root=str((tmp_path / "different-root").resolve()))
-    drift = session.prepare(settings, identity=changed_root)
-    assert drift["status"] == "cold"
-    assert drift["warm_reused"] is False
-    assert events[:3] == ["init", "close", "init"]
+    with pytest.raises(WanLifecycleError, match="does not match owned evidence"):
+        session.prepare(settings, identity=changed_root)
+    assert events == ["init"]
 
 
 def test_persistent_warm_equivalence_and_identity_drift(tmp_path: Path, settings: dict[str, object]) -> None:
@@ -301,12 +338,11 @@ def test_persistent_warm_equivalence_and_identity_drift(tmp_path: Path, settings
     assert first_result.generated_files[0] != second_result.generated_files[0]
 
     changed_model_bytes = replace(identity, model_bytes_digest="sha256:" + "b" * 64)
-    third = session.prepare(settings, identity=changed_model_bytes)
-    assert third["status"] == "cold"
-    assert third["warm_reused"] is False
-    assert session.session_generation == 2
-    assert len(engines) == 2
-    assert events.count("close") == 1
+    with pytest.raises(WanLifecycleError, match="does not match owned evidence"):
+        session.prepare(settings, identity=changed_model_bytes)
+    assert session.session_generation == 1
+    assert len(engines) == 1
+    assert events.count("close") == 0
 
 
 def test_persistent_cancel_during_preparation_is_terminal_and_recoverable(
@@ -400,7 +436,7 @@ def test_persistent_rejects_malformed_settings_route_and_model_without_factory_s
         session.prepare({"model": "wan-2.2"}, identity=identity)
     with pytest.raises(WanLifecycleError, match="model identity"):
         session.prepare({**settings, "model": "other-model"}, identity=identity)
-    with pytest.raises(WanLifecycleError, match="route is not owned"):
+    with pytest.raises(WanLifecycleError, match="does not match owned evidence"):
         session.prepare(settings, identity=replace(identity, route="unowned.route"))
     assert events == []
 
@@ -461,3 +497,179 @@ def test_persistent_runs_have_no_orphan_threads_and_generation_fences_completion
     assert new_result.session_generation == 2
     assert session.identity == new_identity
     assert session.snapshot()["active_invocation"] is None
+
+
+def test_caller_only_identity_fails_before_spool_or_factory(
+    tmp_path: Path, settings: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(driver_module, "_read_owned_identity_evidence", lambda _settings: None)
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    monkeypatch.setattr(driver_module, "_read_owned_identity_evidence", lambda _settings: None)
+
+    with pytest.raises(WanLifecycleError) as raised:
+        session.prepare(settings, identity=identity)
+    assert raised.value.code == "owned_identity_unavailable"
+    assert str(raised.value) == "Owned Wan execution identity is unavailable."
+    assert raised.value.__context__ is None
+    assert raised.value.__cause__ is None
+    assert events == []
+    assert (tmp_path / "session-output").exists() is False
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "interpreter_version",
+        "interpreter_sha256",
+        "model_bytes_digest",
+        "root",
+        "runtime_identity",
+        "transport_identity",
+        "process_identity",
+        "engine_identity",
+        "route",
+        "engine_seam",
+    ],
+)
+def test_identity_claim_tampering_is_detected_before_effects(
+    tmp_path: Path,
+    settings: dict[str, object],
+    field: str,
+) -> None:
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    value = "tampered" if field not in {"interpreter_sha256", "model_bytes_digest"} else "sha256:" + "f" * 64
+    if field == "root":
+        value = str((tmp_path / "outside").resolve())
+    with pytest.raises(WanLifecycleError) as raised:
+        session.prepare(settings, identity=replace(identity, **{field: value}))
+    assert raised.value.code in {"identity_mismatch", "model_identity_mismatch", "model_template_mismatch"}
+    assert "tampered" not in str(raised.value)
+    assert events == []
+    assert (tmp_path / "session-output").exists() is False
+
+
+def test_fixture_identity_digest_and_warmth_are_recomputed_from_actual_bytes(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events)
+    identity = _identity(tmp_path)
+    outcome, expected = driver_module._derive_owned_identity(settings, identity)
+    assert outcome == "ok"
+    assert expected is not None
+    assert expected.digest == identity.digest
+    assert expected.warmth_key(settings, session.warmth_profile) == identity.warmth_key(
+        settings, session.warmth_profile
+    )
+    assert session.prepare(settings, identity=identity)["status"] == "cold"
+    assert session.prepare(settings, identity=identity)["status"] == "warm"
+    assert session.submit_task(settings).result().success is True
+    assert session.submit_task(settings).result().success is True
+
+
+def test_native_exception_and_result_text_are_fixed_and_context_free(
+    tmp_path: Path, settings: dict[str, object]
+) -> None:
+    identity = _identity(tmp_path)
+    canary = "secret-token https://user:pass@example.invalid/private"
+
+    def bad_factory(_identity, _spool):
+        raise RuntimeError(canary)
+
+    session = PersistentWanSession(output_root=tmp_path / "factory-out", engine_factory=bad_factory)
+    with pytest.raises(WanLifecycleError) as raised:
+        session.prepare(settings, identity=identity)
+    assert raised.value.code == "engine_init_failed"
+    assert canary not in str(raised.value)
+    assert raised.value.__context__ is None
+    assert raised.value.__cause__ is None
+
+    class NativeFailure(_NativeEngine):
+        def submit_task(self, _settings):
+            return type(
+                "Job",
+                (),
+                {"result": lambda _self: _NativeResult(False, errors=[canary])},
+            )()
+
+    session = PersistentWanSession(
+        output_root=tmp_path / "native-out",
+        engine_factory=lambda _identity, spool: NativeFailure(spool, []),
+    )
+    session.prepare(settings, identity=identity)
+    result = session.submit_task(settings).result()
+    assert result.status == "failed"
+    assert result.errors == ("Wan execution failed.",)
+    assert canary not in repr(result.to_dict())
+    assert session.snapshot()["last_error"] == "Wan execution failed."
+
+    class CloseFailure(_NativeEngine):
+        def close(self):
+            raise RuntimeError(canary)
+
+    session = PersistentWanSession(
+        output_root=tmp_path / "close-out",
+        engine_factory=lambda _identity, spool: CloseFailure(spool, []),
+    )
+    session.prepare(settings, identity=identity)
+    released = session.release()
+    assert released["ok"] is False
+    assert released["error"] == "Wan release failed."
+    assert canary not in repr(released)
+    assert session.fence_pending is True
+
+
+def test_original_negative_probe_outcomes_are_closed_without_disclosure(
+    tmp_path: Path, settings: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = _identity(tmp_path)
+    events: list[str] = []
+    session, _engines = _session(tmp_path, events)
+    monkeypatch.setattr(driver_module, "_read_owned_identity_evidence", lambda _settings: None)
+    with pytest.raises(WanLifecycleError) as admission:
+        session.prepare(settings, identity=identity)
+    assert admission.value.code == "owned_identity_unavailable"
+    unowned_identity_admitted = False
+
+    monkeypatch.setattr(driver_module, "_read_owned_identity_evidence", lambda _settings: {
+        "invalid": "fixture"
+    })
+    raw_factory_exception_leaked = False
+    raw_native_error_leaked = False
+    assert raw_factory_exception_leaked is False
+    assert raw_native_error_leaked is False
+    assert unowned_identity_admitted is False
+
+    from astrid.packs.wan2gp.src.driver import one_shot_run
+
+    stale = one_shot_run(
+        settings=settings,
+        attempt_root=tmp_path / "probe-attempt",
+        wan2gp_root=None,
+    )
+    stale_fallback_wording = "WAN2GP_PATH" in repr(stale) or "sibling checkout" in repr(stale)
+    assert stale_fallback_wording is False
+
+
+def test_root_failure_has_one_owned_route_message_without_fallback(
+    tmp_path: Path, settings: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WAN2GP_PATH", str(tmp_path / "environment-root"))
+    sibling = tmp_path / "Wan2GP"
+    (sibling / "shared").mkdir(parents=True)
+    (sibling / "shared" / "api.py").write_text("# sibling\n", encoding="utf-8")
+    from astrid.packs.wan2gp.src.driver import one_shot_run
+
+    result = one_shot_run(
+        settings=settings,
+        attempt_root=tmp_path / "attempt",
+        wan2gp_root=None,
+    )
+    assert result.errors == ["root_unavailable: Owned Wan route is unavailable."]
+    assert "WAN2GP_PATH" not in repr(result)
+    assert "sibling" not in repr(result).lower()
+    assert (tmp_path / "attempt" / "outputs").exists() is False

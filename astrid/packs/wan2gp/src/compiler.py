@@ -231,9 +231,9 @@ class WanExecutionIdentity:
     runtime_identity: str
     transport_identity: str
     process_identity: str
-    engine_identity: str = DEFAULT_ENGINE_IDENTITY
-    route: str = "wan2gp.generate_video"
-    engine_seam: str = "shared.api.init/WanGPSession.submit_task"
+    engine_identity: str
+    route: str
+    engine_seam: str
 
     def __post_init__(self) -> None:
         values = {
@@ -275,9 +275,9 @@ class WanExecutionIdentity:
         runtime_identity: str,
         transport_identity: str,
         process_identity: str,
-        engine_identity: str = DEFAULT_ENGINE_IDENTITY,
-        route: str = "wan2gp.generate_video",
-        engine_seam: str = "shared.api.init/WanGPSession.submit_task",
+        engine_identity: str,
+        route: str,
+        engine_seam: str,
     ) -> "WanExecutionIdentity":
         return cls(
             interpreter=_canonical_root(interpreter, "interpreter"),

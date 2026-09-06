@@ -52,6 +52,8 @@ def test_fixture_enumerates_exact_frozen_routes_without_duplicates() -> None:
 def test_every_frozen_row_selects_allowlisted_template_and_typed_bindings() -> None:
     for row in _rows():
         compiled = compile_dimensional_request(_request(row))
+        assert compiled.template_id == row["expected_template_id"]
+        assert compiled.template_id in ALLOWLISTED_TEMPLATE_IDS
         expected_roles = cast(list[str], row["expected_input_roles"])
         input_ids = cast(list[str], row["input_object_ids"])
         assert tuple(
@@ -106,6 +108,44 @@ def test_invalid_fields_and_inputs_fail_closed(bad_patch: dict[str, object], mes
     error_type = UnsupportedDimensionalRoute if message == "unsupported dimensional route" else DimensionalVaceError
     with pytest.raises(error_type, match=message):
         compile_dimensional_request(request)
+
+
+@pytest.mark.parametrize(
+    "object_id",
+    [
+        "clip.mp4",
+        "./clip.mp4",
+        "../clip.mp4",
+        "C:clip.mp4",
+        "/tmp/clip.mp4",
+        "~/clip.mp4",
+        "file://clip.mp4",
+        "http://example.test/clip.mp4",
+        "https://example.test/clip.mp4",
+        "127.0.0.1:8188",
+        "localhost:8188",
+    ],
+)
+def test_object_ids_reject_local_paths_urls_and_endpoints(object_id: str) -> None:
+    request = _request(_rows()[0]) | {"input_object_ids": [object_id, "cas-image-last"]}
+    with pytest.raises(DimensionalVaceError, match="Runtime/CAS identity"):
+        compile_dimensional_request(request)
+
+
+@pytest.mark.parametrize(
+    "object_id",
+    [
+        "cas-image-first",
+        "a" * 64,
+        "sha256:" + "b" * 64,
+    ],
+)
+def test_object_ids_preserve_authorized_runtime_cas_identities(object_id: str) -> None:
+    request = _request(_rows()[0]) | {"input_object_ids": [object_id, "cas-image-last"]}
+    compiled = compile_dimensional_request(request)
+    assert compiled.input_object_ids[0] == object_id
+    assert compiled.bindings["first_image"] == object_id
+    assert object_id in json.dumps(compiled.as_dict())
 
 
 def test_missing_required_fields_fail_before_template_selection() -> None:

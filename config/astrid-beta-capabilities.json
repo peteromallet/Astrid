@@ -19,8 +19,8 @@
   },
   {
    "id": "comfy_wrap.run",
-   "disposition": "optional",
-   "evidence_reason": "Optional local-generation wrapper; retained with truthful VibeComfy preflight.",
+   "disposition": "unsupported",
+   "evidence_reason": "Development-only generic escape hatch; arbitrary workflow/model/node execution is not a supported production Worker capability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -708,8 +708,8 @@
   },
   {
    "id": "vibecomfy.run",
-   "disposition": "required",
-   "evidence_reason": "Required supported local-generation profile; VibeComfy readiness is explicit.",
+   "disposition": "unsupported",
+   "evidence_reason": "Development-only generic escape hatch; arbitrary workflow/model/node execution is not a supported production Worker capability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -722,8 +722,8 @@
   },
   {
    "id": "vibecomfy.validate",
-   "disposition": "required",
-   "evidence_reason": "Required local-generation validation path; VibeComfy readiness is explicit.",
+   "disposition": "unsupported",
+   "evidence_reason": "Development-only non-Worker validation utility; it is retained for workflow checks and is not a supported production Worker capability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -775,8 +775,8 @@
   },
   {
    "id": "vibecomfy.inspect",
-   "disposition": "required",
-   "evidence_reason": "Required supported local-generation profile; read-only IR projection over admitted workflows.",
+   "disposition": "unsupported",
+   "evidence_reason": "Development-only non-Worker inspection utility; it is retained for IR projection and is not a supported production Worker capability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -789,8 +789,8 @@
   },
   {
    "id": "vibecomfy.edit",
-   "disposition": "required",
-   "evidence_reason": "Required supported local-generation profile; typed edits over admitted workflows.",
+   "disposition": "unsupported",
+   "evidence_reason": "Development-only non-Worker edit utility; it is retained for typed workflow edits and is not a supported production Worker capability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -803,8 +803,8 @@
   },
   {
    "id": "wan2gp.generate_video",
-   "disposition": "optional",
-   "evidence_reason": "Optional native Wan2GP worker capability; the pinned engine is disclosed by the executor and runs only on a configured worker.",
+   "disposition": "required",
+   "evidence_reason": "Retained typed Wan2GP production Worker capability; the pinned engine is disclosed by the executor and runs only on a configured Worker.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -815,8 +815,8 @@
   },
   {
    "id": "wan2gp.validate_settings",
-   "disposition": "optional",
-   "evidence_reason": "Optional native Wan2GP settings validation; compilation is available without engine execution.",
+   "disposition": "unsupported",
+   "evidence_reason": "Retained validation-only utility; compile/validate without engine execution and never advertise as a Worker capability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"

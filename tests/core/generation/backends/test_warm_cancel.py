@@ -325,6 +325,11 @@ class _Response(io.BytesIO):
     def __exit__(self, *args: object) -> None:
         self.close()
 
+    def validate_terminal(self) -> None:
+        extra = self.read1(1)
+        if extra:
+            raise backend_module._fresh_checkout_error("checkout_response_malformed")
+
 
 def _native_http(monkeypatch, *, fail_paths: set[str] | None = None):
     calls: list[tuple[str, str, dict[str, object]]] = []
@@ -346,6 +351,38 @@ def _native_http(monkeypatch, *, fail_paths: set[str] | None = None):
         open_remote,
     )
     return calls
+
+
+def test_terminal_framing_failure_keeps_cancel_fenced_and_unsettled(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def open_remote(request, *, timeout: float) -> _Response:
+        del timeout
+        path = request.full_url.removeprefix("http://gpu.example.test")
+        calls.append(path)
+        response = _Response(b"{}x" if path == "/interrupt" else b"{}")
+        response.headers = {"Content-Length": "2"}
+        return response
+
+    monkeypatch.setattr(backend_module, "_open_checkout_http", open_remote)
+    adapter = _adapter()
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter.warm_session(
+        "model-a",
+        _warmth(adapter, "model-a"),
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest=MODEL_DIGEST,
+    )
+
+    result = adapter.cancel()
+
+    assert result["ok"] is False
+    assert result["status"] == "requires_fence"
+    assert result["error_code"] == "checkout_response_malformed"
+    assert result["contained"] is False
+    assert adapter.poisoned is True
+    assert adapter.fence_pending is True
+    assert calls == ["/interrupt", "/queue", "/api/free"]
 
 
 def _runtime(monkeypatch, result: GenerationResult) -> Mock:

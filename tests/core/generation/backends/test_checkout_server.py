@@ -95,6 +95,11 @@ class _Response(io.BytesIO):
     def __exit__(self, *args: object) -> None:
         self.close()
 
+    def validate_terminal(self) -> None:
+        extra = self.read1(1)
+        if extra:
+            raise backend_module._fresh_checkout_error("checkout_response_malformed")
+
     def json(self) -> object:
         if self._payload is None:
             raise AssertionError("json() was not configured")
@@ -810,6 +815,162 @@ def test_correction_f03_hostname_resolution_fails_closed_before_unbounded_resolv
     assert time.monotonic() - started < 0.1
 
 
+def _loopback_response(
+    parts: list[tuple[float, bytes]], *, hold_open: float = 0.0
+) -> tuple[backend_module.urllib_request.Request, threading.Thread]:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    ready = threading.Event()
+
+    def serve() -> None:
+        conn: socket.socket | None = None
+        try:
+            ready.set()
+            conn, _address = listener.accept()
+            request = b""
+            while b"\r\n\r\n" not in request:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    return
+                request += chunk
+            for delay, payload in parts:
+                if delay:
+                    time.sleep(delay)
+                conn.sendall(payload)
+            if hold_open:
+                time.sleep(hold_open)
+        except OSError:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+            listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    assert ready.wait(1)
+    return backend_module.urllib_request.Request(f"http://127.0.0.1:{port}/view"), thread
+
+
+def test_correction_f03_coalesced_surplus_is_rejected_and_not_published(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _Response(b"xy")
+    response.headers = {"Content-Length": "1"}
+    adapter = _prepared_adapter(monkeypatch)
+    result = _output_metadata(tmp_path)
+    monkeypatch.setattr(backend_module, "_open_checkout_http", lambda request, **kwargs: response)
+
+    with pytest.raises(ValueError) as caught:
+        adapter._collect_outputs(result, tmp_path / "out")
+
+    assert getattr(caught.value, "primary_error", None) == "checkout_response_malformed"
+    assert not list((tmp_path / "out").glob("checkout-batch-*"))
+    assert adapter.poisoned is True
+    assert response.closed
+
+
+def test_correction_f03_delayed_surplus_is_rejected_without_tcp_fragment_assumption() -> None:
+    request, thread = _loopback_response(
+        [
+            (0.0, b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx"),
+            (0.03, b"y"),
+        ]
+    )
+    deadline = time.monotonic_ns() + 1_000_000_000
+    try:
+        with pytest.raises(ValueError) as caught:
+            with backend_module._open_checkout_http_bounded(request, deadline) as response:
+                backend_module._read_framed_response(
+                    response, limit=8, timeout=1.0, deadline_ns=deadline
+                )
+        assert getattr(caught.value, "code", None) == "checkout_response_malformed"
+    finally:
+        thread.join(timeout=1)
+    assert not thread.is_alive()
+
+
+def test_correction_f03_exact_eof_and_fragmented_digest_succeed() -> None:
+    request, thread = _loopback_response(
+        [(0.0, b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")]
+    )
+    deadline = time.monotonic_ns() + 1_000_000_000
+    try:
+        with backend_module._open_checkout_http_bounded(request, deadline) as response:
+            assert backend_module._read_framed_response(
+                response, limit=8, timeout=1.0, deadline_ns=deadline
+            ) == b"x"
+    finally:
+        thread.join(timeout=1)
+    assert not thread.is_alive()
+
+    class Fragmented(_Response):
+        def read1(self, size: int = -1) -> bytes:
+            return super().read1(min(size, 1))
+
+    response = Fragmented(b"png")
+    response.headers = {"Content-Length": "3"}
+    sink = io.BytesIO()
+    digest = hashlib.sha256()
+    assert backend_module._read_framed_response(
+        response, limit=8, timeout=1.0, sink=sink, digest=digest
+    ) == b""
+    assert sink.getvalue() == b"png"
+    assert digest.hexdigest() == hashlib.sha256(b"png").hexdigest()
+    assert response.closed
+
+
+def test_correction_f03_held_open_exact_body_expires_as_unavailable() -> None:
+    request, thread = _loopback_response(
+        [(0.0, b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: keep-alive\r\n\r\nx")],
+        hold_open=0.15,
+    )
+    deadline = time.monotonic_ns() + 40_000_000
+    try:
+        with pytest.raises(ValueError) as caught:
+            with backend_module._open_checkout_http_bounded(request, deadline) as response:
+                backend_module._read_framed_response(
+                    response, limit=8, timeout=0.04, deadline_ns=deadline
+                )
+        assert getattr(caught.value, "code", None) == "checkout_deadline_transport_unavailable"
+    finally:
+        thread.join(timeout=1)
+    assert not thread.is_alive()
+
+
+def test_correction_f03_terminal_capability_and_overreturn_fail_closed() -> None:
+    class NoTerminal(_Response):
+        validate_terminal = None
+
+    response = NoTerminal(b"x")
+    response.headers = {"Content-Length": "1"}
+    with pytest.raises(ValueError) as unavailable:
+        backend_module._read_framed_response(response, limit=8, timeout=1.0)
+    assert getattr(unavailable.value, "code", None) == "checkout_deadline_transport_unavailable"
+    assert response.closed
+
+    class OverReturning(_Response):
+        def read1(self, size: int = -1) -> bytes:
+            del size
+            return super().read1(-1)
+
+    response = OverReturning(b"xy")
+    response.headers = {"Content-Length": "1"}
+    sink = Mock()
+    digest = Mock()
+    with pytest.raises(ValueError) as malformed:
+        backend_module._read_framed_response(
+            response, limit=8, timeout=1.0, sink=sink, digest=digest
+        )
+    assert getattr(malformed.value, "code", None) == "checkout_response_malformed"
+    sink.write.assert_not_called()
+    digest.update.assert_not_called()
+    assert response.closed
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -920,9 +1081,14 @@ def test_correction_f03_real_loopback_slow_drip_stops_at_absolute_deadline() -> 
     [
         ({}, b"x"),
         ({"Content-Length": "2"}, b"x"),
+        ({"Content-Length": "0"}, b"x"),
+        ({"Content-Length": "+1"}, b"x"),
+        ({"Content-Length": "999999999999999999999999999999999999"}, b"x"),
         ({"Content-Length": ["1", "1"]}, b"x"),
+        ({"Content-Length": "1, 1"}, b"x"),
         ({"Content-Length": "1", "Transfer-Encoding": "chunked"}, b"x"),
         ({"Content-Length": "1", "Content-Range": "bytes 0-0/1"}, b"x"),
+        ({"Content-Length": "1", "Content-Encoding": "gzip"}, b"x"),
     ],
 )
 def test_correction_f03_view_requires_unambiguous_complete_framing(
@@ -950,8 +1116,8 @@ def test_correction_f03_fragmented_exact_length_succeeds_and_deadline_expires(
     result = _output_metadata(tmp_path)
 
     class Fragmented(_Response):
-        def read(self, size: int = -1) -> bytes:
-            return super().read(min(size, 1))
+        def read1(self, size: int = -1) -> bytes:
+            return super().read1(min(size, 1))
 
     response = Fragmented(b"png")
     response.headers = {"Content-Length": "3"}

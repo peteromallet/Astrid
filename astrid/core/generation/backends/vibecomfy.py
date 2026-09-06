@@ -309,11 +309,13 @@ def _identity_digest(domain: str, identity: _CheckoutIdentity) -> str:
     return _digest({"schema": domain, "identity": identity.record()})
 
 
-def _fresh_checkout_error(code: str) -> _CheckoutProtocolError:
+def _fresh_checkout_error(code: str, *, detail: str | None = None) -> _CheckoutProtocolError:
     """Create a fixed local error with no inherited exception information."""
     error = _CheckoutProtocolError(
         code if code in _CHECKOUT_LOCAL_ERROR_CODES else "checkout_transport_failed"
     )
+    if detail is not None:
+        error.args = (detail,)
     error.__context__ = None
     error.__cause__ = None
     error.__suppress_context__ = True
@@ -3064,17 +3066,56 @@ class _DeadlineResponse:
     def __exit__(self, *_args: object) -> None:
         self.close()
 
-    def _wait(self, events: int) -> None:
-        remaining = (self._deadline_ns - time.monotonic_ns()) / 1_000_000_000
-        if remaining <= 0:
-            raise _CheckoutProtocolError("checkout_response_deadline_expired")
-        try:
-            self._selector.modify(self._sock, events)
-            ready = self._selector.select(remaining)
-        except (OSError, ValueError):
-            raise _CheckoutProtocolError("checkout_transport_failed") from None
-        if not ready or time.monotonic_ns() >= self._deadline_ns:
-            raise _CheckoutProtocolError("checkout_response_deadline_expired")
+    def _wait(self, events: int, *, deadline_code: str = "checkout_response_deadline_expired") -> None:
+        while True:
+            remaining = (self._deadline_ns - time.monotonic_ns()) / 1_000_000_000
+            if remaining <= 0:
+                raise _fresh_checkout_error(deadline_code)
+            try:
+                self._selector.modify(self._sock, events)
+                ready = self._selector.select(remaining)
+            except InterruptedError:
+                continue
+            except (OSError, ValueError):
+                raise _fresh_checkout_error("checkout_transport_failed")
+            if ready:
+                return
+
+    def validate_terminal(self) -> None:
+        """Prove that this single-use response has ended at the same deadline."""
+        if self._buffer:
+            raise _fresh_checkout_error("checkout_response_malformed")
+        while True:
+            if time.monotonic_ns() >= self._deadline_ns:
+                raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+            try:
+                extra = self._sock.recv(1)
+                if not isinstance(extra, bytes):
+                    raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+                if extra:
+                    raise _fresh_checkout_error("checkout_response_malformed")
+                return
+            except ssl.SSLWantReadError:
+                self._wait(
+                    selectors.EVENT_READ,
+                    deadline_code="checkout_deadline_transport_unavailable",
+                )
+            except ssl.SSLWantWriteError:
+                self._wait(
+                    selectors.EVENT_WRITE,
+                    deadline_code="checkout_deadline_transport_unavailable",
+                )
+            except BlockingIOError:
+                self._wait(
+                    selectors.EVENT_READ,
+                    deadline_code="checkout_deadline_transport_unavailable",
+                )
+            except InterruptedError:
+                continue
+            except ssl.SSLEOFError:
+                raise _fresh_checkout_error("checkout_transport_failed")
+            except OSError:
+                raise _fresh_checkout_error("checkout_transport_failed")
 
     def _recv(self, wanted: int) -> bytes:
         while True:
@@ -3091,7 +3132,7 @@ class _DeadlineResponse:
             except InterruptedError:
                 continue
             except OSError:
-                raise _CheckoutProtocolError("checkout_transport_failed") from None
+                raise _fresh_checkout_error("checkout_transport_failed")
 
     def read1(self, size: int = -1) -> bytes:
         if size <= 0:
@@ -3205,7 +3246,12 @@ def _open_checkout_http(request: urllib_request.Request, *, timeout: float,
                 selector.unregister(sock)
             except (OSError, KeyError):
                 pass
-            sock = context.wrap_socket(sock, server_hostname=parsed.hostname, do_handshake_on_connect=False)
+            sock = context.wrap_socket(
+                sock,
+                server_hostname=parsed.hostname,
+                do_handshake_on_connect=False,
+                suppress_ragged_eofs=False,
+            )
             sock.setblocking(False)
             selector.register(sock, selectors.EVENT_READ | selectors.EVENT_WRITE)
             while True:
@@ -3219,9 +3265,12 @@ def _open_checkout_http(request: urllib_request.Request, *, timeout: float,
         path = urllib_parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
         method = request.get_method()
         body = request.data or b""
-        headers = dict(request.header_items())
+        headers = {
+            key: value for key, value in request.header_items()
+            if key.lower() != "connection"
+        }
         headers.setdefault("Content-Length", str(len(body)))
-        headers.setdefault("Connection", "close")
+        headers["Connection"] = "close"
         frame = (f"{method} {path} HTTP/1.1\r\n" +
                  "\r\n".join(f"{key}: {value}" for key, value in headers.items()) +
                  "\r\n\r\n").encode("ascii") + body
@@ -3495,49 +3544,97 @@ def _read_framed_response(
     """Read one exact HTTP representation under an absolute monotonic deadline."""
     if deadline_ns is None:
         deadline_ns = time.monotonic_ns() + max(0, int(timeout * 1_000_000_000))
-    if not callable(getattr(response, "read1", None)) or getattr(response, "_deadline_capable", False) is not True:
-        raise _CheckoutProtocolError("checkout_deadline_transport_unavailable")
-    headers = getattr(response, "headers", None)
-    lengths = _header_values(headers, "Content-Length")
-    transfers = _header_values(headers, "Transfer-Encoding")
-    ranges = _header_values(headers, "Content-Range")
-    encodings = _header_values(headers, "Content-Encoding")
-    if transfers or ranges or any(value.strip().lower() not in {"", "identity"} for value in encodings):
-        raise ValueError("checkout_server response framing is ambiguous")
-    if not require_length and not lengths:
-        return b""
-    if len(lengths) != 1 or not re.fullmatch(r"[1-9][0-9]*", lengths[0].strip()):
-        raise ValueError("checkout_server response has invalid content length")
-    expected = int(lengths[0])
-    if expected > limit:
-        raise ValueError("checkout_server response is too large")
-    chunks: list[bytes] = []
-    received = 0
-    while received < expected:
+    close = getattr(response, "close", None)
+
+    def close_response() -> None:
+        if callable(close):
+            try:
+                close()
+            except BaseException:
+                pass
+
+    try:
+        if (
+            not callable(getattr(response, "read1", None))
+            or getattr(response, "_deadline_capable", False) is not True
+        ):
+            raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+        terminal = getattr(response, "validate_terminal", None)
+        if not callable(terminal):
+            terminal = getattr(response, "_validate_terminal", None)
+        if not callable(terminal):
+            raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+        headers = getattr(response, "headers", None)
+        lengths = _header_values(headers, "Content-Length")
+        transfers = _header_values(headers, "Transfer-Encoding")
+        ranges = _header_values(headers, "Content-Range")
+        encodings = _header_values(headers, "Content-Encoding")
+        if transfers or ranges or any(
+            value.strip().lower() not in {"", "identity"} for value in encodings
+        ):
+            raise _fresh_checkout_error("checkout_response_malformed")
+        if not require_length and not lengths:
+            terminal()
+            close_response()
+            return b""
+        if len(lengths) != 1 or not re.fullmatch(r"[1-9][0-9]*", lengths[0].strip()):
+            raise _fresh_checkout_error("checkout_response_malformed")
+        length_text = lengths[0].strip()
+        limit_text = str(limit)
+        if len(length_text) > len(limit_text) or (
+            len(length_text) == len(limit_text) and length_text > limit_text
+        ):
+            raise _fresh_checkout_error(
+                "checkout_response_malformed",
+                detail="checkout_server response is too large",
+            )
+        expected = int(length_text)
+        chunks: list[bytes] = []
+        received = 0
+        while received < expected:
+            if time.monotonic_ns() >= deadline_ns:
+                raise _fresh_checkout_error("checkout_response_deadline_expired")
+            reader = getattr(response, "read1", None)
+            if not callable(reader):
+                raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+            try:
+                chunk = reader(min(1024 * 1024, expected - received))
+            except _CheckoutProtocolError:
+                raise
+            except BaseException:
+                raise _fresh_checkout_error("checkout_transport_failed")
+            if not isinstance(chunk, bytes) or not chunk:
+                raise _fresh_checkout_error("checkout_response_malformed")
+            if len(chunk) > expected - received:
+                raise _fresh_checkout_error("checkout_response_malformed")
+            if sink is None:
+                chunks.append(chunk)
+            else:
+                written = sink.write(chunk)
+                if written != len(chunk):
+                    raise _fresh_checkout_error("checkout_transport_failed")
+            if digest is not None:
+                digest.update(chunk)
+            received += len(chunk)
+        if received != expected:
+            raise _fresh_checkout_error("checkout_response_malformed")
         if time.monotonic_ns() >= deadline_ns:
-            raise _CheckoutProtocolError("checkout_response_deadline_expired")
-        reader = getattr(response, "read1", None)
-        if not callable(reader):
-            raise _CheckoutProtocolError("checkout_deadline_transport_unavailable")
-        chunk = reader(min(1024 * 1024, expected - received))
-        if not isinstance(chunk, bytes) or not chunk:
-            raise ValueError("checkout_server response body is incomplete")
-        if len(chunk) > expected - received:
-            raise ValueError("checkout_server response body contradicts content length")
-        if sink is None:
-            chunks.append(chunk)
-        else:
-            written = sink.write(chunk)
-            if written != len(chunk):
-                raise ValueError("checkout_server response sink wrote incomplete bytes")
-        if digest is not None:
-            digest.update(chunk)
-        received += len(chunk)
-    if received != expected:
-        raise ValueError("checkout_server response body is incomplete")
-    if time.monotonic_ns() > deadline_ns:
-        raise _CheckoutProtocolError("checkout_response_deadline_expired")
-    return b"".join(chunks)
+            raise _fresh_checkout_error("checkout_deadline_transport_unavailable")
+        try:
+            terminal()
+        except _CheckoutProtocolError:
+            raise
+        except BaseException:
+            raise _fresh_checkout_error("checkout_transport_failed")
+        result = b"".join(chunks)
+        close_response()
+        return result
+    except _CheckoutProtocolError:
+        close_response()
+        raise
+    except BaseException:
+        close_response()
+        raise _fresh_checkout_error("checkout_transport_failed")
 
 
 def _scan_json_depth(raw: bytes, maximum: int) -> None:
@@ -5304,7 +5401,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
                         lengths = _header_values(headers, "Content-Length")
                         if len(lengths) != 1 or not re.fullmatch(r"[1-9][0-9]*", lengths[0].strip()):
                             raise _CheckoutProtocolError("checkout_output_framing_invalid")
-                        expected = int(lengths[0])
+                        length_text = lengths[0].strip()
+                        output_limit_text = str(_MAX_CHECKOUT_OUTPUT_BYTES)
+                        if len(length_text) > len(output_limit_text) or (
+                            len(length_text) == len(output_limit_text)
+                            and length_text > output_limit_text
+                        ):
+                            raise _CheckoutProtocolError("checkout_output_too_large")
+                        expected = int(length_text)
                         if expected > _MAX_CHECKOUT_OUTPUT_BYTES or total_bytes + expected > _MAX_CHECKOUT_OUTPUT_BYTES:
                             raise _CheckoutProtocolError("checkout_output_too_large")
                         fd = os.open(

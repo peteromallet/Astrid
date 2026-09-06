@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Mapping, Sequence, cast
@@ -40,6 +41,8 @@ VACE_TEMPLATE_ID = "video/wanvideo_wrapper_22_14b_vace_cocktail"
 ALLOWLISTED_TEMPLATE_IDS = frozenset({I2V_TEMPLATE_ID, VACE_TEMPLATE_ID})
 
 _DEFAULT_NEGATIVE_PROMPT = "fading, breaking, shot cuts, jumpcuts, blurry, noise, distorted"
+_SHA256_OBJECT_ID_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+_CAS_OBJECT_ID_RE = re.compile(r"^cas-[A-Za-z0-9][A-Za-z0-9_-]*$")
 _REQUEST_FIELDS = frozenset(
     {
         "family",
@@ -255,9 +258,9 @@ def _normalise_ids(value: object) -> tuple[str, ...]:
         if not isinstance(object_id, str) or not object_id.strip():
             raise DimensionalVaceError(f"input_object_ids[{index}] must be a non-empty string")
         normalized = object_id.strip()
-        if "/" in normalized or "\\" in normalized or normalized.startswith((".", "~")):
+        if _SHA256_OBJECT_ID_RE.fullmatch(normalized) is None and _CAS_OBJECT_ID_RE.fullmatch(normalized) is None:
             raise DimensionalVaceError(
-                f"input_object_ids[{index}] must be a Runtime/CAS identity, not a machine-local path"
+                f"input_object_ids[{index}] must be a Runtime/CAS identity, not a machine-local path, URL, or endpoint"
             )
         ids.append(normalized)
     return tuple(ids)

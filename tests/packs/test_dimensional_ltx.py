@@ -205,6 +205,9 @@ def test_missing_first_last_cas_input_is_rejected(field: str) -> None:
         "https://example.test/frame.png",
         "127.0.0.1:8188",
         "localhost:8188",
+        "192.168.1.1:8188",
+        "[::1]:8188",
+        "::1:8188",
     ],
 )
 def test_paths_urls_and_endpoints_cannot_become_durable_input_identity(

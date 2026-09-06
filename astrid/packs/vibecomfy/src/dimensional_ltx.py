@@ -9,6 +9,8 @@ readiness details are outside this contract.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, TypeAlias
@@ -63,6 +65,11 @@ _REQUEST_KEYS = frozenset(
         "guide_object_id",
     }
 )
+
+_AUTHORIZED_OBJECT_ID_SCHEMES = frozenset({"cas", "sha256"})
+_URI_SCHEME_RE = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*):")
+_ENDPOINT_RE = re.compile(r"^(?:localhost|127(?:\.\d{1,3}){3}):\d+$", re.IGNORECASE)
+_RELATIVE_FILENAME_RE = re.compile(r"^[^./\\]+\.[^./\\]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,10 +275,27 @@ def _string(value: Any, *, field: str, non_empty: bool = True) -> str | LtxCompi
 def _object_id(value: Any, *, field: str) -> str | LtxCompilation:
     if not isinstance(value, str) or not value.strip():
         return _reject("missing_required_cas_input", f"{field} must be an authorized CAS object id")
-    # Absolute paths, home-relative paths, and file URLs are readiness/local
-    # values, not durable Runtime/CAS identities.
-    if value.startswith(("/", "~/", "file://")):
-        return _reject("invalid_request", f"{field} must be a Runtime/CAS object id, not a local path")
+
+    candidate = value.strip()
+    is_drive_path = len(candidate) >= 2 and candidate[0].isalpha() and candidate[1] == ":"
+    scheme_match = _URI_SCHEME_RE.match(candidate)
+    scheme = scheme_match.group("scheme").lower() if scheme_match else None
+    is_path = (
+        candidate.startswith(("/", "\\", "./", "../", "~/"))
+        or "/" in candidate
+        or "\\" in candidate
+        or is_drive_path
+        or bool(_RELATIVE_FILENAME_RE.fullmatch(candidate))
+    )
+    is_url_or_endpoint = (
+        (scheme is not None and scheme not in _AUTHORIZED_OBJECT_ID_SCHEMES)
+        or bool(_ENDPOINT_RE.fullmatch(candidate))
+    )
+    if is_path or is_url_or_endpoint:
+        return _reject(
+            "invalid_request",
+            f"{field} must be a Runtime/CAS object id, not a path, URL, or endpoint",
+        )
     return value
 
 
@@ -297,7 +321,10 @@ def _coerce_request(request: object) -> LtxRequest | LtxCompilation:
             "guide_object_id": request.guide_object_id,
         }
     elif isinstance(request, Mapping):
-        unknown = sorted(set(request) - _REQUEST_KEYS)
+        keys = tuple(request)
+        if any(not isinstance(key, str) for key in keys):
+            return _reject("invalid_request", "request keys must be strings")
+        unknown = sorted(set(keys) - _REQUEST_KEYS)
         if unknown:
             return _reject("invalid_request", "request does not accept keys: " + ", ".join(unknown))
         values = request

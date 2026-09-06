@@ -191,6 +191,35 @@ def test_missing_first_last_cas_input_is_rejected(field: str) -> None:
     assert result.rejection.code == "missing_required_cas_input"
 
 
+@pytest.mark.parametrize(
+    "object_id",
+    [
+        "frame.png",
+        "./frame.png",
+        "../frame.png",
+        "C:frame.png",
+        "/tmp/frame.png",
+        "~/frame.png",
+        "file:///tmp/frame.png",
+        "http://127.0.0.1/frame.png",
+        "https://example.test/frame.png",
+        "127.0.0.1:8188",
+        "localhost:8188",
+    ],
+)
+def test_paths_urls_and_endpoints_cannot_become_durable_input_identity(
+    object_id: str,
+) -> None:
+    result = compile_dimensional_ltx(
+        request_for(SUPPORTED_ROUTE_KEYS[0], start_image_object_id=object_id)
+    )
+
+    assert result.task is None
+    assert result.fallback_template_id is None
+    assert result.rejection is not None
+    assert result.rejection.code == "invalid_request"
+
+
 def test_local_paths_cannot_become_durable_input_identity() -> None:
     result = compile_dimensional_ltx(
         request_for(SUPPORTED_ROUTE_KEYS[0], start_image_object_id="/tmp/frame.png")
@@ -213,6 +242,19 @@ def test_local_paths_cannot_become_durable_input_identity() -> None:
         "kind": "video",
         "object_id": "cas:guide-video-01",
     }
+
+@pytest.mark.parametrize("key", [1, None, ("unexpected",)])
+def test_non_string_mapping_keys_are_rejected_deterministically(key: object) -> None:
+    payload = request_for(SUPPORTED_ROUTE_KEYS[0])
+    payload[key] = "unexpected"  # type: ignore[index]
+
+    result = compile_dimensional_ltx(payload)
+
+    assert result.task is None
+    assert result.fallback_template_id is None
+    assert result.rejection is not None
+    assert result.rejection.code == "invalid_request"
+    assert result.rejection.reason == "request keys must be strings"
 
 
 def test_compiled_payload_contains_no_machine_local_readiness_fields() -> None:

@@ -6,6 +6,8 @@ import pytest
 
 from astrid.sdk import host_bootstrap as bootstrap
 from astrid.core.execution import generic_host
+from astrid.core.gateway.dispatch import compose_profile_handoff
+from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
 
 
 @pytest.mark.parametrize("source_changed", [False, True])
@@ -20,6 +22,8 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
     worker.chmod(0o600)
     support = worker.parent.parent
     ready_path = support / "generic-host.ready.json"
+    boot_manifest = support / "astrid-host" / "boot-manifest.json"
+    compose_profile_handoff(boot_manifest, support_root=support)
     current = {
         "endpoint": "http://localhost:1234", "executor_id": bootstrap.PACK_HOST_ACTOR,
         "ready_file": str(ready_path), "credential_file": str(worker),
@@ -27,6 +31,8 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
         "source_checkout_digest": "source-digest", "runtime_instance_id": "instance",
         "runtime_epoch": 1, "schema_digest": "schema", "pid": 101,
         "process_birth_id": "birth",
+        "boot_manifest_path": str(boot_manifest),
+        "boot_manifest_hash": load_boot_manifest_hash(boot_manifest, support_root=support),
     }
     if source_changed:
         current["source_checkout_digest"] = "previous-source-digest"
@@ -48,9 +54,11 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
 
     def launch(argv, **kwargs):
         launched.append(argv[0])
+        boot_manifest_hash = load_boot_manifest_hash(boot_manifest, support_root=support)
         bootstrap._write_object(ready_path, {
             **current, "python_executable": argv[0], "status": "ready",
             "source_checkout_digest": "source-digest",
+            "boot_manifest_hash": boot_manifest_hash,
             "pid": 202, "process_birth_id": "new-birth",
         })
         return SimpleNamespace(pid=202, poll=lambda: None)

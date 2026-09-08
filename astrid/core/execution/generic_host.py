@@ -28,7 +28,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlsplit
 
-from astrid.core.env_vars import ASTRID_INTERNAL_INVOCATION, ASTRID_PACKS_PATH
+from astrid.core.env_vars import (
+    ASTRID_INTERNAL_INVOCATION,
+    ASTRID_PACKS_PATH,
+)
 from astrid.core.execution.capability_ledger import load_capability_ledger
 from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.core.execution.process_group import (
@@ -142,9 +145,9 @@ class AdapterRegistry:
         builtin = cls._specs[family]
         return AdapterSpec(
             family,
-            tuple(entry.get("resource_keys") or builtin.resource_keys),
-            tuple(entry.get("required_binaries") or builtin.required_binaries),
-            tuple(entry.get("required_packages") or builtin.required_packages),
+            tuple(entry["resource_keys"] if "resource_keys" in entry else builtin.resource_keys),
+            tuple(entry["required_binaries"] if "required_binaries" in entry else builtin.required_binaries),
+            tuple(entry["required_packages"] if "required_packages" in entry else builtin.required_packages),
             builtin.requires_network,
             bool(entry.get("requires_remotion", base.requires_remotion)),
         )
@@ -728,6 +731,11 @@ class RuntimeProtocolClient:
         return int(epoch)
 
     def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None):
+        # Runtime schema identity is negotiated through health/compatibility;
+        # source, dependency, and source-epoch identity remain part of the
+        # executor registration admission envelope.  ``schema_digest`` is
+        # intentionally not sent until the generated runtime client contract
+        # exposes that field.
         payload = {
             "executor_id": executor_id,
             "capabilities": capabilities,
@@ -737,7 +745,6 @@ class RuntimeProtocolClient:
             "source_digest": source_digest,
             "source_epoch": source_epoch,
             "dependency_digest": dependency_digest,
-            "schema_digest": schema_digest,
             "runtime_epoch": runtime_epoch,
         }
         return self.generated.register_executor(
@@ -852,8 +859,32 @@ class RuntimeProtocolClient:
             idempotency_key=f"fail-{attempt_id}-{fence}",
         )
 
-    def cancel(self, task_id: str):
-        return self.generated.cancel_task(task_id, idempotency_key=f"cancel-{task_id}")
+    def cancel(
+        self,
+        task_id: str,
+        *,
+        attempt_id: str | None = None,
+        fence: int | None = None,
+        lease_id: str | None = None,
+    ):
+        if attempt_id is None or fence is None:
+            return self.generated.cancel_task(task_id, idempotency_key=f"cancel-{task_id}")
+        task = self.generated.get_task(task_id)
+        current_attempt = (
+            task.get("attempt_id")
+            if isinstance(task, Mapping)
+            else getattr(task, "attempt_id", None)
+        )
+        if current_attempt != attempt_id:
+            raise HostError("runtime cancellation target no longer matches attempt")
+        version = task.get("version") if isinstance(task, Mapping) else getattr(task, "version", None)
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise HostError("runtime cancellation target has no version fence")
+        return self.generated.cancel_task(
+            task_id,
+            expected_version=version,
+            idempotency_key=f"cancel-{task_id}-{attempt_id}-{int(fence)}",
+        )
 
     def get_object(self, digest: str) -> bytes:
         response = self.generated.get_object(digest)
@@ -884,7 +915,20 @@ class RuntimeProtocolClient:
 class GenericPackHost:
     """Discover, register, preflight, and execute pack capabilities."""
 
-    def __init__(self, *, pack_roots: list[str | Path], client: RuntimeProtocolClient | Any | None = None, executor_id: str = "astrid-pack-host", max_concurrency: int = 1, attempt_root: str | Path | None = None, capability_matrix: str | Path | None = None, credential_source: Mapping[str, str] | None = None, source_inventory_identity: str | None = None):
+    def __init__(
+        self,
+        *,
+        pack_roots: list[str | Path],
+        client: RuntimeProtocolClient | Any | None = None,
+        executor_id: str = "astrid-pack-host",
+        max_concurrency: int = 1,
+        attempt_root: str | Path | None = None,
+        capability_matrix: str | Path | None = None,
+        credential_source: Mapping[str, str] | None = None,
+        source_inventory_identity: str | None = None,
+        boot_manifest_path: str | Path | None = None,
+        boot_manifest_hash: str | None = None,
+    ):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
         # directory. Keep it in the same admitted root set so env-only packs
@@ -910,6 +954,16 @@ class GenericPackHost:
         self.source_epoch = "uninitialized"
         self.source_inventory_identity = str(source_inventory_identity or "")
         self.runtime_state: dict[str, Any] = {}
+        # The application composition root owns emission.  The host only reads
+        # this derived stamp when it prepares completion provenance.
+        self.boot_manifest_path = (
+            # Preserve lexical components until boot-manifest validation.  In
+            # particular, resolving here would hide a symlinked parent.
+            Path(boot_manifest_path).expanduser()
+            if boot_manifest_path is not None
+            else None
+        )
+        self.boot_manifest_hash = boot_manifest_hash
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
@@ -943,6 +997,22 @@ class GenericPackHost:
                 # The process may have exited between the census and cleanup;
                 # the group helper is deliberately best effort at shutdown.
                 pass
+    def boot_manifest_provenance(self) -> dict[str, str] | None:
+        """Return completion provenance for the root-owned manifest stamp."""
+        if self.boot_manifest_path is None:
+            return None
+        from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+
+        stamped_manifest_hash = load_boot_manifest_hash(
+            self.boot_manifest_path,
+            support_root=self.boot_manifest_path.parents[1],
+        )
+        if self.boot_manifest_hash and stamped_manifest_hash != self.boot_manifest_hash:
+            raise HostError("boot manifest changed after host startup")
+        return {
+            "kind": "astrid.boot_manifest",
+            "sha256": stamped_manifest_hash,
+        }
 
     def _client_operation(self, name: str):
         if self.client is None:
@@ -2169,6 +2239,7 @@ class GenericPackHost:
         root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
         root.mkdir(parents=True, exist_ok=True)
         settled = False
+        cancelled_attempt = False
         network_broker: _NetworkBrokerContext | None = None
         # Every network attempt gets a fresh host-issued nonce.  It is part of
         # the immutable admission presented to an observable broker, so a
@@ -2183,6 +2254,20 @@ class GenericPackHost:
             "network_nonce": secrets_module.token_urlsafe(24),
             "allowed_routes": list((_network_policy(record) or {}).get("allowed_routes", (_network_policy(record) or {}).get("allowed_destinations", ()))),
         }
+        cancel_signal = threading.Event()
+
+        def cancelled():
+            if self._shutdown.is_set() or cancel_signal.is_set():
+                return True
+            try:
+                current = self.client.task(task_id)
+            except Exception:
+                # Lost lease/transport is cancellation containment, not a
+                # reason to publish output or issue a second fail attempt.
+                return True
+            current_task = current.get("task", current) if isinstance(current, Mapping) else current
+            state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
+            return state == "cancelled"
         try:
             inputs = self._materialize_inputs(
                 spec,
@@ -2215,7 +2300,6 @@ class GenericPackHost:
             network_broker = self._start_network_broker(record, root, network_admission, inputs)
             output_root = root / "outputs"
             output_root.mkdir(parents=True, exist_ok=True)
-            cancel_signal = threading.Event()
             pump_stop = threading.Event()
             self.client.heartbeat(
                 task_id,
@@ -2245,14 +2329,6 @@ class GenericPackHost:
 
             pump_thread = threading.Thread(target=pump_lease, name=f"astrid-heartbeat-{task_id}", daemon=True)
             pump_thread.start()
-
-            def cancelled():
-                if self._shutdown.is_set() or cancel_signal.is_set():
-                    return True
-                current = self.client.task(task_id)
-                current_task = current.get("task", current) if isinstance(current, Mapping) else current
-                state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
-                return state == "cancelled"
 
             try:
                 if record.definition.command is not None:
@@ -2298,17 +2374,30 @@ class GenericPackHost:
                 pump_stop.set()
                 if pump_thread is not None:
                     pump_thread.join(timeout=2)
-            current = self.client.task(task_id)
-            current_task = current.get("task", current) if isinstance(current, Mapping) else current
-            state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
-            if state == "cancelled":
+            if cancelled():
+                cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             typed_outputs = self._typed_outputs(record, result, root)
             project_id = task_data.get("project_id")
             if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
                 raise HostError("runtime task project_id must be a non-empty string or None")
             outputs = self._upload_outputs(typed_outputs, project_id=project_id) if typed_outputs else []
-            payload = {"adapter_family": record.adapter.family, **(getattr(result, "payload", {}) or {})}
+            # Cancellation can arrive while staged outputs are being read or
+            # uploaded. Never publish a completed settlement after that point.
+            if cancelled():
+                cancelled_attempt = True
+                return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+            # Completion provenance is host-owned.  Keep any backend/B6/model
+            # evidence returned by the child, then stamp the exact admitted
+            # capability/source/dependency identities over it so a child
+            # cannot replace the admission evidence in the settlement result.
+            payload = {
+                "adapter_family": record.adapter.family,
+                **(getattr(result, "payload", {}) or {}),
+                "capability_digest": record.capability_digest,
+                "source_digest": record.source_digest,
+                "dependency_digest": record.dependency_digest,
+            }
             network_evidence = self._network_evidence(
                 root,
                 admission=worker_admission if record.definition.command is None else network_admission,
@@ -2321,17 +2410,32 @@ class GenericPackHost:
             )
             if network_evidence is not None:
                 payload["network_evidence"] = network_evidence
+            provenance = self.boot_manifest_provenance()
+            if provenance is not None:
+                payload["provenance"] = provenance
+            result_payload = getattr(result, "payload", None)
+            if not isinstance(result_payload, Mapping):
+                result_payload = {}
+            process_id = getattr(result, "process_id", None)
+            if process_id is None:
+                process_id = result_payload.get("process_id")
+            returncode = getattr(result, "returncode", None)
+            if returncode is None:
+                returncode = result_payload.get("returncode")
             payload["process_evidence"] = {
                 "capability_id": capability_id,
                 "attempt_id": attempt_id,
                 "fence": fence,
                 "child_boundary": "subprocess",
-                "process_id": getattr(result, "process_id", None),
-                "returncode": getattr(result, "returncode", None),
+                "process_id": process_id,
+                "returncode": returncode,
             }
             effect = task_data.get("expected_effect")
             if isinstance(effect, list):
                 effect = effect[0] if effect else None
+            if cancelled():
+                cancelled_attempt = True
+                return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             settlement = self.client.settle(
                 task_id,
                 lease_token,
@@ -2344,8 +2448,14 @@ class GenericPackHost:
             settled = True
             return settlement
         except HostCancelled:
+            cancelled_attempt = True
             return {"task_id": task_id, "status": "cancelled", "cancelled": True}
         except Exception as exc:
+            # A cancellation/lease-loss race must not be turned into a second
+            # runtime failure after child work has been contained.
+            if cancelled():
+                cancelled_attempt = True
+                return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             self.client.fail(
                 task_id,
                 lease_token,
@@ -2358,12 +2468,33 @@ class GenericPackHost:
         finally:
             if network_broker is not None:
                 network_broker.stop()
-            if not keep_attempt and self.attempt_root is None and settled:
+            if not keep_attempt and self.attempt_root is None and (settled or cancelled_attempt):
                 shutil.rmtree(root, ignore_errors=True)
 
-    def cancel_task(self, task_id: str) -> Any:
-        """Propagate cancellation through the runtime client boundary."""
-        return self._client_operation("cancel")(task_id)
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        attempt_id: str | None = None,
+        fence: int | None = None,
+        lease_id: str | None = None,
+        require_fence: bool = False,
+    ) -> Any:
+        """Propagate cancellation, requiring identity for orphan reclaim."""
+        operation = self._client_operation("cancel")
+        if attempt_id is None or fence is None:
+            return operation(task_id)
+        try:
+            return operation(
+                task_id,
+                attempt_id=attempt_id,
+                fence=int(fence),
+                lease_id=lease_id,
+            )
+        except TypeError as exc:
+            if require_fence:
+                raise HostError("runtime cancellation lacks an attempt/fence operation") from exc
+            return operation(task_id)
 
     def claim_once(self) -> Mapping[str, Any] | None:
         """Claim and execute one queued task through the generated boundary."""
@@ -2503,11 +2634,90 @@ class GenericPackHost:
                 break
             self._shutdown.wait(max(0.0, float(poll_seconds)))
         return results
+    def persistent_supervisor(
+        self,
+        state_path: str | Path,
+        *,
+        max_frame_bytes: int = 1024 * 1024,
+    ):
+        """Build the durable JSONL wrapper around this host's one-shot ABI.
+
+        ``run`` remains the canonical claim loop.  This adapter is intentionally
+        opt-in: JSONL ``run`` frames carry the already admitted task, lease,
+        attempt, and fence, then delegate execution to :meth:`run_task`.
+        """
+        from astrid.core.execution.persistent_supervisor import PersistentJsonlSupervisor
+
+        def launch(frame: Mapping[str, Any]) -> Any:
+            task = frame.get("task")
+            if not isinstance(task, Mapping):
+                raise HostError("persistent run requires an admitted task object")
+            lease_id = frame.get("lease_id", frame.get("lease_token"))
+            return self.run_task(
+                task,
+                lease_token=str(lease_id),
+                attempt_id=str(frame["attempt_id"]),
+                fence=int(frame["fence"]),
+                keep_attempt=bool(frame.get("keep_attempt", False)),
+            )
+
+        def request_runtime_cancel(frame: Mapping[str, Any]) -> Any:
+            task = frame.get("task")
+            task_id = frame.get("task_id")
+            if task_id is None and isinstance(task, Mapping):
+                task_id = task.get("id") or (
+                    task.get("task", {}).get("id")
+                    if isinstance(task.get("task"), Mapping)
+                    else None
+                )
+            if not task_id:
+                raise HostError("persistent cancellation requires task_id")
+            return self.cancel_task(
+                str(task_id),
+                attempt_id=str(frame.get("attempt_id") or ""),
+                fence=frame.get("fence"),
+                lease_id=frame.get("lease_id"),
+                require_fence=bool(frame.get("_reclaim")),
+            )
+
+        return PersistentJsonlSupervisor(
+            state_path,
+            launch=launch,
+            cancel=request_runtime_cancel,
+            reclaim=request_runtime_cancel,
+            max_concurrency=self.max_concurrency,
+            max_frame_bytes=max_frame_bytes,
+        )
+
+
+def _compose_cli_boot_manifest(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> tuple[Path, str]:
+    """Read an existing manifest bound to the explicit support root."""
+    if args.boot_manifest_path is None:
+        parser.error("generic host requires explicit --boot-manifest-path")
+    if args.support_root is None:
+        parser.error("generic host requires explicit --support-root")
+    try:
+        from astrid.core.integrations.reigh.boot_manifest import (
+            load_boot_manifest_hash,
+            validate_manifest_path,
+        )
+        manifest_path = validate_manifest_path(args.boot_manifest_path, args.support_root)
+        digest = load_boot_manifest_hash(
+            manifest_path, support_root=args.support_root
+        )
+        if args.boot_manifest_hash is not None and args.boot_manifest_hash != digest:
+            raise RuntimeError("boot manifest hash does not match the existing manifest")
+    except (OSError, RuntimeError) as exc:
+        parser.error(f"boot manifest composition failed: {exc}")
+    return manifest_path, digest
 
 
 def _cli() -> int:
+
     parser = argparse.ArgumentParser(prog="astrid-generic-host")
-    parser.add_argument("command", nargs="?", choices=("run",), help="run the registered worker claim loop")
+    parser.add_argument("command", nargs="?", choices=("run", "supervise"), help="run the worker loop or JSONL supervisor")
     parser.add_argument("--pack-root", action="append", required=True, help="pack/executor root to discover")
     parser.add_argument("--runtime-endpoint")
     parser.add_argument("--credential-file", help="owner-only file containing the worker bearer credential")
@@ -2522,11 +2732,15 @@ def _cli() -> int:
     parser.add_argument("--once", action="store_true", help="claim at most one task and exit")
     parser.add_argument("--poll-seconds", type=float, default=1.0)
     parser.add_argument("--max-tasks", type=int)
+    parser.add_argument("--supervisor-state", help="persistent JSONL supervisor journal")
+    parser.add_argument("--max-frame-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--ready-file", help="write host registration/readiness metadata before entering the claim loop")
     parser.add_argument("--source-checkout", help="absolute source checkout bound to this host")
     parser.add_argument("--support-root", help="absolute runtime support directory bound to this host")
     parser.add_argument("--runtime-instance-id", help="runtime instance identity bound to this host")
     parser.add_argument("--source-inventory-identity", help="verified managed source inventory identity bound to this host")
+    parser.add_argument("--boot-manifest-path", help="existing explicit boot-manifest path")
+    parser.add_argument("--boot-manifest-hash", help="expected SHA-256 hash of the boot manifest")
     args = parser.parse_args()
     credential = None
     credential_path = None
@@ -2542,8 +2756,19 @@ def _cli() -> int:
             parser.error(str(exc))
         if not credential:
             parser.error("credential file is empty")
+    boot_manifest, boot_manifest_hash = _compose_cli_boot_manifest(args, parser)
     client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
-    host = GenericPackHost(pack_roots=args.pack_root, client=client, executor_id=args.executor_id, max_concurrency=args.max_concurrency, attempt_root=args.attempt_root, capability_matrix=args.capability_matrix, source_inventory_identity=args.source_inventory_identity)
+    host = GenericPackHost(
+        pack_roots=args.pack_root,
+        client=client,
+        executor_id=args.executor_id,
+        max_concurrency=args.max_concurrency,
+        attempt_root=args.attempt_root,
+        capability_matrix=args.capability_matrix,
+        source_inventory_identity=args.source_inventory_identity,
+        boot_manifest_path=boot_manifest,
+        boot_manifest_hash=boot_manifest_hash,
+    )
     host.discover()
     host.preflight()
     if args.source_checkout:
@@ -2590,6 +2815,8 @@ def _cli() -> int:
             "source_checkout": str(source_checkout) if source_checkout else None,
             "source_checkout_digest": source_checkout_digest(source_checkout) if source_checkout else None,
             "source_inventory_identity": host.source_inventory_identity,
+            "boot_manifest_path": str(boot_manifest),
+            "boot_manifest_hash": boot_manifest_hash,
             "source_epoch": host.source_epoch,
             "runtime_instance_id": args.runtime_instance_id,
             "runtime_epoch": host.runtime_state.get("runtime_epoch"),
@@ -2609,6 +2836,16 @@ def _cli() -> int:
         if not args.register:
             host.register()
         print(json.dumps(host.run(once=args.once, poll_seconds=args.poll_seconds, max_tasks=args.max_tasks), indent=2, sort_keys=True, default=str))
+    if args.command == "supervise":
+        if client is None:
+            parser.error("supervise requires --runtime-endpoint and --credential-file")
+        if not args.supervisor_state:
+            parser.error("supervise requires --supervisor-state")
+        supervisor = host.persistent_supervisor(
+            args.supervisor_state,
+            max_frame_bytes=args.max_frame_bytes,
+        )
+        supervisor.serve(sys.stdin, sys.stdout)
     return 0
 
 

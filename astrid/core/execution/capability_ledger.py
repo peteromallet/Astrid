@@ -341,6 +341,9 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
             row["disposition"] = "unavailable_external"
             row["discovery_status"] = "not_installed"
             row["reason"] = "optional external pack is not installed in this checkout"
+        elif row["id"] in current_ids:
+            row["disposition"] = "advertised"
+            row["discovery_status"] = "discovered"
         elif row["disposition"] == "historical":
             row["reason"] = row.get("reason") or "retained in historical executor snapshot; no current executor manifest"
             row["discovery_status"] = "historical_only"
@@ -354,10 +357,11 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
     # inspect/edit (2 labels); all implemented, pack tests passing, matrix
     # entries present in config/astrid-beta-capabilities.json. On 2026-09-08,
     # the shipped Hivemind pack adds eight labels backed by seven matrix
-    # executors (resource/distillation contributions share one executor).
+    # executors (resource/distillation contributions share one executor), and
+    # the accepted Wan2GP pack adds two further labels.
     coverage = {
-        "source_labels": {"source": 92, "ledger": len(labels), "missing": [], "complete": len(labels) == 92},
-        "historical_source_labels": {"source": 97, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 97},
+        "source_labels": {"source": 94, "ledger": len(labels), "missing": [], "complete": len(labels) == 94},
+        "historical_source_labels": {"source": 99, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 99},
         "executor_inventory": {"source": 74, "ledger": len(executors), "missing": [], "complete": len(executors) == 74},
         "legacy_ids": {"source": 19, "ledger": len(legacy), "missing": [], "complete": len(legacy) == 19},
     }

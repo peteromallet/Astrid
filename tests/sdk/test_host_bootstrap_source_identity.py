@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from astrid.sdk import host_bootstrap
 from astrid.core.execution.generic_host import source_checkout_digest
+from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
 
 
 def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch, tmp_path: Path) -> None:
@@ -69,6 +70,7 @@ def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch,
 
     def fake_popen(argv, **_kwargs):
         launches.append(list(argv))
+        boot_manifest = credential.parent.parent / "astrid-host" / "boot-manifest.json"
         ready.update({
             "status": "ready",
             "pid": 4242,
@@ -82,6 +84,10 @@ def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch,
             "source_checkout": str(source),
             "source_checkout_digest": source_checkout_digest(source),
             "source_inventory_identity": inventory.identity,
+            "boot_manifest_path": str(boot_manifest),
+            "boot_manifest_hash": load_boot_manifest_hash(
+                boot_manifest, support_root=credential.parent.parent
+            ),
             "runtime_instance_id": "instance-1",
             "runtime_epoch": "epoch-1",
             "schema_digest": "schema-1",

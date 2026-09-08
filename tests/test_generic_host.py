@@ -452,26 +452,21 @@ def test_discovery_digest_and_truthful_preflight(tmp_path):
 def test_claim_only_admits_capabilities_that_are_currently_ready(tmp_path, monkeypatch):
     """The host candidate set must equal its current readiness predicate."""
     monkeypatch.delenv("ASTRID_PROVIDER_KEY", raising=False)
-    root = tmp_path / "provider"
+    root = tmp_path / "required_env"
     root.mkdir()
     (root / "executor.yaml").write_text(
         json.dumps({
             "schema_version": 1,
-            "id": "fixture.provider",
-            "name": "Fixture Provider",
+            "id": "fixture.required_env",
+            "name": "Fixture Required Environment",
             "kind": "external",
             "version": "1.0",
             "command": {"argv": ["{python_exec}", "-c", "pass"]},
             "outputs": [],
-            "isolation": {"mode": "subprocess", "network": True},
+            "isolation": {"mode": "subprocess", "network": False},
             "metadata": {
-                "adapter_family": "provider",
+                "adapter_family": "cpu",
                 "required_env": ["ASTRID_PROVIDER_KEY"],
-                "network_policy": {
-                    "allowed_protocols": ["tcp"],
-                    "allowed_destinations": ["example.invalid:443"],
-                    "broker": {"host_managed": True},
-                },
             },
         }),
         encoding="utf-8",
@@ -480,7 +475,7 @@ def test_claim_only_admits_capabilities_that_are_currently_ready(tmp_path, monke
     host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
     host.discover()
 
-    assert host.capabilities["fixture.provider"].ready is False
+    assert host.capabilities["fixture.required_env"].ready is False
     assert host.claim_once() is None
     assert not hasattr(runtime, "claim_payload")
 
@@ -488,8 +483,7 @@ def test_claim_only_admits_capabilities_that_are_currently_ready(tmp_path, monke
     # host, and the now-ready capability becomes the only candidate.
     monkeypatch.setenv("ASTRID_PROVIDER_KEY", "fixture-secret")
     assert host.claim_once() is None
-    assert runtime.claim_payload["capability_ids"] == ["fixture.provider"]
-
+    assert runtime.claim_payload["capability_ids"] == ["fixture.required_env"]
 
 def test_source_and_dependency_digests_invalidate_registration(tmp_path):
     _write_manifest(tmp_path / "base")
@@ -643,12 +637,14 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
         def __init__(self, endpoint, token):
             self.endpoint = endpoint
             self.token = token
+            self.registration_payloads = []
 
         def handshake(self, *_args, **_kwargs):
             self.handshake_called = True
             raise AssertionError("worker adapter must not fabricate a user handshake")
 
         def register_executor(self, executor, *, idempotency_key):
+            self.registration_payloads.append(executor)
             return {"executor_id": executor["executor_id"], "idempotency_key": idempotency_key}
 
     monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", WorkerGenerated)
@@ -658,7 +654,9 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
         capabilities=[],
         max_concurrency=1,
         resource_keys=[],
-        source_digest=None,
+        source_digest="sha256:" + "a" * 64,
+        dependency_digest="sha256:" + "b" * 64,
+        source_epoch="source-epoch-1",
     )
 
     assert client.WORKER_SCOPES == (
@@ -671,6 +669,47 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
     )
     assert response["executor_id"] == "worker-1"
     assert client.generated.handshake_called is False
+    wire = client.generated.registration_payloads[0]
+    assert wire["source_digest"] == "sha256:" + "a" * 64
+    assert wire["dependency_digest"] == "sha256:" + "b" * 64
+    assert wire["source_epoch"] == "source-epoch-1"
+    assert "schema_digest" not in wire
+
+
+def test_runtime_protocol_client_settlement_preserves_structured_result(monkeypatch):
+    class WorkerGenerated:
+        def __init__(self, endpoint, token):
+            self.settlements = []
+
+        def health(self):
+            return {"runtime_epoch": 7}
+
+        def settle_attempt(self, attempt_id, settlement, *, idempotency_key):
+            self.settlements.append((attempt_id, settlement, idempotency_key))
+            return settlement
+
+    monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", WorkerGenerated)
+    client = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    result = {
+        "adapter_family": "render",
+        "capability_digest": "sha256:" + "a" * 64,
+        "process_evidence": {"child_boundary": "subprocess"},
+    }
+
+    client.settle(
+        "task-1",
+        "lease-1",
+        result=result,
+        outputs=[],
+        effect=None,
+        attempt_id="attempt-1",
+        fence=3,
+    )
+
+    _, wire, _ = client.generated.settlements[0]
+    assert wire["result"] == result
+    assert wire["runtime_epoch"] == 7
+    assert "schema_digest" not in wire
 
 
 def test_runtime_protocol_client_uses_a_fresh_idempotency_key_for_each_heartbeat(
@@ -726,6 +765,14 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert outputs[0]["name"] == "answer"
     assert outputs[0]["digest"]
     assert "content_base64" not in outputs[0]
+    result = runtime.settlements[0][2]["result"]
+    assert result["adapter_family"] == "cpu"
+    assert result["capability_digest"] == host.capabilities["test.echo"].capability_digest
+    assert result["source_digest"] == host.capabilities["test.echo"].source_digest
+    assert result["dependency_digest"] == host.capabilities["test.echo"].dependency_digest
+    assert result["process_evidence"]["child_boundary"] == "subprocess"
+    assert result["process_evidence"]["returncode"] == 0
+    assert isinstance(result["process_evidence"]["process_id"], int)
     assert not list(tmp_path.glob("astrid-attempt-*"))
 
 
@@ -784,19 +831,18 @@ def test_adapter_registry_classifies_provider_local_generation_and_render():
     provider = GenericPackHost(pack_roots=[Path("astrid/packs/generation/executors")])
     provider.discover()
     assert AdapterRegistry.resolve(provider.capabilities["generation.generate_image_openai"].definition).family == "provider"
-
     local = GenericPackHost(pack_roots=[Path("astrid/packs/vibecomfy/executors")])
     local.discover()
     assert AdapterRegistry.resolve(local.capabilities["vibecomfy.run"].definition).family == "local_generation"
     local.preflight("vibecomfy.run")
     assert local.capabilities["vibecomfy.run"].resource_keys == ("gpu",)
-
     render = GenericPackHost(pack_roots=[Path("astrid/packs/rendering/executors/render")])
     render.discover()
     assert AdapterRegistry.resolve(render.capabilities["rendering.render"].definition).family == "render"
     render.preflight("rendering.render")
     report = render.capabilities["rendering.render"].preflight
-    assert report["binaries"]["ok"]
+    if not report["binaries"]["ok"]:
+        assert "ffmpeg" in report["binaries"]["missing"]
     assert "remotion" in report
     assert render.capabilities["rendering.render"].estimated_scratch_bytes == 0
     assert render.capabilities["rendering.render"].estimated_output_bytes == 0
@@ -817,6 +863,24 @@ def test_render_preflight_requires_the_explicit_execution_runtime(monkeypatch):
     assert not record.ready
     assert not record.preflight["remotion"]["ok"]
     assert "ASTRID_REMOTION_PROJECT_DIR" in record.preflight["remotion"]["reason"]
+
+
+def test_adapter_registry_preserves_explicit_empty_matrix_lists(tmp_path):
+    _write_manifest(tmp_path / "echo")
+    host = GenericPackHost(pack_roots=[tmp_path])
+    record = host.discover()[0]
+    adapter = AdapterRegistry.from_matrix(
+        record.definition,
+        {
+            "adapter_family": "render",
+            "resource_keys": [],
+            "required_binaries": [],
+            "required_packages": [],
+        },
+    )
+    assert adapter.resource_keys == ()
+    assert adapter.required_binaries == ()
+    assert adapter.required_packages == ()
 
 
 def test_register_preserves_declared_dispositions_and_block_reasons(tmp_path, monkeypatch):

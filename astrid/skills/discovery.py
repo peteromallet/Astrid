@@ -141,7 +141,10 @@ def _scan_discovered_packs(descriptors: list[SkillDescriptor]) -> None:
 
     seen_ids = {descriptor.pack_id for descriptor in descriptors}
     for discovered in discover_pack_metadata():
-        if discovered.source_kind not in ("extra", "installed"):
+        # The shared inventory calls environment/extra roots ``env``. Keep
+        # ``installed`` as a compatibility spelling for older inventory
+        # records, but never invent a second source scan here.
+        if discovered.source_kind not in ("extra", "env", "managed", "installed"):
             continue
         pack = discovered.pack
         if pack.status == "deprecated" or pack.visibility == "hidden":

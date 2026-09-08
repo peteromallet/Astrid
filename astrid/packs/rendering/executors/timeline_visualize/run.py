@@ -355,6 +355,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Owning project slug issued by the workspace runtime.",
     )
+    parser.add_argument("--view", choices=("structure", "filmstrip"), default="structure")
+    parser.add_argument("--sample", choices=("interval", "clips", "shots", "cuts"))
+    parser.add_argument("--every", type=float)
+    parser.add_argument("--every-frames", type=int)
+    parser.add_argument("--render-run")
+    parser.add_argument("--columns", type=int)
+    parser.add_argument("--page-size", type=int)
+    parser.add_argument("--filmstrip-authority", help=argparse.SUPPRESS)
     parser.add_argument("--timeline-slug")
     parser.add_argument("--all", action="store_true", dest="select_all")
     parser.add_argument(
@@ -1609,6 +1617,9 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
             raise ValueError("--materialized-objects must be a JSON object")
     else:
         args.materialized_objects = None
+    if args.view == "filmstrip":
+        from .filmstrip_execution import execute_filmstrip
+        return execute_filmstrip(args, authority=_execution_authority_context())
     _validate_selectors(args)
     if not args.project_slug:
         raise ValueError(

@@ -56,6 +56,18 @@ class ExecutorSchemaCapabilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ExecutorValidationError, "pipeline_requirements"):
             validate_executor_definition(_manifest(pipeline_requirements=["banana"]))
 
+    def test_project_scope_defaults_to_required_and_round_trips(self) -> None:
+        default = validate_executor_definition(_manifest())
+        self.assertEqual(default.metadata.get("project_scope"), None)
+        optional = validate_executor_definition(
+            _manifest(metadata={"project_scope": "optional"})
+        )
+        self.assertEqual(optional.to_dict()["metadata"]["project_scope"], "optional")
+
+    def test_invalid_project_scope_rejected(self) -> None:
+        with self.assertRaisesRegex(ExecutorValidationError, "project_scope"):
+            validate_executor_definition(_manifest(metadata={"project_scope": "none"}))
+
     def test_retired_produces_for_alias_is_rejected(self) -> None:
         with self.assertRaisesRegex(ExecutorValidationError, "produces_for is retired"):
             validate_executor_definition(_manifest(produces_for=["AUDIO", "TEXT"]))

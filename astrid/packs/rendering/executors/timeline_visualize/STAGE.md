@@ -23,6 +23,61 @@ It is a first-class project executor, but it deliberately declares
 `requires_timeline: false`: one run may cover several timelines and is never
 bound to, or recorded in, a timeline `manifest.json`.
 
+## Rendered filmstrip view
+
+Use `--view filmstrip` for continuity review. The existing diagram remains
+`--view structure`, which is the compatibility default. Filmstrip inputs are
+`sample` (`interval`, `clips`, `cuts`, `shots`), `every` (seconds, default 0.5)
+or `every_frames` (positive integer, mutually exclusive with `every`),
+`render_run` (exact successful run id or `latest`), `columns` (default 5), and
+`page_size` (default 50). Existing range, timestamp/context, clip, asset, and
+shot selectors restrict frame selection.
+
+```bash
+python3 -m astrid timelines visualize main --project demo \
+  --view filmstrip --render-run latest --every 0.5
+python3 -m astrid timelines visualize main --project demo \
+  --view filmstrip --render-run <exact-run-id> --range 10..20 --every-frames 6
+```
+
+The executor samples presentation frame numbers from the actual managed
+render video with ffmpeg and rational frame timing. It uses the render's
+frozen timeline snapshot for clip and script annotations; current edits do
+not silently annotate an older render. Missing render provenance fails with
+an actionable error. SDK-injected `filmstrip_authority` is internal handoff
+data, never a public caller override.
+
+The frame index records integer frames, rational times, active clips, authored
+script segments, sample reasons, render provenance, and commands pinned to
+the exact render run. Intervals retain neighboring visual cut frames;
+`clips` means picture clips, `cuts` means cut boundaries, and `shots` means
+authored story beat midpoints. There is no inferred scene detection.
+Sampling is bounded at 2,000 cards and fails with guidance to narrow the
+range or increase the interval.
+
+Outputs include a self-contained offline HTML viewer, chronological paginated
+PNG and SVG contact sheets, Markdown, and JSON frame cards. Cards show time,
+frame, human shot name, and wrapped script text. The filmstrip view is the
+unified inspector: it adds expandable declared visual/audio track lanes on the
+same time ruler and uses the frozen snapshot's integer clip intervals. Empty
+tracks remain visible; audio is a placement interval, not a fabricated
+waveform. A lane row means timing overlap at the selected time; it does not
+assert that the clip contributes visible or audible output when tracks are
+muted, occluded, transparent, or otherwise composited away. Preserve those
+frozen track flags in the lane metadata. Frame and clip selection share one
+render-scoped target. A clip with no captured frame reports that fact and
+exposes its exact focus command instead of choosing an unrelated card. Clip
+identities remain in the frame index and expanded inspection. The viewer
+supports dialogue search, shot and time filters, density reduction, and
+enlarged frames with copyable times, stable targets, and pinned focus commands.
+The dense captured-frame grid is a sample of the selected render; it is not a
+second time ruler and does not claim unsampled frames exist. It cannot
+produce finer sampling from already captured frames; rerun the command for
+that. Script captions are segment-level, not word-aligned. “No script” is
+separate from any claim about acoustic silence. Filmstrip navigation uses
+its frame actions; legacy `--from-view` object navigation belongs to the
+structural view.
+
 ## Read-only contract
 
 The executor reads timeline rows/config/history from the workspace runtime and
@@ -39,7 +94,13 @@ a gateway command).
 
 ## Pack layout
 
-The run writes `agent-view/manifest.json` plus the mandatory machine bundle:
+The rendered view writes `filmstrip-view/` and publishes `filmstrip-bundle.zip`,
+a standalone HTML file, and its result manifest as managed objects. The SDK
+verifies and extracts the bundle into a disposable local delivery directory,
+returning `html`, `pages`, `frame_index`, and `manifest_path`. The runtime
+objects remain the durable record.
+
+The structural view writes `agent-view/manifest.json` plus the mandatory machine bundle:
 
 - `ground-truth.json`, `view-map.json`, and `action-index.json`
 - `asset-index.json`, `transcript-index.json`, and `diagnostics.json`
@@ -118,7 +179,10 @@ run.
 
 Snapshot-safe `--from-view`/`--focus` navigation accepts the durable managed
 manifest path returned by a successful visualization (Astrid rehydrates and
-hash-verifies its kernel-owned companion outputs). It follows
+hash-verifies its kernel-owned companion outputs). This is the structural
+frozen-object grammar; filmstrip inspector targets are render-scoped
+frame/clip/track references and are not silently treated as structural refs.
+It follows
 `docs/architecture/timeline-visualization-agent-navigation.md`. That document
 is the canonical agent navigation contract once R18 lands; the evidence pack's
 `action-index.json` is the executable source of navigation actions.

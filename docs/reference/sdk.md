@@ -32,7 +32,10 @@ as strict UTF-8 of at most 1 MiB and stored in the runtime CAS. Set/rebind
 commands require `expected_head`, use an idempotency key, and return the
 runtime's committed receipt. The remote shots adapter exposes
 `list_text_bindings`, `show_text_binding`, `set_text_binding`, and
-`rebind_text_binding`; it never opens local persistence.
+`rebind_text_binding`; it never opens local persistence. Pass `include_text=True`
+to list/show to fetch and verify the exact immutable UTF-8 text alongside its
+binding head. The CLI exposes this as `timelines shots text list/show/set`.
+Voiceover scripts and transcripts are unslotted; only prompts accept a slot.
 
 The published Astrid wheel includes the generated
 `banodoco_workspace_client` transport package. It is a pinned vendor copy of
@@ -192,9 +195,22 @@ print(result.raw_result["dry_run"])  # True
 print(result.raw_result["command"])
 ```
 
-`kind` is required (`"executor"` or `"orchestrator"`), and every executor
-run belongs to exactly one project: pass `project=<slug>` (the slug or id
-of an existing project).
+`kind` is required (`"executor"` or `"orchestrator"`). Pass the connected
+`client=` for live module-level invocations, or use `client.invoke_result()`.
+For project work, `project=<slug-or-id>` overrides the runtime's persisted
+current selection; omitting it reuses that selection. Dry runs do not read
+selection or admit work.
+
+Public Hivemind reads (`hivemind.search`, `hivemind.get_item`, and
+`hivemind.refresh_media`) work without a selected project. Omit `project` for
+workspace-scoped research, or supply it explicitly to associate the run with a
+project. These calls still pass through runtime admission and artifact storage;
+there is no standalone executor fallback. Completed invocations expose
+artifact descriptors in `result.outputs["artifacts"]`; retrieve a descriptor's
+`digest` with `client.media.read_bytes(digest)`. This Python-only method returns
+bytes and raises typed SDK errors for runtime rejection or malformed download
+responses. It also supports projectless artifacts; authorization remains with
+the runtime.
 
 ### Regular Invocation
 

@@ -121,8 +121,26 @@ class RemoteTimelines(_RemoteFamily):
     def create(self, *, project, config: Mapping[str, Any], registry: Mapping[str, Any], slug=None, name=None, timeline_id=None, idempotency_key=None):
         key = idempotency_key or uuid.uuid4().hex
         return self._typed("create_timeline_document", project, timeline_id or uuid.uuid4().hex, key=key, config=config, registry=registry, slug=slug, name=name, idempotency_key=key)
-    def list(self, project, *, cursor=None, limit=50):
-        return self._typed("list_timelines", project, cursor=cursor, limit=limit)
+    def list(self, project, *, cursor=None, limit=50, include_archived=False):
+        result = self._typed("list_timelines", project, cursor=cursor, limit=limit)
+        if not result.ok or include_archived or not isinstance(result.data, (list, tuple)):
+            return result
+        # Older/runtime deployments return archived rows from this endpoint
+        # despite the product route's active-only default. Filter only rows
+        # carrying the authoritative archived flag and retain page shape and
+        # cursor so callers can continue pagination normally.
+        page = result.data
+        if len(page) != 2 or not isinstance(page[0], list):
+            return result
+        active = [
+            row for row in page[0]
+            if not isinstance(row, Mapping) or not bool(row.get("archived", False))
+        ]
+        return DomainResult.success(
+            [active, page[1]],
+            receipt=result.receipt,
+            idempotency_key=result.idempotency_key,
+        )
     def show(self, project, ref):
         # The runtime read endpoint is id-addressed while the product CLI is
         # deliberately slug-friendly. Resolve the project-local slug to the
@@ -235,6 +253,31 @@ class RemoteMedia(_RemoteFamily):
         # response would put raw bytes in the stable product envelope and make
         # ``--json`` fail during canonicalization.
         return DomainResult.success(match)
+    def read_bytes(self, object_id: str) -> bytes:
+        """Read runtime-authorized artifact bytes, including unscoped outputs.
+
+        This Python-only method deliberately returns bytes rather than placing
+        them in the JSON-safe product result envelope used by media.show.
+        """
+        from .exceptions import ServiceError, _SERVICE_ERROR_CLASSES
+
+        try:
+            response = self._client.get_object(object_id)
+        except WorkspaceClientError as exc:
+            error_type = _SERVICE_ERROR_CLASSES.get(exc.code, ServiceError)
+            error = error_type(exc.message, details=exc.details)
+            error.code = exc.code
+            raise error from exc
+        data = response.get("data") if isinstance(response, Mapping) else None
+        if not isinstance(data, bytes):
+            error = ServiceError(
+                "runtime object download returned no bytes",
+                details={"object_id": object_id},
+            )
+            error.code = "protocol_error"
+            raise error
+        return data
+
     def verify(self, project, ref, *, realm="managed_local", idempotency_key=None):
         realm_error = self._managed_realm_error(realm, idempotency_key=idempotency_key)
         if realm_error is not None:
@@ -266,7 +309,7 @@ class RemoteTasks(_RemoteFamily):
         return self._typed("register_executor", {"executor_id": executor_id, "capabilities": capabilities}, key=idempotency_key, idempotency_key=idempotency_key)
     def register_capability(self, capability_id: str, definition_digest: str, *, idempotency_key=None):
         return self._typed("register_capability", capability_id, definition_digest, key=idempotency_key, idempotency_key=idempotency_key)
-    def create(self, *, project_id: str, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None):
+    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None):
         key = idempotency_key or uuid.uuid4().hex
         capabilities = paged_rows(self._client.list_capabilities, limit=50)
         if capabilities is None:
@@ -326,10 +369,13 @@ class RemoteRuns(_RemoteFamily):
         return self._typed(
             "list_events", cursor=cursor, limit=limit, aggregate_id=run_id
         )
-    def open(self, run_id=None, *, project=None, cache_root=None):
+    def open(self, run_id=None, *, project=None, timeline=None, default_timeline=False, cache_root=None):
         from .project_render import open_project_render
         return open_project_render(
-            self._client, project, run_id=run_id, cache_root=cache_root
+            self._client, project, run_id=run_id,
+            timeline_ref=timeline,
+            default_timeline=default_timeline,
+            cache_root=cache_root,
         )
 
 
@@ -391,6 +437,13 @@ class RemoteReferences(_RemoteFamily):
 
 
 class RemoteShots(_RemoteFamily):
+    def group(self, project, timeline, *, clip_ids, name, expected_version, hold=None, idempotency_key=None):
+        from .shot_grouping import group_timeline_clips
+        return group_timeline_clips(shots=self, timelines=RemoteTimelines(self._client),
+                                    project=project, timeline=timeline, clip_ids=clip_ids,
+                                    name=name, expected_version=expected_version, hold=hold,
+                                    idempotency_key=idempotency_key)
+
     def list(self, project, *, cursor=None, limit=50, include_archived=False):
         return self._typed("list_project_shots", project, cursor=cursor, limit=limit, include_archived=include_archived)
     def show(self, project, shot_id): return self._typed("get_project_shot", project, shot_id)
@@ -481,11 +534,38 @@ class RemoteShots(_RemoteFamily):
         except WorkspaceClientError as exc: return DomainResult.failure(ErrorObject(exc.code, exc.message, exc.details), idempotency_key=key)
         return self._typed("reorder_shot_items", project, shot_id, list(item_ids or []), key=key, expected_version=version, idempotency_key=key)
 
-    def list_text_bindings(self, project, *, shot_id=None, kind=None, slot=None):
-        return self._typed("list_project_shot_text_bindings", project, shot_id=shot_id, kind=kind, slot=slot)
+    def list_text_bindings(self, project, *, shot_id=None, kind=None, slot=None, include_text=False):
+        result = self._typed("list_project_shot_text_bindings", project, shot_id=shot_id, kind=kind, slot=slot)
+        if not result.ok or not include_text:
+            return result
+        rows, cursor = result.data
+        enriched = []
+        for row in rows:
+            content = self._text_binding_content(row)
+            if not content.ok:
+                return content
+            enriched.append(content.data)
+        return DomainResult.success([enriched, cursor])
 
-    def show_text_binding(self, project, binding_id):
-        return self._typed("get_project_shot_text_binding", project, binding_id)
+    def show_text_binding(self, project, binding_id, *, include_text=False):
+        result = self._typed("get_project_shot_text_binding", project, binding_id)
+        return self._text_binding_content(result.data) if result.ok and include_text else result
+
+    def _text_binding_content(self, binding):
+        """Read the exact immutable text referenced by an authorized binding row."""
+        import hashlib
+        try:
+            response = self._client.get_object(binding["media_id"])
+            raw = response["data"] if isinstance(response, Mapping) else response.data
+            if (not isinstance(raw, bytes) or
+                    "sha256:" + hashlib.sha256(raw).hexdigest() != binding["content_hash"] or
+                    len(raw) != binding["byte_size"]):
+                return DomainResult.failure(ErrorObject("integrity_error", "Shot text bytes do not match the binding", {"binding_id": binding["binding_id"]}))
+            return DomainResult.success({**binding, "text": raw.decode("utf-8")})
+        except UnicodeDecodeError:
+            return DomainResult.failure(ErrorObject("integrity_error", "Shot text is not valid UTF-8", {"binding_id": binding["binding_id"]}))
+        except WorkspaceClientError as exc:
+            return DomainResult.failure(ErrorObject(exc.code, exc.message, exc.details))
 
     def set_text_binding(self, project, *, shot_id, kind, text, expected_head, slot=None, binding_id=None, idempotency_key=None):
         key = idempotency_key or uuid.uuid4().hex

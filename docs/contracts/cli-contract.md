@@ -19,29 +19,20 @@ Every Astrid CLI invocation observes strict stdout/stderr separation:
 
 | Stream | Content | Purpose |
 |---|---|---|
-| **stdout** | Command result surface | The human-readable result line, or (in `--json` mode) exactly one JSON document.  Agents read stdout for the command outcome. |
+| **stdout** | Command result surface | Exactly one JSON document for product commands.  Agents read stdout for the command outcome. |
 | **stderr** | Diagnostics and structured errors | Error envelopes, `valid options:` / `recovery:` lines, and pure diagnostics.  Agents parse stderr for structured recovery guidance. |
 
-### Default Mode (Human-Readable)
+### Default output and `--json`
 
-In default mode (no `--json`), stdout carries the command result: for a
-mutation, one concise identity line (e.g. the created project slug and id);
-for a read, the requested listing or detail in plain text.
+Product and nested-mount commands emit the complete JSON SDK envelope by
+default. `--json` remains accepted for compatibility and produces identical
+output. Success and failure envelopes go to stdout; exit codes retain their
+existing meanings. Stderr is reserved for diagnostics and argument errors.
 
-Stderr in default mode carries only true diagnostics: typed error envelopes
-and recovery guidance.
-
-### JSON Mode (`--json`)
-
-When a product or nested-mount command accepts `--json`, stdout contains
-**exactly one JSON document** — one line, one object, terminated by a single
-`\n`. No preamble, no prose, no separator. This is the sole five-key
-machine-contract path for those commands. `doctor --json` is intentionally a
-different read-only diagnostic surface (its object contains `state`, `checks`,
-`next_action`, and `ok`). The operational `backup` route accepts `--json` and
-returns its runtime result object rather than the product five-key envelope.
-Agents should follow each verb's help rather than assume every operational
-family has the product envelope.
+Each response is exactly one JSON document followed by a newline.
+`tasks follow` returns its observation history in the final envelope.
+Operational `doctor` and `backup` retain their own output contracts;
+`doctor --json` returns diagnostics and `backup --json` its runtime result.
 
 The JSON payload is the frozen five-key envelope:
 
@@ -81,7 +72,7 @@ the canonical next command.
 
 These decisions are locked and must not be re-litigated:
 
-- **SD1**: `--json` is the sole machine-contract path.  It never includes
+- **SD1**: Default output and `--json` use the same machine-contract path.  It never includes
   preamble or prose — exactly one JSON object on stdout.
 - **SD2**: Recovery guidance (`valid options:` / `recovery:`) lives on
   stderr in both modes, so the stdout contract stays parseable.

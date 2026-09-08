@@ -234,6 +234,8 @@ def render(
     theme_path: Path | None = None,
     min_free_gb: float | None = None,
     keep_previous_renders: bool = False,
+    review: bool = False,
+    review_context: Mapping[str, Any] | None = None,
     backend_config: Mapping[str, Mapping[str, Any]] | None = None,
     profile: Mapping[str, Any] | None = None,
     timeline_authority: Mapping[str, Any] | None = None,
@@ -281,7 +283,7 @@ def render(
             "audio": None,
             "profile": profile,
             "backend_config": config,
-            "metadata": {},
+            "metadata": {"review": json.dumps(dict(review_context or {"shots": []}), sort_keys=True)} if review else {},
             "materialized_root": (
                 None
                 if materialized_root is None
@@ -363,6 +365,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "(optional; the built-in default is used when omitted)."
         ),
     )
+    parser.add_argument("--review", nargs="?", const=True, default=False, type=_parse_bool_arg)
+    parser.add_argument("--review-context", default=None)
     args = parser.parse_args(argv)
     try:
         if args.output_name is not None:
@@ -395,6 +399,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     theme_path=args.theme,
                     min_free_gb=args.min_free_gb,
                     keep_previous_renders=args.keep_previous_renders,
+                    review=args.review,
+                    review_context=_parse_profile(args.review_context),
                     backend_config=config,
                     profile=profile,
                     timeline_authority=timeline_authority,
@@ -412,6 +418,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 theme_path=args.theme,
                 min_free_gb=args.min_free_gb,
                 keep_previous_renders=args.keep_previous_renders,
+                review=args.review,
+                review_context=_parse_profile(args.review_context),
                 backend_config=config,
                 profile=profile,
                 timeline_authority=timeline_authority,

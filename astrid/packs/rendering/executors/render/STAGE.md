@@ -112,6 +112,7 @@ The equivalent product command is
 | selector        | string | no       | Qualified renderer id: `rendering.remotion`, `rendering.ffmpeg`, or `rendering.threejs`. Omit to select `rendering.remotion`. |
 | backend_config  | JSON   | no       | Object keyed by qualified implementation id. The service forwards only the selected implementation's namespace. |
 | output_name     | string | no       | Plain basename; defaults to `hype.mp4`. `.mov` is admitted only when the timeline has the exact `metadata.astrid_layer.alpha: true` stamp, and an explicit profile must declare MOV/ProRes/`yuva444p12le` plus PCM S16LE/48 kHz/stereo. The video and sidecar outputs use this value. |
+| review | boolean | no | Render-only top-right registered shot names plus running timeline time. Supported by Remotion and Three.js; FFmpeg rejects it. Gaps display `No shot`, overlaps display all active names. Saved timelines are unchanged. |
 | keep_previous_renders | boolean | no | Preserve prior provenance-linked sibling render outputs. |
 
 Qualified renderer selection fails closed when that implementation reports the
@@ -191,6 +192,8 @@ The staging directory and temporary props file are cleaned up after Remotion
 exits.
 
 ## Provenance sidecar
+
+Canonical shot renders pin each referenced shot’s name, version, and canonical text-binding rows under `timeline_authority.expansion.shots`. A binding’s `head`, immutable `media_id`, and `content_hash` identify the exact narration or other attached text at admission. Rebinding text changes render identity even when the visual timeline stays unchanged. This records source provenance; it does not generate speech or draw captions. The bound text remains inspectable through the canonical shot text-binding and media APIs.
 
 Every successful facade render writes `<output>.provenance.json`. Core owns its
 routing and identity fields: request digest, requested policy, planner, ordered

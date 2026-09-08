@@ -325,6 +325,15 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             or not source_path.is_dir() or source_path.is_symlink()
             or worker_path.stat().st_mode & 0o777 != 0o600):
         raise PackHostBootstrapError(f"generic Astrid pack host handoff is unavailable; {reconfigure_action}")
+    try:
+        from astrid.core.pack.source_setup import active_source_inventory
+
+        managed_inventory = active_source_inventory()
+    except Exception as exc:
+        raise PackHostBootstrapError(
+            f"managed source inventory could not be verified; {reconfigure_action}"
+        ) from exc
+    inventory_identity = managed_inventory.identity if managed_inventory.sources else ""
     pack_root = source_path / "astrid" / "packs"
     if not pack_root.is_dir() or pack_root.is_symlink():
         raise PackHostBootstrapError(f"Astrid source checkout has no pack root; {reconfigure_action}")
@@ -394,6 +403,9 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
         current = _read_object(state_path)
         ready = _read_object(ready_path)
         expected = {
+            # Preserve the venv executable path: resolving its symlink would
+            # collapse different dependency environments to the base Python.
+            "python_executable": os.path.abspath(sys.executable),
             "endpoint": endpoint,
             "executor_id": PACK_HOST_ACTOR,
             "ready_file": str(ready_path),
@@ -401,12 +413,28 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "support_root": str(runtime_support),
             "source_checkout": str(source_path),
             "source_checkout_digest": source_digest,
+            "source_inventory_identity": inventory_identity,
             "runtime_instance_id": str(runtime_instance_id),
             "runtime_epoch": runtime_epoch,
             "schema_digest": schema_digest,
         }
+        recorded_inventory_identity = str(current.get("source_inventory_identity") or "") if current else ""
+        ready_inventory_identity = str(ready.get("source_inventory_identity") or "") if ready else ""
+        legacy_empty_inventory = (
+            not inventory_identity
+            and not recorded_inventory_identity
+            and not ready_inventory_identity
+        )
+        if legacy_empty_inventory:
+            # Preserve reuse of hosts created before managed-source fencing
+            # only when both persisted records are also empty. A host that
+            # advertises a prior non-empty inventory must be restarted when
+            # the selected inventory is disabled.
+            expected.pop("source_inventory_identity")
         if (current and ready
                 and all(current.get(key) == expected_value for key, expected_value in expected.items())
+                and (legacy_empty_inventory or recorded_inventory_identity == inventory_identity)
+                and (legacy_empty_inventory or ready_inventory_identity == inventory_identity)
                 and _host_identity_matches(current)
                 and str(ready.get("status")) == "ready"
                 and all(ready.get(key) == expected_value for key, expected_value in expected.items())
@@ -421,8 +449,17 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
                 "host_runtime_instance_id": str(runtime_instance_id),
                 "host_runtime_epoch": runtime_epoch,
                 "host_source_checkout_digest": source_digest,
+                "host_source_inventory_identity": inventory_identity,
             }
         if current:
+            # Reconfiguration is not cancellation. In particular, a status
+            # command from another interpreter or after a documentation edit
+            # must not terminate a render already owned by this host.
+            if _host_identity_matches(current) and _descendant_snapshot(int(current["pid"])):
+                raise PackHostBootstrapError(
+                    "generic Astrid pack host is busy with active child processes; "
+                    "reconfiguration is deferred until its work finishes"
+                )
             _terminate_old_host(current)
         ready_path.unlink(missing_ok=True)
         log_path = runtime_support / "generic-host.log"
@@ -439,7 +476,10 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "--source-checkout", str(source_path),
             "--runtime-instance-id", str(runtime_instance_id),
             "--register",
+            "--source-inventory-identity", inventory_identity,
         ]
+        for managed_root in managed_inventory.roots:
+            argv.extend(("--pack-root", str(managed_root)))
         if matrix.is_file():
             argv.extend(("--capability-matrix", str(matrix)))
         child_env = dict(os.environ)
@@ -505,6 +545,7 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "host_runtime_instance_id": str(runtime_instance_id),
             "host_runtime_epoch": runtime_epoch,
             "host_source_checkout_digest": source_digest,
+            "host_source_inventory_identity": inventory_identity,
         }
     finally:
         try:

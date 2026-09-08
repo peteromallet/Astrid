@@ -103,7 +103,7 @@ Executor-owned complexity stays in the executor folder, usually under optional l
 | `astrid/packs/local/elements/<kind>/<id>` | Element support | Optional project-local source pack for authored elements; identities and digests come from its declared manifests. |
 | `astrid/core/element/catalog.py` | Element support | Effect, animation, and transition catalog support used by render validation. |
 | `scripts/gen_effect_registry.py` | Element support | Generates Remotion registries from the element registry; emits `@pack-<pack>-elements-<kind>/...` imports. |
-| `scripts/gen_capability_index.py` | Capability discovery | Regenerates the capability index block in `astrid/packs/_core/skill/SKILL.md` from executor, orchestrator, and element manifests. |
+| `scripts/gen_capability_index.py` | Capability discovery | Regenerates the optional capability index in `astrid/packs/_core/skill/references/capabilities.md` from executor, orchestrator, and element manifests. |
 | `astrid/timeline.py` | Shared library and element validator | Timeline schema and effect/animation/transition validation. |
 | `remotion/*` | Element runtime support | TypeScript renderer consuming generated element registries from canonical discovered pack sources. |
 

@@ -463,6 +463,10 @@ class AutoHealTest(unittest.TestCase):
             for harness in ("claude", "codex", "hermes"):
                 link = self._core_link(fx, harness)
                 self.assertTrue(link.is_symlink(), f"missing gateway link for {harness}")
+                self.assertEqual(
+                    link.resolve(),
+                    (state.state_path().parent / "skills" / harness).resolve(),
+                )
                 others = [
                     p.name
                     for p in link.parent.iterdir()
@@ -538,7 +542,7 @@ class AutoHealTest(unittest.TestCase):
         fx = _Tmp()
         try:
             stream = io.StringIO()
-            with mock.patch.object(skills, "install", side_effect=RuntimeError("boom")):
+            with mock.patch.object(skills, "sync", side_effect=RuntimeError("boom")):
                 # Must not propagate; returns False (no heal performed).
                 fired = skills.nudge_if_needed(argv=["doctor"], stream=stream)
             self.assertFalse(fired)

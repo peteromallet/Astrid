@@ -55,7 +55,8 @@ def _add_json_flag(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--json",
         action="store_true",
-        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key).",
+        default=True,
+        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key); default output.",
     )
 
 
@@ -113,7 +114,12 @@ def _cmd_events(parsed: argparse.Namespace) -> int:
 
 
 def _cmd_open(parsed: argparse.Namespace) -> int:
-    result = parsed.client.runs.open(parsed.run_id, project=parsed.project)
+    kwargs = {"project": parsed.project}
+    if parsed.timeline is not None:
+        kwargs["timeline"] = parsed.timeline
+    if parsed.default_timeline:
+        kwargs["default_timeline"] = True
+    result = parsed.client.runs.open(parsed.run_id, **kwargs)
     return print_result(result, as_json=parsed.json)
 
 
@@ -184,6 +190,17 @@ def _configure_open(subparser: argparse.ArgumentParser) -> None:
         "--project",
         default=None,
         help="Project id or immutable slug (default: selected current project).",
+    )
+    timeline_group = subparser.add_mutually_exclusive_group()
+    timeline_group.add_argument(
+        "--timeline",
+        default=None,
+        help="Canonical timeline slug/id to select.",
+    )
+    timeline_group.add_argument(
+        "--default-timeline",
+        action="store_true",
+        help="Select the project's configured default canonical timeline.",
     )
     _add_json_flag(subparser)
     subparser.set_defaults(handler=_cmd_open)

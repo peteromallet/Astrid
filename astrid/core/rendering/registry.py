@@ -639,6 +639,12 @@ def _derive_pack_trust(discovered: DiscoveredPack) -> _PackTrust:
             "project-local pack is execution-eligible",
             trust_method="project_local",
         )
+    if source_kind == "managed":
+        return _PackTrust(
+            True,
+            "validated managed pack source is execution-eligible",
+            trust_method="managed_source",
+        )
     if source_kind == "extra":
         return _PackTrust(
             True,

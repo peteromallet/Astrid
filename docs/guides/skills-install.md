@@ -8,6 +8,16 @@ python3 -m astrid.skills.cli install --all
 
 `--all` only writes to harnesses whose home directory exists; missing harnesses are skipped silently.
 
+The gateway also recognizes shipped external packs whose canonical manifest
+declares `install_tier: default` (currently Hivemind). A fresh harness
+discovery links those default skills alongside `_core`. If a user removes a
+default skill with `skills uninstall`, Astrid records that choice and leaves it
+removed. A missing link that was still installed is treated as drift and is
+restored by the normal auto-heal path or `skills sync`.
+
+The installed-wheel recovery entrypoint is `python -m astrid.skills sync` (or
+`python -m astrid.skills doctor --heal`).
+
 ## SkillDescriptor contract
 
 Each pack that wants to be installable contributes one file:

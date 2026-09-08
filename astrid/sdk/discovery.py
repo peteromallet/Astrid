@@ -144,6 +144,15 @@ def _pack_record(discovered_pack: Any) -> dict[str, Any]:
     payload["source_kind"] = discovered_pack.source_kind
     payload["priority_index"] = discovered_pack.priority_index
     payload["source_type"] = discovered_pack.source_kind
+    for field in (
+        "source_revision",
+        "source_manifest_sha256",
+        "source_tree_sha256",
+        "source_inventory_identity",
+    ):
+        value = getattr(discovered_pack, field, None)
+        if value is not None:
+            payload[field] = value
     return _json_safe_mapping(payload)
 
 

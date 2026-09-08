@@ -33,6 +33,7 @@ import pytest
 from astrid.core.cli.domain_product import run_product_family
 from astrid.core.receipts.contract import CommandReceipt
 from astrid.sdk.contracts import DomainResult, ErrorObject
+from astrid.sdk.remote import RemoteTimelines
 from astrid.sdk.results import InvocationResult
 
 ENVELOPE_KEYS = {"ok", "data", "error", "receipt", "idempotency_key"}
@@ -488,7 +489,7 @@ def test_projects_show_is_one_sdk_call(capsys) -> None:
     assert rc == 0
     assert client.calls == [("projects.show", {"ref": "demo"})]
     out = capsys.readouterr().out
-    assert out == "slug: demo\n"
+    assert json.loads(out)["data"]["slug"] == "demo"
 
 
 def test_projects_update_is_one_sdk_call_with_delta_and_key(capsys) -> None:
@@ -551,8 +552,9 @@ def test_projects_failure_envelope_exits_one(capsys) -> None:
     assert rc == 1
     assert len(client.calls) == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "error not_found: missing\n"
+    assert captured.err == ""
+    assert json.loads(captured.out)["error"]["code"] == "not_found"
+    assert json.loads(captured.out)["error"]["message"] == "missing"
 
 
 def test_projects_unknown_verb_is_a_usage_error() -> None:
@@ -712,21 +714,61 @@ def test_timelines_render_detach_is_explicit_and_truthfully_labeled(capsys) -> N
     }
 
 
-def test_timelines_render_human_admission_prints_copyable_handoff(capsys) -> None:
+def test_timelines_render_default_admission_preserves_json_handoff(capsys) -> None:
     client = _FakeClient()
 
     assert _run(
         "timelines", ["render", "--project", "demo", "main", "--detach"], client=client
     ) == 0
 
-    output = capsys.readouterr().out
-    assert "render admitted" in output
-    assert "run: R-1" in output
-    assert "task: T-1" in output
-    assert "follow: python3 -m astrid tasks follow T-1 --project demo" in output
-    assert "inspect: python3 -m astrid tasks show T-1 --project demo --json" in output
-    assert "events: python3 -m astrid tasks events T-1 --project demo --json" in output
-    assert "open: python3 -m astrid runs open R-1 --project demo" in output
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["state"] == "admitted"
+    assert payload["data"]["handoff"]["open"] == "python3 -m astrid runs open R-1 --project demo"
+
+
+
+class _DefaultTimelineProjects(_RecordingProjects):
+    def show(self, ref):
+        self._owner.calls.append(("projects.show", {"ref": ref}))
+        return DomainResult.success(
+            {
+                "slug": ref,
+                "name": "Demo",
+                "project_id": "P-1",
+                "metadata": {"default_timeline_id": "TL-9"},
+            }
+        )
+
+
+class _DefaultTimelineClient(_FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.projects = _DefaultTimelineProjects(self)
+
+
+def test_timelines_render_without_ref_uses_project_default_timeline(capsys) -> None:
+    client = _DefaultTimelineClient()
+    rc = _run(
+        "timelines",
+        ["render", "--project", "demo", "--detach", "--json"],
+        client=client,
+    )
+    assert rc == 0
+    assert client.calls[0] == ("projects.show", {"ref": "demo"})
+    _, kwargs = client.calls[-1]
+    assert kwargs["capability_id"] == "rendering.render"
+    assert kwargs["inputs"]["timeline_ref"] == "TL-9"
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_timelines_render_without_ref_and_without_default_fails_cleanly(capsys) -> None:
+    client = _FakeClient()
+    rc = _run("timelines", ["render", "--project", "demo", "--json"], client=client)
+    assert rc == 1
+    assert [verb for verb, _ in client.calls] == ["projects.show"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "default timeline" in json.dumps(payload)
 
 
 def test_timelines_visualize_help_separates_legacy_input_from_manifest_compatibility(
@@ -835,12 +877,108 @@ def test_timelines_list_is_one_sdk_call(capsys) -> None:
     assert envelope["data"] == [{"slug": "main", "name": "Main"}]
 
 
+def test_timelines_list_compacts_document_blobs_to_identity_and_counts(capsys) -> None:
+    class _LargeListing(_RecordingTimelines):
+        def list(self, project, *, include_archived=False):
+            self._owner.calls.append(("timelines.list", {"project": project}))
+            return DomainResult.success(
+                [
+                    {
+                        "timeline_id": "T-1",
+                        "slug": "main",
+                        "name": "Main",
+                        "version": 7,
+                        "is_default": True,
+                        "config": {
+                            "fps": 24,
+                            "clips": [{"id": "C-1"}, {"id": "C-2"}],
+                            "opaque": "large config omitted",
+                        },
+                        "registry": {"assets": {"A-1": {}, "A-2": {}}},
+                    }
+                ]
+            )
+
+    class _Client(_FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.timelines = _LargeListing(self)
+
+    client = _Client()
+    assert _run("timelines", ["list", "--project", "demo", "--json"], client=client) == 0
+    data = json.loads(capsys.readouterr().out)["data"][0]
+    assert data == {
+        "timeline_id": "T-1",
+        "slug": "main",
+        "name": "Main",
+        "version": 7,
+        "is_default": True,
+        "counts": {"config_keys": 3, "clips": 2, "assets": 2},
+    }
+
+
+def test_timelines_list_forwards_include_archived(capsys) -> None:
+    client = _FakeClient()
+    assert _run(
+        "timelines", ["list", "--project", "demo", "--include-archived", "--json"], client=client
+    ) == 0
+    assert client.calls == [("timelines.list", {"project": "demo", "include_archived": True})]
+    capsys.readouterr()
+
+
+def test_timelines_list_compacts_runtime_page_and_preserves_cursor(capsys) -> None:
+    class _PagedListing(_RecordingTimelines):
+        def list(self, project, *, include_archived=False):
+            self._owner.calls.append(("timelines.list", {"project": project}))
+            return DomainResult.success(
+                [
+                    [{"timeline_id": "T-1", "slug": "main", "config": {"clips": [1]}}],
+                    "next-page",
+                ]
+            )
+
+    class _Client(_FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.timelines = _PagedListing(self)
+
+    client = _Client()
+    assert _run("timelines", ["list", "--project", "demo", "--json"], client=client) == 0
+    assert json.loads(capsys.readouterr().out)["data"] == [
+        [{"timeline_id": "T-1", "slug": "main", "counts": {"config_keys": 1, "clips": 1}}],
+        "next-page",
+    ]
+
+
+def test_remote_timelines_list_filters_archived_rows_and_preserves_cursor() -> None:
+    class _Runtime:
+        def list_timelines(self, project, *, cursor=None, limit=50):
+            assert project == "demo"
+            return (
+                [
+                    {"timeline_id": "T-archived", "archived": True},
+                    {"timeline_id": "T-active", "archived": False},
+                ],
+                "next-page",
+            )
+
+    service = RemoteTimelines(_Runtime())
+    result = service.list("demo")
+    assert result.ok is True
+    assert result.data == [[{"timeline_id": "T-active", "archived": False}], "next-page"]
+    inclusive = service.list("demo", include_archived=True)
+    assert inclusive.data[0] == [
+        {"timeline_id": "T-archived", "archived": True},
+        {"timeline_id": "T-active", "archived": False},
+    ]
+
+
 def test_timelines_show_is_one_sdk_call(capsys) -> None:
     client = _FakeClient()
     rc = _run("timelines", ["show", "--project", "demo", "main"], client=client)
     assert rc == 0
     assert client.calls == [("timelines.show", {"project": "demo", "ref": "main"})]
-    assert capsys.readouterr().out == "slug: main\n"
+    assert json.loads(capsys.readouterr().out)["data"]["slug"] == "main"
 
 
 def test_timelines_save_is_one_sdk_call_with_cas_args(capsys) -> None:
@@ -931,7 +1069,7 @@ def test_timelines_history_is_one_sdk_call(capsys) -> None:
     rc = _run("timelines", ["history", "--project", "demo", "main"], client=client)
     assert rc == 0
     assert client.calls == [("timelines.history", {"project": "demo", "ref": "main"})]
-    assert capsys.readouterr().out == "1 result(s)\n"
+    assert len(json.loads(capsys.readouterr().out)["data"]) == 1
 
 
 def test_timelines_diff_is_one_sdk_call(capsys) -> None:
@@ -939,7 +1077,7 @@ def test_timelines_diff_is_one_sdk_call(capsys) -> None:
     rc = _run("timelines", ["diff", "--project", "demo", "main"], client=client)
     assert rc == 0
     assert client.calls == [("timelines.diff", {"project": "demo", "ref": "main"})]
-    assert capsys.readouterr().out == "1 result(s)\n"
+    assert len(json.loads(capsys.readouterr().out)["data"]) == 1
 
 
 def test_timelines_visualize_routes_public_sdk_and_normalizes_formats(capsys) -> None:
@@ -1154,10 +1292,12 @@ def test_dispatch_timelines_has_no_legacy_cli_fallback(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_shots_parser_has_exactly_six_verbs_beneath_timelines() -> None:
+def test_shots_parser_has_exactly_eight_verbs_beneath_timelines() -> None:
     from astrid.packs.shots.cli import COMMANDS, build_parser
 
     assert tuple(spec.name for spec in COMMANDS) == (
+        "text",
+        "group",
         "list",
         "show",
         "create",
@@ -1169,6 +1309,8 @@ def test_shots_parser_has_exactly_six_verbs_beneath_timelines() -> None:
     parser = build_parser(_FakeClient())
     assert parser.prog == "astrid timelines shots"
     assert _subparser_choices(parser) == {
+        "text",
+        "group",
         "list",
         "show",
         "create",
@@ -1421,8 +1563,9 @@ def test_shots_failure_envelope_exits_one(capsys) -> None:
     assert rc == 1
     assert len(client.calls) == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "error not_found: missing\n"
+    assert captured.err == ""
+    assert json.loads(captured.out)["error"]["code"] == "not_found"
+    assert json.loads(captured.out)["error"]["message"] == "missing"
 
 
 def test_shots_unknown_verb_is_a_usage_error() -> None:
@@ -1468,3 +1611,36 @@ def test_dispatch_timelines_shots_routes_through_product_dispatch(
     monkeypatch.setattr(dispatch, "_dispatch_product", _fake_product)
     assert dispatch._dispatch_timelines(["shots", "list", "--project", "demo"]) == 9
     assert seen["args"] == ["timelines", "shots", "list", "--project", "demo"]
+
+
+def test_projects_list_default_matches_explicit_json(capsys) -> None:
+    client = _FakeClient()
+    assert _run("projects", ["list"], client=client) == 0
+    default = capsys.readouterr().out
+    assert _run("projects", ["list", "--json"], client=client) == 0
+    assert default == capsys.readouterr().out
+    assert json.loads(default)["ok"] is True
+
+
+def test_timelines_render_review_is_public_admitted_input(capsys):
+    client = _FakeClient()
+    assert _run('timelines', ['render', 'main', '--project', 'demo', '--review', '--json'], client=client) == 0
+    assert client.calls[0][1]['inputs'] == {'timeline_ref': 'main', 'review': True}
+
+
+def test_timelines_visualize_forwards_filmstrip_options(capsys) -> None:
+    client = _FakeClient()
+    rc = _run('timelines', [
+        'visualize', '--project', 'demo', 'main', '--view', 'filmstrip',
+        '--sample', 'cuts', '--render-run', '01EXACT', '--every-frames', '12',
+        '--columns', '4', '--page-size', '40', '--range', '10..20', '--json',
+    ], client=client)
+    assert rc == 0
+    assert len(client.calls) == 1
+    assert client.calls[0][1]["wait"] is True
+    assert client.calls[0][1]['inputs'] == {
+        'formats': ['all'], 'timeline_slug': 'main', 'view': 'filmstrip',
+        'sample': 'cuts', 'render_run': '01EXACT', 'every_frames': 12,
+        'columns': 4, 'page_size': 40, 'range': '10..20',
+    }
+    capsys.readouterr()

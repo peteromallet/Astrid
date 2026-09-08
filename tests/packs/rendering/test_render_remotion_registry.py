@@ -95,15 +95,59 @@ class RenderRemotionRegistryGenerationTest(unittest.TestCase):
             project_dir, _composition_src = self._write_fake_remotion_project(tmp)
             state = render_remotion._effective_registry_state(None)
             render_remotion._write_registry_state(project_dir, state)
-            for output_path in render_remotion._registry_output_paths(project_dir):
+            # Write the ACTUAL generated registry content so the recorded
+            # content_hashes match the on-disk files.  A stale/placeholder
+            # file (e.g. leftover from an older generator) must NOT qualify as
+            # current — that is exactly the drift the content-verify guard
+            # catches, so this test asserts the skip only when content matches.
+            content_hashes = state["content_hashes"]
+            for kind in ("effects", "animations", "transitions"):
+                output_path = render_remotion._registry_output_paths(project_dir)[
+                    ["effects", "animations", "transitions"].index(kind)
+                ]
                 if tmp in output_path.parents:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
-                    output_path.write_text("// generated test fixture\n", encoding="utf-8")
+                    output_path.write_text(
+                        render_remotion.gen_effect_registry.generate_element_registry(kind),
+                        encoding="utf-8",
+                    )
+                    self.assertEqual(
+                        render_remotion._registry_output_content_hashes(project_dir)[kind],
+                        content_hashes[kind],
+                    )
 
             with mock.patch.object(render_remotion.subprocess, "run") as run_mock:
                 render_remotion._regenerate_element_registries(project_dir, None)
 
         run_mock.assert_not_called()
+
+    def test_registry_generation_regenerates_when_on_disk_outputs_are_stale(self) -> None:
+        """A stale on-disk registry must be regenerated even when the hash matches.
+
+        The recorded state hash can match the generator's current inputs while
+        the actual ``*.generated.ts`` files drifted (e.g. an old generator left
+        a text-card-only node_modules copy).  The content-verify guard compares
+        the on-disk content hashes against the cached snapshot and forces a
+        regeneration, instead of trusting the fingerprint alone.
+        """
+        with tempfile.TemporaryDirectory(prefix="render-registry-stale-") as tmp_text:
+            tmp = Path(tmp_text)
+            project_dir, _composition_src = self._write_fake_remotion_project(tmp)
+            state = render_remotion._effective_registry_state(None)
+            render_remotion._write_registry_state(project_dir, state)
+            for output_path in render_remotion._registry_output_paths(project_dir):
+                if tmp in output_path.parents:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    # Deliberately stale/placeholder content, NOT the current
+                    # generator output.
+                    output_path.write_text("// stale placeholder\n", encoding="utf-8")
+
+            self.assertFalse(render_remotion._registry_outputs_match_state(project_dir, state))
+
+            with mock.patch.object(render_remotion.subprocess, "run") as run_mock:
+                render_remotion._regenerate_element_registries(project_dir, None)
+
+        run_mock.assert_called_once()
 
     def test_render_discovers_fixture_local_effect_assets_without_real_local_pack(self) -> None:
         with tempfile.TemporaryDirectory(prefix="render-local-effect-smoke-") as tmp_text:
@@ -125,6 +169,24 @@ class RenderRemotionRegistryGenerationTest(unittest.TestCase):
 
             def fake_run(cmd, **kwargs):
                 command = [str(part) for part in cmd]
+                # The registry generator subprocess runs first.  Write the
+                # actual generated registries into the (temp) composition src
+                # so the render-admission effect check sees the real EFFECT_IDS
+                # (the fixture's local effect must be mountable).
+                if (
+                    len(command) >= 2
+                    and str(command[0]).endswith("gen_effect_registry.py")
+                ):
+                    env = kwargs.get("env", {})
+                    src = env.get("ASTRID_TIMELINE_COMPOSITION_SRC")
+                    if src:
+                        src_path = Path(src)
+                        for kind in ("effects", "animations", "transitions"):
+                            (src_path / f"{kind}.generated.ts").write_text(
+                                render_remotion.gen_effect_registry.generate_element_registry(kind),
+                                encoding="utf-8",
+                            )
+                    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
                 if (
                     len(command) >= 3
                     and Path(command[0]).name == "node"

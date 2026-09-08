@@ -14,12 +14,18 @@ source-profile manifest. The first product command starts or reconnects that
 runtime through the neutral launcher; no separate database service is needed:
 
 ```bash
-pip install .
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install .
 python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@4050394c5395206f1ec6bf0d905ffbfb7bb0e4de'
 export BANODOCO_LOCAL_SOURCE_MANIFEST=/path/to/astrid-source-profile.json
 python3 -m astrid --help
 python3 -m astrid projects list --json
 ```
+
+Use that environment for later commands too. The render worker checks its
+dependencies in an isolated Python process, so user-site-only installations
+are insufficient; install rendering dependencies into the active environment.
 
 The pinned source install is temporary until the certified
 `banodoco-workspace-runtime==0.1.0` wheel is published. Astrid resolves the

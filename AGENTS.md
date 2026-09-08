@@ -1,7 +1,7 @@
 # Astrid
 
 When in doubt, run `python3 -m astrid --help` — it prints the complete
-eight-family census (projects, timelines, media, tasks, runs, serve,
+seven-family census (projects, timelines, media, tasks, runs,
 doctor, backup). For the agent-facing skill, see
 [astrid/packs/_core/skill/SKILL.md](astrid/packs/_core/skill/SKILL.md).
 For the human setup path, see

@@ -52,6 +52,30 @@ def _output_name(spec: Any) -> str | None:
     return None
 
 
+def _timeline_provenance(value: Any) -> set[str]:
+    """Return explicit canonical timeline refs carried by a run/task spec.
+
+    ``timeline`` is deliberately excluded: it is the legacy file input and
+    cannot prove ownership of a managed canonical timeline.
+    """
+    refs: set[str] = set()
+    if isinstance(value, Mapping):
+        for key in ("timeline_ref", "timeline_id"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                refs.add(candidate.strip())
+        # Runtime admission wraps executor inputs in ``spec``; the remaining
+        # containers are the documented input envelopes. Avoid treating an
+        # arbitrary annotation or output filename as provenance.
+        for key in ("spec", "inputs", "params"):
+            if key in value:
+                refs.update(_timeline_provenance(value[key]))
+    elif isinstance(value, list):
+        for child in value:
+            refs.update(_timeline_provenance(child))
+    return refs
+
+
 def _default_cache_root() -> Path:
     if platform.system() == "Darwin":
         return Path.home() / "Library" / "Caches" / "Astrid" / "renders"
@@ -83,12 +107,16 @@ def open_project_render(
     project_ref: str | None = None,
     *,
     run_id: str | None = None,
+    timeline_ref: str | None = None,
+    default_timeline: bool = False,
     cache_root: Path | None = None,
 ) -> DomainResult[Any]:
-    """Open one exact render, or the current project's newest successful render."""
+    """Open one exact render, or the newest successful render for a timeline."""
     if platform.system() != "Darwin":
         return _failure("unsupported_platform", "opening renders is currently supported on macOS only")
     try:
+        if default_timeline and isinstance(timeline_ref, str) and timeline_ref.strip():
+            return _failure("validation_error", "timeline_ref and default_timeline are mutually exclusive")
         if project_ref is None:
             current = client.current_project()
             project = current.get("project") if isinstance(current, Mapping) else None
@@ -105,6 +133,31 @@ def open_project_render(
         project_id = _identifier(project, "project_id", "id")
         if not project_id:
             return _failure("protocol_error", "runtime project response has no project id")
+
+        selected_timeline = timeline_ref.strip() if isinstance(timeline_ref, str) and timeline_ref.strip() else None
+        if selected_timeline is None and default_timeline:
+            metadata = project.get("metadata")
+            if isinstance(metadata, Mapping):
+                default = metadata.get("default_timeline_id")
+                if isinstance(default, str) and default.strip():
+                    selected_timeline = default.strip()
+            if selected_timeline is None:
+                return _failure("not_found", "project has no configured default canonical timeline", project_id=project_id)
+
+        # Resolve a slug to its canonical id through the runtime timeline
+        # listing; provenance is always required below.
+        timeline_refs = {selected_timeline} if selected_timeline else set()
+        if selected_timeline:
+            if not callable(getattr(client, "list_timelines", None)):
+                return _failure("unavailable", "runtime cannot resolve canonical timelines for render opening", project_id=project_id, timeline_ref=selected_timeline)
+            timeline_rows = paged_rows(client.list_timelines, project_id, limit=50)
+            if timeline_rows is None:
+                return _failure("protocol_error", "runtime timeline listing is malformed", project_id=project_id)
+            match = next((row for row in timeline_rows if isinstance(row, Mapping) and selected_timeline in {_identifier(row, "timeline_id", "id"), _identifier(row, "slug")}), None)
+            if match is None:
+                return _failure("not_found", "canonical timeline is not in the selected project", timeline_ref=selected_timeline, project_id=project_id)
+            if match:
+                timeline_refs.update({_identifier(match, "timeline_id", "id"), _identifier(match, "slug")})
 
         if run_id is not None:
             run = client.get_run(run_id)
@@ -127,11 +180,32 @@ def open_project_render(
                 key=lambda row: (str(row.get("created_at") or row.get("updated_at") or ""), _identifier(row, "run_id", "id")),
                 reverse=True,
             )
+        if selected_timeline:
+            associated: list[Mapping[str, Any]] = []
+            for candidate in candidates:
+                if _timeline_provenance(candidate.get("spec")) & timeline_refs:
+                    associated.append(candidate)
+                    continue
+                task_ids = candidate.get("task_ids")
+                if not isinstance(task_ids, list):
+                    refreshed = client.get_run(_identifier(candidate, "run_id", "id"))
+                    if isinstance(refreshed, Mapping):
+                        candidate = refreshed
+                        task_ids = candidate.get("task_ids")
+                if isinstance(task_ids, list):
+                    for task_id in task_ids:
+                        task = client.get_task(task_id)
+                        if isinstance(task, Mapping) and _timeline_provenance(task.get("spec")) & timeline_refs:
+                            associated.append(candidate)
+                            break
+            candidates = associated
         if not candidates:
+            message = "project has no successful rendering.render run for the selected canonical timeline" if selected_timeline else "project has no successful rendering.render run"
             return _failure(
                 "not_found",
-                "project has no successful rendering.render run",
+                message,
                 project_id=project_id,
+                **({"timeline_ref": selected_timeline} if selected_timeline else {}),
                 next_action="astrid timelines render <timeline> --project <project>",
             )
 
@@ -141,6 +215,14 @@ def open_project_render(
             return _failure("protocol_error", "runtime render run has no id")
         if _render_capability(run) not in {"", "rendering.render"} or _state(run) not in _SUCCESS_STATES:
             return _failure("validation_error", "selected run is not a successful rendering.render run", run_id=selected_run_id)
+        if selected_timeline and not (_timeline_provenance(run.get("spec")) & timeline_refs):
+            # Exact runs may omit provenance at the run level; verify it from
+            # the child task before allowing the download/open side effect.
+            run_task_ids = run.get("task_ids")
+            if not isinstance(run_task_ids, list):
+                return _failure("validation_error", "selected render has no authoritative timeline provenance", run_id=selected_run_id, timeline_ref=selected_timeline)
+            if not any(_timeline_provenance(client.get_task(task_id).get("spec")) & timeline_refs for task_id in run_task_ids):
+                return _failure("validation_error", "selected render has no authoritative timeline provenance", run_id=selected_run_id, timeline_ref=selected_timeline)
         if not isinstance(run.get("task_ids"), list):
             run = client.get_run(selected_run_id)
         task_ids = run.get("task_ids") if isinstance(run, Mapping) else None
@@ -217,6 +299,7 @@ def open_project_render(
                 "size": len(data),
                 "local_path": str(path),
                 "opened": True,
+                **({"timeline_ref": selected_timeline} if selected_timeline else {}),
             }
         )
     except WorkspaceClientError as exc:

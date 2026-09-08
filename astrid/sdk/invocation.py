@@ -569,6 +569,7 @@ def _validate_timeline_visualize_inputs(
     project: str | None,
     project_root: str | Path | None = None,
     out: str | Path | None = None,
+    _client: Any | None = None,
 ) -> dict[str, Any]:
     """Validate visualization's selector/ownership contract before admission.
 
@@ -619,6 +620,33 @@ def _validate_timeline_visualize_inputs(
             "timeline_source is not a supported product input; use timeline_slug "
             "or the runtime-selected default"
         )
+    if "filmstrip_authority" in values:
+        raise CapabilityValidationError("filmstrip_authority is host-owned and cannot be supplied")
+    view = values.get("view", "structure")
+    if view not in {"structure", "filmstrip"}:
+        raise CapabilityValidationError("view must be structure or filmstrip")
+    if view == "filmstrip":
+        if not isinstance(project, str) or not project.strip():
+            raise CapabilityValidationError("filmstrip review requires project=<slug>")
+        if values.get("project_slug") not in (None, "", project):
+            raise CapabilityValidationError("project_slug does not match project")
+        if any(values.get(key) for key in ("all", "from_view", "focus", "refresh_root")):
+            raise CapabilityValidationError(
+                "filmstrip review selects one managed render; all/from_view navigation "
+                "belongs to the timeline view"
+            )
+        from .timeline_filmstrip import prepare_filmstrip
+        from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
+        try:
+            filmstrip_options(values)
+        except ValueError as exc:
+            raise CapabilityValidationError(str(exc)) from exc
+        return prepare_filmstrip(values, project=project, client=_client)
+    if any(values.get(key) is not None for key in (
+        "render_run", "sample", "every", "every_frames", "columns", "page_size"
+    )):
+        raise CapabilityValidationError("filmstrip controls require view=filmstrip")
+
     has_ref = values.get("timeline_slug") not in (None, "")
     select_all = bool(values.get("all", False))
     if has_ref and select_all:
@@ -1029,6 +1057,9 @@ def _prepare_managed_render_inputs(
         # the SDK before expansion. The expander never invents or fetches a
         # missing shot and never talks to storage itself.
         child_records: list[dict[str, Any]] = []
+        review_shots: list[dict[str, Any]] = []
+        shot_records: dict[str, dict[str, Any]] = {}
+        from .render_shot_snapshot import shot_text_snapshot
         raw_clips = snapshot.config.get("clips", [])
         for index, clip in enumerate(raw_clips):
             if not isinstance(clip, Mapping) or clip.get("clipType") != "shot":
@@ -1049,6 +1080,15 @@ def _prepare_managed_render_inputs(
                     f"canonical timeline {snapshot.timeline_slug!r} references unregistered shot "
                     f"{shot_id!r}"
                 )
+            if shot_id not in shot_records:
+                shot_records[shot_id] = {
+                    "shot_id": shot_id,
+                    "name": str(shot_result.data.get("name") or shot_id),
+                    "version": shot_result.data.get("version"),
+                    "text_bindings": shot_text_snapshot(_client, str(project), shot_id),
+                }
+            if values.get("review"):
+                review_shots.append({"shot_id": shot_id, "name": str(shot_result.data.get("name") or shot_id), "at": float(clip.get("at", 0)), "hold": float(clip.get("hold", 0))})
             if not isinstance(timeline_document_id, str) or not timeline_document_id:
                 raise CapabilityValidationError(
                     f"canonical timeline {snapshot.timeline_slug!r} shot {shot_id!r} "
@@ -1067,7 +1107,7 @@ def _prepare_managed_render_inputs(
             child_records.append(
                 {
                     "timeline_id": str(child["timeline_id"]),
-                    "timeline_ulid": str(child["timeline_ulid"]),
+                    "timeline_ulid": str(child.get("timeline_ulid") or child["timeline_id"]),
                     "slug": str(child["slug"]),
                     "config_version": int(child["config_version"]),
                     "config_hash": _expanded_config_hash(child_config),
@@ -1097,6 +1137,7 @@ def _prepare_managed_render_inputs(
             materialized_registry_hash=_expanded_config_hash(expanded_registry),
             expansion={
                 "children": child_records,
+                "shots": [shot_records[key] for key in sorted(shot_records)],
                 "expanded_config_hash": _expanded_config_hash(expanded_config),
             },
         )
@@ -1128,6 +1169,10 @@ def _prepare_managed_render_inputs(
         )
     except RenderOutputPolicyError as exc:
         raise CapabilityValidationError(str(exc), details=exc.details) from exc
+    # Never trust caller-authored review labels: pin registered names alongside the render.
+    values.pop("review_context", None)
+    if values.get("review"):
+        values["review_context"] = {"shots": review_shots}
     authority = snapshot.authority()
     values.update(
         {
@@ -1177,6 +1222,85 @@ def _discover_invocation_manifest_path(
     return None
 
 
+def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> str:
+    """Rehydrate verified published evidence in a disposable local cache."""
+    import io
+    import tempfile
+    import zipfile
+    from pathlib import PurePosixPath
+
+    artifacts = raw_result.get("outputs", {}).get("artifacts", [])
+    bundles = [a for a in artifacts if a.get("name") == "filmstrip_bundle"]
+    if len(bundles) != 1:
+        raise CapabilityInvocationError("filmstrip task did not publish its evidence bundle")
+    artifact = bundles[0]
+    digest = str(artifact.get("digest", "")).removeprefix("sha256:")
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise CapabilityInvocationError("filmstrip bundle has an invalid digest")
+    data = client.media.read_bytes("sha256:" + digest)
+    if hashlib.sha256(data).hexdigest() != digest or len(data) != artifact.get("size"):
+        raise CapabilityInvocationError("filmstrip bundle does not match its published digest and size")
+    root = Path(tempfile.mkdtemp(prefix="astrid-filmstrip-"))
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) > 10000 or sum(m.file_size for m in members) > 1024 ** 3:
+                raise CapabilityInvocationError("filmstrip bundle exceeds evidence extraction limits")
+            names: set[str] = set()
+            for member in members:
+                path = PurePosixPath(member.filename)
+                if (path.is_absolute() or not path.parts or ".." in path.parts
+                        or "\\" in member.filename or member.filename in names
+                        or (member.external_attr >> 16) & 0o170000 == 0o120000):
+                    raise CapabilityInvocationError("filmstrip bundle contains an unsafe or duplicate path")
+                names.add(member.filename)
+                destination = root.joinpath(*path.parts)
+                if member.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(archive.read(member))
+        manifest = root / "manifest.json"
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        if document.get("kind") != "timeline_filmstrip" or not (root / "filmstrip.html").is_file():
+            raise CapabilityInvocationError("filmstrip bundle is missing its manifest or HTML entrypoint")
+        declared = document.get("outputs")
+        if not isinstance(declared, list):
+            raise CapabilityInvocationError("filmstrip manifest lacks member integrity records")
+        verified_members: set[str] = set()
+        for member in declared:
+            if not isinstance(member, Mapping):
+                raise CapabilityInvocationError("filmstrip manifest has an invalid member")
+            relative = member.get("path")
+            if not isinstance(relative, str) or relative in verified_members:
+                raise CapabilityInvocationError("filmstrip manifest has a duplicate or invalid path")
+            member_path = PurePosixPath(relative)
+            if member_path.is_absolute() or ".." in member_path.parts or "\\" in relative:
+                raise CapabilityInvocationError("filmstrip manifest member escapes its bundle")
+            path = root.joinpath(*member_path.parts)
+            if not path.is_file():
+                raise CapabilityInvocationError("filmstrip manifest references a missing member")
+            with path.open("rb") as stream:
+                member_digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+            if member_digest != member.get("content_hash") or path.stat().st_size != member.get("bytes"):
+                raise CapabilityInvocationError("filmstrip bundle member integrity mismatch")
+            verified_members.add(relative)
+        actual_members = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+        if actual_members != verified_members | {"manifest.json"}:
+            raise CapabilityInvocationError("filmstrip bundle has unrecorded members")
+        raw_result["outputs"].update({
+            "pack_root": str(root), "manifest_path": str(manifest),
+            "html": str(root / "filmstrip.html"),
+            "pages": [str(p) for p in sorted(root.glob("filmstrip-*.png"))],
+            "frame_index": str(root / "frame-index.json"),
+        })
+        return str(manifest)
+    except Exception:
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+
+
 def _invocation_outputs(
     raw_result: Mapping[str, Any],
     *,
@@ -1213,9 +1337,12 @@ def _invocation_outputs(
             # persists a project-side ``.astrid/views`` copy.
             outputs["pack_root"] = str(pack_root)
             outputs["manifest_path"] = str(manifest)
+            page_pattern = "filmstrip-*.png" if isinstance(document, dict) and document.get("kind") == "timeline_filmstrip" else "PG*.png"
+            if page_pattern == "filmstrip-*.png":
+                outputs["html"] = str(pack_root / "filmstrip.html")
             outputs["pages"] = [
                 str(path)
-                for path in sorted(pack_root.rglob("PG*.png"))
+                for path in sorted(pack_root.rglob(page_pattern))
                 if "filmstrip" not in path.relative_to(pack_root).parts
             ]
             outputs["file_hashes"] = {
@@ -1228,9 +1355,41 @@ def _invocation_outputs(
     return _json_safe_mapping(outputs)
 
 
-def _runtime_selected_project() -> str | None:
-    """Project selection is never inferred by the SDK runtime boundary."""
-    return None
+def _runtime_selected_project(client: Any | None = None) -> str | None:
+    """Read the connected runtime's durable selection; never infer locally."""
+    if client is None:
+        return None
+    current = getattr(getattr(client, "projects", None), "current", None)
+    if not callable(current):
+        raise CapabilityInvocationError("runtime client does not expose current project selection")
+    result = current()
+    if not result.ok:
+        error = result.error
+        if getattr(error, "code", None) == "not_found":
+            return None
+        from .exceptions import ServiceError, _SERVICE_ERROR_CLASSES
+        error_type = _SERVICE_ERROR_CLASSES.get(error.code, ServiceError)
+        raise error_type(error.message, details=error.details)
+    data = result.data
+    row = data.get("project") if isinstance(data, Mapping) else None
+    if not isinstance(row, Mapping):
+        raise CapabilityInvocationError("runtime current project returned an invalid selection")
+    ref = row.get("project_id") or row.get("id") or row.get("slug")
+    if not isinstance(ref, str) or not ref.strip():
+        raise CapabilityInvocationError("runtime current project returned no project identity")
+    return ref
+
+
+def _project_scope(capability: Any) -> str:
+    """Return validated executor project scope, defaulting old manifests to required."""
+    definition = getattr(capability, "definition", None)
+    metadata = definition.get("metadata", {}) if isinstance(definition, Mapping) else {}
+    scope = metadata.get("project_scope", "required") if isinstance(metadata, Mapping) else "required"
+    if scope not in {"required", "optional"}:
+        raise CapabilityInvocationError(
+            f"executor {getattr(capability, 'id', '<unknown>')!r} has invalid project_scope {scope!r}"
+        )
+    return str(scope)
 
 
 def _kernel_invoke(
@@ -1310,6 +1469,23 @@ def _kernel_invoke(
                     continue
                 seen.add(normalized)
                 input_manifest.append(candidate)
+
+    if (str(capability.id) == "rendering.timeline_visualize"
+            and isinstance(idempotency_context, Mapping)
+            and idempotency_context.get("mode") == "filmstrip"):
+        # This authority is minted by managed-render preflight, never by a
+        # public file argument. Generic-host materialization requires the
+        # same immutable object in both inputs and the authorization manifest.
+        video_id = idempotency_context.get("video_object_id")
+        video_input = (inputs or {}).get("rendered_video")
+        if (not isinstance(video_id, str) or not video_id.startswith("sha256:")
+                or len(video_id) != 71
+                or any(c not in "0123456789abcdef" for c in video_id[7:])
+                or not isinstance(video_input, Mapping)
+                or video_input.get("digest") != video_id
+                or video_input.get("object_id") != video_id):
+            raise CapabilityValidationError("filmstrip video admission identity mismatch")
+        input_manifest.append(video_id)
 
     idempotency_key = hashlib.sha256(
         json.dumps(
@@ -1535,8 +1711,11 @@ def invoke(
     if capability.capability_type == "element":
         raise UnsupportedCapabilityError(f"elements are not invokable via the SDK: {capability.id}")
 
-    if not dry_run and project is None:
-        project = _runtime_selected_project()
+    if isinstance(project, str) and not project.strip():
+        project = None
+    project_scope = _project_scope(capability)
+    if not dry_run and project is None and project_scope == "required":
+        project = _runtime_selected_project(_client)
         if project is None:
             from astrid.core.project.guidance import format_project_required_guidance
 
@@ -1563,7 +1742,21 @@ def invoke(
                 project=project,
                 project_root=project_root,
                 out=out,
+                _client=_client,
             )
+            if invocation_authority_context.get("mode") == "filmstrip":
+                # Only preflight may turn a successful project-owned render
+                # into a file input. Public paths were rejected above.
+                inputs = dict(inputs or {})
+                inputs["project_slug"] = invocation_authority_context["filmstrip_snapshot"]["project_slug"]
+                inputs["rendered_video"] = {
+                    "digest": invocation_authority_context["video_digest"],
+                    "object_id": invocation_authority_context["video_object_id"],
+                }
+                inputs["filmstrip_authority"] = json.dumps(
+                    invocation_authority_context, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False,
+                )
         elif capability.id == "rendering.render":
             inputs, invocation_authority_context = _prepare_managed_render_inputs(
                 inputs,
@@ -1715,18 +1908,8 @@ def invoke(
             kernel_attempt_id=None,
         )
 
-    # Real kernel admission path — no fallback; failures raise CapabilityInvocationError.
-    # Project is required: mirror runner's selected_project check so missing
-    # project maps to CapabilityValidationError (not silent default).
-    from astrid.core.project.guidance import format_project_required_guidance, selected_project
-
-    resolved_project, _src = selected_project(project)
-    if resolved_project is None:
-        raise CapabilityValidationError(
-            format_project_required_guidance(operation=f"{capability.capability_type} run")
-        )
-    # Use resolved project (handles auto-resolved via selected_project)
-    project = resolved_project
+    # Project requirements were resolved above. Public knowledge reads may
+    # enter the same runtime admission path without a project association.
     kernel_capability_version: str | None = None
     if capability.capability_type == "executor":
         from astrid.core.foundation.hash import executor_definition_digest
@@ -1780,6 +1963,9 @@ def invoke(
         manifest_path = (
             str(mpath) if mpath else _discover_invocation_manifest_path(raw_result, out=out)
         )
+        if (wait and ok and capability.id == "rendering.timeline_visualize"
+                and (invocation_authority_context or {}).get("mode") == "filmstrip"):
+            manifest_path = _materialize_filmstrip_outputs(raw_result, _client)
         return InvocationResult(
             capability_id=capability.id,
             capability_type=capability.capability_type,

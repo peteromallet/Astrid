@@ -22,7 +22,8 @@ each):
 - ``create`` — ``client.timelines.create`` (project id/slug, slug, name,
   optional ``--config``/``--registry`` JSON, ``--default``, and
   ``--idempotency-key``; a fresh key is generated and returned when absent);
-- ``list`` — ``client.timelines.list`` (active timelines only);
+- ``list`` — ``client.timelines.list`` (active timelines only), rendered as
+  compact identity/count summaries; use ``show`` for the full document;
 - ``show`` — ``client.timelines.show`` by UUID, ULID, or slug;
 - ``save`` — whole-document CAS ``client.timelines.save`` with
   ``--config``/``--registry`` and ``--expected-version``;
@@ -78,7 +79,8 @@ def _add_json_flag(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--json",
         action="store_true",
-        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key).",
+        default=True,
+        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key); default output.",
     )
 
 
@@ -123,8 +125,69 @@ def _cmd_create(parsed: argparse.Namespace) -> int:
 
 
 def _cmd_list(parsed: argparse.Namespace) -> int:
-    result = parsed.client.timelines.list(parsed.project)
+    result = parsed.client.timelines.list(
+        parsed.project, include_archived=parsed.include_archived
+    )
+    # Listing is a discovery route.  Keep the full document available through
+    # ``show`` while preventing a registry/config blob from flooding the
+    # terminal (and agent context) during the common list operation.
+    if result.ok and isinstance(result.data, (list, tuple)):
+        from astrid.sdk.contracts import DomainResult
+
+        data: Any = list(result.data)
+        # Runtime list reads are cursor pages: [rows, next_cursor]. Keep the
+        # cursor in the envelope while compacting only the document rows.
+        if (
+            len(data) == 2
+            and isinstance(data[0], list)
+            and (data[1] is None or isinstance(data[1], str))
+        ):
+            data = [[_timeline_summary(item) for item in data[0]], data[1]]
+        else:
+            data = [_timeline_summary(item) for item in data]
+        result = DomainResult.success(
+            data,
+            receipt=result.receipt,
+            idempotency_key=result.idempotency_key,
+        )
     return print_result(result, as_json=parsed.json)
+
+
+def _timeline_summary(item: Any) -> Any:
+    """Return a compact identity/count view for one listed timeline."""
+    if not isinstance(item, Mapping):
+        return item
+
+    summary: dict[str, Any] = {}
+    # These are the stable identity/lifecycle fields emitted by the runtime.
+    for key in (
+        "timeline_id", "id", "slug", "name", "version", "config_version",
+        "archived", "archived_at", "is_default", "default",
+    ):
+        if key in item:
+            summary[key] = item[key]
+    # Some runtime projections keep the display metadata nested.
+    display = item.get("display")
+    if "is_default" not in summary and isinstance(display, Mapping):
+        if "is_default" in display:
+            summary["is_default"] = display["is_default"]
+
+    config = item.get("config")
+    registry = item.get("registry")
+    counts: dict[str, int] = {}
+    if isinstance(config, Mapping):
+        counts["config_keys"] = len(config)
+        for key in ("clips", "tracks", "shots", "scenes"):
+            value = config.get(key)
+            if isinstance(value, (list, tuple, Mapping)):
+                counts[key] = len(value)
+    if isinstance(registry, Mapping):
+        assets = registry.get("assets")
+        if isinstance(assets, (list, tuple, Mapping)):
+            counts["assets"] = len(assets)
+    if counts:
+        summary["counts"] = counts
+    return summary
 
 
 def _cmd_show(parsed: argparse.Namespace) -> int:
@@ -236,6 +299,7 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     timeline_slug = parsed.timeline_slug or parsed.timeline_ref
     for name in (
         "layout", "filmstrip", "rendered_video", "shot",
+        "view", "sample", "every", "every_frames", "render_run", "columns", "page_size",
         "range", "at", "clip", "asset", "context", "neighbors", "from_view",
         "focus",
     ):
@@ -254,6 +318,7 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
         project=parsed.project,
         inputs=inputs,
         out=parsed.out,
+        **({"wait": True} if getattr(parsed, "view", None) == "filmstrip" else {}),
     )
     if result.ok:
         outputs = result.outputs
@@ -293,12 +358,46 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     return print_result(envelope, as_json=parsed.json)
 
 
+def _resolve_timeline_ref(client: Any, project: str, ref: str | None) -> str | None:
+    """Return the explicit ref, falling back to the project's default timeline."""
+    if ref not in (None, ""):
+        return ref
+    shown = client.projects.show(project)
+    data = getattr(shown, "data", None)
+    if isinstance(data, Mapping):
+        metadata = data.get("metadata")
+        if isinstance(metadata, Mapping):
+            default = metadata.get("default_timeline_id")
+            if default not in (None, ""):
+                return str(default)
+    return None
+
+
 def _cmd_render(parsed: argparse.Namespace) -> int:
-    """Render one canonical kernel timeline through the public SDK."""
+    """Render one kernel timeline, defaulting to the project's default timeline."""
     from astrid.sdk.contracts import DomainResult, ErrorObject
 
-    inputs: dict[str, Any] = {"timeline_ref": parsed.ref}
-    for name in ("expected_version", "output_name", "profile"):
+    ref = _resolve_timeline_ref(parsed.client, parsed.project, parsed.ref)
+    if ref is None:
+        return print_result(
+            DomainResult.failure(
+                ErrorObject(
+                    code="validation_error",
+                    message=(
+                        "no timeline ref given and project "
+                        f"{parsed.project!r} has no resolvable default timeline "
+                        "(missing project or no default set); pass a timeline "
+                        "slug or set one with astrid projects update "
+                        "<project> --settings "
+                        "'{\"default_timeline_id\": \"<timeline-id>\"}'"
+                    ),
+                    details={"project": parsed.project},
+                )
+            ),
+            as_json=parsed.json,
+        )
+    inputs: dict[str, Any] = {"timeline_ref": ref}
+    for name in ("expected_version", "output_name", "profile", "review"):
         value = getattr(parsed, name, None)
         if value not in (None, ""):
             inputs[name] = value
@@ -528,6 +627,21 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
         metavar="FORMAT[,FORMAT...]",
         help="Repeatable/comma-separated png, svg, md, or all (default: all).",
     )
+    subparser.add_argument("--view", choices=("structure", "filmstrip"), default=None,
+                           help="Timeline diagram (default) or rendered contact sheet with an offline HTML viewer.")
+    subparser.add_argument("--sample", choices=("interval", "clips", "cuts", "shots"), default=None,
+                           help="Filmstrip sampling: interval (default), picture clips, cut boundaries, or authored story beats.")
+    sampling = subparser.add_mutually_exclusive_group()
+    sampling.add_argument("--every", type=float, default=None,
+                          help="Filmstrip interval in seconds (default: 0.5).")
+    sampling.add_argument("--every-frames", type=int, default=None,
+                          help="Filmstrip interval in integer rendered frames; replaces --every.")
+    subparser.add_argument("--render-run", default=None,
+                           help="Exact successful render run, or latest (filmstrip default).")
+    subparser.add_argument("--columns", type=int, default=None,
+                           help="Filmstrip contact sheet columns (default: 5).")
+    subparser.add_argument("--page-size", type=int, default=None,
+                           help="Filmstrip cards per static page (default: 50).")
     subparser.add_argument("--layout", choices=("time-scaled", "linear", "both"), default=None)
     subparser.add_argument(
         "--filmstrip", choices=("auto", "off", "assets", "rendered"), default=None,
@@ -553,7 +667,16 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
 
 def _configure_render(subparser: argparse.ArgumentParser) -> None:
     _add_project_arg(subparser)
-    subparser.add_argument("ref", help="Canonical timeline UUID, ULID, or slug.")
+    subparser.add_argument("--review", action="store_true", default=None, help="Show shot names and current timeline time in the top-right corner (Remotion/Three.js).")
+    subparser.add_argument(
+        "ref",
+        nargs="?",
+        default=None,
+        help=(
+            "Canonical timeline UUID, ULID, or slug. "
+            "When omitted, the project's default timeline is rendered."
+        ),
+    )
     subparser.add_argument(
         "--expected-version",
         dest="expected_version",

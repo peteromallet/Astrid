@@ -1,0 +1,38 @@
+{
+  "astrid/packs/_core/skill/SKILL.md": {
+    "sha256": "39a9a01f31b8c8e6d2514c25f7f37f34a32a6cdebe6fff3eae17f73c9ef4b114",
+    "lines": 177
+  },
+  "astrid/packs/_core/skill/pack-builder/SKILL.md": {
+    "sha256": "f4efe3d9afd034616f9fcd0ca3d93066fdfc3b8f09cfb5c19165056d10813f25",
+    "lines": 128
+  },
+  "astrid/packs/_core/skill/references/capabilities.md": {
+    "sha256": "be7828130be81834c125e2f79630adddf4c08fe6e2a73728a3ecc8df18a2ac38",
+    "lines": 117
+  },
+  "astrid/packs/_core/skill/creative-work/SKILL.md": {
+    "sha256": "da6821d9f096cbf789bba2b2f17d0f59106578913c0690bdccc98895ed547021",
+    "lines": 70
+  },
+  "astrid/packs/_core/skill/creative-work/references/packs.md": {
+    "sha256": "26d995b3aeaf48a44693eae226061a94af2c5c7795308fefcbe2fbed8e30e52e",
+    "lines": 36
+  },
+  "astrid/packs/rendering/skill/SKILL.md": {
+    "sha256": "7dbf76d6ff02771df263f7c9fdb9ab1362f0c0593c59c8b29ad4fc69ff8bd3e2",
+    "lines": 139
+  },
+  "astrid/packs/rendering/skill/references/timeline-cookbook.md": {
+    "sha256": "15a3503429156649bb3587319437f29bdd7455e7fb3aa7f624fd42d200c26a14",
+    "lines": 67
+  },
+  "astrid/packs/references/skill/SKILL.md": {
+    "sha256": "318084b573c2bcc8b4b512140099783faba49a9b3012ef4b41431aec1af08974",
+    "lines": 60
+  },
+  "astrid/packs/fal/skill/SKILL.md": {
+    "sha256": "3aeeed6f13ac416b80930d0cd54ce14a868cb203f11d6592f46debcfbe9728dd",
+    "lines": 69
+  }
+}

@@ -802,6 +802,76 @@
    ]
   },
   {
+   "id": "hivemind.contribute",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind contribution route; provider readiness is credential-gated.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": ["HIVEMIND_CONTRIBUTOR_KEY"],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "hivemind.get_item",
+   "disposition": "optional",
+   "evidence_reason": "Optional read-only Hivemind item retrieval through the public corpus API.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "hivemind.ingest_article",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind article ingestion route; provider readiness is credential-gated.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": ["HIVEMIND_CONTRIBUTOR_KEY"],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "hivemind.ingest_workflow",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind workflow ingestion route; provider readiness is credential-gated.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": ["HIVEMIND_CONTRIBUTOR_KEY"],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "hivemind.ingest_youtube",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind YouTube ingestion route; provider and yt-dlp readiness are explicit.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": ["HIVEMIND_CONTRIBUTOR_KEY"],
+   "required_binaries": ["yt-dlp"],
+   "required_packages": []
+  },
+  {
+   "id": "hivemind.refresh_media",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind Discord media refresh route through the public API.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "hivemind.search",
+   "disposition": "optional",
+   "evidence_reason": "Optional read-only Hivemind corpus search through the public API.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
    "id": "seedance_local.reference_video",
    "disposition": "optional",
    "evidence_reason": "Optional hosted FAL integration; retained with truthful credential preflight.",

@@ -592,7 +592,7 @@ def test_media_show_is_one_sdk_call(capsys) -> None:
     rc = _run("media", ["show", "--project", "demo", "M-1"], client=client)
     assert rc == 0
     assert client.calls == [("media.show", {"project": "demo", "ref": "M-1"})]
-    assert capsys.readouterr().out == "id: M-1\n"
+    assert json.loads(capsys.readouterr().out)["data"]["id"] == "M-1"
 
 
 def test_media_verify_is_one_sdk_call_with_realm_and_key(capsys) -> None:
@@ -745,8 +745,9 @@ def test_media_failure_envelope_exits_one(capsys) -> None:
     assert rc == 1
     assert len(client.calls) == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "error media_not_found: no media row for M-9\n"
+    assert captured.err == ""
+    assert json.loads(captured.out)["error"]["code"] == "media_not_found"
+    assert json.loads(captured.out)["error"]["message"] == "no media row for M-9"
 
 
 def test_media_unknown_verb_is_a_usage_error() -> None:
@@ -1147,7 +1148,7 @@ def test_references_show_is_one_sdk_call(capsys) -> None:
     rc = _run("media", ["references", "show", "--project", "demo", "R-1"], client=client)
     assert rc == 0
     assert client.calls == [("references.show", {"project": "demo", "ref": "R-1"})]
-    assert capsys.readouterr().out == "reference_id: R-1\n"
+    assert json.loads(capsys.readouterr().out)["data"]["reference_id"] == "R-1"
 
 
 def test_references_failure_envelope_exits_one(capsys) -> None:
@@ -1172,8 +1173,9 @@ def test_references_failure_envelope_exits_one(capsys) -> None:
     assert rc == 1
     assert len(client.calls) == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "error reference_not_found: missing\n"
+    assert captured.err == ""
+    assert json.loads(captured.out)["error"]["code"] == "reference_not_found"
+    assert json.loads(captured.out)["error"]["message"] == "missing"
 
 
 def test_references_unknown_verb_is_a_usage_error() -> None:

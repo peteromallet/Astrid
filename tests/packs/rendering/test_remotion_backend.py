@@ -689,11 +689,16 @@ class RemotionBackendRegistryGenerationTest(unittest.TestCase):
 
             def state_from_component(theme_path: Path | None) -> dict[str, object]:
                 digest = hashlib.sha256(component_path.read_bytes()).hexdigest()
+                # The recorded content_hashes are what the generator wrote to
+                # disk.  The cache is valid only when the on-disk generated
+                # files still match their recorded content hashes, so record
+                # the hash of the placeholder the fake generator writes.
+                placeholder_hash = hashlib.sha256(b"// generated test fixture\n").hexdigest()
                 return {
                     "version": 1,
                     "hash": digest,
                     "theme": None if theme_path is None else str(theme_path),
-                    "content_hashes": {"effects": digest},
+                    "content_hashes": {"effects": placeholder_hash},
                 }
 
             def fake_run(cmd, **kwargs):

@@ -38,6 +38,7 @@ def test_generic_host_process_preflights_and_reports_readiness(tmp_path: Path) -
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(ready_file.read_text(encoding="utf-8"))
     assert payload["status"] == "ready"
+    assert payload["python_executable"] == os.path.abspath(sys.executable)
     assert payload["executor_id"] == "astrid-pack-host"
     assert payload["pid"] != os.getpid()
     assert payload["capability_count"] > 0

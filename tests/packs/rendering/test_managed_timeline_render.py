@@ -30,6 +30,7 @@ class _Runtime:
         self.media_rows = media or []
         self.extra_timelines: dict[str, dict] = {}
         self.shot_rows: dict[str, dict] = {}
+        self.text_binding_rows: list[dict] = []
         self.project = {"id": "project-demo", "project_id": "project-demo", "slug": "demo"}
         self.timeline = {
             "timeline_id": "timeline-1",
@@ -49,7 +50,7 @@ class _Runtime:
         self.media = SimpleNamespace(
             list=lambda _project, **_kwargs: _result([self.media_rows, None])
         )
-        self.shots = SimpleNamespace(show=self._show_shot)
+        self.shots = SimpleNamespace(show=self._show_shot, list_text_bindings=lambda _project, **kwargs: _result([[row for row in self.text_binding_rows if row["shot_id"] == kwargs["shot_id"]], None]))
 
     def _show_timeline(self, _project: str, ref: str):
         row = self.extra_timelines.get(ref)
@@ -311,3 +312,44 @@ def test_alpha_mov_compatibility_requires_matching_profile(tmp_path: Path) -> No
     profile = _profile(); profile.update(container="mov", video_codec="prores", pixel_format="yuva444p12le", audio_codec="pcm_s16le")
     prepared, _authority = _prepare_managed_render_inputs({"timeline_ref": "main", "output_name": "alpha.mov", "profile": profile}, project="demo", _client=runtime)
     assert prepared["profile"] == profile
+
+
+def test_review_pins_registered_names_and_ranges_without_changing_authority():
+    import copy
+    runtime = _Runtime()
+    runtime.shot_rows['shot-1'] = {'shot_id': 'shot-1', 'project_id': 'project-demo', 'name': '01 Opening'}
+    runtime.extra_timelines['child'] = {
+        'timeline_id': 'child-1', 'slug': 'child',
+        'config_version': 1, 'config': {'tracks': [], 'clips': []}, 'registry': {}, 'archived_at': None,
+    }
+    runtime.timeline['config'] = {'tracks': [], 'clips': [{
+        'id': 'shot', 'at': 1.25, 'hold': 2.75, 'clipType': 'shot',
+        'params': {'shot_id': 'shot-1', 'timeline_document_id': 'child'},
+    }]}
+    runtime.text_binding_rows = [{'binding_id': 'binding-1', 'shot_id': 'shot-1',
+        'kind': 'voiceover_script', 'slot': None, 'head': 1,
+        'media_id': 'sha256:' + 'a' * 64, 'content_hash': 'sha256:' + 'a' * 64}]
+    before = copy.deepcopy(runtime.timeline)
+    prepared, authority = _prepare_managed_render_inputs(
+        {'timeline_ref': 'main', 'review': True, 'review_context': {'shots': ['forged']}}, project='demo', _client=runtime)
+    assert prepared['review_context'] == {'shots': [{'shot_id': 'shot-1', 'name': '01 Opening', 'at': 1.25, 'hold': 2.75}]}
+    clean, clean_authority = _prepare_managed_render_inputs({'timeline_ref': 'main'}, project='demo', _client=runtime)
+    assert 'review_context' not in clean
+    assert authority['expansion']['children'][0]['timeline_ulid'] == 'child-1'
+    assert clean_authority == authority
+    assert runtime.timeline == before
+    pinned = authority['expansion']['shots'][0]['text_bindings'][0]
+    assert pinned['head'] == 1 and pinned['content_hash'] == 'sha256:' + 'a' * 64
+    runtime.text_binding_rows[0].update(head=2, media_id='sha256:' + 'b' * 64, content_hash='sha256:' + 'b' * 64)
+    revised, revised_authority = _prepare_managed_render_inputs({'timeline_ref': 'main'}, project='demo', _client=runtime)
+    assert revised['timeline_snapshot'] == clean['timeline_snapshot']
+    assert revised_authority != clean_authority
+    assert pinned['head'] == 1  # The first admission is immutable after a rebind.
+
+
+@pytest.mark.parametrize('data', [None, [[], 'more'], [[{'binding_id': 'bad'}], None]])
+def test_render_rejects_incomplete_or_invalid_shot_text_snapshot(data):
+    from astrid.sdk.render_shot_snapshot import shot_text_snapshot
+    client = SimpleNamespace(shots=SimpleNamespace(list_text_bindings=lambda *args, **kwargs: _result(data)))
+    with pytest.raises(CapabilityValidationError):
+        shot_text_snapshot(client, 'project', 'shot')

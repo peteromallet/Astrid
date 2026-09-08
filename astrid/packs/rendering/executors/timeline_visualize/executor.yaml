@@ -145,6 +145,55 @@
       "required": false,
       "artifact_type": null,
       "description": "Host-owned object-id to attempt-local path handoff."
+    },
+    {
+      "name": "view",
+      "type": "string",
+      "required": false,
+      "description": "Presentation: timeline diagram or rendered filmstrip contact sheet with an offline HTML viewer.",
+      "default": "structure"
+    },
+    {
+      "name": "sample",
+      "type": "string",
+      "required": false,
+      "description": "Filmstrip sampling: interval (default), clips (picture clips), cuts (cut boundaries), or shots (authored story beats)."
+    },
+    {
+      "name": "every",
+      "type": "number",
+      "required": false,
+      "description": "Filmstrip interval in seconds (default 0.5 when every_frames is absent)."
+    },
+    {
+      "name": "every_frames",
+      "type": "integer",
+      "required": false,
+      "description": "Positive integer rendered frame interval, mutually exclusive with every."
+    },
+    {
+      "name": "render_run",
+      "type": "string",
+      "required": false,
+      "description": "Exact successful rendering.render run id, or latest; filmstrip defaults to latest matching timeline render."
+    },
+    {
+      "name": "columns",
+      "type": "integer",
+      "required": false,
+      "description": "Filmstrip contact sheet columns, default 5."
+    },
+    {
+      "name": "page_size",
+      "type": "integer",
+      "required": false,
+      "description": "Filmstrip static page card count, default 50."
+    },
+    {
+      "name": "filmstrip_authority",
+      "type": "string",
+      "required": false,
+      "description": "Internal SDK-injected trusted filmstrip snapshot manifest. Public caller values are rejected."
     }
   ],
   "outputs": [
@@ -163,6 +212,30 @@
       "path_template": "{out}/agent-view/manifest.json",
       "artifact_type": "metadata/result-manifest",
       "description": "Durable managed result manifest and authoritative agent navigation handle."
+    },
+    {
+      "name": "filmstrip_bundle",
+      "type": "file",
+      "mode": "create_or_replace",
+      "path_template": "{out}/filmstrip-bundle.zip",
+      "artifact_type": "archive/filmstrip",
+      "description": "Rendered filmstrip delivery artifact; produced for view=filmstrip."
+    },
+    {
+      "name": "filmstrip_html",
+      "type": "file",
+      "mode": "create_or_replace",
+      "path_template": "{out}/filmstrip-view/filmstrip.html",
+      "artifact_type": "document/html",
+      "description": "Rendered filmstrip delivery artifact; produced for view=filmstrip."
+    },
+    {
+      "name": "filmstrip_manifest",
+      "type": "file",
+      "mode": "create_or_replace",
+      "path_template": "{out}/filmstrip-view/manifest.json",
+      "artifact_type": "metadata/result-manifest",
+      "description": "Rendered filmstrip delivery artifact; produced for view=filmstrip."
     }
   ],
   "command": {
@@ -189,6 +262,121 @@
         "input": "materialized_objects",
         "flag": "--materialized-objects",
         "optional": true
+      },
+      {
+        "input": "filmstrip_authority",
+        "flag": "--filmstrip-authority",
+        "optional": true
+      },
+      {
+        "input": "project_slug",
+        "flag": "--project-slug",
+        "optional": true
+      },
+      {
+        "input": "timeline_slug",
+        "flag": "--timeline-slug",
+        "optional": true
+      },
+      {
+        "input": "scope",
+        "flag": "--scope",
+        "optional": true
+      },
+      {
+        "input": "shot",
+        "flag": "--shot",
+        "optional": true
+      },
+      {
+        "input": "range",
+        "flag": "--range",
+        "optional": true
+      },
+      {
+        "input": "at",
+        "flag": "--at",
+        "optional": true
+      },
+      {
+        "input": "clip",
+        "flag": "--clip",
+        "optional": true
+      },
+      {
+        "input": "asset",
+        "flag": "--asset",
+        "optional": true
+      },
+      {
+        "input": "context",
+        "flag": "--context",
+        "optional": true
+      },
+      {
+        "input": "neighbors",
+        "flag": "--neighbors",
+        "optional": true
+      },
+      {
+        "input": "from_view",
+        "flag": "--from-view",
+        "optional": true
+      },
+      {
+        "input": "focus",
+        "flag": "--focus",
+        "optional": true
+      },
+      {
+        "input": "layout",
+        "flag": "--layout",
+        "optional": true
+      },
+      {
+        "input": "filmstrip",
+        "flag": "--filmstrip",
+        "optional": true
+      },
+      {
+        "input": "rendered_video",
+        "flag": "--rendered-video",
+        "optional": true
+      },
+      {
+        "input": "view",
+        "flag": "--view",
+        "optional": true
+      },
+      {
+        "input": "sample",
+        "flag": "--sample",
+        "optional": true
+      },
+      {
+        "input": "every",
+        "flag": "--every",
+        "optional": true
+      },
+      {
+        "input": "every_frames",
+        "flag": "--every-frames",
+        "optional": true
+      },
+      {
+        "input": "render_run",
+        "flag": "--render-run",
+        "optional": true
+      },
+      {
+        "input": "columns",
+        "flag": "--columns",
+        "optional": true
+      },
+      {
+        "input": "page_size",
+        "flag": "--page-size",
+        "optional": true
       }
     ]
   },
@@ -208,7 +396,9 @@
   "isolation": {
     "mode": "subprocess",
     "network": false,
-    "binaries": [],
+    "binaries": [
+      "ffmpeg"
+    ],
     "requirements": []
   },
   "metadata": {

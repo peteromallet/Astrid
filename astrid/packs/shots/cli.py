@@ -15,7 +15,12 @@ handler renders through the shared product output layer
 concise human output, and stable exit codes stay aligned with the frozen SDK
 contract.
 
-Verbs (exactly these six, one SDK call each):
+Verbs (one SDK call each):
+
+- ``text list/show/set`` — read immutable shot text and edit it with expected-head protection;
+
+- ``group`` — resumably group existing timeline clips into a shot with a child
+  timeline and managed media associations; commit the parent with CAS last;
 
 - ``list`` — ``client.shots.list(project)`` (sort_key, then id order);
 - ``show`` — ``client.shots.show(project, shot_id)`` (ordered items, media ids,
@@ -43,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 from astrid.core.cli.domain_output import print_result
@@ -78,7 +84,8 @@ def _add_json_flag(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--json",
         action="store_true",
-        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key).",
+        default=True,
+        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key); default output.",
     )
 
 
@@ -106,6 +113,75 @@ def _add_project_arg(subparser: argparse.ArgumentParser) -> None:
 def _cmd_list(parsed: argparse.Namespace) -> int:
     result = parsed.client.shots.list(parsed.project)
     return print_result(result, as_json=parsed.json)
+
+
+def _cmd_group(parsed: argparse.Namespace) -> int:
+    return print_result(parsed.client.shots.group(
+        parsed.project, parsed.timeline, clip_ids=parsed.clip, name=parsed.name,
+        expected_version=parsed.expected_version, hold=parsed.hold,
+        idempotency_key=parsed.idempotency_key), as_json=parsed.json)
+
+
+def _configure_group(subparser: argparse.ArgumentParser) -> None:
+    _add_project_arg(subparser)
+    subparser.add_argument("timeline", help="Parent timeline slug or id.")
+    subparser.add_argument("--clip", action="append", required=True, help="Existing clip id (repeat for each item).")
+    subparser.add_argument("--name", required=True, help="Shot name for editing and review.")
+    subparser.add_argument("--expected-version", required=True, type=int)
+    subparser.add_argument("--hold", type=float, help="Optional shot duration including trailing space; cannot truncate clips.")
+    _add_idempotency_key(subparser)
+    _add_json_flag(subparser)
+    subparser.set_defaults(handler=_cmd_group)
+
+
+def _cmd_text_list(parsed: argparse.Namespace) -> int:
+    return print_result(parsed.client.shots.list_text_bindings(
+        parsed.project, shot_id=parsed.shot, kind=parsed.kind, slot=parsed.slot,
+        include_text=True), as_json=parsed.json)
+
+
+def _cmd_text_show(parsed: argparse.Namespace) -> int:
+    return print_result(parsed.client.shots.show_text_binding(
+        parsed.project, parsed.binding, include_text=True), as_json=parsed.json)
+
+
+def _cmd_text_set(parsed: argparse.Namespace) -> int:
+    text = parsed.text
+    if parsed.text_file is not None:
+        try:
+            text = Path(parsed.text_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            from astrid.sdk.contracts import DomainResult, ErrorObject
+            return print_result(DomainResult.failure(ErrorObject(
+                "validation_error", f"Cannot read UTF-8 text file: {exc}", {})), as_json=parsed.json)
+    return print_result(parsed.client.shots.set_text_binding(
+        parsed.project, shot_id=parsed.shot, kind=parsed.kind, slot=parsed.slot,
+        text=text, expected_head=parsed.expected_head,
+        idempotency_key=parsed.idempotency_key), as_json=parsed.json)
+
+
+def _configure_text(subparser: argparse.ArgumentParser) -> None:
+    children = subparser.add_subparsers(dest="text_command", required=True)
+    kinds = ("prompt", "voiceover_script", "transcript")
+    for verb, handler in (("list", _cmd_text_list), ("show", _cmd_text_show), ("set", _cmd_text_set)):
+        command = children.add_parser(verb)
+        _add_project_arg(command)
+        _add_json_flag(command)
+        command.set_defaults(handler=handler)
+        if verb == "show":
+            command.add_argument("binding", help="Binding id; reads its exact immutable text.")
+            continue
+        command.add_argument("--kind", choices=kinds, required=verb == "set")
+        command.add_argument("--slot", help="Optional lowercase prompt slot; only allowed with kind prompt.")
+        if verb == "list":
+            command.add_argument("--shot", help="Limit to one registered shot.")
+        else:
+            command.add_argument("shot", help="Registered shot id.")
+            content = command.add_mutually_exclusive_group(required=True)
+            content.add_argument("--text", help="Exact narration, prompt, or transcript text.")
+            content.add_argument("--text-file", help="UTF-8 text file (including its exact whitespace).")
+            command.add_argument("--expected-head", type=int, required=True, help="0 for creation; current binding head for edits.")
+            _add_idempotency_key(command)
 
 
 def _cmd_show(parsed: argparse.Namespace) -> int:
@@ -246,6 +322,8 @@ def _configure_reorder(subparser: argparse.ArgumentParser) -> None:
 
 
 COMMANDS: tuple[CommandSpec, ...] = (
+    CommandSpec("text", help="Read or update canonical shot narration, prompts, and transcripts.", configure=_configure_text),
+    CommandSpec("group", help="Group existing timeline clips into a reusable shot, preserving timing.", configure=_configure_group),
     CommandSpec(
         "list",
         help="List every shot in a project (sort_key, then id order).",
@@ -282,16 +360,15 @@ COMMANDS: tuple[CommandSpec, ...] = (
 def build_parser(client: Any) -> argparse.ArgumentParser:
     """Build the nested ``timelines shots`` product parser stamped with *client*.
 
-    Exactly the six verbs above are registered: no aliases and no top-level
+    The eight verbs above are registered: no aliases and no top-level
     exposure — this parser is only reachable beneath the timelines family.
     """
     parser = argparse.ArgumentParser(
         prog="astrid timelines shots",
         description=(
-            "Project-level reusable shots: list/create/show/add/remove/reorder "
-            "(nested product family). A shot is not implicitly attached to a "
-            "timeline; use its id in a timeline document's own config when "
-            "you want that document to reference it."
+            "Project-level reusable shots: text/group/list/create/show/add/remove/reorder "
+            "(nested product family). Use group to organize existing timeline clips "
+            "into an attached reusable shot without changing their timing."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

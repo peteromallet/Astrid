@@ -65,3 +65,45 @@ def test_text_binding_methods_are_thin_runtime_adapters() -> None:
             {"media_id": "sha256:" + "a" * 64, "expected_head": 1, "idempotency_key": "rebind-1"},
         ),
     ]
+
+
+def test_readable_binding_fetches_exact_utf8_and_checks_integrity():
+    import hashlib
+    from types import SimpleNamespace
+    raw = 'Narration — café'.encode()
+    row = {'binding_id': 'b1', 'media_id': 'text-object', 'content_hash': 'sha256:' + hashlib.sha256(raw).hexdigest(), 'byte_size': len(raw)}
+    transport = SimpleNamespace(get_project_shot_text_binding=lambda *a: row,
+                                list_project_shot_text_bindings=lambda *a, **k: ([row], None),
+                                get_object=lambda ref: {'data': raw})
+    shots = RemoteShots(transport)
+    assert shots.show_text_binding('p', 'b1', include_text=True).data['text'] == raw.decode()
+    assert shots.list_text_bindings('p', include_text=True).data[0][0]['text'] == raw.decode()
+    transport.get_object = lambda ref: {'data': b'wrong'}
+    failure = shots.show_text_binding('p', 'b1', include_text=True)
+    assert not failure.ok and failure.error.code == 'integrity_error'
+
+
+def test_text_cli_reads_and_sets_through_sdk(tmp_path):
+    from types import SimpleNamespace
+    from astrid.packs.shots.cli import build_parser
+    from astrid.sdk.contracts import DomainResult
+    calls = []
+    def capture(name):
+        def f(*a, **kw):
+            calls.append((name, a, kw))
+            return DomainResult.success({})
+        return f
+    client = SimpleNamespace(shots=SimpleNamespace(list_text_bindings=capture('list'), show_text_binding=capture('show'), set_text_binding=capture('set')))
+    parser = build_parser(client)
+    source = tmp_path / 'voice.txt'; source.write_text('Exact narration.\n', encoding='utf-8')
+    for args in [
+        ['text', 'list', '--project', 'p', '--shot', 's', '--kind', 'voiceover_script'],
+        ['text', 'show', 'b', '--project', 'p'],
+        ['text', 'set', 's', '--project', 'p', '--kind', 'voiceover_script', '--text-file', str(source), '--expected-head', '0', '--idempotency-key', 'test'],
+    ]:
+        parsed = parser.parse_args(args); assert parsed.handler(parsed) == 0
+    assert calls == [
+        ('list', ('p',), {'shot_id':'s', 'kind':'voiceover_script', 'slot':None, 'include_text':True}),
+        ('show', ('p','b'), {'include_text':True}),
+        ('set', ('p',), {'shot_id':'s', 'kind':'voiceover_script', 'slot':None, 'text':'Exact narration.\n', 'expected_head':0, 'idempotency_key':'test'}),
+    ]

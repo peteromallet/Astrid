@@ -88,7 +88,6 @@ exclude = [
     # installed runtime modules.
     "astrid.*.golden*",
     "astrid.*.skill*",
-    "astrid.skills*",
 ]
 
 [tool.setuptools.exclude-package-data]
@@ -98,7 +97,6 @@ astrid = [
     "**/__pycache__/*",
     "packs/**/tests/*",
     "packs/**/golden/*",
-    "packs/**/skill/*",
     "packs/**/build/*",
 ]
 
@@ -114,10 +112,17 @@ astrid = [
     "core/rendering/fixtures/renderer_parity/*",
     "core/rendering/schemas/v1/*.json",
 
-    # Capability manifests and their runtime data.  STAGE.md, skill files,
-    # requirements files, golden logs, and other authoring-only material are
-    # intentionally not included by these patterns.
+    # Capability manifests, runtime data, and agent-facing pack skills.
+    # STAGE.md, requirements files, golden logs, and other authoring-only
+    # material remain excluded by these patterns.
     "packs/**/pack.yaml",
+    # Agent-facing pack skills are shipped with the product.  They are
+    # discovered from the installed package on a fresh machine, so they
+    # cannot remain authoring-only source files.
+    "packs/**/skill/*",
+    "packs/**/skill/**/*",
+    "packs/**/AGENTS.md",
+    "packs/**/README.md",
     "packs/**/*.yaml",
     "packs/**/*.json",
     "packs/text_analysis/fixtures/*.txt",

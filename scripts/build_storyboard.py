@@ -217,6 +217,11 @@ def _client_import(client: Any, project: str, path: Path) -> AssetImport:
     digest = data.get("content_hash", data.get("digest")) if isinstance(data, Mapping) else None
     if not isinstance(digest, str) or not digest:
         raise StoryboardError([f"managed import for {path} returned no content hash"])
+    # The SDK returns a content-address digest with a ``sha256:`` prefix (e.g.
+    # ``sha256:2bc957...``); the registry validator requires the bare 64-char
+    # lowercase hex, consistent with the kernel's stored asset metadata.
+    if digest.startswith("sha256:"):
+        digest = digest[len("sha256:"):]
     media_id = data.get("id", data.get("object_id")) if isinstance(data, Mapping) else None
     return AssetImport(
         file=locator,
@@ -318,6 +323,7 @@ def compile_storyboard(
             )
         assets[img_key] = {
             "file": img_import.file,
+            "media_id": img_import.media_id,
             "type": "image",
             "content_sha256": img_import.content_sha256,
             "origin": "refreshable-from-generation" if img_origin else "immutable-public",
@@ -349,6 +355,7 @@ def compile_storyboard(
                 generator = _DEFAULT_TTS_GENERATOR
             assets[vo_key] = {
                 "file": vo_import.file,
+                "media_id": vo_import.media_id,
                 "type": "audio",
                 "duration": round(duration, 3),
                 "content_sha256": vo_import.content_sha256,

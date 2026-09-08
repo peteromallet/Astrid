@@ -340,12 +340,22 @@ python3 -m astrid runs open
 # open one exact render; --project overrides the selected current project
 python3 -m astrid runs open RUN_01ABC
 python3 -m astrid runs open --project demo
+
+# open the latest successful render belonging to the main/default timeline
+python3 -m astrid runs open --project demo --default-timeline
+
+# choose a canonical timeline explicitly
+python3 -m astrid runs open --project demo --timeline primary
 ```
 
 `runs open` uses runtime run/task records and managed object bytes only. It
 never scans checkout files or sorts filenames by modification time. "Latest"
 means the newest successfully settled `rendering.render` run; Astrid does not
 yet expose a separate editor-approved/current-deliverable promotion pointer.
+`--default-timeline` resolves the project's `metadata.default_timeline_id`;
+`--timeline` selects a canonical timeline by slug or id. Both require matching
+runtime run/task provenance and report an error if no matching successful
+render exists. A filename alone does not establish a timeline match.
 Downloaded bytes are checked against their runtime SHA-256 and size before the
 video is opened from a content-addressed local cache. Opening is currently
 supported on macOS.
@@ -372,10 +382,10 @@ There is no `--run` flag on `tasks retry`; the batch retry surface is
 python3 -m astrid timelines create --project demo primary \
   --name "Primary" --json
 
-# list — active timelines (slug ascending)
+# list — compact identities and counts for active timelines (slug ascending)
 python3 -m astrid timelines list --project demo --json
 
-# show — by UUID, ULID, or slug
+# show — full timeline config and asset registry, by UUID, ULID, or slug
 python3 -m astrid timelines show --project demo primary --json
 
 # save — whole-document compare-and-swap (config and registry both required);

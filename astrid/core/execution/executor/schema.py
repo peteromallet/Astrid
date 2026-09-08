@@ -67,6 +67,7 @@ ExecutorKind = _Literal["built_in", "external"]
 ExternalRuntimeMode = _Literal["api", "package"]
 ExternalRuntimeSourceKind = _Literal["git", "path", "pypi"]
 ExternalRuntimeInstallStrategy = _Literal["pip_args", "pyproject", "requirements"]
+ProjectScope = _Literal["required", "optional"]
 ConditionKind = _Literal["requires_input", "requires_file", "skip_if_input", "always"]
 
 # Runtime allowlists derived from the Literal aliases (single source of truth).
@@ -74,6 +75,7 @@ EXECUTOR_KINDS: frozenset[str] = frozenset(_get_args(ExecutorKind))
 EXTERNAL_RUNTIME_MODES: frozenset[str] = frozenset(_get_args(ExternalRuntimeMode))
 EXTERNAL_RUNTIME_SOURCE_KINDS: frozenset[str] = frozenset(_get_args(ExternalRuntimeSourceKind))
 EXTERNAL_RUNTIME_INSTALL_STRATEGIES: frozenset[str] = frozenset(_get_args(ExternalRuntimeInstallStrategy))
+PROJECT_SCOPE_VALUES: frozenset[str] = frozenset(_get_args(ProjectScope))
 CONDITION_KINDS: frozenset[str] = frozenset(_get_args(ConditionKind))
 
 CLIP_KIND_VALUES = tuple(kind.value for kind in ClipClassifiedKind)
@@ -515,6 +517,11 @@ def _validate_executor(executor: ExecutorDefinition) -> None:
     _validate_clip_kinds_supported(executor.clip_kinds_supported)
     _validate_pipeline_requirements(executor.pipeline_requirements)
     _validate_isolation(executor.isolation, error_cls=ExecutorValidationError)
+    project_scope = executor.metadata.get("project_scope", "required")
+    if not isinstance(project_scope, str) or project_scope not in PROJECT_SCOPE_VALUES:
+        raise ExecutorValidationError(
+            f"executor.metadata.project_scope must be one of {sorted(PROJECT_SCOPE_VALUES)}"
+        )
     _validate_external_runtime(executor)
     if executor.command is not None:
         _validate_command(executor.command, placeholders)

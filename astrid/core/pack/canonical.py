@@ -339,6 +339,7 @@ class CanonicalPackEntry:
 
 class ExternalPackSource(str, Enum):
     LOCAL = "local"
+    MANAGED = "managed"
     EXTRA = "extra"
     ENV = "env"
 
@@ -658,11 +659,14 @@ def read_normalize_validate(
     )
 
 
-def validate_canonical_pack(pack_root: str | Path) -> CanonicalPackEntry:
+def validate_canonical_pack(
+    pack_root: str | Path, *, expected_pack_id: str | None = None
+) -> CanonicalPackEntry:
     return _admit(
         Path(pack_root) / CANONICAL_MANIFEST_NAME,
         source="validation",
         resolve_resources=True,
+        expected_pack_id=expected_pack_id,
     )
 
 

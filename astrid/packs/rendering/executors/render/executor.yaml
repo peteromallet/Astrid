@@ -77,6 +77,16 @@
         "input": "materialized_objects",
         "flag": "--materialized-objects",
         "optional": true
+      },
+      {
+        "input": "review",
+        "flag": "--review",
+        "optional": true
+      },
+      {
+        "input": "review_context",
+        "flag": "--review-context",
+        "optional": true
       }
     ]
   },
@@ -152,20 +162,20 @@
       "type": "string",
       "artifact_type": null
     },
-      {
-        "description": "JSON object keyed by qualified backend id with per-backend configuration. The facade forwards only the selected implementation's namespace.",
-        "name": "backend_config",
-        "required": false,
-        "type": "json",
-        "artifact_type": null
-      },
-      {
-        "description": "Requested render profile mapping. The selected backend validates it against the media it can actually produce.",
-        "name": "profile",
-        "required": false,
-        "type": "json",
-        "artifact_type": null
-      },
+    {
+      "description": "JSON object keyed by qualified backend id with per-backend configuration. The facade forwards only the selected implementation's namespace.",
+      "name": "backend_config",
+      "required": false,
+      "type": "json",
+      "artifact_type": null
+    },
+    {
+      "description": "Requested render profile mapping. The selected backend validates it against the media it can actually produce.",
+      "name": "profile",
+      "required": false,
+      "type": "json",
+      "artifact_type": null
+    },
     {
       "description": "Plain output filename with no separators or traversal. Defaults to hype.mp4. A timeline stamped metadata.astrid_layer.alpha=true may request .mov for ProRes 4444/PCM output; an explicit profile must match that alpha mux.",
       "name": "output_name",
@@ -194,6 +204,20 @@
       "required": false,
       "type": "json",
       "artifact_type": null
+    },
+    {
+      "name": "review",
+      "type": "boolean",
+      "required": false,
+      "artifact_type": null,
+      "description": "Render-only shot-name and timeline-clock overlay."
+    },
+    {
+      "name": "review_context",
+      "type": "json",
+      "required": false,
+      "artifact_type": null,
+      "description": "Admission-owned snapshot of registered shot names and timeline ranges."
     }
   ],
   "isolation": {

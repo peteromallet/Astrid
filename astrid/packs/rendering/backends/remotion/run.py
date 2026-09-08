@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -191,6 +192,55 @@ def _registry_outputs_exist(project_dir: Path) -> bool:
     return all(path.exists() for path in _registry_output_paths(project_dir))
 
 
+def _registry_output_content_hashes(project_dir: Path) -> dict[str, str]:
+    """Return sha256 of each on-disk generated registry.
+
+    The registry-state cache compares the *computed* generator state against a
+    recorded snapshot.  That only detects when the generator's inputs changed;
+    it never detects an on-disk registry that drifted from what the generator
+    last wrote (e.g. a stale ``node_modules`` copy left by an older generator).
+    Reading the actual output content closes that gap: the cache is only valid
+    when every on-disk ``*.generated.ts`` matches the recorded content hash.
+    """
+    content_hashes: dict[str, str] = {}
+    for kind in ("effects", "animations", "transitions"):
+        path = _registry_output_paths(project_dir)[["effects", "animations", "transitions"].index(kind)]
+        if not path.is_file():
+            content_hashes[kind] = ""
+            continue
+        digest = hashlib.sha256()
+        digest.update(path.read_bytes())
+        content_hashes[kind] = digest.hexdigest()
+    return content_hashes
+
+
+def _registry_outputs_match_state(
+    project_dir: Path,
+    cached_state: dict[str, Any],
+) -> bool:
+    """True only when the on-disk registries match the cached state snapshot.
+
+    ``cached_state`` records per-kind content hashes of what the generator last
+    produced.  Comparing against the live files catches a stale ``node_modules``
+    copy whose content no longer matches the cached snapshot, even when the
+    generator's *inputs* are unchanged (the ``hash`` still matches).
+    """
+    if not _registry_outputs_exist(project_dir):
+        return False
+    recorded = cached_state.get("content_hashes")
+    if not isinstance(recorded, dict):
+        return False
+    on_disk = _registry_output_content_hashes(project_dir)
+    # Verify every kind the snapshot recorded.  A kind absent from the
+    # snapshot (e.g. a minimal state recording only effects) is validated by
+    # the existence check above, not its content hash — this keeps the guard
+    # backward compatible with callers that track a subset of the registry.
+    for kind, recorded_hash in recorded.items():
+        if on_disk.get(kind) != recorded_hash:
+            return False
+    return True
+
+
 def _effective_registry_state(theme_path: Path | None) -> dict[str, Any]:
     if gen_effect_registry is None:
         return {"version": 1, "hash": "server-provisioned"}
@@ -242,7 +292,7 @@ def _regenerate_element_registries_locked(
     if (
         cached_state is not None
         and cached_state.get("hash") == state.get("hash")
-        and _registry_outputs_exist(project_dir)
+        and _registry_outputs_match_state(project_dir, cached_state)
     ):
         return
 
@@ -262,6 +312,80 @@ def _regenerate_element_registries_locked(
         text=True,
     )
     _write_registry_state(project_dir, state)
+
+
+_EFFECT_IDS_RE = re.compile(r"EFFECT_IDS\s*=\s*\[([^\]]*)\]\s*as const")
+
+
+def _generated_effect_registry_ids(project_dir: Path) -> set[str]:
+    """Parse the EFFECT_IDS that the active composition's registry exposes."""
+    effects_path = _registry_output_paths(project_dir)[0]
+    if not effects_path.is_file():
+        return set()
+    text = effects_path.read_text(encoding="utf-8")
+    match = _EFFECT_IDS_RE.search(text)
+    if match is None:
+        raise RuntimeError(
+            f"generated effect registry {effects_path} does not declare EFFECT_IDS "
+            "(expected `export const EFFECT_IDS = [...] as const;`)"
+        )
+    return set(re.findall(r"'([a-z0-9][a-z0-9-]*)'", match.group(1)))
+
+
+def _validate_renderer_effect_registry(
+    project_dir: Path,
+    timeline_data: Mapping[str, Any],
+) -> None:
+    """Fail closed when a referenced effect has no renderable component.
+
+    The authoring catalog (``astrid.core.element.catalog``) reports every
+    effect the pack layout knows about, but the Remotion composition only
+    mounts effects present in its generated ``EFFECT_REGISTRY``.  A catalog
+    entry that is missing from the generated registry is a catalog/renderer
+    divergence: the timeline validates but renders only the base plate.  This
+    cross-reference surfaces that divergence before the render is admitted,
+    naming the offending effect and the fix.
+
+    Only effects actually referenced by ``timeline_data`` are checked so a
+    catalog effect that is simply not used by this timeline never blocks a
+    render (it is not part of the render's admission contract).  A timeline
+    that references no catalog effect is a no-op even if the generated
+    registry is a placeholder (it cannot silently drop an effect it never
+    references).
+    """
+    from astrid.core.element import catalog as element_catalog
+
+    clips = timeline_data.get("clips") if isinstance(timeline_data, dict) else None
+    if not isinstance(clips, list):
+        return
+
+    catalog_ids = set(element_catalog.list_effect_ids())
+    referenced_catalog_effects = {
+        clip.get("clipType")
+        for clip in clips
+        if isinstance(clip, Mapping)
+        and isinstance(clip.get("clipType"), str)
+        and clip.get("clipType") not in _BUILTIN_MEDIA_CLIP_TYPES
+        and clip.get("clipType") in catalog_ids
+    }
+    if not referenced_catalog_effects:
+        return
+
+    # A referenced catalog effect is only renderable if the active generated
+    # EFFECT_REGISTRY mounts it.  Parse the registry lazily so a timeline that
+    # references nothing (or only built-ins) never trips on a placeholder file.
+    generated_ids = _generated_effect_registry_ids(project_dir)
+    missing = sorted(referenced_catalog_effects - generated_ids)
+    if missing:
+        joined = ", ".join(missing)
+        raise RuntimeError(
+            "timeline references effect(s) the active composition's generated "
+            f"EFFECT_REGISTRY cannot mount: {joined}. The catalog knows these "
+            "effects but the renderer registry is missing their components, so "
+            "the render would silently drop to the base plate. Regenerate the "
+            f"registry (`python scripts/gen_effect_registry.py`) so these "
+            "components are bundled, then retry."
+        )
 
 
 def _render_asset_stage_hash(
@@ -543,6 +667,7 @@ def _execute_remotion(
     composition_id: str,
     theme_path: Path | None,
     min_free_gb: float | None,
+    review: Mapping[str, Any] | None = None,
     materialized_root: Path | None = None,
     staging_parent: Path | None = None,
     materialized_objects: Mapping[str, str] | None = None,
@@ -562,6 +687,7 @@ def _execute_remotion(
                 composition_id=composition_id,
                 theme_path=theme_path,
                 min_free_gb=min_free_gb,
+                review=review,
                 materialized_root=materialized_root,
                 staging_parent=staging_parent,
                 materialized_objects=materialized_objects,
@@ -592,6 +718,7 @@ def _execute_remotion(
                 composition_id=composition_id,
                 theme_path=theme_path,
                 min_free_gb=min_free_gb,
+                review=review,
                 materialized_root=materialized_root,
                 staging_parent=staging_parent,
                 materialized_objects=materialized_objects,
@@ -612,6 +739,7 @@ def _execute_remotion_locked(
     composition_id: str,
     theme_path: Path | None,
     min_free_gb: float | None,
+    review: Mapping[str, Any] | None = None,
     materialized_root: Path | None = None,
     staging_parent: Path | None = None,
     materialized_objects: Mapping[str, str] | None = None,
@@ -620,6 +748,12 @@ def _execute_remotion_locked(
 
     runtime_tools = _validate_project_dir(project_dir)
     _regenerate_element_registries(project_dir, theme_path)
+    # Render admission: the catalog and the active composition's generated
+    # EFFECT_REGISTRY must agree.  A catalog effect that the registry cannot
+    # mount would otherwise pass validation and silently drop to the base
+    # plate; fail closed here with an actionable diagnostic.
+    timeline_data = _serialize_timeline(timeline_path)
+    _validate_renderer_effect_registry(project_dir, timeline_data)
     registry_state = _effective_registry_state(theme_path)
     _require_free_space(provenance_out_path.parent, min_free_gb)
     remotion_port = _available_remotion_port()
@@ -673,6 +807,7 @@ def _execute_remotion_locked(
                 ),
                 "assets": resolved_registry,
                 "theme": theme_for_props,
+                "review": review,
             }
             # Batch 4 (layer stack): the service stamps
             # ``metadata.astrid_layer.alpha = z > 0`` onto the materialized
@@ -1038,6 +1173,7 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
                 composition_id=settings.composition_id,
                 theme_path=settings.theme_path,
                 min_free_gb=settings.min_free_gb,
+                review=json.loads(request.metadata["review"]) if "review" in request.metadata else None,
                 materialized_root=request.materialized_root,
                 staging_parent=workspace,
                 materialized_objects=request.materialized_objects,
@@ -1074,6 +1210,7 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
                     "renderer_version": BACKEND_VERSION,
                     "composition": settings.composition_id,
                     **backend_provenance,
+                    "review": request.metadata.get("review"),
                 }
             },
             normalization=[],

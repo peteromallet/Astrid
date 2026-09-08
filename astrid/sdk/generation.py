@@ -127,6 +127,7 @@ def _resolve_invoke_destination(
     out: Path | str | None,
     project: str | None,
     project_root: str | Path | None,
+    client: Any | None = None,
 ) -> tuple[Path | str | None, str | None]:
     del project_root  # project roots discover packs; they never select ownership.
     from astrid.core.project.guidance import (
@@ -138,7 +139,7 @@ def _resolve_invoke_destination(
     if selected is None:
         from astrid.sdk.invocation import _runtime_selected_project
 
-        selected = _runtime_selected_project()
+        selected = _runtime_selected_project(client) if client is not None else _runtime_selected_project()
     if selected is None:
         raise CapabilityPreconditionError(
             format_project_required_guidance(operation="generation")
@@ -273,6 +274,7 @@ class GenerationFacade:
                 python_executable=python_exec,
             )
         invoke_out, invoke_project = _resolve_invoke_destination(
+            client=client,
             out=out,
             project=project,
             project_root=project_root,
@@ -380,6 +382,7 @@ class GenerationFacade:
                 python_executable=python_exec,
             )
         invoke_out, invoke_project = _resolve_invoke_destination(
+            client=client,
             out=out,
             project=project,
             project_root=project_root,
@@ -488,6 +491,7 @@ class GenerationFacade:
             )
 
         invoke_out, invoke_project = _resolve_invoke_destination(
+            client=client,
             out=out,
             project=project,
             project_root=project_root,

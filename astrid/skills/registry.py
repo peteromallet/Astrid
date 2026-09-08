@@ -1,6 +1,6 @@
-"""Auto-managed pack registry block inside the gateway skill (``_core/skill/SKILL.md``).
+"""Auto-managed pack registry in the creative-work supporting reference.
 
-``astrid skills sync`` keeps a sentinel-delimited block in the gateway skill
+``astrid skills sync`` keeps a sentinel-delimited block in the creative-work reference
 current: one terse row per discovered pack skill, with the pack's
 ``short_description`` and an inward pointer to where its full skill lives. The
 block is regenerated deterministically from :func:`astrid.skills.discovery.list_skills`
@@ -25,12 +25,21 @@ END_MARKER = "<!-- PACKS:END -->"
 
 _HEADING = "## Installed packs"
 
-# Default location of the gateway skill whose registry block this module owns.
-CORE_SKILL_MD = REPO_ROOT / "astrid" / "packs" / "_core" / "skill" / "SKILL.md"
+# Default registry reference; constant name retained for API compatibility.
+CORE_SKILL_MD = REPO_ROOT / "astrid/packs/_core/skill/creative-work/references/packs.md"
 
 
-def _repo_relative(path: Path) -> Path:
+def _repo_relative(path: Path, *, view_root: Path | None = None) -> Path:
     """Return *path* relative to the repo root when it lives under it, else as-is."""
+    if view_root is not None:
+        # Keep the lexical view path. The pack entry is intentionally a
+        # symlink into a read-only source tree; resolving it here would turn a
+        # composed `packs/<id>/SKILL.md` route back into a checkout-relative
+        # path and defeat the writable view contract.
+        try:
+            return path.relative_to(view_root)
+        except ValueError:
+            pass
     resolved = path.resolve()
     root = REPO_ROOT.resolve()
     if root in resolved.parents:
@@ -55,6 +64,7 @@ def render_registry_block(
     descriptors: list[SkillDescriptor] | None = None,
     *,
     deep: bool = False,
+    view_root: Path | None = None,
 ) -> str:
     """Render the managed registry block (markers included, no trailing newline).
 
@@ -81,7 +91,7 @@ def render_registry_block(
 
     for descriptor in rows:
         summary = (descriptor.short_description or descriptor.description or "").replace("|", "\\|")
-        skill_path = _repo_relative(descriptor.skill_md)
+        skill_path = _repo_relative(descriptor.skill_md, view_root=view_root)
         path_cell = f"`{skill_path}`"
         if deep:
             skill_name = f"`astrid-{descriptor.pack_id}`"
@@ -135,6 +145,7 @@ def regenerate(
     skill_md_path: Path | None = None,
     descriptors: list[SkillDescriptor] | None = None,
     deep: bool = False,
+    view_root: Path | None = None,
     dry_run: bool = False,
 ) -> bool:
     """Regenerate the managed registry block in *skill_md_path*.
@@ -144,7 +155,7 @@ def regenerate(
     """
     target = skill_md_path or CORE_SKILL_MD
     original = target.read_text(encoding="utf-8")
-    block = render_registry_block(descriptors, deep=deep)
+    block = render_registry_block(descriptors, deep=deep, view_root=view_root)
     updated = _splice_block(original, block)
     if updated == original:
         return False
@@ -158,12 +169,14 @@ def is_current(
     skill_md_path: Path | None = None,
     descriptors: list[SkillDescriptor] | None = None,
     deep: bool = False,
+    view_root: Path | None = None,
 ) -> bool:
     """Return ``True`` when the registry block is already up to date."""
     return not regenerate(
         skill_md_path=skill_md_path,
         descriptors=descriptors,
         deep=deep,
+        view_root=view_root,
         dry_run=True,
     )
 

@@ -14,6 +14,7 @@ import contextlib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import mock
 
 from astrid import skills
@@ -46,6 +47,30 @@ def _write_skill_md(tmp: Path, body: str | None = None) -> Path:
 
 
 class BaseHelperTest(unittest.TestCase):
+    def test_env_inventory_source_is_visible_to_skill_discovery(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "external-pack"
+            skill = root / "skill"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "---\nname: external\ndescription: external\n---\nbody\n",
+                encoding="utf-8",
+            )
+            pack = SimpleNamespace(id="external", status="active", visibility="public")
+            discovered = SimpleNamespace(
+                source_kind="env",
+                pack=pack,
+                pack_dir=root,
+                executor_roots=lambda: (),
+                orchestrator_roots=lambda: (),
+            )
+            with mock.patch(
+                "astrid.core.pack.discovery.discover_pack_metadata",
+                return_value=(discovered,),
+            ):
+                ids = {descriptor.pack_id for descriptor in discovery.list_skills()}
+            self.assertIn("external", ids)
+
     def test_is_ours_matches_only_astrid_namespace(self) -> None:
         self.assertTrue(is_ours("astrid"))
         self.assertTrue(is_ours("astrid-foley"))
@@ -149,6 +174,37 @@ class RegistryBlockTest(unittest.TestCase):
 
 
 class SyncGatewayTest(unittest.TestCase):
+    def test_normal_sync_uses_writable_composed_view(self) -> None:
+        fx = _Tmp()
+        try:
+            source_registry = registry.CORE_SKILL_MD.read_text(encoding="utf-8")
+            skills.sync(deep=True, state_path=fx.state_path)
+            view = fx.state_path.parent / "skills" / "claude"
+            gateway = fx.home / ".claude" / "skills" / "astrid"
+            self.assertTrue(gateway.is_symlink())
+            self.assertEqual(gateway.resolve(), view.resolve())
+            self.assertTrue((view / "SKILL.md").is_file())
+            pack_link = view / "packs" / "foley"
+            self.assertTrue(pack_link.is_symlink())
+            self.assertTrue((pack_link / "SKILL.md").is_file())
+            self.assertIn(registry.BEGIN_MARKER, (view / "creative-work" / "references" / "packs.md").read_text(encoding="utf-8"))
+            for route in (
+                view / "packs" / "rendering" / "SKILL.md",
+                view / "packs" / "references" / "SKILL.md",
+                view / "creative-work" / "../packs" / "generation" / "SKILL.md",
+                view / "creative-work" / "../packs" / "rendering" / "SKILL.md",
+                view / "pack-builder" / "SKILL.md",
+            ):
+                self.assertTrue(route.resolve().is_file(), f"unopenable composed route: {route}")
+            pack_builder = (view / "pack-builder" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("https://github.com/peteromallet/Astrid/blob/main/docs/", pack_builder)
+            self.assertNotIn("../../../../../docs/", pack_builder)
+            registry_text = (view / "creative-work" / "references" / "packs.md").read_text(encoding="utf-8")
+            self.assertIn("packs/foley/SKILL.md", registry_text)
+            self.assertEqual(registry.CORE_SKILL_MD.read_text(encoding="utf-8"), source_registry)
+        finally:
+            fx.close()
+
     def test_gateway_only_links_core_and_writes_registry(self) -> None:
         fx = _Tmp()
         try:
@@ -228,6 +284,29 @@ class SyncGatewayTest(unittest.TestCase):
                     if s["extras"].get("pruned")
                 ]
                 self.assertTrue(any("astrid-ghostpack" in s["description"] for s in pruned))
+        finally:
+            fx.close()
+
+    def test_deep_sync_prunes_disabled_managed_pack_but_keeps_foreign_entry(self) -> None:
+        fx = _Tmp()
+        try:
+            skills.sync(deep=True, state_path=fx.state_path)
+            data = skills.state.load(fx.state_path)
+            data["disabled_defaults"]["claude"] = ["foley"]
+            skills.state.save(data, fx.state_path)
+
+            claude_skills = fx.home / ".claude" / "skills"
+            foreign = claude_skills / "image-generation"
+            foreign.mkdir()
+            (foreign / "SKILL.md").write_text("foreign", encoding="utf-8")
+            managed = claude_skills / "astrid-foley"
+            self.assertTrue(managed.is_symlink())
+
+            skills.sync(deep=True, state_path=fx.state_path)
+
+            self.assertFalse(managed.exists())
+            self.assertTrue(foreign.is_dir())
+            self.assertEqual((foreign / "SKILL.md").read_text(encoding="utf-8"), "foreign")
         finally:
             fx.close()
 

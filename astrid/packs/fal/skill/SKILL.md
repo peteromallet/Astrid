@@ -13,8 +13,8 @@ The fal pack provides focused executors for hunyuan-video-foley and MiniMax H3.
 
 | Executor | What it does |
 |---|---|
-| `fal.fal_foley` | Send a video clip (≤15s recommended) to fal.ai and receive a Foley audio track matched to the clip's duration. |
-| `fal.h3_video` | Generate a 2K MiniMax H3 clip from text or ordered image/video/audio references. |
+| [`fal.fal_foley`](../executors/fal_foley/STAGE.md) | Send a video clip (≤15s recommended) to fal.ai and receive a Foley audio track matched to the clip's duration. |
+| [`fal.h3_video`](../executors/h3_video/STAGE.md) | Generate a 2K MiniMax H3 clip from text or ordered image/video/audio references. |
 
 ## When to use
 
@@ -44,14 +44,16 @@ The fal pack provides focused executors for hunyuan-video-foley and MiniMax H3.
 import astrid.sdk as sdk
 result = sdk.invoke(
     "fal.fal_foley",
+    kind="executor",
+    project="demo",
     inputs={"clip": "./short_clip.mp4"},
-    out="./foley_audio.mp3",
 )
 
 result = sdk.invoke(
     "fal.h3_video",
+    kind="executor",
+    project="demo",
     inputs={
-        "project": "<slug>",
         "mode": "text-to-video",
         "prompt_file": "./prompt.txt",
         "duration": "15",
@@ -59,3 +61,9 @@ result = sdk.invoke(
     },
 )
 ```
+
+For a finished video with Foley, use the returned runtime audio artifact in the
+source video's timeline on an audio track aligned to the scored clip. Follow
+[timeline editing and rendering](../../rendering/skill/SKILL.md) to save and
+render it; Foley generation alone returns audio, not a muxed video. Read the
+selected executor's `STAGE.md` before admission.

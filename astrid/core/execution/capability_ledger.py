@@ -335,10 +335,9 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
             row["disposition"] = "advertised"
             row["discovery_status"] = "discovered"
         elif row["id"].startswith(("hivemind.", "discord_local.", "seedance_local.")):
-            # These IDs remain in the historical result-contract inventory,
-            # but their source packs are optional and are not shipped in the
-            # current checkout.  Keep them visible for reconciliation without
-            # making an absent external route look executable.
+            # These IDs remain in the result-contract inventory. If their
+            # shipped/explicit pack is absent, keep them visible without
+            # making an unavailable external route look executable.
             row["disposition"] = "unavailable_external"
             row["discovery_status"] = "not_installed"
             row["reason"] = "optional external pack is not installed in this checkout"
@@ -353,10 +352,12 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
     # labels are real, implemented, and matrix-covered: 2026-09-04 adds the
     # local/discord_local/seedance_local packs (6 labels) and vibecomfy
     # inspect/edit (2 labels); all implemented, pack tests passing, matrix
-    # entries present in config/astrid-beta-capabilities.json.
+    # entries present in config/astrid-beta-capabilities.json. On 2026-09-08,
+    # the shipped Hivemind pack adds eight labels backed by seven matrix
+    # executors (resource/distillation contributions share one executor).
     coverage = {
-        "source_labels": {"source": 84, "ledger": len(labels), "missing": [], "complete": len(labels) == 84},
-        "historical_source_labels": {"source": 89, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 89},
+        "source_labels": {"source": 92, "ledger": len(labels), "missing": [], "complete": len(labels) == 92},
+        "historical_source_labels": {"source": 97, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 97},
         "executor_inventory": {"source": 74, "ledger": len(executors), "missing": [], "complete": len(executors) == 74},
         "legacy_ids": {"source": 19, "ledger": len(legacy), "missing": [], "complete": len(legacy) == 19},
     }
@@ -377,9 +378,11 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
             "executor_ids": expected_hivemind,
             "external_census": {
                 "declared_count": 7,
-                "installed_count": 8,
-                "unresolved": True,
-                "note": "The eighth installed Hivemind item is not identified; no ID is guessed.",
+                "installed_count": len(expected_hivemind),
+                "unresolved": len(expected_hivemind) != 7,
+                "note": "Seven Hivemind executors are shipped by the default pack; no historical eighth item is guessed."
+                if len(expected_hivemind) == 7
+                else "Historical Hivemind census exceeds the seven shipped executors; no additional ID is guessed.",
             },
         },
         "coverage": coverage,

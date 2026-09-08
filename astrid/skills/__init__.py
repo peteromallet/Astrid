@@ -15,6 +15,51 @@ from . import discovery, registry, state
 from .discovery import SkillDescriptor, list_skills
 from .harnesses import ADAPTERS, HarnessAdapter, adapter_for, all_adapters
 
+
+def default_descriptors(
+    descriptors: Iterable[SkillDescriptor] | None = None,
+) -> list[SkillDescriptor]:
+    """Return the gateway plus explicitly taxonomy-default skill packs.
+
+    First-party manifests historically omit ``install_tier`` and retain their
+    existing explicit-install behavior.  Packs that explicitly declare a
+    default tier are installed on first harness discovery through this
+    existing skill layer.  Hivemind is retained as the compatibility default
+    while older canonical manifests are upgraded to carry that declaration.
+    """
+    from astrid.core.pack import load_pack_manifest, pack_manifest_path
+
+    available = list(descriptors if descriptors is not None else list_skills())
+    result: list[SkillDescriptor] = [d for d in available if d.pack_id == "_core"]
+    for descriptor in available:
+        if descriptor.pack_id == "_core":
+            continue
+        manifest_path = pack_manifest_path(descriptor.skill_dir.parent)
+        if manifest_path is None:
+            continue
+        try:
+            pack = load_pack_manifest(manifest_path)
+        except Exception:  # malformed optional packs remain discoverable only
+            continue
+        # Canonical v2 currently normalizes omitted taxonomy fields to the
+        # default value, so inspect the source manifest to distinguish an
+        # explicit default declaration from legacy first-party manifests.
+        try:
+            import yaml
+
+            raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        except Exception:  # malformed optional packs remain opt-in
+            raw = {}
+        declared_tier = raw.get("install_tier") if isinstance(raw, dict) else None
+        if declared_tier in {"core", "default"}:
+            result.append(descriptor)
+    return result
+
+
+def default_pack_ids(descriptors: Iterable[SkillDescriptor] | None = None) -> tuple[str, ...]:
+    """Return stable ids for skills installed by default."""
+    return tuple(d.pack_id for d in default_descriptors(descriptors))
+
 NUDGE_INTERVAL_DAYS = 7
 NUDGE_ENV = "ASTRID_NO_NUDGE"
 
@@ -80,7 +125,12 @@ def uninstall(
         else:
             steps = adapter.apply("uninstall", descriptors, **kwargs)
             for descriptor in descriptors:
-                state.record_uninstall(current_state, harness_name, descriptor.pack_id)
+                state.record_uninstall(
+                    current_state,
+                    harness_name,
+                    descriptor.pack_id,
+                    default=descriptor in default_descriptors(descriptors),
+                )
         report["actions"].append({"harness": harness_name, "steps": [_step_to_dict(s) for s in steps]})
 
     if not dry_run:
@@ -101,7 +151,7 @@ def sync(
 
     Default (gateway-only) links just the ``_core`` skill as ``astrid`` into
     every detected harness and regenerates the managed pack registry block in
-    the gateway ``SKILL.md``. With *deep*, every discovered pack skill is also
+    the creative-work supporting reference. With *deep*, every discovered pack skill is also
     linked as ``astrid-<pack>`` and the block records those skill names.
     Orphan ``astrid-*`` installs (no longer-discovered packs) are pruned.
     """
@@ -111,20 +161,45 @@ def sync(
 
     report: dict = {"actions": []}
 
-    # Regenerate the managed registry block in the gateway skill first so the
-    # block reflects the descriptors we are about to (re)link.
-    registry_changed = registry.regenerate(
-        skill_md_path=skill_md_path,
-        descriptors=all_descriptors,
-        deep=deep,
-        dry_run=dry_run,
-    )
-    report["registry"] = {"changed": registry_changed}
+    # Explicit skill_md_path is retained as a test/operator escape hatch. The
+    # normal path composes one writable view per harness before linking it.
+    explicit_registry_changed = False
+    if skill_md_path is not None:
+        explicit_registry_changed = registry.regenerate(
+            skill_md_path=skill_md_path,
+            descriptors=all_descriptors,
+            deep=deep,
+            dry_run=dry_run,
+        )
+    registry_changes: dict[str, bool] = {}
+    view_parent = (state_path or state.state_path()).parent / "skills"
 
     for harness_name, adapter in targets.items():
         descriptors = _sync_descriptors_for_harness(
             all_descriptors, current_state, harness_name, deep=deep
         )
+        view_steps: list = []
+        if skill_md_path is None:
+            from .view import compose_view
+
+            core = next(d for d in descriptors if d.pack_id == "_core")
+            pack_descriptors = [d for d in descriptors if d.pack_id != "_core"]
+            view_root = view_parent / harness_name
+            gateway, view_steps, view_packs = compose_view(
+                view_root, core, pack_descriptors, dry_run=dry_run
+            )
+            registry_target = gateway.skill_md.parent / "creative-work" / "references" / "packs.md"
+            if not dry_run:
+                changed = registry.regenerate(
+                    skill_md_path=registry_target,
+                    descriptors=view_packs,
+                    deep=deep,
+                    view_root=view_root,
+                )
+            else:
+                changed = False
+            registry_changes[harness_name] = changed
+            descriptors = [gateway, *view_packs] if deep else [gateway]
         kwargs: dict = {"force": force}
         if harness_name == "hermes":
             kwargs["mechanism"] = mechanism
@@ -158,16 +233,34 @@ def sync(
             if skills_dir is not None and kwargs.get("mechanism", "symlink") != "external-dir":
                 from .harnesses.base import prune_orphan_skill_links
 
-                known_ids = {d.pack_id for d in all_descriptors}
+                disabled_ids = set(
+                    current_state.get("disabled_defaults", {}).get(harness_name, [])
+                )
+                known_ids = {
+                    d.pack_id for d in all_descriptors if d.pack_id not in disabled_ids
+                }
                 for removed in prune_orphan_skill_links(skills_dir, known_ids):
                     steps.append(_pruned_step(removed))
+                    removed_id = _link_pack_id(removed.name)
                     state.record_uninstall(
-                        current_state, harness_name, _link_pack_id(removed.name)
+                        current_state,
+                        harness_name,
+                        removed_id,
+                        default=removed_id in default_pack_ids(all_descriptors),
                     )
-        report["actions"].append({"harness": harness_name, "steps": [_step_to_dict(s) for s in steps]})
+        report["actions"].append(
+            {
+                "harness": harness_name,
+                "steps": [_step_to_dict(s) for s in [*view_steps, *steps]],
+            }
+        )
 
     if not dry_run:
         state.save(current_state, state_path)
+    report["registry"] = {
+        "changed": explicit_registry_changed or any(registry_changes.values()),
+        "by_harness": registry_changes,
+    }
     return report
 
 
@@ -181,8 +274,8 @@ def check(
 
     Reports, without making any change:
 
-    * ``registry_stale`` — the managed pack registry block in the gateway
-      ``SKILL.md`` is missing or out of date.
+    * ``registry_stale`` — the managed pack registry block in the creative-work
+      supporting reference is missing or out of date.
     * ``missing`` — packs that should be linked into a detected harness but
       are not (the gateway ``astrid`` link always; ``astrid-<pack>`` links too
       when *deep*).
@@ -202,8 +295,14 @@ def check(
 
     report: dict = {
         "detected": list(detected.keys()),
-        "registry_stale": not registry.is_current(
-            skill_md_path=skill_md_path, descriptors=all_descriptors, deep=deep
+        "registry_stale": (
+            not registry.is_current(
+                skill_md_path=skill_md_path,
+                descriptors=all_descriptors,
+                deep=deep,
+            )
+            if skill_md_path is not None
+            else False
         ),
         "missing": [],
         "stale_links": [],
@@ -213,6 +312,30 @@ def check(
         expected = _sync_descriptors_for_harness(
             all_descriptors, current_state, harness_name, deep=deep
         )
+        registry_descriptors = expected
+        registry_target = skill_md_path
+        view_root = None
+        if skill_md_path is None:
+            from .view import compose_view
+
+            core = next(d for d in expected if d.pack_id == "_core")
+            pack_descriptors = [d for d in expected if d.pack_id != "_core"]
+            view_root = (state_path or state.state_path()).parent / "skills" / harness_name
+            gateway, _steps, registry_descriptors = compose_view(
+                view_root, core, pack_descriptors, dry_run=True
+            )
+            expected = [gateway, *registry_descriptors] if deep else [gateway]
+            registry_target = view_root / "creative-work" / "references" / "packs.md"
+        if registry_target is not None and skill_md_path is None:
+            if not registry_target.is_file():
+                report["registry_stale"] = True
+            else:
+                report["registry_stale"] = report["registry_stale"] or not registry.is_current(
+                    skill_md_path=registry_target,
+                    descriptors=registry_descriptors,
+                    deep=deep,
+                    view_root=view_root,
+                )
         for descriptor in expected:
             ok, _msg = adapter.verify(descriptor)
             if not ok:
@@ -403,7 +526,8 @@ def nudge_if_needed(*, argv: list[str], state_path: Path | None = None, stream=s
     descriptors = list_skills()
     if not descriptors:
         return False
-    core_descriptor = next((d for d in descriptors if d.pack_id == "_core"), None)
+    default_set = default_descriptors(descriptors)
+    core_descriptor = next((d for d in default_set if d.pack_id == "_core"), None)
     if core_descriptor is None:
         return False
 
@@ -412,8 +536,23 @@ def nudge_if_needed(*, argv: list[str], state_path: Path | None = None, stream=s
     # re-heals even when state still claims it installed.
     drifted: list[str] = []
     for harness_name, adapter in detected.items():
+        current_state = state.load(state_path)
+        expected = _sync_descriptors_for_harness(
+            descriptors, current_state, harness_name, deep=False
+        )
+        core = next(d for d in expected if d.pack_id == "_core")
+        pack_descriptors = [d for d in expected if d.pack_id != "_core"]
+        from .view import compose_view
+
+        view_root = (state_path or state.state_path()).parent / "skills" / harness_name
+        gateway, _steps, _view_packs = compose_view(
+            view_root, core, pack_descriptors, dry_run=True
+        )
         try:
-            ok, _msg = adapter.verify(core_descriptor)
+            # Sync installs the composed gateway into the harness. Verify that
+            # same view descriptor here; checking the source descriptor would
+            # report drift forever after a successful composed sync.
+            ok = adapter.verify(gateway)[0]
         except Exception:  # noqa: BLE001 - a flaky probe must not block the command
             ok = False
         if not ok:
@@ -426,7 +565,10 @@ def nudge_if_needed(*, argv: list[str], state_path: Path | None = None, stream=s
     # reuses install() (link machinery + state recording) and never regenerates
     # the registry block, so the repo is never written on the auto path.
     try:
-        install(["_core"], drifted, force=False, state_path=state_path)
+        # Heal through the same composed-view path as an explicit sync. The
+        # older direct install route bypassed the view and could verify a
+        # source descriptor while the harness actually points at the gateway.
+        sync(deep=False, state_path=state_path)
     except Exception:  # noqa: BLE001 - never let auto-heal break the real command
         return False
 
@@ -491,10 +633,13 @@ def _sync_descriptors_for_harness(
     *,
     deep: bool,
 ) -> list[SkillDescriptor]:
+    disabled = set(current_state.get("disabled_defaults", {}).get(harness_name, []))
     if deep:
-        return all_descriptors
+        return [d for d in all_descriptors if d.pack_id not in disabled]
     installed_ids = set(current_state["installs"].get(harness_name, {}).keys())
-    expected_ids = installed_ids | {"_core"}
+    expected_ids = installed_ids | set(default_pack_ids(all_descriptors))
+    expected_ids.difference_update(disabled)
+    expected_ids.add("_core")
     return [descriptor for descriptor in all_descriptors if descriptor.pack_id in expected_ids]
 
 
@@ -526,6 +671,8 @@ __all__ = [
     "NUDGE_ENV",
     "NUDGE_INTERVAL_DAYS",
     "check",
+    "default_descriptors",
+    "default_pack_ids",
     "doctor",
     "install",
     "list_skills",

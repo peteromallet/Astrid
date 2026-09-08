@@ -6,7 +6,7 @@ read-only: it can see source-tree packs, an already-materialized project
 ``ASTRID_PACKS_PATH``. It never creates a project pack and never consults an
     mutable user pack store.
 
-Fault tolerance: the ``extra`` / ``env`` layers are
+Fault tolerance: the ``managed`` / ``extra`` / ``env`` layers are
 external by definition. A pack whose manifest fails to load is skipped
 individually with a logged warning so one broken external pack cannot hide its
 valid neighbors. The source-tree scan stays strict: first-party packs must
@@ -39,7 +39,8 @@ from astrid.core.pack.canonical import (
 DiscoverPacksFn = Callable[..., "tuple[PackDefinition, ...]"]
 
 # Source-kind labels in discovery (and therefore priority) order.
-SOURCE_KINDS: tuple[str, ...] = ("source", "local", "extra", "env")
+SOURCE_KINDS: tuple[str, ...] = ("source", "local", "managed", "extra", "env")
+MANAGED_SOURCE_KIND = "managed"
 ASTRID_PACKS_PATH_ENV = "ASTRID_PACKS_PATH"
 
 
@@ -49,13 +50,17 @@ class DiscoveredPack:
 
     ``priority_index`` is the position of this pack in the ordered discovery
     list; lower indices were discovered first. It encodes layer precedence
-    (source < local < extra < env) and is distinct from the per-content
+    (source < local < managed < extra < env) and is distinct from the per-content
     ``metadata["priority"]`` value that registries use to pick winners.
     """
 
     pack: PackDefinition
     source_kind: str
     priority_index: int
+    source_revision: str | None = None
+    source_manifest_sha256: str | None = None
+    source_tree_sha256: str | None = None
+    source_inventory_identity: str | None = None
 
     @property
     def id(self) -> str:
@@ -94,6 +99,10 @@ class CanonicalDiscoveredPack:
     entry: CanonicalPackEntry
     source_kind: str
     priority_index: int
+    source_revision: str | None = None
+    source_manifest_sha256: str | None = None
+    source_tree_sha256: str | None = None
+    source_inventory_identity: str | None = None
 
     @property
     def id(self) -> str:
@@ -115,8 +124,18 @@ def discover_canonical_pack_metadata(
     seen: set[tuple[str, str]] = set()
     scanned: set[Path] = set()
 
-    def add(path: Path, source: ExternalPackSource) -> None:
-        entry = read_normalize_validate(path, source=source)
+    try:
+        from astrid.core.pack.source_setup import active_source_inventory
+
+        managed_inventory = active_source_inventory()
+    except ImportError:
+        managed_inventory = None
+    def add(path: Path, source: ExternalPackSource, *, source_record: Any | None = None) -> None:
+        entry = read_normalize_validate(
+            path,
+            source=source,
+            expected_pack_id=source_record.pack_id if source_record is not None else None,
+        )
         if entry.definition.visibility == "hidden":
             return
         key = (source.value, entry.id)
@@ -125,7 +144,19 @@ def discover_canonical_pack_metadata(
                 f"duplicate canonical pack ID {entry.id!r} in {source.value}"
             )
         seen.add(key)
-        discovered.append(CanonicalDiscoveredPack(entry, source.value, len(discovered)))
+        discovered.append(
+            CanonicalDiscoveredPack(
+                entry,
+                source.value,
+                len(discovered),
+                source_revision=source_record.revision if source_record is not None else None,
+                source_manifest_sha256=source_record.manifest_sha256 if source_record is not None else None,
+                source_tree_sha256=source_record.tree_sha256 if source_record is not None else None,
+                source_inventory_identity=managed_inventory.identity
+                if source_record is not None and managed_inventory is not None
+                else None,
+            )
+        )
 
     def scan(raw_root: str | Path, source: ExternalPackSource) -> None:
         root = Path(raw_root).expanduser()
@@ -145,6 +176,13 @@ def discover_canonical_pack_metadata(
     local = project_root / "astrid" / "packs" / "local" / "pack.yaml"
     if local.is_file():
         add(local, ExternalPackSource.LOCAL)
+    if managed_inventory is not None:
+        for source in managed_inventory.sources:
+            add(
+                source.pack_root / "pack.yaml",
+                ExternalPackSource.MANAGED,
+                source_record=source,
+            )
     for root in extra_pack_roots:
         scan(root, ExternalPackSource.EXTRA)
     for root in os.environ.get(ASTRID_PACKS_PATH_ENV, "").split(os.pathsep):
@@ -166,8 +204,9 @@ def discover_pack_metadata(
     """Return discovered packs in layered priority order.
 
     Layers, in order: source-tree packs (excluding ``local``), an existing
-    project-scoped ``local`` pack, explicit extra pack roots (excluding
-    ``local``), and ``ASTRID_PACKS_PATH`` roots (excluding ``local``).
+    project-scoped ``local`` pack, validated managed roots, explicit extra pack
+    roots (excluding ``local``), and ``ASTRID_PACKS_PATH`` roots (excluding
+    ``local``).
 
     *discover_packs_fn* overrides the source/local/extra layer scanner; callers
     pass their own module-level ``discover_packs`` so the historical per-registry
@@ -188,16 +227,43 @@ def discover_pack_metadata(
     discovered: list[DiscoveredPack] = []
     scanned_external_roots: set[Path] = set()
 
-    def _add(pack: PackDefinition, source_kind: str) -> None:
+    def _add(pack: PackDefinition, source_kind: str, *, source_record: Any | None = None) -> None:
+        metadata: dict[str, Any] = {}
+        if source_record is not None:
+            metadata = {
+                "source_revision": source_record.revision,
+                "source_manifest_sha256": source_record.manifest_sha256,
+                "source_tree_sha256": source_record.tree_sha256,
+                "source_inventory_identity": managed_inventory.identity,
+            }
         discovered.append(
             DiscoveredPack(
                 pack=pack,
                 source_kind=source_kind,
                 priority_index=len(discovered),
+                **metadata,
             )
         )
 
     _LOGGER = logging.getLogger(__name__)
+
+    try:
+        from astrid.core.pack.source_setup import active_source_inventory
+
+        managed_inventory = active_source_inventory()
+    except ImportError:
+        managed_inventory = None
+
+    managed_by_root = {
+        source.pack_root.resolve(): source
+        for source in (managed_inventory.sources if managed_inventory is not None else ())
+    }
+
+    def _resolve_pack_root(raw_root: str | Path) -> Path:
+        candidate = Path(raw_root).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path(project_root) / candidate
+        return candidate.resolve()
 
     def _scan_external_root(raw_root: str | Path, source_kind: str) -> None:
         """Scan one external root, isolating failures per pack manifest.
@@ -220,7 +286,10 @@ def discover_pack_metadata(
         if not resolved.is_dir():
             return
         try:
-            children = sorted(resolved.iterdir(), key=lambda path: path.name)
+            if (resolved / "pack.yaml").is_file():
+                children = (resolved,)
+            else:
+                children = tuple(sorted(resolved.iterdir(), key=lambda path: path.name))
         except OSError as exc:
             # An unreadable external root (e.g. chmod 000) is skipped
             # wholesale with a warning — one dead root must not abort
@@ -252,7 +321,12 @@ def discover_pack_metadata(
             if manifest_path is None:
                 continue
             try:
-                pack = load_pack_manifest(manifest_path)
+                pack = load_pack_manifest(
+                    manifest_path,
+                    expected_pack_id=managed_by_root[resolved].pack_id
+                    if source_kind == MANAGED_SOURCE_KIND and resolved in managed_by_root
+                    else None,
+                )
             except Exception as exc:  # noqa: BLE001 - external roots are fault-tolerant
                 _LOGGER.warning(
                     "skipping %s pack %s: manifest failed to load: %s",
@@ -276,7 +350,13 @@ def discover_pack_metadata(
                 )
                 continue
             seen[pack.id] = manifest_path
-            _add(pack, source_kind)
+            _add(
+                pack,
+                source_kind,
+                source_record=managed_by_root.get(resolved)
+                if source_kind == MANAGED_SOURCE_KIND
+                else None,
+            )
 
     for pack in scan():
         if pack.id == "local":
@@ -285,14 +365,12 @@ def discover_pack_metadata(
 
     if local_pack_root is not None and project_pack_root.is_dir():
         for pack in scan(project_pack_root):
-            if pack.id == "local":
+            if pack.id == "local" and pack.root.resolve() == local_pack_root.resolve():
                 _add(pack, "local")
 
-    def _resolve_pack_root(raw_root: str | Path) -> Path:
-        candidate = Path(raw_root).expanduser()
-        if not candidate.is_absolute():
-            candidate = Path(project_root) / candidate
-        return candidate.resolve()
+    if managed_inventory is not None:
+        for source in managed_inventory.sources:
+            _scan_external_root(source.pack_root, MANAGED_SOURCE_KIND)
 
     raw_env_roots = os.environ.get(ASTRID_PACKS_PATH_ENV, "")
     if extra_pack_roots or raw_env_roots:
@@ -329,6 +407,7 @@ def discover_packs_ordered(
 
 __all__ = [
     "ASTRID_PACKS_PATH_ENV",
+    "MANAGED_SOURCE_KIND",
     "SOURCE_KINDS",
     "DiscoveredPack",
     "CanonicalDiscoveredPack",

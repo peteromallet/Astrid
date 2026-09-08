@@ -57,7 +57,7 @@ def discover_packs(
     return tuple(packs)
 
 
-def load_pack_manifest(path: str | Path) -> PackDefinition:
+def load_pack_manifest(path: str | Path, *, expected_pack_id: str | None = None) -> PackDefinition:
     """Load one strict-v2 capability manifest through the canonical parser."""
     manifest_path = Path(path).expanduser().resolve()
     if manifest_path.name != "pack.yaml" or not manifest_path.is_file():
@@ -65,7 +65,9 @@ def load_pack_manifest(path: str | Path) -> PackDefinition:
             f"canonical pack admission requires a regular pack.yaml, got {manifest_path}"
         )
     try:
-        entry = validate_canonical_pack(manifest_path.parent)
+        entry = validate_canonical_pack(
+            manifest_path.parent, expected_pack_id=expected_pack_id
+        )
     except CanonicalPackValidationError as exc:
         raise PackValidationError(str(exc)) from exc
     definition = entry.definition

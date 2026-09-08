@@ -115,6 +115,8 @@ def _text_overlay_specs(
 def support(request: RenderRequest, *, workspace: Path) -> SupportReport:
     """Load request files and delegate to the fail-closed evaluator."""
 
+    if request.metadata.get("review") is not None:
+        return _support_load_failure("Review overlay requires rendering.remotion or rendering.threejs")
     timeline_path = _input_path(request.timeline_path, workspace)
     if request.assets_registry_path is None:
         return _support_load_failure("rendering.ffmpeg requires an assets registry")

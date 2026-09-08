@@ -202,13 +202,9 @@ def test_tasks_follow_prints_only_durable_changes_and_exits_on_success(capsys) -
         client,
     ) == 0
 
-    output = capsys.readouterr().out
-    assert output.count("phase=queued") == 1
-    assert output.count("phase=running") == 1
-    assert output.count("phase=succeeded") == 1
-    assert "heartbeat=" in output
-    assert "attempt=A-1" in output
-    assert "waiting=awaiting_execution" in output
+    observations = json.loads(capsys.readouterr().out)["data"]["observations"]
+    assert [row["state"] for row in observations] == ["queued", "running", "succeeded"]
+    assert observations[-1]["attempt_id"] == "A-1"
 
 
 def test_tasks_follow_json_is_one_envelope_with_observation_history(capsys) -> None:
@@ -270,12 +266,10 @@ def test_tasks_follow_does_not_invent_queue_progress_or_eta(capsys) -> None:
     )
 
     assert _run("tasks", ["follow", "T-1", "--project", "P-1"], client) == 0
-    output = capsys.readouterr().out
-    assert "queue=unavailable" in output
-    assert "progress=unavailable" in output
-    assert "speed=unavailable" in output
-    assert "eta=unavailable" in output
-    assert "runtime did not report queue position" in output
+    observation = json.loads(capsys.readouterr().out)["data"]["observations"][0]
+    for key in ("queue_position", "progress_percent", "current_speed", "eta_seconds"):
+        assert observation[key] is None
+    assert observation["queue_position_unavailable_reason"] == "runtime did not report queue position"
 
 
 def test_tasks_follow_terminal_failure_is_exit_one(capsys) -> None:

@@ -60,7 +60,8 @@ def _add_json_flag(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--json",
         action="store_true",
-        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key).",
+        default=True,
+        help="Print the exact SDK envelope (ok/data/error/receipt/idempotency_key); default output.",
     )
 
 

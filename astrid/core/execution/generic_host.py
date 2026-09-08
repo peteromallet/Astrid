@@ -393,6 +393,28 @@ def _hivemind_source_preflight(record: "CapabilityRecord") -> dict[str, Any] | N
     pack_root = Path(str(raw_root)).expanduser().resolve() if raw_root else None
     if pack_root is None or not pack_root.is_dir():
         return {"ok": False, "reason": "hivemind source root is unavailable"}
+    # Wheels and editable Astrid installs carry the verified Hivemind pack
+    # under the product's own packs root.  There is no Git metadata in a
+    # wheel, so the capability admission/source digest is the integrity
+    # authority for this bundled source.
+    bundled_root = (Path(__file__).resolve().parents[3] / "astrid" / "packs" / "hivemind").resolve()
+    if pack_root == bundled_root:
+        source_roots = _admitted_source_roots(record.source_root, record.definition)
+        digest = _source_digest_for_roots(source_roots)
+        expected_digest = str(getattr(record, "source_digest", "") or "")
+        if expected_digest and digest != expected_digest:
+            return {
+                "ok": False,
+                "source": "bundled",
+                "reason": "bundled Hivemind source digest changed",
+                "source_digest": digest,
+                "expected_source_digest": expected_digest,
+            }
+        return {
+            "ok": True,
+            "source": "bundled",
+            "source_digest": digest,
+        }
     checkout = next((candidate for candidate in (pack_root, *pack_root.parents) if (candidate / ".git").exists()), None)
     if checkout is None:
         return {"ok": False, "reason": "hivemind source is not a Git checkout"}
@@ -837,14 +859,15 @@ class RuntimeProtocolClient:
         response = self.generated.get_object(digest)
         return response.data
 
-    def upload_object(self, path: Path, *, project_id: str, media_type: str, filename: str | None = None):
-        if not isinstance(project_id, str) or not project_id.strip():
-            raise HostError("project-scoped output upload requires project_id")
+    def upload_object(self, path: Path, *, project_id: str | None, media_type: str, filename: str | None = None):
+        if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
+            raise HostError("output upload project_id must be a non-empty string or None")
         # Worker credentials may publish CAS bytes but are deliberately not
         # granted projects:write, which is required to mutate project
         # associations.  Settlement owns that association transactionally;
         # upload only the immutable object here and keep the project binding
-        # on the task/settlement path.
+        # on the task/settlement path. Workspace tasks have no project binding
+        # and publish the same immutable CAS objects.
         with path.open("rb") as stream:
             data = stream.read()
             return self.generated.ingest_object(
@@ -861,7 +884,7 @@ class RuntimeProtocolClient:
 class GenericPackHost:
     """Discover, register, preflight, and execute pack capabilities."""
 
-    def __init__(self, *, pack_roots: list[str | Path], client: RuntimeProtocolClient | Any | None = None, executor_id: str = "astrid-pack-host", max_concurrency: int = 1, attempt_root: str | Path | None = None, capability_matrix: str | Path | None = None, credential_source: Mapping[str, str] | None = None):
+    def __init__(self, *, pack_roots: list[str | Path], client: RuntimeProtocolClient | Any | None = None, executor_id: str = "astrid-pack-host", max_concurrency: int = 1, attempt_root: str | Path | None = None, capability_matrix: str | Path | None = None, credential_source: Mapping[str, str] | None = None, source_inventory_identity: str | None = None):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
         # directory. Keep it in the same admitted root set so env-only packs
@@ -885,6 +908,7 @@ class GenericPackHost:
         self.ledger = load_capability_ledger(self.capability_matrix_path) if self.capability_matrix_path else {"capabilities": [], "sources": {}}
         self.matrix: dict[str, dict[str, Any]] = self._load_matrix(self.capability_matrix_path)
         self.source_epoch = "uninitialized"
+        self.source_inventory_identity = str(source_inventory_identity or "")
         self.runtime_state: dict[str, Any] = {}
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
@@ -1009,6 +1033,7 @@ class GenericPackHost:
         self.source_epoch = _canonical_digest({
             "vcs_revision": _vcs_revision(root),
             "source_digest": _canonical_digest({key: record.source_digest for key, record in records.items()}),
+            "source_inventory_identity": self.source_inventory_identity,
             "matrix_digest": _canonical_digest(self.matrix),
         })
         return tuple(records[key] for key in sorted(records))
@@ -1790,7 +1815,7 @@ class GenericPackHost:
             (attempt / "network-evidence.json").write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
             return value
 
-    def _upload_outputs(self, outputs: list[dict[str, Any]], *, project_id: str) -> list[dict[str, Any]]:
+    def _upload_outputs(self, outputs: list[dict[str, Any]], *, project_id: str | None) -> list[dict[str, Any]]:
         """Publish staged outputs and return settlement-safe object refs."""
         upload_object = getattr(self.client, "upload_object", None)
         if not callable(upload_object):
@@ -2280,10 +2305,8 @@ class GenericPackHost:
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             typed_outputs = self._typed_outputs(record, result, root)
             project_id = task_data.get("project_id")
-            if typed_outputs and (not isinstance(project_id, str) or not project_id.strip()):
-                raise HostError(
-                    "runtime task is missing project_id for project-scoped output publication"
-                )
+            if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
+                raise HostError("runtime task project_id must be a non-empty string or None")
             outputs = self._upload_outputs(typed_outputs, project_id=project_id) if typed_outputs else []
             payload = {"adapter_family": record.adapter.family, **(getattr(result, "payload", {}) or {})}
             network_evidence = self._network_evidence(
@@ -2503,6 +2526,7 @@ def _cli() -> int:
     parser.add_argument("--source-checkout", help="absolute source checkout bound to this host")
     parser.add_argument("--support-root", help="absolute runtime support directory bound to this host")
     parser.add_argument("--runtime-instance-id", help="runtime instance identity bound to this host")
+    parser.add_argument("--source-inventory-identity", help="verified managed source inventory identity bound to this host")
     args = parser.parse_args()
     credential = None
     credential_path = None
@@ -2519,7 +2543,7 @@ def _cli() -> int:
         if not credential:
             parser.error("credential file is empty")
     client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
-    host = GenericPackHost(pack_roots=args.pack_root, client=client, executor_id=args.executor_id, max_concurrency=args.max_concurrency, attempt_root=args.attempt_root, capability_matrix=args.capability_matrix)
+    host = GenericPackHost(pack_roots=args.pack_root, client=client, executor_id=args.executor_id, max_concurrency=args.max_concurrency, attempt_root=args.attempt_root, capability_matrix=args.capability_matrix, source_inventory_identity=args.source_inventory_identity)
     host.discover()
     host.preflight()
     if args.source_checkout:
@@ -2551,6 +2575,7 @@ def _cli() -> int:
         ready_path.parent.mkdir(parents=True, exist_ok=True)
         ready_payload = {
             "status": "ready",
+            "python_executable": os.path.abspath(sys.executable),
             "pid": os.getpid(),
             "process_birth_id": process_birth_identity(),
             "endpoint": str(args.runtime_endpoint).rstrip("/") if args.runtime_endpoint else None,
@@ -2564,6 +2589,7 @@ def _cli() -> int:
             "support_root": str(support_root) if support_root else None,
             "source_checkout": str(source_checkout) if source_checkout else None,
             "source_checkout_digest": source_checkout_digest(source_checkout) if source_checkout else None,
+            "source_inventory_identity": host.source_inventory_identity,
             "source_epoch": host.source_epoch,
             "runtime_instance_id": args.runtime_instance_id,
             "runtime_epoch": host.runtime_state.get("runtime_epoch"),

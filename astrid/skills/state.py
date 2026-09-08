@@ -35,6 +35,11 @@ def _empty_state() -> dict[str, Any]:
     return {
         "version": STATE_VERSION,
         "installs": {harness: {} for harness in HARNESSES},
+        # Default-tier packs are installed on first discovery, but an
+        # explicit uninstall is a durable opt-out.  Keeping that choice in
+        # the existing skills state avoids treating a deliberate uninstall
+        # as filesystem drift on the next command.
+        "disabled_defaults": {harness: [] for harness in HARNESSES},
         "nudge": {harness: {"last_shown_at": None} for harness in HARNESSES},
     }
 
@@ -52,9 +57,11 @@ def load(path: Path | None = None) -> dict[str, Any]:
         return _empty_state()
     data.setdefault("version", STATE_VERSION)
     installs = data.setdefault("installs", {})
+    disabled_defaults = data.setdefault("disabled_defaults", {})
     nudge = data.setdefault("nudge", {})
     for harness in HARNESSES:
         installs.setdefault(harness, {})
+        disabled_defaults.setdefault(harness, [])
         nudge.setdefault(harness, {"last_shown_at": None})
     return data
 
@@ -78,10 +85,19 @@ def record_install(
         "installed_at": now_iso(),
         "mechanism": mechanism,
     }
+    disabled = state.setdefault("disabled_defaults", {}).setdefault(harness, [])
+    if pack_id in disabled:
+        disabled.remove(pack_id)
 
 
-def record_uninstall(state: dict[str, Any], harness: str, pack_id: str) -> None:
+def record_uninstall(
+    state: dict[str, Any], harness: str, pack_id: str, *, default: bool = False
+) -> None:
     state["installs"].setdefault(harness, {}).pop(pack_id, None)
+    if default:
+        disabled = state.setdefault("disabled_defaults", {}).setdefault(harness, [])
+        if pack_id not in disabled:
+            disabled.append(pack_id)
 
 
 def record_nudge(state: dict[str, Any], harness: str) -> None:

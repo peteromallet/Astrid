@@ -7,6 +7,7 @@ import hashlib
 import textwrap
 import os
 import socket
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -17,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient
+from astrid.core.execution.generic_host import (
+    GenericPackHost,
+    HostError,
+    RuntimeProtocolClient,
+    _hivemind_source_preflight,
+)
 from astrid.core.execution.network_broker import ObservableNetworkBroker
 
 RUNTIME = Path("/Users/peteromalley/Documents/reigh-workspace/banodoco-workspace-runtime-stage1-convergence")
@@ -25,6 +31,125 @@ if RUNTIME.is_dir():
     sys.path.insert(0, str(RUNTIME))
 from banodoco_workspace_client import ApiError, WorkspaceClient
 from runtime_protocol.daemon import RuntimeDaemon
+
+
+@pytest.fixture
+def bundled_hivemind_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Discover the real bundled manifest from an isolated, Git-free install."""
+    import astrid.core.execution.generic_host as generic_host
+
+    original_root = Path(generic_host.__file__).resolve().parents[3]
+    pack_root = tmp_path / "astrid" / "packs" / "hivemind"
+    shutil.copytree(original_root / "astrid" / "packs" / "hivemind", pack_root)
+    monkeypatch.setattr(
+        generic_host, "__file__",
+        str(tmp_path / "astrid" / "core" / "execution" / "generic_host.py"),
+    )
+    host = GenericPackHost(pack_roots=[pack_root], attempt_root=tmp_path / "attempt")
+    record = next(record for record in host.discover() if record.id == "hivemind.search")
+    return record, pack_root
+
+
+def test_bundled_hivemind_source_preflight_accepts_wheel_layout(bundled_hivemind_record) -> None:
+    record, _ = bundled_hivemind_record
+    result = _hivemind_source_preflight(record)
+    assert result is not None
+    assert result["ok"] is True
+    assert result["source"] == "bundled"
+    assert result["source_digest"] == record.source_digest
+
+
+@pytest.mark.parametrize("changed_path", ["executors/search/run.py", "pack.yaml"])
+def test_bundled_hivemind_source_preflight_rejects_changed_admission_digest(
+    bundled_hivemind_record, changed_path: str,
+) -> None:
+    record, pack_root = bundled_hivemind_record
+    path = pack_root / changed_path
+    path.write_text(path.read_text() + "\n# changed after admission\n")
+    result = _hivemind_source_preflight(record)
+    assert result is not None
+    assert result["ok"] is False
+    assert "digest changed" in result["reason"]
+    assert result["expected_source_digest"] == record.source_digest
+
+
+@pytest.mark.parametrize("capability", ["hivemind.search", "hivemind.get_item", "hivemind.refresh_media"])
+def test_bundled_hivemind_public_reads_need_no_secret_passthrough(
+    bundled_hivemind_record, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capability: str,
+) -> None:
+    _, pack_root = bundled_hivemind_record
+    monkeypatch.setenv("HIVEMIND_ANON_KEY", "ambient-key-must-not-leak")
+    host = GenericPackHost(pack_roots=[pack_root], credential_source={})
+    record = next(record for record in host.discover() if record.id == capability)
+    host.preflight()
+    record = host.capabilities[capability]
+    assert record.preflight["credentials"]["ok"]
+    env, secrets = host._child_environment(record, tmp_path / "child")
+    assert "HIVEMIND_ANON_KEY" not in env
+    assert secrets == {}
+
+
+@pytest.mark.parametrize("capability", [
+    "hivemind.contribute", "hivemind.ingest_article",
+    "hivemind.ingest_workflow", "hivemind.ingest_youtube",
+])
+def test_bundled_hivemind_writes_use_declared_secret_channel(
+    bundled_hivemind_record, tmp_path: Path, capability: str,
+) -> None:
+    _, pack_root = bundled_hivemind_record
+    host = GenericPackHost(pack_roots=[pack_root], credential_source={})
+    record = next(record for record in host.discover() if record.id == capability)
+    host.preflight()
+    record = host.capabilities[capability]
+    assert record.preflight["credentials"]["missing"] == ["HIVEMIND_CONTRIBUTOR_KEY"]
+    host.credential_source = {"HIVEMIND_CONTRIBUTOR_KEY": "fixture-contributor"}
+    env, secrets = host._child_environment(record, tmp_path / "child")
+    assert env["HIVEMIND_CONTRIBUTOR_KEY"] == "fixture-contributor"
+    assert secrets == {"HIVEMIND_CONTRIBUTOR_KEY": "fixture-contributor"}
+
+
+@pytest.mark.parametrize("project_id", [None, "existing-project"])
+@pytest.mark.parametrize("inline", [False, True])
+def test_output_publication_uses_canonical_cas_with_optional_project(
+    tmp_path: Path, project_id: str | None, inline: bool,
+) -> None:
+    calls = []
+    def ingest_object(data, **kwargs):
+        calls.append((data, kwargs))
+        return SimpleNamespace(digest="sha256:" + hashlib.sha256(data).hexdigest(), size=len(data))
+
+    client = object.__new__(RuntimeProtocolClient)
+    client.generated = SimpleNamespace(ingest_object=ingest_object)
+    client.INLINE_SETTLEMENT_OUTPUTS = inline
+    host = GenericPackHost(pack_roots=[], client=client)
+    path = tmp_path / "results.json"
+    path.write_text('{"results": []}')
+    outputs = host._upload_outputs(
+        [{"name": "results", "path": str(path), "artifact_type": "application/json"}],
+        project_id=project_id,
+    )
+    if inline:
+        import base64
+        assert calls == []
+        assert base64.b64decode(outputs[0].pop("data_base64")) == path.read_bytes()
+    else:
+        assert len(calls) == 1
+        assert calls[0][0] == path.read_bytes()
+        assert calls[0][1]["media_type"] == "application/json"
+        assert "project_id" not in calls[0][1]
+    assert outputs == [{
+        "name": "results", "kind": "object", "media_type": "application/json",
+        "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+        "size": path.stat().st_size,
+    }]
+
+
+@pytest.mark.parametrize("project_id", ["", "  ", 7])
+def test_output_publication_rejects_malformed_project(tmp_path: Path, project_id) -> None:
+    client = object.__new__(RuntimeProtocolClient)
+    with pytest.raises(HostError, match="non-empty string or None"):
+        client.upload_object(tmp_path / "unused", project_id=project_id, media_type="text/plain")
 
 
 class _TaskRuntime:

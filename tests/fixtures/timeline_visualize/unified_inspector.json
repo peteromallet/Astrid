@@ -1,0 +1,29 @@
+{
+  "project_slug": "inspector-fixture",
+  "timeline_id": "timeline-multitrack",
+  "timeline_name": "Multi-track continuity",
+  "render_run_id": "render-frozen",
+  "video_digest": "sha256:fixture",
+  "fps_rational": [24, 1],
+  "duration_frames": 96,
+  "tracks": [
+    {"id": "picture", "name": "Main picture", "kind": "visual"},
+    {"id": "overlay", "name": "Creature overlay", "kind": "visual"},
+    {"id": "voice", "name": "Voiceover", "kind": "audio"},
+    {"id": "music", "name": "Music", "kind": "audio"}
+  ],
+  "clips": [
+    {"id": "base", "track": "picture", "kind": "visual", "asset": "source", "at": 0, "duration": 4},
+    {"id": "creature", "track": "overlay", "kind": "visual", "asset": "mink", "at": 1.01, "duration": 1},
+    {"id": "voice", "track": "voice", "kind": "audio", "asset": "speech", "at": 0.5, "duration": 2},
+    {"id": "brief-audio", "track": "voice", "kind": "audio", "asset": "tick", "at": 3.2, "duration": 0.05}
+  ],
+  "scripts": [
+    {"start": 0.5, "end": 2.5, "text": "Look <closely> & inspect the overlap.", "shot_id": "beat", "shot_name": "The choice"}
+  ],
+  "occurrences": [
+    {"occurrence_id": "beat-first", "shot_id": "beat", "shot_name": "The choice", "start_frame": 0, "end_frame": 48},
+    {"occurrence_id": "beat-repeat", "shot_id": "beat", "shot_name": "The choice again", "start_frame": 60, "end_frame": 96}
+  ],
+  "metadata": {"selection": "explicit_render", "script_mapping_available": true}
+}

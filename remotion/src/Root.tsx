@@ -12,6 +12,16 @@ import type {
   VisualOverrides,
 } from './types.augmentations';
 import {FontProvider} from './fonts';
+import {ReviewOverlay} from './ReviewOverlay';
+import type {ReviewContext} from './ReviewOverlay';
+
+type ReviewProps = TimelineCompositionProps & {review?: ReviewContext | null};
+const ReviewedTimeline = (props: ReviewProps): ReactElement => <>
+  <TimelineComposition {...props} /><ReviewOverlay review={props.review} />
+</>;
+const ReviewedThreeTimeline = (props: ReviewProps): ReactElement => <>
+  <ThreeTimelineComposition {...props} /><ReviewOverlay review={props.review} />
+</>;
 
 const DEFAULT_PROPS: TimelineCompositionProps = {
   timeline: {
@@ -78,13 +88,13 @@ export const Root = (): ReactElement => {
       <FontProvider />
       <Composition
         id="TimelineComposition"
-        component={TimelineComposition}
+        component={ReviewedTimeline}
         defaultProps={DEFAULT_PROPS}
         calculateMetadata={getMetadata}
       />
       <Composition
         id="ThreeTimelineComposition"
-        component={ThreeTimelineComposition}
+        component={ReviewedThreeTimeline}
         defaultProps={DEFAULT_PROPS}
         calculateMetadata={getMetadata}
       />

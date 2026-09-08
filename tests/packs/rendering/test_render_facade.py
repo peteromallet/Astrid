@@ -257,3 +257,38 @@ def test_main_selector_defaults_to_remotion_when_absent(
     assert result == 0
     assert len(fake_service.calls) == 1
     assert fake_service.calls[0][1]["selector"] == "rendering.remotion"
+
+
+@pytest.mark.parametrize('review', [False, True])
+def test_review_metadata_is_render_only(fake_service, tmp_path, review):
+    timeline, assets, out = _inputs(tmp_path)
+    before = timeline.read_bytes(), assets.read_bytes()
+    context = {'shots': [{'shot_id': 'one', 'name': '01 Opening', 'at': 0, 'hold': 2}]}
+    render_run.render(timeline, assets, out, review=review, review_context=context)
+    request = fake_service.calls[0][0][0]
+    import json
+    assert (json.loads(request.metadata['review']) if review else request.metadata) == (context if review else {})
+    assert (timeline.read_bytes(), assets.read_bytes()) == before
+
+
+def test_ffmpeg_review_rejects_in_support_before_render(tmp_path):
+    import json
+    from astrid.packs.rendering.backends.ffmpeg.run import support
+    request = RenderRequest.from_dict({'schema_version': 1, 'timeline_path': str(tmp_path / 'timeline.json'), 'output_name': 'review.mp4', 'metadata': {'review': json.dumps({'shots': []})}})
+    report = support(request, workspace=tmp_path)
+    assert not report.supported
+    assert 'Review overlay requires' in report.reasons[0]
+
+
+def test_remotion_lock_handoff_keeps_review_context(monkeypatch, tmp_path):
+    from contextlib import nullcontext
+    from astrid.packs.rendering.backends.remotion import run as backend
+    captured = {}
+    monkeypatch.setattr(backend.remotion_lock, 'remotion_render_lock', lambda: nullcontext())
+    def locked(*args, **kwargs):
+        captured.update(kwargs)
+        return 'rendered'
+    monkeypatch.setattr(backend, '_execute_remotion_locked', locked)
+    context = {'shots': [{'shot_id': 'a', 'name': 'Opening', 'at': 0, 'hold': 2}]}
+    assert backend._execute_remotion(tmp_path / 'timeline.json', tmp_path / 'assets.json', tmp_path / 'staged.mp4', provenance_out_path=tmp_path / 'output.mp4', project_dir=tmp_path, composition_id='TimelineComposition', theme_path=None, min_free_gb=None, review=context) == 'rendered'
+    assert captured['review'] == context

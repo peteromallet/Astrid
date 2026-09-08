@@ -474,6 +474,7 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
             composition_id=THREE_COMPOSITION_ID,
             theme_path=settings.theme_path,
             min_free_gb=settings.min_free_gb,
+            review=json.loads(request.metadata["review"]) if "review" in request.metadata else None,
         )
         output_path.unlink(missing_ok=True)
         os.replace(staged_video, output_path)

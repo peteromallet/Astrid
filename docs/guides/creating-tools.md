@@ -12,8 +12,9 @@ internal executors by hand:
 import astrid.sdk as sdk
 result = sdk.invoke(
     "video_editing.hype",
+    kind="orchestrator",
     inputs={"video": "source.mp4", "brief": "brief.txt"},
-    out="runs/example",
+    project="demo",
 )
 ```
 
@@ -35,13 +36,13 @@ Current start points:
 
 ```python
 # Source-backed edit
-sdk.invoke("video_editing.hype", inputs={"video": "source.mp4", "brief": "brief.txt"}, out="runs/example")
+sdk.invoke("video_editing.hype", kind="orchestrator", inputs={"video": "source.mp4", "brief": "brief.txt"}, project="demo")
 
 # Audio-backed edit
-sdk.invoke("video_editing.hype", inputs={"audio": "voiceover.wav", "brief": "brief.txt"}, out="runs/audio")
+sdk.invoke("video_editing.hype", kind="orchestrator", inputs={"audio": "voiceover.wav", "brief": "brief.txt"}, project="demo")
 
 # Pure-generative edit from an existing brief
-sdk.invoke("video_editing.hype", inputs={"brief": "examples/briefs/cinematic.txt", "target_duration": 15}, out="runs/generative")
+sdk.invoke("video_editing.hype", kind="orchestrator", inputs={"brief": "examples/briefs/cinematic.txt", "target_duration": 15}, project="demo")
 ```
 
 If the user gives a topic instead of a brief, create or use a brief-generation
@@ -231,8 +232,9 @@ For a template executor's canonical invocation, run it through the SDK:
 import astrid.sdk as sdk
 result = sdk.invoke(
     "rendering.render",
+    kind="executor",
     inputs={"timeline": "runs/example/hype.timeline.json"},
-    out="runs/example",
+    project="demo",
 )
 ```
 

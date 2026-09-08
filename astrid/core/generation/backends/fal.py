@@ -429,8 +429,9 @@ class FalBackend(BackendAdapter):
             try:
                 data = self._client.get_bytes(url, timeout=120)
             except Exception as exc:
-                logger.warning("Failed to download fal result image %d: %s", idx, exc)
-                continue
+                raise ValueError(
+                    f"Failed to download fal result output {idx}: {exc}"
+                ) from exc
             suffix = _guess_suffix(url)
             dst = out_dir / f"output_{idx:03d}{suffix}"
             if dst.exists():

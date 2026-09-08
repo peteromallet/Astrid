@@ -479,6 +479,51 @@ def _verify_outputs_in_spool(files: list[str], spool: Path) -> list[str]:
     return violations
 
 
+_WALL_CLOCK_METADATA_KEYS = ("generation_time", "creation_date", "creation_timestamp")
+
+
+def _canonicalize_generated_files(files: list[str]) -> None:
+    """Drop wall-clock Wan2GP comment metadata so CAS is input-determined.
+
+    Native Wan2GP embeds ``creation_date`` / ``generation_time`` in the MP4
+    ``©cmt`` tag. Cold vs warm then differ by a handful of timestamp bytes
+    even when the video payload is identical.
+    """
+    try:
+        from mutagen.mp4 import MP4
+    except ImportError:
+        return
+    for raw in files:
+        path = Path(raw)
+        if not path.is_file() or path.suffix.lower() not in {".mp4", ".m4v", ".mov"}:
+            continue
+        media = MP4(str(path))
+        tags = media.tags
+        if tags is None:
+            continue
+        comments = list(tags.get("\xa9cmt", []) or tags.get("©cmt", []) or [])
+        changed = False
+        rewritten: list[str] = []
+        for comment in comments:
+            text = comment.decode("utf-8") if isinstance(comment, (bytes, bytearray)) else str(comment)
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                rewritten.append(text)
+                continue
+            if not isinstance(payload, dict):
+                rewritten.append(text)
+                continue
+            for key in _WALL_CLOCK_METADATA_KEYS:
+                if key in payload:
+                    payload.pop(key, None)
+                    changed = True
+            rewritten.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        if changed:
+            tags["\xa9cmt"] = rewritten
+            media.save()
+
+
 def _terminal_mapping(
     generation_result: Any, spool: Path, errors: list[str]
 ) -> dict[str, Any]:
@@ -577,12 +622,14 @@ def one_shot_run(
 ) -> DriverResult:
     """Run one Wan2GP task in a private per-attempt spool (one-shot).
 
-    Creates ``attempt_root/outputs`` as the private spool and passes it as
-    ``output_dir`` to ``shared.api.init``.  The session is closed (model
-    release) before return.  Outputs are verified to stay inside the spool.
+    ``attempt_root`` *is* the private spool (the host ``{out}`` directory) and
+    is passed as ``output_dir`` to ``shared.api.init``.  Do not nest another
+    ``outputs/`` under it — harvest reads ``{out}/manifest.json`` and the
+    files listed there.  The session is closed (model release) before return.
+    Outputs are verified to stay inside the spool.
     """
     attempt = Path(attempt_root).expanduser().resolve()
-    spool = attempt / "outputs"
+    spool = attempt
     spool.mkdir(parents=True, exist_ok=True)
     root = resolve_wan2gp_root(wan2gp_root)
     disclosed = _disclosed_engine(root)
@@ -659,9 +706,12 @@ def one_shot_run(
                     spool=spool,
                 )
             disclosed["wan2gp_root"] = str(root)
+            generated_files = list(getattr(result, "generated_files", []) or [])
+            if getattr(result, "success", False):
+                _canonicalize_generated_files(generated_files)
             return DriverResult(
                 success=bool(getattr(result, "success", False)),
-                generated_files=list(getattr(result, "generated_files", []) or []),
+                generated_files=generated_files,
                 errors=[str(e) for e in (getattr(result, "errors", []) or [])],
                 total_tasks=int(getattr(result, "total_tasks", 0) or 0),
                 successful_tasks=int(getattr(result, "successful_tasks", 0) or 0),

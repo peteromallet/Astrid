@@ -58,6 +58,16 @@ MACHINE_LOCAL_KEYS: tuple[str, ...] = (
     "wan2gp_sha",
 )
 
+# Pack-owned smoke defaults.  These are deliberately explicit so an omitted
+# cost-class control never falls through to a model/engine cinematic default.
+DEFAULT_VIDEO_LENGTH = 9
+DEFAULT_FORCE_FPS = "8"
+DEFAULT_RESOLUTION = "512x512"
+# Wan2GP does not publish one cross-model smoke-step value; four is the pack's
+# intentionally small validation/generation default until that ABI does.
+DEFAULT_NUM_INFERENCE_STEPS = 4
+DEFAULT_SEED = 0
+
 
 def _coerce_force_fps(value: Any) -> Any:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -97,18 +107,25 @@ def compile_settings(
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model must be a non-empty string")
     settings["model"] = model.strip()
-    if resolution is not None:
-        settings["resolution"] = str(resolution).strip()
-    if video_length is not None:
-        settings["video_length"] = int(video_length)
-    if num_inference_steps is not None:
-        settings["num_inference_steps"] = int(num_inference_steps)
+    settings["resolution"] = (
+        str(resolution).strip() if resolution not in (None, "") else DEFAULT_RESOLUTION
+    )
+    settings["video_length"] = (
+        int(video_length) if video_length not in (None, "") else DEFAULT_VIDEO_LENGTH
+    )
+    settings["num_inference_steps"] = (
+        int(num_inference_steps)
+        if num_inference_steps not in (None, "")
+        else DEFAULT_NUM_INFERENCE_STEPS
+    )
     if guidance_scale is not None:
         settings["guidance_scale"] = float(guidance_scale)
-    if seed is not None:
-        settings["seed"] = int(seed)
-    if force_fps is not None:
-        settings["force_fps"] = _coerce_force_fps(force_fps)
+    settings["seed"] = int(seed) if seed not in (None, "") else DEFAULT_SEED
+    settings["force_fps"] = (
+        _coerce_force_fps(force_fps)
+        if force_fps not in (None, "")
+        else DEFAULT_FORCE_FPS
+    )
     if negative_prompt is not None and str(negative_prompt).strip():
         settings["negative_prompt"] = str(negative_prompt).strip()
     if loras is not None:
@@ -153,7 +170,9 @@ def compile_from_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         steps = inputs.get("steps")
     guidance = inputs.get("guidance_scale")
     seed = inputs.get("seed")
-    force_fps = inputs.get("force_fps") if "force_fps" in inputs else inputs.get("fps")
+    force_fps = inputs.get("force_fps")
+    if force_fps in (None, "") and inputs.get("fps") not in (None, ""):
+        force_fps = inputs.get("fps")
     negative_prompt = inputs.get("negative_prompt")
     loras = inputs.get("loras")
     # Pass through any extra portable keys not explicitly handled

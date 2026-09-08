@@ -123,11 +123,28 @@
   ],
   "kind": "built_in",
   "metadata": {
+    "output_result_manifest": true,
     "pack_id": "wan2gp",
     "runtime_file": "run.py",
     "runtime_module": "astrid.packs.wan2gp.executors.generate_video.run"
   },
   "name": "Wan2GP Generate Video",
+  "outputs": [
+    {
+      "artifact_type": "video/clip",
+      "description": "Generated video file listed in the result manifest.",
+      "mode": "create_or_replace",
+      "name": "generated_videos",
+      "type": "file"
+    },
+    {
+      "description": "Universal result manifest for this generation.",
+      "mode": "create_or_replace",
+      "name": "video_manifest",
+      "path_template": "{out}/manifest.json",
+      "type": "file"
+    }
+  ],
   "short_description": "One-shot native Wan2GP video generation with private spool.",
   "version": "0.1.0"
 }

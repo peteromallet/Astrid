@@ -128,7 +128,9 @@ def test_generic_host_materializes_managed_snapshot_inside_attempt(tmp_path: Pat
     output_root = attempt / "outputs"
     output_root.mkdir(parents=True)
     result = host._run_command_definition(record, inputs, output_root, attempt)
-    assert result.outputs == {"seen": str(attempt / "outputs" / "seen.json")}
+    assert [(item["name"], item["path"]) for item in result.outputs] == [
+        ("seen", str(attempt / "outputs" / "seen.json"))
+    ]
     assert json.loads((attempt / "outputs" / "seen.json").read_text()) == {
         "tracks": [],
         "clips": [],
@@ -200,5 +202,7 @@ def test_generic_host_still_executes_a_pack_command_in_a_child_process(tmp_path:
 
     result = host._run_command_definition(record, {}, output_root, attempt)
 
-    assert result.outputs == {"answer": str(output_root / "answer.txt")}
+    assert [(item["name"], item["path"]) for item in result.outputs] == [
+        ("answer", str(output_root / "answer.txt"))
+    ]
     assert (output_root / "answer.txt").read_text() == "generic-host"

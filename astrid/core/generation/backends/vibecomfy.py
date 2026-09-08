@@ -211,8 +211,7 @@ class VibeComfyBackend(BackendAdapter):
         for output_path_str in result.outputs:
             src = Path(output_path_str)
             if not src.is_file():
-                logger.warning("VibeComfy output not found: %s", src)
-                continue
+                raise ValueError(f"VibeComfy output not found: {src}")
             dst = out_dir / src.name
             # If dst already exists (e.g. from a prior iteration), add a suffix
             if dst.exists():

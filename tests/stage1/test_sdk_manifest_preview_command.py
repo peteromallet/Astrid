@@ -190,6 +190,25 @@ def test_preview_store_true_boolean_omits_false_and_value() -> None:
     assert true_command == ["python", "-m", "render", "--denoise"]
 
 
+def test_preview_honors_host_consumed_auto_forward_skip() -> None:
+    capability = _capability(
+        command={"argv": ["python", "-m", "render"]},
+        inputs=(Port("frames", type="integer", required=False),),
+        metadata={"auto_forward_skip": ["frames"]},
+    )
+
+    command = _manifest_preview_command(
+        capability,
+        inputs={"frames": 9},
+        outputs=None,
+        brief=None,
+        python_exec=None,
+        out=None,
+    )
+
+    assert command == ["python", "-m", "render"]
+
+
 def test_pipeline_preview_forwards_declared_inputs_defaults_and_out() -> None:
     capability = _capability(
         command=None,

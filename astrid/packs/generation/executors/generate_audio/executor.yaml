@@ -175,11 +175,10 @@
   "name": "Generate Audio",
   "outputs": [
     {
-      "description": "Directory containing generated audio files.",
+      "description": "Generated audio files identified by receipt entries.",
       "mode": "create_or_replace",
       "name": "generated_audio",
-      "path_template": "{out}/audio",
-      "type": "directory",
+      "type": "file",
       "artifact_type": "audio"
     },
     {

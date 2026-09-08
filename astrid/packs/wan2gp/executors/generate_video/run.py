@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from astrid.core._shared.result_manifest import build_manifest
+from astrid.core._shared.result_manifest import build_manifest, write_manifest
 from astrid.packs.wan2gp.src.compiler import compile_from_inputs, portable_digest
 from astrid.packs.wan2gp.src.driver import one_shot_run, validate_settings as driver_validate
 
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--guidance-scale", dest="guidance_scale", type=float, default=None)
     p.add_argument("--steps", type=int, default=None, dest="num_inference_steps", help="Sampling steps.")
     p.add_argument("--loras", default=None, help="LoRAs JSON/path (pass-through).")
-    p.add_argument("--out", type=Path, default=Path.cwd() / "wan2gp_output", help="Attempt root (spool is out/outputs).")
+    p.add_argument("--out", type=Path, default=Path.cwd() / "wan2gp_output", help="Private spool directory (host {out}).")
     p.add_argument("--wan2gp-path", dest="wan2gp_path", type=Path, default=None, help="Explicit Wan2GP checkout root.")
     return p
 
@@ -72,17 +72,38 @@ def generate_core(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         attempt_root=attempt_root,
         wan2gp_root=str(args.wan2gp_path) if args.wan2gp_path else None,
     )
+    from astrid.packs.wan2gp.src.driver import _canonicalize_generated_files
 
-    # If engine checkout absent, treat as structured failure with disclosure, not crash.
-    # Build a manifest regardless so callers have durable evidence.
+    spool_videos = [str(path) for path in attempt_root.rglob("*") if path.suffix.lower() in {".mp4", ".m4v", ".mov"}]
+    _canonicalize_generated_files(list(dict.fromkeys([*result.generated_files, *spool_videos])))
+
+    # Receipt paths are relative to {out} so any host can harvest them.
     outputs: list[dict[str, object]] = []
-    for f in result.generated_files:
+    for ordinal, raw in enumerate(result.generated_files):
+        candidate = Path(raw)
+        resolved = candidate.resolve() if candidate.exists() else candidate
         try:
-            p = Path(f)
-            size = p.stat().st_size if p.exists() else None
-        except Exception:
-            size = None
-        outputs.append({"path": f, "size": size} if size is not None else {"path": f})
+            relative = resolved.relative_to(attempt_root).as_posix()
+        except ValueError as exc:
+            raise ValueError(
+                f"Wan2GP output is outside the assigned spool: {resolved}"
+            ) from exc
+        entry: dict[str, object] = {
+            "path": relative,
+            "name": "generated_videos",
+            "ordinal": ordinal,
+            "role": "result",
+            "is_primary": ordinal == 0,
+        }
+        outputs.append(entry)
+
+    empty_success = bool(result.success) and not outputs
+    if empty_success:
+        result_success = False
+        errors = list(result.errors) + ["generation produced no files"]
+    else:
+        result_success = bool(result.success)
+        errors = list(result.errors)
 
     manifest = build_manifest(
         kind="video",
@@ -97,14 +118,16 @@ def generate_core(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         spool=str(result.spool),
     )
 
-    # Write manifest under attempt root for the host to publish
     manifest_path = attempt_root / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    if outputs:
+        manifest = write_manifest(manifest_path, manifest)
+    else:
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
-    if not result.success:
+    if not result_success:
         return 1, {
             "ok": False,
-            "error": "; ".join(result.errors) if result.errors else "generation failed",
+            "error": "; ".join(errors) if errors else "generation failed",
             "manifest": manifest,
             "disclosed_engine": result.disclosed_engine,
             "spool": str(result.spool),

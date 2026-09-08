@@ -1,0 +1,63 @@
+mode: delivery
+roles:
+  coordinator:
+    model: gpt-5.6-luna
+    reasoning: medium
+  worker_normal:
+    model: gpt-5.6-luna
+    reasoning: high
+  worker_xhard:
+    model: gpt-5.6-sol
+    reasoning: high
+  reviewer_normal:
+    model: gpt-5.6-luna
+    reasoning: medium
+  reviewer_xhard:
+    model: gpt-5.6-sol
+    reasoning: high
+  oracle:
+    model: gpt-6-astra
+    reasoning: medium
+  final_reviewer:
+    model: gpt-6-astra
+    reasoning: medium
+oracle:
+  max_calls: 3
+review_stages:
+- id: source_contract
+  after: T3+A2
+  reviewer_role: reviewer_normal
+  lens: completion
+  scope_tasks:
+  - T0
+  - T2
+  - T3
+  - A2
+  criteria_source: implementation-criteria.md
+  criteria:
+  - C1
+  - C2
+  - C3
+  - C6
+  max_rounds: 2
+- id: final
+  after: T6
+  reviewer_role: final_reviewer
+  lens: completion_and_strategy
+  scope_tasks:
+  - T0
+  - T2
+  - T3
+  - T4
+  - T5
+  - T6
+  - A2
+  criteria_source: implementation-criteria.md
+  criteria:
+  - C1
+  - C2
+  - C3
+  - C4
+  - C5
+  - C6
+  max_rounds: 3

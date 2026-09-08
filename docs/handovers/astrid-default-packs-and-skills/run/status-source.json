@@ -1,0 +1,38 @@
+{
+  "status": "complete_scoped_astrid",
+  "oracle_calls": 1,
+  "review_rounds": {
+    "source_contract": 1,
+    "final": 2
+  },
+  "agents_launched": 0,
+  "implementation_started": true,
+  "tests_run": true,
+  "captured_at": "2026-09-08T14:26:56.530956+00:00",
+  "sources": {
+    "astrid": {
+      "path": "/Users/peteromalley/Documents/reigh-workspace/Astrid",
+      "head": "0c852b7748f9f519413ec96f037b04b3d90e70a2",
+      "dirty_status": " M AGENTS.md\n M astrid/core/cli/domain_media.py\n M astrid/core/cli/domain_projects.py\n M astrid/core/cli/domain_runs.py\n M astrid/core/cli/domain_tasks.py\n M astrid/core/execution/capability_ledger.py\n M astrid/core/execution/generic_host.py\n M astrid/packs/_core/skill/SKILL.md\n M astrid/packs/fal/skill/SKILL.md\n M astrid/packs/references/cli.py\n M astrid/packs/rendering/backends/remotion/run.py\n M astrid/packs/rendering/skill/SKILL.md\n M astrid/packs/shots/cli.py\n M astrid/packs/timeline/cli.py\n M astrid/sdk/project_render.py\n M astrid/sdk/remote.py\n M astrid/skills/__init__.py\n M astrid/skills/registry.py\n M astrid/skills/state.py\n M config/astrid-beta-capabilities.json\n M docs/contracts/cli-contract.md\n M docs/guides/cli-journeys.md\n M docs/guides/creating-tools.md\n M docs/guides/skills-install.md\n M docs/reference/architecture.md\n M pyproject.toml\n M scripts/build_storyboard.py\n M scripts/gen_capability_index.py\n M storyboards/astrid-intro.storyboard.json\n M tests/integrations/test_generic_host_external_provider.py\n M tests/packs/rendering/test_remotion_backend.py\n M tests/packs/rendering/test_render_remotion_registry.py\n M tests/sdk/test_project_render.py\n M tests/test_capability_ledger.py\n M tests/v10/test_domain_cli_media_references.py\n M tests/v10/test_domain_cli_projects_timelines.py\n M tests/v10/test_domain_cli_tasks_runs.py\n?? astrid/packs/_core/skill/creative-work/\n?? astrid/packs/_core/skill/pack-builder/\n?? astrid/packs/_core/skill/references/\n?? astrid/packs/hivemind/\n?? astrid/packs/references/skill/\n?? astrid/packs/rendering/skill/references/\n?? astrid/skills/__main__.py\n?? docs/plans/\n?? docs/testing/skill-navigation-20260908/\n?? tests/packs/hivemind/\n?? tests/test_skills_package_data.py\n"
+    },
+    "hivemind": {
+      "path": "/Users/peteromalley/Documents/banodoco-workspace/hivemind",
+      "head": "abe41fdf72df3bbcfe45087eae64ccf50a1bb809",
+      "dirty_status": "?? briefing.md\n?? handoff-agent-note.txt\n"
+    }
+  },
+  "authorization": "Execute in existing main /Astrid; no new worktree",
+  "baseline": "baseline-20260908-delivery/source.json",
+  "logical_run_key": "megado:astrid-default-packs-and-skills:c3b344bd91f7948b",
+  "oracle_decision": {
+    "id": "O1",
+    "disposition": "proceed",
+    "decision": "Use validated executor metadata.project_scope enum required|optional, default required; explicit project wins, optional skips persisted selection, required uses it.",
+    "scope": "A2",
+    "calls_consumed": 1
+  },
+  "review_identity": "final-round2-result.md",
+  "review_verdict": "PASS",
+  "integrated_tests": "123 passed, 8 subtests passed",
+  "integrated_command": "TMPDIR=.otto/runs/astrid-default-packs-and-skills/tmp PYTHONDONTWRITEBYTECODE=1 pytest -q tests/core/pack/test_source_setup.py tests/packs/test_pack_discovery_canonical.py tests/sdk/test_host_bootstrap_source_identity.py tests/stage1/test_pack_host_interpreter_identity.py tests/core/test_executor_schema_capabilities.py tests/packs/hivemind/test_projectless_admission.py tests/packs/hivemind/test_pack.py tests/sdk/test_media_read_bytes.py tests/test_skills.py tests/test_skills_sync_registry.py tests/test_skills_package_data.py"
+}

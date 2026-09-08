@@ -1,0 +1,3 @@
+# Status
+
+Delivery complete for the scoped Astrid work in the existing main checkout. A2 scope metadata, T2/T3 managed source setup and host fencing, and T4/T5 composed skill views/package navigation are implemented. The source-contract review passed C1, C2, C3 and C6; final Astra correction review passed C3–C5 with no blockers. The final affected suite passed 123 tests and 8 subtests. Hivemind H3—the upstream v2 manifest/release pin and live external-pack acceptance—remains an explicit external dependency and is not claimed complete. No Astrid commit, push, merge, deployment, global install, or corpus write was performed.

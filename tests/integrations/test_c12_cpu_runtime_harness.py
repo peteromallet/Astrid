@@ -279,7 +279,7 @@ def test_c12_deadline_contains_child_and_terminalizes_runtime(tmp_path: Path) ->
             execution_policy=ExecutionGuardPolicy(
                 scratch_floor_bytes=1,
                 evidence_cap_bytes=1024,
-                deadline_seconds=0.25,
+                deadline_seconds=1.0,
             ),
         )
         records = {record.id: record for record in host.discover()}
@@ -305,10 +305,10 @@ def test_c12_deadline_contains_child_and_terminalizes_runtime(tmp_path: Path) ->
         assert _value(outcome, "status") == "failed"
         failed = _wait_state(owner, task_id, {"failed"})
         assert _value(failed, "state") == "failed"
-        if slow_pid_file.is_file():
-            _wait_pid_absent(int(slow_pid_file.read_text(encoding="utf-8")))
-        if slow_port_file.is_file():
-            _wait_port_available(int(slow_port_file.read_text(encoding="utf-8")))
+        assert slow_pid_file.is_file()
+        assert slow_port_file.is_file()
+        _wait_pid_absent(int(slow_pid_file.read_text(encoding="utf-8")))
+        _wait_port_available(int(slow_port_file.read_text(encoding="utf-8")))
     finally:
         if host is not None:
             host.shutdown()

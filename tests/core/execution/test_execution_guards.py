@@ -194,3 +194,28 @@ def test_cleanup_helper_does_not_claim_absence_after_recursive_delete_error(
     )
     with pytest.raises(generic_host.HostError, match="cleanup was not verified"):
         generic_host._cleanup_ephemeral_attempt(root)
+
+
+def test_cleanup_failure_latches_and_blocks_new_admissions(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = GenericPackHost(pack_roots=[tmp_path])
+    root = tmp_path / "attempt"
+    root.mkdir()
+    monkeypatch.setattr(
+        generic_host,
+        "_cleanup_ephemeral_attempt",
+        lambda _path: (_ for _ in ()).throw(generic_host.HostError("injected cleanup failure")),
+    )
+    with pytest.raises(generic_host.HostError, match="injected cleanup failure"):
+        host._cleanup_ephemeral_attempt_or_latch(root)
+    assert host.last_cleanup_receipt == {
+        "path": str(root),
+        "intended_disposition": "deleted",
+        "status": "uncertain",
+        "errors": ["injected cleanup failure"],
+    }
+    with pytest.raises(generic_host.HostError, match="cleanup uncertainty"):
+        host.claim_once()
+    with pytest.raises(generic_host.HostError, match="cleanup uncertainty"):
+        host.run_task({}, lease_token="", attempt_id="", fence=1)

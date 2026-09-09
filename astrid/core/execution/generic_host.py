@@ -1313,6 +1313,26 @@ class GenericPackHost:
         self._active_processes: set[subprocess.Popen] = set()
         self._process_lock = threading.RLock()
         self._shutdown = threading.Event()
+        self._cleanup_uncertain = False
+        self._last_cleanup_receipt: dict[str, Any] | None = None
+
+    @property
+    def last_cleanup_receipt(self) -> dict[str, Any] | None:
+        return dict(self._last_cleanup_receipt) if self._last_cleanup_receipt is not None else None
+
+    def _cleanup_ephemeral_attempt_or_latch(self, root: Path) -> None:
+        """Delete one owned root, latching uncertainty if observation fails."""
+        try:
+            _cleanup_ephemeral_attempt(root)
+        except Exception as exc:
+            self._cleanup_uncertain = True
+            self._last_cleanup_receipt = {
+                "path": str(root),
+                "intended_disposition": "deleted",
+                "status": "uncertain",
+                "errors": [str(exc)],
+            }
+            raise
 
     def _track_process(self, process: subprocess.Popen) -> None:
         with self._process_lock:
@@ -2636,6 +2656,8 @@ class GenericPackHost:
         keep_attempt: bool = False,
         provider_route_grant: str | None = None,
     ) -> Mapping[str, Any]:
+        if self._cleanup_uncertain:
+            raise HostError("generic host admissions are blocked by cleanup uncertainty")
         if self.client is None:
             raise HostError("runtime client is required to execute a task")
         if self._shutdown.is_set():
@@ -2697,7 +2719,7 @@ class GenericPackHost:
                 fail_error = runtime_exc
             finally:
                 if ephemeral_attempt_root:
-                    _cleanup_ephemeral_attempt(root)
+                    self._cleanup_ephemeral_attempt_or_latch(root)
             if fail_error is not None:
                 raise HostError("scratch-floor failure was not recorded by Runtime") from fail_error
             raise HostError(str(exc)) from exc
@@ -3140,14 +3162,14 @@ class GenericPackHost:
             if provenance is not None:
                 payload["provenance"] = provenance
             if self.attempt_root is not None:
-                scratch_disposition = "caller_owned"
+                scratch_disposition = "caller_owned_pending"
                 retained_owner = "caller"
             elif keep_attempt:
-                scratch_disposition = "retained"
+                scratch_disposition = "retention_pending"
                 retained_owner = "generic-pack-host"
             else:
-                scratch_disposition = "deleted"
-                retained_owner = None
+                scratch_disposition = "cleanup_pending"
+                retained_owner = "generic-pack-host"
             payload["execution_guards"] = {
                 "scratch": scratch_receipt,
                 "evidence": evidence_receipt,
@@ -3158,13 +3180,9 @@ class GenericPackHost:
                     "cap_bytes": self.execution_policy.evidence_cap_bytes,
                 },
                 "scratch_disposition": scratch_disposition,
-                "retained_path": str(root) if scratch_disposition != "deleted" else None,
+                "cleanup_path": str(root),
                 "retained_owner": retained_owner,
-                "retained_bytes": (
-                    int((evidence_receipt or {}).get("observed_bytes", 0))
-                    if scratch_disposition != "deleted"
-                    else 0
-                ),
+                "retained_bytes": 0,
             }
             payload["process_evidence"] = _completed_process_evidence(
                 capability_id=capability_id,
@@ -3233,6 +3251,17 @@ class GenericPackHost:
             raise
         finally:
             cleanup_errors: list[str] = []
+            cleanup_receipt: dict[str, Any] = {
+                "path": str(root),
+                "intended_disposition": (
+                    "caller_owned"
+                    if self.attempt_root is not None
+                    else "retained"
+                    if keep_attempt
+                    else "deleted"
+                ),
+                "status": "pending",
+            }
             if network_broker is not None:
                 try:
                     network_broker.stop()
@@ -3280,11 +3309,39 @@ class GenericPackHost:
             if keep_attempt:
                 if not root.exists():
                     cleanup_errors.append(f"retained attempt disappeared: {root}")
+                else:
+                    try:
+                        retained_bytes = self.execution_policy.evidence_bytes(
+                            root,
+                            immutable_inputs=immutable_input_baseline,
+                        )
+                        cleanup_receipt.update(
+                            {
+                                "status": "retained",
+                                "observed_exists": True,
+                                "bytes": retained_bytes,
+                            }
+                        )
+                    except Exception as exc:
+                        cleanup_errors.append(f"retained evidence: {exc}")
             elif self.attempt_root is None:
                 try:
-                    _cleanup_ephemeral_attempt(root)
+                    self._cleanup_ephemeral_attempt_or_latch(root)
+                    cleanup_receipt.update({"status": "deleted", "observed_absent": True})
                 except Exception as exc:
                     cleanup_errors.append(f"attempt root: {exc}")
+                    cleanup_receipt.update({"status": "uncertain", "observed_absent": False})
+            else:
+                observed_exists = root.exists()
+                cleanup_receipt.update(
+                    {"status": "caller_owned", "observed_exists": observed_exists}
+                )
+                if not observed_exists:
+                    cleanup_errors.append(f"caller-owned attempt disappeared: {root}")
+            if cleanup_errors:
+                cleanup_receipt.update({"status": "uncertain", "errors": list(cleanup_errors)})
+                self._cleanup_uncertain = True
+            self._last_cleanup_receipt = cleanup_receipt
             if cleanup_errors:
                 raise HostError("owned cleanup incomplete: " + "; ".join(cleanup_errors))
 
@@ -3315,6 +3372,8 @@ class GenericPackHost:
 
     def claim_once(self) -> Mapping[str, Any] | None:
         """Claim and execute one queued task through the generated boundary."""
+        if self._cleanup_uncertain:
+            raise HostError("generic host admissions are blocked by cleanup uncertainty")
         if self._shutdown.is_set():
             return None
         claim_next = self._client_operation("claim_next")

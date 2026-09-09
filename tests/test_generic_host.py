@@ -733,6 +733,10 @@ def test_register_with_profile_missing_verified_facts_fails_closed(
     profile = tmp_path / "readiness.json"
     profile.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
     monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest(),
+    )
     runtime = FakeRuntime()
     host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
 
@@ -754,6 +758,10 @@ def test_register_with_profile_publishes_valid_verified_facts(
     profile = tmp_path / "readiness.json"
     profile.write_text(json.dumps({"verified_facts": facts}), encoding="utf-8")
     monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest(),
+    )
     runtime = FakeRuntime()
     host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
 
@@ -779,6 +787,10 @@ def test_register_rejects_malformed_verified_facts(
     profile = tmp_path / "readiness.json"
     profile.write_text(json.dumps(profile_value), encoding="utf-8")
     monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest(),
+    )
     runtime = FakeRuntime()
 
     with pytest.raises(HostError, match="verified_facts"):
@@ -848,11 +860,7 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert outputs[0]["name"] == "answer"
     assert set(outputs[0]) <= {
         "name", "kind", "digest", "media_type", "size", "data_base64",
-        "ordinal", "role", "is_primary",
     }
-    assert outputs[0]["ordinal"] == 0
-    assert outputs[0]["role"] == "result"
-    assert outputs[0]["is_primary"] is False
     assert "path" not in outputs[0]
     assert "artifact_type" not in outputs[0]
     assert outputs[0]["digest"]
@@ -1160,13 +1168,9 @@ def test_command_host_harvests_result_manifest_media(tmp_path: Path) -> None:
         set(item)
         <= {
             "name", "kind", "digest", "media_type", "size", "data_base64",
-            "ordinal", "role", "is_primary",
         }
         for item in settled
     )
-    assert [item["ordinal"] for item in settled] == [0, 1]
-    assert [item["role"] for item in settled] == ["result", "result"]
-    assert [item["is_primary"] for item in settled] == [True, False]
     assert all("path" not in item and "artifact_type" not in item for item in settled)
 
 

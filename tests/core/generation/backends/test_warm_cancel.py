@@ -394,6 +394,54 @@ def test_run_preserves_vibecomfy_runresult_generation_result_contract(monkeypatc
     assert run_sync.call_args.kwargs == {"server_url": "http://gpu.example.test"}
 
 
+def test_completed_run_after_cancel_is_rejected_as_stale(monkeypatch) -> None:
+    entered = threading.Event()
+    unblock = threading.Event()
+    result = GenerationResult(seed_used=12, model_actual="image/z_image")
+
+    def run_sync(_workflow, *, server_url):
+        assert server_url == "http://gpu.example.test"
+        entered.set()
+        assert unblock.wait(2)
+        return result
+
+    runtime = types.ModuleType("vibecomfy.runtime.run")
+    runtime.run_sync = run_sync  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vibecomfy.runtime.run", runtime)
+    monkeypatch.setitem(sys.modules, "vibecomfy", types.ModuleType("vibecomfy"))
+    _native_http(monkeypatch)
+    engine = VibeComfyEngine("http://gpu.example.test")
+    engine.prepare_session(
+        "model-a",
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest=MODEL_DIGEST,
+    )
+    errors: list[BaseException] = []
+    worker = threading.Thread(
+        target=lambda: _capture_error(
+            errors,
+            lambda: engine.run(object(), runtime_instance_id=RUNTIME_A),
+        )
+    )
+    worker.start()
+    assert entered.wait(2)
+    cancelled = engine.cancel()
+    assert cancelled["ok"] is True
+    unblock.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert "lifecycle fence" in str(errors[0])
+
+
+def _capture_error(errors: list[BaseException], callback) -> None:
+    try:
+        callback()
+    except BaseException as exc:  # noqa: BLE001 - test captures stale completion.
+        errors.append(exc)
+
+
 def test_post_release_subsequent_run_is_cold_and_executes(monkeypatch) -> None:
     first = GenerationResult(seed_used=1, model_actual="image/z_image")
     second = GenerationResult(seed_used=2, model_actual="image/z_image")

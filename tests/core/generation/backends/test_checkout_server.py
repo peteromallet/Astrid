@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -464,3 +465,183 @@ def test_generate_failure_discards_prepared_warmth(
     )
     assert second["lifecycle"] == "cold"
     assert second["warm_reused"] is False
+
+
+def _hc03_profile(tmp_path: Path, *, model_digest: str = "sha256:" + "a" * 64) -> dict[str, object]:
+    pytest.importorskip("vibecomfy")
+    from vibecomfy.runtime.session import (
+        current_source_content_digest,
+        current_source_revision,
+    )
+
+    (tmp_path / "outputs").mkdir()
+    session_dir = tmp_path / "sessions" / "default"
+    session_dir.mkdir(parents=True)
+    pid = os.getpid()
+    server_url = "http://gpu.example.test:8188"
+    source_revision = current_source_revision() or "vibe-source"
+    source_content_digest = current_source_content_digest() or "sha256:" + "b" * 64
+    config_bytes = b'{"base_directory":"/managed/comfy","disable_known_models":true}'
+    (session_dir / "pid").write_text(str(pid), encoding="utf-8")
+    (session_dir / "comfy_pid").write_text(str(pid), encoding="utf-8")
+    (session_dir / "comfy_process_start_identity").write_text("process-birth", encoding="utf-8")
+    (session_dir / "url").write_text(server_url, encoding="utf-8")
+    (session_dir / "config.json").write_bytes(config_bytes)
+    (session_dir / "source_revision").write_text(source_revision, encoding="utf-8")
+    (session_dir / "source_content_digest").write_text(source_content_digest, encoding="utf-8")
+    (session_dir / "daemon.log").write_text("owned\n", encoding="utf-8")
+    marker = {
+        "launch_token": "launch-token",
+        "pid": pid,
+        "process_start_identity": "process-birth",
+        "comfy_pid": pid,
+        "comfy_process_start_identity": "process-birth",
+        "url": server_url,
+    }
+    (session_dir / "launch.json").write_text(json.dumps(marker), encoding="utf-8")
+    exact = {
+        "interpreter": "python",
+        "runtime_lock": "sha256:" + "1" * 64,
+        "engine_lock": "sha256:" + "2" * 64,
+        "model_digest": model_digest,
+        "custom_node_digest": "sha256:" + "3" * 64,
+        "driver": "driver",
+        "root": "sha256:" + "4" * 64,
+        "port": 8180,
+    }
+    minimum = {"vram_bytes": 8, "scratch_bytes": 8}
+    facts = {"exact": dict(sorted(exact.items())), "minimum": dict(sorted(minimum.items()))}
+    return {
+        "schema_version": "hc03-worker-readiness.v1",
+        "status": "ready",
+        "verified_facts": facts,
+        "verified_facts_digest": backend_module._canonical_sha256(facts),
+        "runtime": {"runtime_instance_id": RUNTIME_A},
+        "launch": {"output_root": str(tmp_path / "outputs")},
+        "vibecomfy_session": {
+            "session_dir": str(session_dir),
+            "server_url": server_url,
+            "pid": pid,
+            "comfy_pid": pid,
+            "launch_token": "launch-token",
+            "process_birth_id": "process-birth",
+            "comfy_process_birth_id": "process-birth",
+            "source_revision": source_revision,
+            "source_content_digest": source_content_digest,
+            "config_digest": "sha256:" + hashlib.sha256(config_bytes).hexdigest(),
+        },
+    }
+
+
+def test_from_host_session_requires_owned_registry_and_binds_hc03(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _hc03_profile(tmp_path)
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch)
+    adapter = CheckoutServerAdapter.from_host_session(
+        hc03_profile=profile,
+        model_id="z-image",
+        template_id="image/z_image",
+        invocation_identity="task-1",
+    )
+    assert adapter.runtime_instance_id == RUNTIME_A
+    assert adapter._bound_model_id == "z-image"
+    assert adapter._bound_template_id == "image/z_image"
+    assert adapter._invocation_identity == "task-1"
+    assert adapter._bound_fingerprint
+
+
+def test_from_host_session_rejects_reachability_without_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _hc03_profile(tmp_path)
+    profile.pop("vibecomfy_session")
+    monkeypatch.setattr(backend_module, "_open_checkout_http", lambda *args, **kwargs: pytest.fail("must not probe"))
+    with pytest.raises(ValueError, match="vibecomfy_session"):
+        CheckoutServerAdapter.from_host_session(
+            hc03_profile=profile,
+            model_id="z-image",
+            template_id="image/z_image",
+            invocation_identity="task-1",
+        )
+
+
+def test_from_host_session_rejects_source_content_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _hc03_profile(tmp_path)
+    profile["vibecomfy_session"]["source_content_digest"] = "sha256:" + "c" * 64
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch)
+    with pytest.raises(ValueError, match="source content digest"):
+        CheckoutServerAdapter.from_host_session(
+            hc03_profile=profile,
+            model_id="z-image",
+            template_id="image/z_image",
+            invocation_identity="task-1",
+        )
+
+
+def test_run_compiled_workflow_uses_bundle_and_private_output_custody(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vibecomfy = pytest.importorskip("vibecomfy")
+    from vibecomfy.workflow import VibeWorkflow, WorkflowSource
+    import vibecomfy.workflow_bundle as workflow_bundle
+
+    profile = _hc03_profile(tmp_path)
+    output_root = tmp_path / "outputs"
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch, output=b"artifact")
+    adapter = CheckoutServerAdapter.from_host_session(
+        hc03_profile=profile,
+        model_id="z-image",
+        template_id="image/z_image",
+        invocation_identity="task-1",
+    )
+    workflow = VibeWorkflow(
+        id="image/z_image",
+        source=WorkflowSource(id="image/z_image"),
+        metadata={"ready_template": "image/z_image"},
+    )
+    metadata_path = tmp_path / "run-metadata.json"
+    metadata_path.write_text(
+        json.dumps({"comfy_outputs": [{"filename": "artifact.png", "subfolder": "", "type": "output"}]}),
+        encoding="utf-8",
+    )
+    bundle = Mock()
+    bundle.require_canonical_authority.return_value = None
+    bundle.compile.return_value = object()
+    monkeypatch.setattr(workflow_bundle, "load_bundle", lambda _: bundle)
+    adapter._run_workflow = Mock(return_value=SimpleNamespace(metadata_path=metadata_path))  # type: ignore[method-assign]
+    generated = adapter.run_compiled_workflow(workflow, output_root / "task-1")
+    bundle.require_canonical_authority.assert_called_once_with("checkout_server execution")
+    bundle.compile.assert_called_once_with()
+    assert generated[0].read_bytes() == b"artifact"
+
+
+def test_run_compiled_workflow_rejects_registry_mutation_after_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vibecomfy = pytest.importorskip("vibecomfy")
+    from vibecomfy.workflow import VibeWorkflow, WorkflowSource
+
+    profile = _hc03_profile(tmp_path)
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch)
+    adapter = CheckoutServerAdapter.from_host_session(
+        hc03_profile=profile,
+        model_id="z-image",
+        template_id="image/z_image",
+        invocation_identity="task-1",
+    )
+    session_dir = Path(profile["vibecomfy_session"]["session_dir"])
+    (session_dir / "config.json").write_text('{"changed":true}\n', encoding="utf-8")
+    workflow = VibeWorkflow(
+        id="image/z_image",
+        source=WorkflowSource(id="image/z_image"),
+        metadata={"ready_template": "image/z_image"},
+    )
+    with pytest.raises(ValueError, match="registry identity changed"):
+        adapter.run_compiled_workflow(workflow, tmp_path / "outputs" / "task-1")

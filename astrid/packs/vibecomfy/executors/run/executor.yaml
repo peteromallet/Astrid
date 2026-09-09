@@ -11,7 +11,13 @@
       "run",
       "{workflow}",
       "--out",
-      "{out}"
+      "{out}",
+      "--task-identity",
+      "{task_identity}",
+      "--readiness-profile-path",
+      "{readiness_profile_path}",
+      "--readiness-profile-hash",
+      "{readiness_profile_hash}"
     ]
   },
   "conditions": [
@@ -37,6 +43,24 @@
       "name": "workflow",
       "required": true,
       "type": "file"
+    },
+    {
+      "description": "Host-issued task identity for the production engine adapter.",
+      "name": "task_identity",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Worker-issued readiness profile path for owned checkout execution.",
+      "name": "readiness_profile_path",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Hash paired with the Worker-issued readiness profile.",
+      "name": "readiness_profile_hash",
+      "required": false,
+      "type": "string"
     }
   ],
   "isolation": {

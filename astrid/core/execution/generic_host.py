@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from astrid.core.contracts.binding import (
@@ -64,6 +64,11 @@ from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantError,
 )
 from astrid.core.subprocess_env import build_child_subprocess_env
+from astrid.core.execution.managed_tool_session import (
+    CapabilityDescriptor,
+    ManagedToolSession,
+    SessionBinding,
+)
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -76,6 +81,86 @@ class HostError(RuntimeError):
 
 class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
+
+
+class _ManagedTaskAdapter:
+    """Host-owned lifecycle adapter for one claimed task.
+
+    Engine-specific adapters may add stronger process/session custody, but the
+    generic host still needs a concrete fence/release surface around every
+    claimed task.  The manager's token is therefore part of the task's
+    completion proof even for CPU executors.
+    """
+
+    def __init__(
+        self,
+        cancel_signal: threading.Event,
+        process_census: Callable[[], bool] | None = None,
+    ) -> None:
+        self._cancel_signal = cancel_signal
+        self._process_census = process_census
+        self.fenced = False
+
+    def fence(self, *, reason: str) -> dict[str, Any]:
+        self.fenced = True
+        self._cancel_signal.set()
+        return {"ok": True, "fenced": True, "reason": reason}
+
+    def release(self, *, reason: str) -> dict[str, Any]:
+        if self._process_census is not None and self._process_census():
+            return {"ok": False, "released": False, "reason": reason, "active_processes": True}
+        return {"ok": True, "released": True, "reason": reason}
+
+
+class _ManagedVibeSessionAdapter:
+    """Bridge the manager lifecycle to the reviewed checkout adapter."""
+
+    def __init__(self, backend: Any) -> None:
+        self.backend = backend
+
+    @staticmethod
+    def _native_evidence(
+        evidence: Any,
+        *,
+        kind: str,
+        native_key: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(evidence, Mapping)
+            or evidence.get("ok") is not True
+            or evidence.get(native_key) is not True
+        ):
+            return {
+                "ok": False,
+                kind: False,
+                "reason": reason,
+                "native": dict(evidence) if isinstance(evidence, Mapping) else evidence,
+            }
+        return {"ok": True, kind: True, "reason": reason, "native": dict(evidence)}
+
+    def observe(self, *, binding: SessionBinding) -> dict[str, Any]:
+        del binding
+        self.backend._revalidate_host_session()
+        return {"ok": True, "observed": True}
+
+    def fence(self, *, reason: str) -> dict[str, Any]:
+        evidence = self.backend.cancel()
+        return self._native_evidence(
+            evidence, kind="fenced", native_key="cancelled", reason=reason
+        )
+
+    def cancel(self, *, reason: str) -> dict[str, Any]:
+        evidence = self.backend.cancel()
+        return self._native_evidence(
+            evidence, kind="cancelled", native_key="cancelled", reason=reason
+        )
+
+    def release(self, *, reason: str) -> dict[str, Any]:
+        evidence = self.backend.release(reason=reason)
+        return self._native_evidence(
+            evidence, kind="released", native_key="released", reason=reason
+        )
 
 
 _EXECUTION_FACT_EXACT_KEYS = frozenset(
@@ -98,6 +183,7 @@ _HOST_OWNED_ENVELOPE_PORTS = (
     "task_identity",
     "engine_python",
     "readiness_profile_json",
+    "readiness_profile_path",
 )
 _TYPED_FAMILIES = {
     "z_image_turbo": "z_image_t2i",
@@ -158,16 +244,31 @@ def _normalize_verified_facts(value: Any) -> dict[str, dict[str, Any]]:
     return {"exact": normalized_exact, "minimum": normalized_minimum}
 
 
-def _registration_verified_facts() -> dict[str, dict[str, Any]] | dict[str, Any]:
-    """Read configured evidence fail-closed; profile-free hosts publish none."""
+def _read_readiness_profile_document() -> Mapping[str, Any] | None:
+    """Read the Worker-issued readiness document with its hash fence."""
     profile_path = os.environ.get("ASTRID_HOST_READINESS_PROFILE_PATH")
     if not profile_path:
-        return {}
+        return None
     try:
-        profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+        profile_bytes = Path(profile_path).read_bytes()
+        expected_hash = os.environ.get("ASTRID_HOST_READINESS_PROFILE_HASH", "")
+        actual_hash = "sha256:" + hashlib.sha256(profile_bytes).hexdigest()
+        if not expected_hash or expected_hash != actual_hash:
+            raise HostError("readiness profile hash does not match the supplied profile")
+        profile = json.loads(profile_bytes.decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise HostError(f"readiness profile is unreadable: {exc}") from exc
-    if not isinstance(profile, Mapping) or "verified_facts" not in profile:
+    if not isinstance(profile, Mapping):
+        raise HostError("readiness profile is not an object")
+    return profile
+
+
+def _registration_verified_facts() -> dict[str, dict[str, Any]] | dict[str, Any]:
+    """Read configured evidence fail-closed; profile-free hosts publish none."""
+    profile = _read_readiness_profile_document()
+    if profile is None:
+        return {}
+    if "verified_facts" not in profile:
         raise HostError("readiness profile is missing verified_facts")
     return _normalize_verified_facts(profile["verified_facts"])
 
@@ -265,9 +366,8 @@ def _bind_host_owned_command_values(
     if "input_object_paths_json" in declared:
         values.setdefault("input_object_paths_json", "[]")
     if "task_identity" in declared:
-        values.setdefault(
-            "task_identity",
-            str((admission or {}).get("task_id") or attempt.name),
+        values["task_identity"] = str(
+            (admission or {}).get("task_id") or attempt.name
         )
     if "engine_python" in declared:
         values.setdefault("engine_python", sys.executable)
@@ -277,6 +377,14 @@ def _bind_host_owned_command_values(
             values["readiness_profile_json"] = Path(profile_path).read_text(encoding="utf-8")
         else:
             values["readiness_profile_json"] = "{}"
+    if "readiness_profile_path" in declared:
+        values["readiness_profile_path"] = os.environ.get(
+            "ASTRID_HOST_READINESS_PROFILE_PATH"
+        ) or "-"
+    if "readiness_profile_hash" in declared:
+        values["readiness_profile_hash"] = os.environ.get(
+            "ASTRID_HOST_READINESS_PROFILE_HASH"
+        ) or "-"
     return values
 
 
@@ -1169,6 +1277,12 @@ class GenericPackHost:
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
         self._pending_provider_grants: dict[str, str] = {}
+        # Engine-neutral lifecycle custody lives beside, not inside, the
+        # Runtime client.  Adapters are opened explicitly by the execution
+        # path; the host owns shutdown fencing for every opened session.
+        self.managed_tool_session = ManagedToolSession(
+            manager_id=self.executor_id
+        )
         self._active_processes: set[subprocess.Popen] = set()
         self._process_lock = threading.RLock()
         self._shutdown = threading.Event()
@@ -1189,6 +1303,7 @@ class GenericPackHost:
     def shutdown(self) -> None:
         """Stop the host and every currently owned capability process."""
         self._shutdown.set()
+        self.managed_tool_session.close(reason="host_shutdown")
         with self._process_lock:
             active = tuple(self._active_processes)
         for process in active:
@@ -2161,9 +2276,9 @@ class GenericPackHost:
                 descriptor["size"] = len(data)
                 descriptor["kind"] = "object"
                 descriptor["data_base64"] = base64.b64encode(data).decode("ascii")
-                descriptor.setdefault("ordinal", index)
-                descriptor.setdefault("role", "result")
-                descriptor.setdefault("is_primary", False)
+                # Result-manifest metadata (ordinal/role/primary) is local
+                # harvest evidence.  Runtime 70872d03 accepts only the
+                # canonical settlement Output fields plus inline bytes.
                 uploaded.append({
                     key: descriptor[key]
                     for key in (
@@ -2173,9 +2288,6 @@ class GenericPackHost:
                         "digest",
                         "size",
                         "data_base64",
-                        "ordinal",
-                        "role",
-                        "is_primary",
                     )
                     if key in descriptor
                 })
@@ -2195,9 +2307,6 @@ class GenericPackHost:
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
-                "ordinal": descriptor.get("ordinal", index),
-                "role": descriptor.get("role", "result"),
-                "is_primary": descriptor.get("is_primary", False),
             })
         return uploaded
 
@@ -2538,6 +2647,9 @@ class GenericPackHost:
         # the immutable admission presented to an observable broker, so a
         # handshake captured from another task cannot be replayed.
         network_admission = {
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "fence": fence,
             "capability_digest": record.capability_digest,
             "source_digest": record.source_digest,
             "dependency_digest": record.dependency_digest,
@@ -2548,6 +2660,85 @@ class GenericPackHost:
             "allowed_routes": list((_network_policy(record) or {}).get("allowed_routes", (_network_policy(record) or {}).get("allowed_destinations", ()))),
         }
         cancel_signal = threading.Event()
+        managed_adapter = _ManagedTaskAdapter(
+            cancel_signal,
+            process_census=lambda: bool(self._active_processes),
+        )
+        runtime_instance_id = str(
+            self.runtime_state.get("runtime_instance_id")
+            or self.runtime_state.get("instance_id")
+            or "runtime-local"
+        )
+        runtime_endpoint = str(
+            getattr(self.client, "endpoint", None)
+            or getattr(getattr(self.client, "generated", None), "endpoint", None)
+            or "runtime://local"
+        )
+        managed_binding = SessionBinding(
+            session_id=f"{capability_id}:{task_id}",
+            runtime_instance_id=runtime_instance_id,
+            process_birth_id=process_birth_identity(),
+            endpoint=runtime_endpoint,
+            source_digest=record.source_digest,
+            config_digest=_canonical_digest(
+                {
+                    "capability_digest": record.capability_digest,
+                    "dependency_digest": record.dependency_digest,
+                    "interpreter": str(Path(sys.executable).resolve()),
+                }
+            ),
+        )
+        managed_capability = CapabilityDescriptor(
+            capability_id=capability_id,
+            residency_support="unsupported",
+            resources_claimed=tuple(record.resource_keys),
+        )
+        readiness_profile = _read_readiness_profile_document()
+        vibe_session = (
+            readiness_profile.get("vibecomfy_session")
+            if isinstance(readiness_profile, Mapping)
+            else None
+        )
+        if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
+            from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
+
+            raw_inputs = spec.get("spec", spec) if isinstance(spec, Mapping) else {}
+            if not isinstance(raw_inputs, Mapping):
+                raw_inputs = {}
+            model_id = str(raw_inputs.get("model_id") or "vibecomfy.run")
+            template_id = str(raw_inputs.get("template_id") or "vibecomfy.run")
+            checkout_adapter = CheckoutServerAdapter.from_host_session(
+                hc03_profile=readiness_profile,
+                model_id=model_id,
+                template_id=template_id,
+                invocation_identity=f"{task_id}:{attempt_id}:{fence}",
+            )
+            session_id = str(vibe_session.get("session_dir") or "")
+            session_birth = str(vibe_session.get("process_birth_id") or "")
+            session_endpoint = str(vibe_session.get("server_url") or "")
+            session_source = str(vibe_session.get("source_revision") or "")
+            session_config = str(vibe_session.get("config_digest") or "")
+            managed_binding = SessionBinding(
+                session_id=session_id,
+                runtime_instance_id=str(
+                    (readiness_profile.get("runtime") or {}).get("runtime_instance_id")
+                    if isinstance(readiness_profile.get("runtime"), Mapping)
+                    else runtime_instance_id
+                ),
+                process_birth_id=session_birth,
+                endpoint=session_endpoint,
+                source_digest=session_source,
+                config_digest=session_config,
+            )
+            managed_capability = CapabilityDescriptor(
+                capability_id=capability_id,
+                residency_support="observable_releasable",
+                resources_claimed=tuple(record.resource_keys),
+            )
+            managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
+        managed_token = None
+        managed_settled = False
+        managed_opened = False
 
         def cancelled():
             if self._shutdown.is_set() or cancel_signal.is_set():
@@ -2562,6 +2753,17 @@ class GenericPackHost:
             state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
             return state == "cancelled"
         try:
+            self.managed_tool_session.open(
+                capability=managed_capability,
+                binding=managed_binding,
+                adapter=managed_adapter,
+            )
+            managed_opened = True
+            self.managed_tool_session.observe(managed_binding)
+            managed_token = self.managed_tool_session.admit(
+                capability_id=capability_id,
+                invocation_id=f"{task_id}:{attempt_id}:{fence}",
+            )
             inputs = self._materialize_inputs(
                 spec,
                 root,
@@ -2754,6 +2956,20 @@ class GenericPackHost:
             if cancelled():
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+            # Re-observe the actual engine session after output custody and
+            # immediately before consuming the manager token.  A session
+            # restart or identity change cannot become a Runtime settlement.
+            self.managed_tool_session.observe(managed_binding)
+            managed_envelope = self.managed_tool_session.settle(
+                managed_token,
+                result_evidence={
+                    "generation": managed_token.generation,
+                    "binding_identity": list(managed_token.binding_identity),
+                    "outputs": outputs,
+                },
+            )
+            managed_settled = True
+            payload["managed_tool_session"] = managed_envelope.to_dict()
             settlement = self.client.settle(
                 task_id,
                 lease_token,
@@ -2786,6 +3002,35 @@ class GenericPackHost:
         finally:
             if network_broker is not None:
                 network_broker.stop()
+            if managed_token is not None and not managed_settled:
+                if cancelled_attempt or cancel_signal.is_set() or self._shutdown.is_set():
+                    try:
+                        self.managed_tool_session.cancel(
+                            managed_token,
+                            outcome="confirmed",
+                        )
+                    except Exception:
+                        # A missing or stale token is already a fail-closed
+                        # condition; release below preserves the poisoned slot.
+                        self.managed_tool_session.fence(reason="cancel_unconfirmed")
+                else:
+                    self.managed_tool_session.fence(reason="task_failed")
+            if managed_opened:
+                retain_persistent_session = (
+                    isinstance(managed_adapter, _ManagedVibeSessionAdapter)
+                    and managed_settled
+                    and settled
+                )
+                if not retain_persistent_session:
+                    self.managed_tool_session.release(
+                        reason=(
+                            "task_settled"
+                            if managed_settled
+                            else "task_cancelled"
+                            if cancelled_attempt
+                            else "task_failed"
+                        )
+                    )
             if not keep_attempt and self.attempt_root is None and (settled or cancelled_attempt):
                 shutil.rmtree(root, ignore_errors=True)
 
@@ -3059,7 +3304,24 @@ def _cli() -> int:
     parser.add_argument("--source-inventory-identity", help="verified managed source inventory identity bound to this host")
     parser.add_argument("--boot-manifest-path", help="existing explicit boot-manifest path")
     parser.add_argument("--boot-manifest-hash", help="expected SHA-256 hash of the boot manifest")
+    parser.add_argument("--readiness-profile-path", help="Worker-published HC-03 readiness profile")
+    parser.add_argument("--readiness-profile-hash", help="expected SHA-256 hash of the readiness profile")
     args = parser.parse_args()
+    if (args.readiness_profile_path is None) != (args.readiness_profile_hash is None):
+        parser.error("--readiness-profile-path and --readiness-profile-hash must be supplied together")
+    if args.readiness_profile_path is not None:
+        readiness_path = Path(args.readiness_profile_path).expanduser()
+        if (
+            not readiness_path.is_absolute()
+            or readiness_path.is_symlink()
+            or not readiness_path.is_file()
+        ):
+            parser.error("--readiness-profile-path must be an absolute non-symlink regular file")
+        actual_readiness_hash = "sha256:" + hashlib.sha256(readiness_path.read_bytes()).hexdigest()
+        if args.readiness_profile_hash != actual_readiness_hash:
+            parser.error("--readiness-profile-hash does not match the readiness profile")
+        os.environ["ASTRID_HOST_READINESS_PROFILE_PATH"] = str(readiness_path)
+        os.environ["ASTRID_HOST_READINESS_PROFILE_HASH"] = actual_readiness_hash
     credential = None
     credential_path = None
     if args.credential_file:

@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
@@ -164,6 +165,40 @@ def _extract_output_descriptors(value: object) -> list[object]:
             descriptors.extend(_extract_output_descriptors(item))
         return descriptors
     return []
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _require_identity(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"checkout_server {field} must be a non-empty string")
+    return value.strip()
+
+
+def _strict_absolute_directory(value: object, field: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"checkout_server {field} must be an absolute directory")
+    path = Path(value)
+    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        raise ValueError(f"checkout_server {field} must be an existing non-symlink directory")
+    return path
+
+
+def _verify_owned_vibe_session(session_dir: Path, pid: int) -> None:
+    """Verify the daemon, Comfy child, and listener as one owned composite."""
+    try:
+        from vibecomfy.runtime.session import _session_composite_ownership_verified
+    except (ImportError, AttributeError) as exc:
+        raise ValueError("checkout_server cannot load VibeComfy ownership verifier") from exc
+    try:
+        owned = _session_composite_ownership_verified(session_dir, pid)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError("checkout_server session ownership verification failed") from exc
+    if owned is not True:
+        raise ValueError("checkout_server session is not manager-owned")
 
 # ---------------------------------------------------------------------------
 # Size / resolution parsing helpers
@@ -853,16 +888,50 @@ class VibeComfyEngine:
         try:
             from vibecomfy.runtime.run import run_sync
 
-            result = run_sync(workflow, server_url=self._origin)
+            runtime_args: tuple[Any, ...]
+            if isinstance(workflow, tuple) and len(workflow) == 2:
+                runtime_args = (workflow[0], workflow[1])
+            else:
+                # The selected VibeComfy runtime admits only canonical
+                # ApprovedProjectionRecord + WorkflowBundle pairs.  Keep the
+                # lightweight raw call only for old test doubles that are not
+                # VibeWorkflow instances; production objects always cross the
+                # bundle compiler here.
+                try:
+                    from vibecomfy.workflow import VibeWorkflow
+                    from vibecomfy.workflow_bundle import load_bundle
+                except ImportError:
+                    VibeWorkflow = None  # type: ignore[assignment,misc]
+                    load_bundle = None  # type: ignore[assignment]
+                if VibeWorkflow is not None and isinstance(workflow, VibeWorkflow):
+                    if load_bundle is None:
+                        raise RuntimeError(
+                            "checkout_server cannot load the canonical workflow bundle"
+                        )
+                    bundle = load_bundle(workflow)
+                    bundle.require_canonical_authority("runtime execution")
+                    runtime_args = (bundle.compile(), bundle)
+                else:
+                    runtime_args = (workflow,)
+            result = run_sync(*runtime_args, server_url=self._origin)
             with self._lock:
-                # A containment transition may have superseded this run.
-                if self._lifecycle_generation == run_generation:
-                    self._warm = True
-                    self._fingerprint = self._prepared_fingerprint
-                    self._warmth_identity = self._prepared_warmth_identity
-                    self._model_bytes_digest = self._prepared_model_bytes_digest
-                    self._runtime_instance_id = self._prepared_runtime_instance_id
-                    self._clear_prepared()
+                # A containment transition may have superseded this run.  A
+                # result from the old incarnation is never eligible for
+                # output custody or settlement.
+                if (
+                    self._lifecycle_generation != run_generation
+                    or self._fence_pending
+                    or self._poisoned
+                ):
+                    raise RuntimeError(
+                        "checkout_server run completed after its lifecycle fence"
+                    )
+                self._warm = True
+                self._fingerprint = self._prepared_fingerprint
+                self._warmth_identity = self._prepared_warmth_identity
+                self._model_bytes_digest = self._prepared_model_bytes_digest
+                self._runtime_instance_id = self._prepared_runtime_instance_id
+                self._clear_prepared()
             return result
         except BaseException:
             with self._lock:
@@ -932,11 +1001,228 @@ class CheckoutServerAdapter(VibeComfyBackend):
         self._system_stats_verified = False
         self._runtime_instance_id: str | None = None
         self._startup_probe_digest: str | None = None
+        self._host_session: dict[str, Any] | None = None
+        self._bound_model_id: str | None = None
+        self._bound_template_id: str | None = None
+        self._invocation_identity: str | None = None
+        self._output_root: Path | None = None
+        self._bound_fingerprint: str | None = None
+        self._bound_warmth_identity: str | None = None
+
+    @classmethod
+    def from_host_session(
+        cls,
+        *,
+        hc03_profile: Mapping[str, Any],
+        model_id: str,
+        template_id: str,
+        invocation_identity: str,
+    ) -> "CheckoutServerAdapter":
+        """Bind one manager-owned Vibe session to the verified HC-03 facts.
+
+        ``hc03_profile.vibecomfy_session`` is a deliberately narrow extension
+        to the engine-neutral readiness document.  It is produced by the
+        manager after reading the Vibe registry and contains the launch marker
+        pairing, process incarnation, source revision, configuration digest,
+        and listener URL.  A reachable listener without those facts is not an
+        admissible checkout server.
+        """
+        if not isinstance(hc03_profile, Mapping):
+            raise ValueError("checkout_server requires a verified HC-03 profile")
+        if hc03_profile.get("schema_version") != "hc03-worker-readiness.v1":
+            raise ValueError("checkout_server HC-03 profile has an unsupported schema")
+        if hc03_profile.get("status") != "ready":
+            raise ValueError("checkout_server requires a ready HC-03 profile")
+        facts = hc03_profile.get("verified_facts")
+        if not isinstance(facts, Mapping):
+            raise ValueError("checkout_server HC-03 profile lacks verified facts")
+        exact = facts.get("exact")
+        minimum = facts.get("minimum")
+        if not isinstance(exact, Mapping) or not isinstance(minimum, Mapping):
+            raise ValueError("checkout_server HC-03 verified facts are malformed")
+        expected_exact = {
+            "interpreter",
+            "runtime_lock",
+            "engine_lock",
+            "model_digest",
+            "custom_node_digest",
+            "driver",
+            "root",
+            "port",
+        }
+        expected_minimum = {"vram_bytes", "scratch_bytes"}
+        if set(exact) != expected_exact or set(minimum) != expected_minimum:
+            raise ValueError("checkout_server HC-03 verified facts are incomplete")
+        facts_digest = hc03_profile.get("verified_facts_digest")
+        if not isinstance(facts_digest, str) or _canonical_sha256(
+            {"exact": dict(sorted(exact.items())), "minimum": dict(sorted(minimum.items()))}
+        ) != facts_digest:
+            raise ValueError("checkout_server HC-03 verified facts digest does not match")
+        runtime = hc03_profile.get("runtime")
+        launch = hc03_profile.get("launch")
+        session = hc03_profile.get("vibecomfy_session")
+        if not isinstance(runtime, Mapping) or not isinstance(launch, Mapping):
+            raise ValueError("checkout_server HC-03 runtime/launch facts are missing")
+        if not isinstance(session, Mapping):
+            raise ValueError(
+                "checkout_server requires a manager-owned vibecomfy_session binding"
+            )
+
+        model_name = _require_identity(model_id, "model_id")
+        template_name = _require_identity(template_id, "template_id")
+        invocation = _require_identity(invocation_identity, "invocation_identity")
+        runtime_instance_id = VibeComfyEngine._runtime_identity(
+            runtime.get("runtime_instance_id")
+        )
+        model_bytes_digest = VibeComfyEngine._validate_model_bytes_digest(
+            exact.get("model_digest")
+        )
+        output_root = _strict_absolute_directory(launch.get("output_root"), "output_root")
+
+        session_dir = _strict_absolute_directory(
+            session.get("session_dir"), "vibecomfy_session.session_dir"
+        )
+        server_url = _validate_checkout_server_url(session.get("server_url"))
+        pid = session.get("pid")
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ValueError("checkout_server session pid is invalid")
+        launch_token = _require_identity(
+            session.get("launch_token"), "vibecomfy_session.launch_token"
+        )
+        process_birth_id = _require_identity(
+            session.get("process_birth_id"), "vibecomfy_session.process_birth_id"
+        )
+        comfy_pid = session.get("comfy_pid")
+        if isinstance(comfy_pid, bool) or not isinstance(comfy_pid, int) or comfy_pid <= 0:
+            raise ValueError("checkout_server session comfy_pid is invalid")
+        comfy_process_birth_id = _require_identity(
+            session.get("comfy_process_birth_id"),
+            "vibecomfy_session.comfy_process_birth_id",
+        )
+        source_revision = _require_identity(
+            session.get("source_revision"), "vibecomfy_session.source_revision"
+        )
+        source_content_digest = _require_identity(
+            session.get("source_content_digest"),
+            "vibecomfy_session.source_content_digest",
+        )
+        if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", source_content_digest):
+            raise ValueError("checkout_server source_content_digest is not sha256")
+        config_digest = _require_identity(
+            session.get("config_digest"), "vibecomfy_session.config_digest"
+        )
+        if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", config_digest):
+            raise ValueError("checkout_server session config_digest is not sha256")
+
+        registry = {
+            "pid": session_dir / "pid",
+            "comfy_pid": session_dir / "comfy_pid",
+            "comfy_process_start_identity": session_dir / "comfy_process_start_identity",
+            "url": session_dir / "url",
+            "config": session_dir / "config.json",
+            "source_revision": session_dir / "source_revision",
+            "source_content_digest": session_dir / "source_content_digest",
+            "launch": session_dir / "launch.json",
+            "daemon_log": session_dir / "daemon.log",
+        }
+        if any(not path.is_file() or path.is_symlink() for path in registry.values()):
+            raise ValueError("checkout_server session registry is incomplete")
+        try:
+            if registry["pid"].read_text(encoding="utf-8").strip() != str(pid):
+                raise ValueError("checkout_server session pid registry does not match")
+            if _validate_checkout_server_url(
+                registry["url"].read_text(encoding="utf-8").strip()
+            ) != server_url:
+                raise ValueError("checkout_server session URL registry does not match")
+            if registry["source_revision"].read_text(encoding="utf-8").strip() != source_revision:
+                raise ValueError("checkout_server session source revision does not match")
+            if registry["source_content_digest"].read_text(encoding="utf-8").strip() != source_content_digest:
+                raise ValueError("checkout_server session source content digest does not match")
+            config_digest_observed = "sha256:" + hashlib.sha256(
+                registry["config"].read_bytes()
+            ).hexdigest()
+            if config_digest_observed != config_digest:
+                raise ValueError("checkout_server session configuration digest does not match")
+            marker = json.loads(registry["launch"].read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("checkout_server session registry is unreadable") from exc
+        if not isinstance(marker, Mapping):
+            raise ValueError("checkout_server launch marker is malformed")
+        if (
+            marker.get("pid") != pid
+            or marker.get("url") != server_url
+            or marker.get("launch_token") != launch_token
+            or marker.get("process_start_identity") != process_birth_id
+            or marker.get("comfy_pid") != comfy_pid
+            or marker.get("comfy_process_start_identity") != comfy_process_birth_id
+        ):
+            raise ValueError("checkout_server launch marker does not match the HC-03 binding")
+        try:
+            from vibecomfy.runtime.session import (
+                current_source_content_digest,
+                current_source_revision,
+            )
+            observed_source_revision = current_source_revision()
+            observed_source_content_digest = current_source_content_digest()
+        except (ImportError, AttributeError):
+            observed_source_revision = None
+            observed_source_content_digest = None
+        if (
+            observed_source_revision is None
+            or observed_source_revision != source_revision
+            or observed_source_content_digest is None
+            or observed_source_content_digest != source_content_digest
+        ):
+            raise ValueError("checkout_server source revision does not match the live VibeComfy checkout")
+        try:
+            os.kill(pid, 0)
+        except (OSError, ProcessLookupError) as exc:
+            raise ValueError("checkout_server session process is not alive") from exc
+        _verify_owned_vibe_session(session_dir, pid)
+
+        adapter = cls(
+            server_url,
+            environment_fingerprint=str(facts_digest),
+        )
+        adapter._host_session = {
+            "session_dir": str(session_dir),
+            "pid": pid,
+            "comfy_pid": comfy_pid,
+            "server_url": server_url,
+            "launch_token": launch_token,
+            "process_birth_id": process_birth_id,
+            "comfy_process_birth_id": comfy_process_birth_id,
+            "source_revision": source_revision,
+            "source_content_digest": source_content_digest,
+            "config_digest": config_digest,
+            "model_bytes_digest": model_bytes_digest,
+        }
+        adapter._bound_model_id = model_name
+        adapter._bound_template_id = template_name
+        adapter._invocation_identity = invocation
+        adapter._runtime_instance_id = runtime_instance_id
+        adapter._output_root = output_root
+        adapter._bound_fingerprint = adapter.session_fingerprint(
+            model_fingerprint=f"{model_name}:{template_name}",
+            model_bytes_digest=model_bytes_digest,
+            environment_fingerprint=str(facts_digest),
+            server_url=server_url,
+            runtime_instance_id=runtime_instance_id,
+        )
+        adapter._bound_warmth_identity = (
+            f"{model_name}:{template_name}:{model_bytes_digest}:{facts_digest}"
+        )
+        adapter._probe_system_stats()
+        return adapter
 
     @property
     def runtime_instance_id(self) -> str | None:
         """Canonical instance identity supplied by M2 health/bootstrap."""
-        return self._engine.runtime_instance_id or self._engine.prepared_runtime_instance_id
+        return (
+            self._engine.runtime_instance_id
+            or self._engine.prepared_runtime_instance_id
+            or self._runtime_instance_id
+        )
 
     @property
     def poisoned(self) -> bool:
@@ -1136,6 +1422,136 @@ class CheckoutServerAdapter(VibeComfyBackend):
         except BaseException:
             self._engine._abort_preparation()
             raise
+
+    def _revalidate_host_session(self) -> None:
+        """Recheck the manager binding immediately before native admission."""
+        binding = self._host_session
+        if binding is None:
+            raise ValueError("checkout_server has no verified host-session binding")
+        session_dir = Path(str(binding["session_dir"]))
+        pid = binding["pid"]
+        if not isinstance(pid, int) or pid <= 0:
+            raise ValueError("checkout_server host-session pid is invalid")
+        comfy_pid = binding.get("comfy_pid")
+        if not isinstance(comfy_pid, int) or comfy_pid <= 0:
+            raise ValueError("checkout_server host-session comfy pid is invalid")
+        try:
+            os.kill(pid, 0)
+            os.kill(comfy_pid, 0)
+            marker = json.loads(
+                (session_dir / "launch.json").read_text(encoding="utf-8")
+            )
+            observed_comfy_birth_id = (
+                session_dir / "comfy_process_start_identity"
+            ).read_text(encoding="utf-8").strip()
+            url = (session_dir / "url").read_text(encoding="utf-8").strip()
+            source_revision = (
+                session_dir / "source_revision"
+            ).read_text(encoding="utf-8").strip()
+            source_content_digest = (
+                session_dir / "source_content_digest"
+            ).read_text(encoding="utf-8").strip()
+            config_digest = "sha256:" + hashlib.sha256(
+                (session_dir / "config.json").read_bytes()
+            ).hexdigest()
+        except (OSError, ProcessLookupError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("checkout_server host session is no longer live") from exc
+        if not isinstance(marker, Mapping) or any(
+            marker.get(key) != value
+            for key, value in (
+                ("pid", pid),
+                ("url", binding["server_url"]),
+                ("launch_token", binding["launch_token"]),
+                ("process_start_identity", binding["process_birth_id"]),
+                ("comfy_pid", comfy_pid),
+                ("comfy_process_start_identity", binding["comfy_process_birth_id"]),
+            )
+        ):
+            raise ValueError("checkout_server host-session ownership changed")
+        if (
+            _validate_checkout_server_url(url) != binding["server_url"]
+            or source_revision != binding["source_revision"]
+            or source_content_digest != binding["source_content_digest"]
+            or config_digest != binding["config_digest"]
+            or observed_comfy_birth_id != binding["comfy_process_birth_id"]
+        ):
+            raise ValueError("checkout_server host-session registry identity changed")
+        try:
+            from vibecomfy.runtime.session import (
+                current_source_content_digest,
+                current_source_revision,
+            )
+            observed_source_revision = current_source_revision()
+            observed_source_content_digest = current_source_content_digest()
+        except (ImportError, AttributeError):
+            observed_source_revision = None
+            observed_source_content_digest = None
+        if (
+            observed_source_revision is None
+            or observed_source_revision != source_revision
+            or observed_source_content_digest is None
+            or observed_source_content_digest != source_content_digest
+        ):
+            raise ValueError("checkout_server live source revision changed")
+        _verify_owned_vibe_session(session_dir, pid)
+
+    def run_compiled_workflow(self, workflow: Any, out_dir: Path) -> list[Path]:
+        """Compile one canonical workflow, run it, and custody private outputs."""
+        if self._bound_fingerprint is None or self._bound_warmth_identity is None:
+            raise ValueError("checkout_server has no verified workflow binding")
+        if self._runtime_instance_id is None:
+            raise ValueError("checkout_server has no verified runtime identity")
+        if self._output_root is None:
+            raise ValueError("checkout_server has no verified output root")
+        if not isinstance(out_dir, Path):
+            out_dir = Path(out_dir)
+        if out_dir.is_symlink():
+            raise ValueError("checkout_server output directory must not be a symlink")
+        destination = out_dir.resolve()
+        try:
+            destination.relative_to(self._output_root)
+        except ValueError as exc:
+            raise ValueError("checkout_server output directory escaped HC-03 output root") from exc
+        destination.mkdir(parents=True, exist_ok=True)
+
+        try:
+            self._revalidate_host_session()
+            from vibecomfy.workflow import VibeWorkflow
+            from vibecomfy.workflow_bundle import load_bundle
+
+            if not isinstance(workflow, VibeWorkflow):
+                raise ValueError(
+                    "checkout_server requires a VibeWorkflow from the canonical loader"
+                )
+            ready_template = getattr(workflow, "metadata", {}).get("ready_template")
+            if ready_template != self._bound_template_id:
+                raise ValueError("checkout_server workflow template binding changed")
+            bundle = load_bundle(workflow)
+            bundle.require_canonical_authority("checkout_server execution")
+            approved = bundle.compile()
+            model_bytes_digest = self._engine._validate_model_bytes_digest(
+                self._bound_host_model_digest()
+            )
+            self.warm_session(
+                self._bound_fingerprint,
+                self._bound_warmth_identity,
+                runtime_instance_id=self._runtime_instance_id,
+                model_bytes_digest=model_bytes_digest,
+            )
+            result = self._run_workflow((approved, bundle))
+            return self._collect_outputs(result, destination)
+        except BaseException:
+            self._engine._abort_preparation()
+            raise
+
+    def _bound_host_model_digest(self) -> str:
+        binding = self._host_session
+        if binding is None:
+            raise ValueError("checkout_server has no host-session model binding")
+        digest = binding.get("model_bytes_digest")
+        if not isinstance(digest, str):
+            raise ValueError("checkout_server host-session model digest is missing")
+        return digest
 
     def cancel(self, frame: object | None = None) -> dict[str, Any]:
         """Fence native work before probing or settling host cancellation."""

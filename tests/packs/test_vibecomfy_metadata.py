@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 from astrid.core.execution.executor.folder import load_folder_executors
 from astrid.core.execution.executor.registry import load_default_registry
+from astrid.packs.vibecomfy import production_engine
 from astrid.packs.vibecomfy.executors.run.run import _run_and_settle
 
 
@@ -51,6 +52,12 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
                 "{workflow}",
                 "--out",
                 "{out}",
+                "--task-identity",
+                "{task_identity}",
+                "--readiness-profile-path",
+                "{readiness_profile_path}",
+                "--readiness-profile-hash",
+                "{readiness_profile_hash}",
             ],
         )
         self.assertEqual(payload["isolation"]["requirements"], ["vibecomfy"])
@@ -86,21 +93,36 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
     def test_run_settles_every_engine_output_with_port_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source_a = root / "source-a.png"
-            source_b = root / "source-b.mp4"
+            out = root / "spool"
+            engine_output = out / "engine-output"
+            engine_output.mkdir(parents=True)
+            source_a = engine_output / "source-a.png"
+            source_b = engine_output / "source-b.mp4"
             source_a.write_bytes(b"image")
             source_b.write_bytes(b"video")
-            out = root / "spool"
             result = SimpleNamespace(
                 outputs=[str(source_a), str(source_b)],
                 run_id="run-1",
                 prompt_id="prompt-1",
             )
-            modules, load_workflow = _fake_vibecomfy_modules(result)
-            with patch.dict(sys.modules, modules):
-                manifest = _run_and_settle(root / "workflow.json", out)
+            with patch.object(
+                production_engine,
+                "run_workflow_path",
+                return_value=(source_a, source_b),
+            ) as run_workflow:
+                manifest = _run_and_settle(
+                    root / "workflow.json",
+                    out,
+                    task_identity="task-1",
+                )
 
-            load_workflow.assert_called_once_with(str(root / "workflow.json"))
+            run_workflow.assert_called_once_with(
+                root / "workflow.json",
+                out,
+                task_identity="task-1",
+                profile_id="pip_embedded",
+                hc03_profile=None,
+            )
             self.assertEqual(len(manifest["outputs"]), 2)
             for ordinal, entry in enumerate(manifest["outputs"]):
                 self.assertEqual(entry["name"], "vibecomfy_run")
@@ -120,14 +142,20 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
             root = Path(tmp)
             cases = ([root / "missing.png"], [])
             for inventory in cases:
-                result = SimpleNamespace(outputs=inventory)
-                modules, _ = _fake_vibecomfy_modules(result)
                 with (
                     self.subTest(inventory=inventory),
-                    patch.dict(sys.modules, modules),
+                    patch.object(
+                        production_engine,
+                        "run_workflow_path",
+                        return_value=tuple(inventory),
+                    ),
                 ):
                     with self.assertRaises((FileNotFoundError, ValueError)):
-                        _run_and_settle(root / "workflow.json", root / "spool")
+                        _run_and_settle(
+                            root / "workflow.json",
+                            root / "spool",
+                            task_identity="task-1",
+                        )
 
     def test_vibecomfy_validate_metadata_is_structured_and_network_false(self) -> None:
         validate = load_default_registry().get("vibecomfy.validate")

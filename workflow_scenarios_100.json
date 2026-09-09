@@ -1,0 +1,1876 @@
+{
+  "github": [
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 1005,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/1005",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "Maintainer (comfyui-wiki) stated the missing image is available at https://comfyui-template-manager.vercel.app/ (comment 2026-07-16 with screenshot). Definitive source for the asset; template itself still lacks a pointer.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "gsl_starter_1_3 template requires an input image (car and landscape) that is not bundled with the template and has no note on where to obtain it, so the workflow is incomplete for every fresh user."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 866,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/866",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "Commenter smithian123 (2026-05-19): un-bypassing the ImageScaleToTotalPixels node fixed the grey output. Affects anyone who runs the template as shipped since the node ships bypassed.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "image_hidream_o1_dev template produces a grey image (or pure noise for others, incl. fp8/mxfp8 variants; edit mode broken) even with default prompts and correct model placement. Root cause: the ImageScaleToTotalPixels node in the template is bypassed, corrupting the image path."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15797,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15797",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP (C1): 'The ComfyUI version was too old, but it's running fine after the update.' m8rr (C0) had pointed to the GGUF node. Upgrading ComfyUI resolves it.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "CLIPTextEncode fails with ValueError 'not enough values to unpack (expected 4, got 1)' (GGUF text-encoder path) on an outdated ComfyUI install."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15614,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15614",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP (C2/C3): fixed by downgrading - the portable ComfyUI 0.30.0 build generates normal audio. (Regression in newer versions; no upstream fix identified.)",
+      "difficulty_guess": "EASY",
+      "problem_summary": "H3 generated-video audio always has static/popping on RTX 4080 Super across ComfyUI 0.31/0.33 regardless of sampler, LoRA, precision, or attention choice."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15274,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15274",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "Maintainer rattus128 (C3): the MiniMax VAE has built-in tiling (trained tile size, <8GB VRAM) - use the standard VAE Decode node, the tiled node is incompatible. LIQUIDMIND111 (C4) confirms standard decode works.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "VAEDecodeTiled on MiniMax H3 video fails with 'to() received an invalid combination of arguments - got (NestedTensor)'."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15246,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15246",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP (C5): updating to torch 2.11.0+cu128 fixed it on Windows. cushycrux (C6) fixed the triton compile variant via woct0rdho/triton-windows #8 (embedded-python notes). hum-ma (C8): don't use the tiled node - H3 VAE has built-in tiling (see #15274).",
+      "difficulty_guess": "EASY",
+      "problem_summary": "H3 audio/video VAE decode crashes (NestedTensor error in decode_tiled) on torch 2.9.1+cu128 (WSL and Windows); related triton 'Python.h not found' compile errors also seen."
+    },
+    {
+      "repo": "kijai/ComfyUI-KJNodes",
+      "issue_number": 629,
+      "url": "https://github.com/kijai/ComfyUI-KJNodes/issues/629",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP-confirmed (issue body): switch back to sdpa attention for wan2.2 video; flicker fully disappears. No maintainer reply, so treat as known trade-off of SageAttention quantization.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "SageAttention (3.1.0) on Wan 2.2 video generation causes temporal flickering/flashing that disappears when switching back to default sdpa attention with all other parameters unchanged \u2014 quantized attention compromises temporal layers."
+    },
+    {
+      "repo": "kijai/ComfyUI-KJNodes",
+      "issue_number": 586,
+      "url": "https://github.com/kijai/ComfyUI-KJNodes/issues/586",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP diagnosed and maintainer kijai (2026-04-02) confirmed: open the mask editor and save (even unchanged) to replace the 64x64 placeholder; maintainer promised a guard. Rounding stays floor-by-design \u2014 maintainer reluctant to change existing workflows' behavior.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "Two issues: (1) rounding 32 floors 1080\u21921056 instead of rounding up; (2) IndexError when crop is enabled with a mask attached \u2014 caused by Load Image passing a 64x64 placeholder mask when none was drawn/edited."
+    },
+    {
+      "repo": "Lightricks/ComfyUI-LTXVideo",
+      "issue_number": 502,
+      "url": "https://github.com/Lightricks/ComfyUI-LTXVideo/issues/502",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "Maintainer (rluxemburg) states definitive cause: 'This is a checkpoint/code version mismatch. Please check whether you downloaded LTX-2 or LTX-2.3 model weights' \u2014 match weight version to the node pack.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "Loading state_dict for LTXAVModel fails with scale_shift_table size mismatches (5,2048 vs 8,2048 etc.) after downloading models from HuggingFace \u2014 checkpoint version vs node-pack/model-code version mismatch."
+    },
+    {
+      "repo": "kijai/ComfyUI-WanVideoWrapper",
+      "issue_number": 1998,
+      "url": "https://github.com/kijai/ComfyUI-WanVideoWrapper/issues/1998",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP confirmed root cause was resolution: 800x456 is not divisible by 16 (456/16=28.5), causing the audio cross-attention reshape mismatch; switching to 832x480 in ImageScaleByAspectRatio fixed it completely (OP comment 'rookie-thomas'). Corroborated by Booyaka101's clean repro on current main and maintainer (kijai) saying the example workflow runs unchanged.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "InfiniteTalk/MultiTalk crashes at multitalk.py:247 reshape (tensor size mismatch) after updating to ComfyUI 0.19.x; suspected off-by-one frame count. Anyone running 800x456 (non-16-divisible resolution) hits it."
+    },
+    {
+      "repo": "kijai/ComfyUI-WanVideoWrapper",
+      "issue_number": 1986,
+      "url": "https://github.com/kijai/ComfyUI-WanVideoWrapper/issues/1986",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "OP self-confirmed workarounds with logs: run ComfyUI with --disable-pinned-memory and replace the WanVideo BlockSwap node with the older 'WanVideo Enhanced BlockSwap' node \u2014 this stopped RAM growth and enabled 1920x1024x61-frame generation on a 5060 Ti 16GB. For sageattn_3: use the per_block_mean sageattn3 mode (or keep SageAttention 2.2 for first/last steps); torch.compile reduce-overhead is blocked by Windows cudaMallocAsync pool limits (not fixable via --disable-cuda-malloc).",
+      "difficulty_guess": "HARD",
+      "problem_summary": "WanVideo BlockSwap causes unbounded system-RAM growth on Windows (96GB filled by ~3rd run, pinned-memory related), and sageattn_3 + torch.compile either OOMs, degrades quality, or reduce-overhead fails (cudaMallocAsync pool conflict on Windows). Self-resolved with detailed evidence, 0 comments."
+    },
+    {
+      "repo": "kijai/ComfyUI-KJNodes",
+      "issue_number": 669,
+      "url": "https://github.com/kijai/ComfyUI-KJNodes/issues/669",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "Maintainer kijai (2026-06-13): output looks like wrong model or missing distill lora; uninstall xformers, use standard pytorch attention or SageAttention. OP confirmed quality returned after removing xformers, cleaning caches and re-attaching the LoRAs.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "LTX-2.3 videos degraded to muddy, structureless output after dependency churn; intermittent 'ghost' recovery. Root cause: running without the required distill LoRA and with xformers installed (should not be used with these nodes)."
+    },
+    {
+      "repo": "city96/ComfyUI-GGUF",
+      "issue_number": 471,
+      "url": "https://github.com/city96/ComfyUI-GGUF/issues/471",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "yes",
+      "solution": "molbal's fork (github.com/molbal/ComfyUI-GGUF) loads MiniMax-H3 GGUFs incl. Unsloth quants \u2014 OP alish119 confirmed it 'works excellently' after fixing his own error (pixel count must be a multiple of 32) and using the 'Unet Loader (Dynamic VRAM)' node inside the comfy.org subgraph workflow (molbal comment + OP confirmation).",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "MiniMax-H3 GGUF (UNet + qwen3vl text encoder) unsupported by mainline nodes; users need a working loader/TE combination and correct workflow settings."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15653,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15653",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "Fixed by PR #15648. 0xDELUXA (C0/C1) diagnosed the missing-AOTriton-kernel root cause and suggested --use-split-cross-attention as a test; OP (C2) confirms 'It is solved after merging #15648' and C5 confirms the merge.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "RX 9060 XT crashes with 'CUDA error: invalid argument' running the official MiniMax H3 t2v workflow (AOTriton/SDPA kernel path)."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15478,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15478",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "Workaround confirmed by OP (C5) and others: swap the node for 'Patch Sage Attention KJ' (aakash-chaddha, C2) - after which the native H3 patch also started working again for some. Real fix tracked in PR #15270 (still open at thread end).",
+      "difficulty_guess": "EASY",
+      "problem_summary": "MiniMaxH3MemoryEfficientSageAttentionPatch fails with 'sageattention is not new enough version or could not determine CUDA architecture' despite correct torch 2.13+cu130 / sageattention 2.2.0 - node's own version/arch check bug."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15445,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15445",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "OP (C2) and partridge (C5): rolling back to 0.30.0 restores 12-min runtimes. comfyanonymous (C9) suggested renaming custom_nodes to rule them out - partially helped one user then reverted. Root regression in 0.31 memory management left unfixed.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "Official MiniMax H3 workflow doubles in runtime (12 -> 25+ min) after the 0.31 update on 5080/5090/H200/5060Ti; VRAM underused, disk thrashing each gen."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 15001,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/15001",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "OP guayar (C1) root-caused it and --disable-mmap 'completely fixed' load times; independently confirmed by zenmasterzardoz (C2, gfx1100) and boxwrench (C4, 0.33.2). Underlying per-tensor mmap-transfer defect still needs a core fix honoring disable_mmap everywhere.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "On ROCm, model loading became ~15x slower: per-tensor ~0.5s fixed overhead when .to(device) copies mmap-backed safetensors tensors (cost scales with tensor count)."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 14250,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/14250",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "OP-confirmed fixes: --disable-pinned-memory (title/body), and eoris' CUDA_VISIBLE_DEVICES=1 / --cuda-device <uuid> to hide the second GPU (C6, and akashzeno C9's controlled A/B). rattus128 worked a speculative fix in PR #14252; aimdo 0.4.5+ 'cold marking of pins' also shipped.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "After the pinned-memory update, WAN 2.2 (and later MiniMax H3) intermittently fails at 'HostBuffer.read_file_slice failed'/CUDA OOM during weight loading, mostly on multi-GPU systems."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 13458,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/13458",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "Booyaka101 root-caused it: comfy-aimdo is still dlopen'd (RTLD_GLOBAL) on WSL by main.py line 45 even with dynamic VRAM disabled. OP (C1/C12) confirms --disable-dynamic-vram fixes it and that commenting out the dlopen confirms the diagnosis; fix proposed in PR #13818 (WSL guard), not yet merged at thread end.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "Custom LoRA-trainer (block swapping) OOMs at pinned-memory allocation on >=0.16 in WSL/5090 although RAM/VRAM are free; worked 21h on 0.9.x."
+    },
+    {
+      "repo": "kijai/ComfyUI-KJNodes",
+      "issue_number": 750,
+      "url": "https://github.com/kijai/ComfyUI-KJNodes/issues/750",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "Maintainer kijai (2026-09-06): 'Should be fixed now' via recent PR; also notes the low-VRAM attention is no longer needed with comfy core sparse attention. OP confirmed (2026-09-08) the H3 Low VRAM attention breakage is fixed. Side-thread: VRAM/OOM with Model Preview Override traced to comfy-compiler/aimdo, mitigated by --disable-comfy-compiler.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "MiniMax H3 Low/VRAM attention node fails with minimax_block_lowmem_forward() got an unexpected keyword argument 'attention' after upstream model API changes."
+    },
+    {
+      "repo": "Lightricks/ComfyUI-LTXVideo",
+      "issue_number": 553,
+      "url": "https://github.com/Lightricks/ComfyUI-LTXVideo/issues/553",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "Community fix (posted by OP Magenta-6 from Gemini diagnosis, referencing #494): remove `pad` from the kornia import block in pyramid_blending.py and add `from torch.nn.functional import pad`. OP confirmed 'THIS FIXED THE PROBLEM', and two later commenters confirm; caveat: re-appears after node updates until PR merges.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "LTX IC Lora Loader (Model Only) shows as unknown/missing because the whole ComfyUI-LTXVideo pack fails to import: kornia 0.8.x no longer re-exports `pad` from kornia.geometry.transform.pyramid, killing pyramid_blending.py at import time."
+    },
+    {
+      "repo": "Lightricks/ComfyUI-LTXVideo",
+      "issue_number": 544,
+      "url": "https://github.com/Lightricks/ComfyUI-LTXVideo/issues/544",
+      "classification": "CORE BUG",
+      "solution_found": "yes",
+      "solution": "Danny-707 links the #538 fix (remove/reinstall or git pull the node pack) and peterducan-hub confirms it worked; OP separately confirmed a clean 'ComfyUI easy install' fixed it.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "Several LTX nodes error after install \u2014 pack import failure after a ComfyUI update (same class as #538 interleaved_freqs_cis break), so nodes fail to register."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 931,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/931",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "partially",
+      "solution": "Commenter lin-bot23 says Z-Image-Turbo expects CFG=1 and takes no negative prompt - distortion comes from high CFG, not the node; use the Z-Image template if negative prompting is needed (https://github.com/Tongyi-MAI/Z-Image). OP (FrizzSoft) disputed, arguing empty CLIP Text Encode behaves better at CFG~1.5. No maintainer ruling or template change confirmed.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "Z-Image-Turbo Text to Image template wires ConditioningZeroOut into the negative KSampler input; at CFG above 1 this produces distorted output, while an empty CLIP Text Encode node gives cleaner results."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 858,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/858",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "partially",
+      "solution": "Reporter (from comfy_cloud MCP smoke test) provided full diagnosis and two concrete fixes: republish the template against the current GeminiNanoBanana2 node schema (prompt, model, seed, aspect_ratio, resolution, response_modalities, thinking_level) or reinstate GeminiNanoBanana2V2 on cloud. No maintainer response; nothing confirmed fixed.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "templates/api_google_nano_banana2_image_edit.json references node type GeminiNanoBanana2V2 which no longer exists on Comfy Cloud (only GeminiNanoBanana2), failing validation for everyone ('unknown node type(s)'), and its widgets_values are in the old V2 order so a mere rename still fails value_not_in_list checks."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 536,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/536",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "partially",
+      "solution": "Maintainer (comfyui-wiki) said 'Please update your comfyui first' \u2014 the missing nodes are core nodes added in ComfyUI 0.11.1. OP never confirmed; dhosein remains stuck because their Desktop install reports no update available.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "audio_ace_step_1_5_checkpoint template loads with missing core nodes (EmptyAceStep1.5LatentAudio, TextEncodeAceStepAudio1.5 \u2014 shipped with ComfyUI 0.11.1); ACE custom nodes also crash get_object_info because ACE-Step model dirs don't exist. A second user hit the same on every ACE 1.5 template with a Desktop build reporting no updates available."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 457,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/457",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "partially",
+      "solution": "Maintainer (comfyui-wiki) posted a workaround video: use the flux.2 dev fp8 template instead and unpack the subgraph \u2014 the multi-image inputs are there. No OP confirmation.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "The flux2.dev template's subgraph conversion dropped/hid the multi-image input the older workflow had; maintainer admits 'maybe we do a bad conversion for this template'."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 339,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/339",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "partially",
+      "solution": "Fix per affected users (not OP/maintainer): fully update the ComfyUI backend+frontend \u2014 diverHansun confirmed updating to latest solved it, seanntxj fixed it by force-updating via command line instead of ComfyUI-Manager (one user still broken on 0.3.76 after Manager update). diverHansun links the official comfyui-wiki update guide.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "Freshly-installed template fails at CLIPLoader: 'size mismatch for Llama2 state_dict' (Qwen3-shaped 2560-hidden weights loaded into a Llama arch) \u2014 hits a wave of users on older ComfyUI builds that can't load the new text-encoder weights."
+    },
+    {
+      "repo": "Comfy-Org/workflow_templates",
+      "issue_number": 447,
+      "url": "https://github.com/Comfy-Org/workflow_templates/issues/447",
+      "classification": "GENERALIZABLE-WORKFLOW",
+      "solution_found": "partially",
+      "solution": "Maintainer (comfyui-wiki): 'This model support requires custom nodes. Please follow the note in the guide to install the custom nodes.' Users report the Manager finds no such nodes (same family as #422), so no confirmed install path.",
+      "difficulty_guess": "MEDIUM",
+      "problem_summary": "video_wan2_2_14B_animate template opens with 2 missing nodes ('Cannot execute because a node is missing the class_type property'); ComfyUI-Manager shows nothing to install and restarts don't help. A second user (Watermelon6093) reports the same."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 16097,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/16097",
+      "classification": "INFRASTRUCTURE",
+      "solution_found": "yes",
+      "solution": "LukeG89 (C0): install missing dep into python_embeded (`python_embeded\\python.exe -m pip install SQLAlchemy`); OP confirmed import then works (v2.0.52). bhusann (C3): for manager also `pip install -r manager_requirements.txt` or clone ComfyUI-Manager into custom_nodes.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "ModuleNotFoundError: sqlalchemy when launching with --enable-manager on Windows portable; dependencies not installed in embedded python."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 14465,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/14465",
+      "classification": "INFRASTRUCTURE",
+      "solution_found": "yes",
+      "solution": "anr2me (C0): CUDA and ROCm torch can't coexist; need a separate venv with ROCm torch for the AMD GPU. Kosinkadink (maintainer, C1): the 'Advanced' section of the install window lets you pick the environment/backend version.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "Desktop autodetects only the Nvidia GPU on a mixed Nvidia+AMD system - one PyTorch build (CUDA vs ROCm) can't see both vendors."
+    },
+    {
+      "repo": "Comfy-Org/ComfyUI",
+      "issue_number": 13116,
+      "url": "https://github.com/Comfy-Org/ComfyUI/issues/13116",
+      "classification": "INFRASTRUCTURE",
+      "solution_found": "yes",
+      "solution": "Maintainer rattus128 (C3): behavior across installs/OSes points to failing hardware. OP (C6) confirms: OCCT VRAM test 'spitting out errors like crazy' - faulty GPU VRAM, replacing under warranty; --novram works around until then.",
+      "difficulty_guess": "HARD",
+      "problem_summary": "Intermittent black/grey outputs and NaN latents across SDXL/Wan/Flux2 on a 5080, persisting across OSes and clean installs."
+    },
+    {
+      "repo": "kijai/ComfyUI-KJNodes",
+      "issue_number": 627,
+      "url": "https://github.com/kijai/ComfyUI-KJNodes/issues/627",
+      "classification": "INFRASTRUCTURE",
+      "solution_found": "yes",
+      "solution": "Maintainer kijai (2026-05-21): 'Update ComfyUI itself.' Commenter confirmed updating the ComfyUI core fixed it.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "KJNodes 'Load VAE' (audio VAE loader) throws RuntimeError: VAE is invalid: None with ltx_2.0_vae.safetensors when ComfyUI core is outdated."
+    },
+    {
+      "repo": "kijai/ComfyUI-KJNodes",
+      "issue_number": 570,
+      "url": "https://github.com/kijai/ComfyUI-KJNodes/issues/570",
+      "classification": "INFRASTRUCTURE",
+      "solution_found": "yes",
+      "solution": "OP aswordok (2026-03-13): updating ComfyUI-KJNodes to the nightly via Manager fixed it (latest release was too old at the time); commenter ccran adds updating ComfyUI to latest also fixes it.",
+      "difficulty_guess": "EASY",
+      "problem_summary": "SimpleCalculatorKJ throws TypeError on 'variables.a' kwarg and VAE load fails \u2014 stale KJNodes/ComfyUI versions incompatible with the workflow."
+    }
+  ],
+  "discord": [
+    {
+      "message_id": "1534879820578816122",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "cryzo_",
+      "created_at": "2026-08-06T11:04:25.914+00:00",
+      "tier": "EASY",
+      "likely_fix": "MISSING NODE/FILE",
+      "content": "am I using the right checkpoints and vae for the 4 step H3 turbo Lora Workflow?(ckpt500) it's throwing up an error",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1534879820578816122",
+      "attachments": [
+        {
+          "id": "1534879820012322858",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1534879820012322858/image.png?ex=6aa13d39&is=6a9febb9&hm=e9297e86be2d68e49e13df6704b5c61495f5aab1b101cb75f63752c7a988d466&",
+          "content_type": "image/webp",
+          "size": 62956
+        }
+      ]
+    },
+    {
+      "message_id": "1497308883243241633",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Clone",
+      "created_at": "2026-04-24T18:50:56.419+00:00",
+      "tier": "EASY",
+      "likely_fix": "MISSING NODE/FILE",
+      "content": "Using the edit anything workflow.   Seeing the LTXVAddGuideMulti node is giving an unusual error.   Any idea?   Maybe need a specific version?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1497308883243241633",
+      "attachments": [
+        {
+          "id": "1497308882849239080",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1497308882849239080/image.png?ex=6aa1aa90&is=6aa05910&hm=b76d175f5b74314269b3d5fea0ef89de78eea704802cd99590ae6b97b0b27433&",
+          "content_type": "image/webp",
+          "size": 133194
+        }
+      ]
+    },
+    {
+      "message_id": "1460550032674787470",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Guey.KhalaMari",
+      "created_at": "2026-01-13T08:24:23.497+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "MISSING NODE/FILE",
+      "content": "I haven't used Kijai's ttm for native before, anyone have a workflow template for it?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1460550032674787470",
+      "attachments": [
+        {
+          "id": "1460550032372793476",
+          "filename": "ttm.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1460550032372793476/ttm.png?ex=6aa1c077&is=6aa06ef7&hm=d40b8527f7582110bb25ba5e675cab568d9e14a573128adde077267d035b7074&",
+          "content_type": "image/png",
+          "size": 1545880
+        }
+      ]
+    },
+    {
+      "message_id": "1457141980260991190",
+      "channel_id": "1443174533271130132",
+      "guild_id": "1076117621407223829",
+      "channel_name": "z-image",
+      "author": "David Snow",
+      "created_at": "2026-01-03T22:42:00.483+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "MISSING NODE/FILE",
+      "content": "just added depthanything v2 to my workflow, and I've never seen this particular model before. anyone know anything about it?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1443174533271130132/1457141980260991190",
+      "attachments": [
+        {
+          "id": "1457141979887702047",
+          "filename": "Screenshot_2026-01-03_224017.png",
+          "url": "https://cdn.discordapp.com/attachments/1443174533271130132/1457141979887702047/Screenshot_2026-01-03_224017.png?ex=6aa1e0b8&is=6aa08f38&hm=92afeaf64675567da9b0ac4533cddbaa89d0611bbe912831334b3cb9cbb69358&",
+          "content_type": "image/png",
+          "size": 61790
+        }
+      ]
+    },
+    {
+      "message_id": "1496215227438727358",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "yukass",
+      "created_at": "2026-04-21T18:25:08.556+00:00",
+      "tier": "EASY",
+      "likely_fix": "NODE/VERSION UPDATE",
+      "content": "I'm testing it in 21:9 and getting this error:  !!! Exception during processing !!! The expanded size of the tensor (1) must match the existing size (1472) at non-singleton dimension 1.  Target sizes: [632, 1, 3].  Tensor sizes: [632, 1472, 3]  but Bypassing ImagePad KJ fixes it...  it's an outpainting workflow, right?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1496215227438727358",
+      "attachments": [
+        {
+          "id": "1496215227119833329",
+          "filename": "Captura_de_pantalla_2026-04-21_202220.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1496215227119833329/Captura_de_pantalla_2026-04-21_202220.png?ex=6aa1a484&is=6aa05304&hm=6088fbabd239d9b0157d7225a29f95716ea2d78aac449c996ca24c7d8223a2db&",
+          "content_type": "image/webp",
+          "size": 83186
+        }
+      ]
+    },
+    {
+      "message_id": "1485499069387374686",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Tachyon",
+      "created_at": "2026-03-23T04:42:57.38+00:00",
+      "tier": "EASY",
+      "likely_fix": "NODE/VERSION UPDATE",
+      "content": "Can anyone help me with Rune's LTX 2.3 workflows? It has a prompt enhancer node that seems to break with this error:\n\"NotImplementedError: Cannot copy out of meta tensor; no data!\"",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1485499069387374686",
+      "attachments": [
+        {
+          "id": "1485499069202698280",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1485499069202698280/image.png?ex=6aa18c91&is=6aa03b11&hm=fc567ae920300c1f1fa825842a5960f77b248a5be19abc3d3e3bf3bc50de83ca&",
+          "content_type": "image/webp",
+          "size": 53100
+        }
+      ]
+    },
+    {
+      "message_id": "1479552965877698681",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "David Snow",
+      "created_at": "2026-03-06T18:55:15.83+00:00",
+      "tier": "EASY",
+      "likely_fix": "NODE/VERSION UPDATE",
+      "content": "trying to run one of the ltx workflows, and I get this split_with_sizes error. anyone know what the issue is?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1479552965877698681",
+      "attachments": [
+        {
+          "id": "1479552965575573698",
+          "filename": "Screenshot_2026-03-06_185419.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1479552965575573698/Screenshot_2026-03-06_185419.png?ex=6aa1ab93&is=6aa05a13&hm=486d0165f1a82ba4b7d80056a60f48ea8208a5fa1f90c9328153c3d4a4871415&",
+          "content_type": "image/png",
+          "size": 39146
+        }
+      ]
+    },
+    {
+      "message_id": "1477045617321709638",
+      "channel_id": "1443174533271130132",
+      "guild_id": "1076117621407223829",
+      "channel_name": "z-image",
+      "author": "cocktailprawn1212",
+      "created_at": "2026-02-27T20:51:57.35+00:00",
+      "tier": "EASY",
+      "likely_fix": "NODE/VERSION UPDATE",
+      "content": "anyone else get this error today with z-image? i had it first with klein 9b edit earlier and i thought it was just that but it happened on one of my z-image workflows that i generated with just now too, both workflows worked fine until today and i update comfy daily, its as if something has broken? gemini said tiled vae can fix it and it pretty much did resolve it but seems strange as to why its suddenly happening, has anyone else experienced this? for me it happens after my first generation of loading the model, works fine once and then the error spawns, unloading cache/models makes it work again",
+      "permalink": "https://discord.com/channels/1076117621407223829/1443174533271130132/1477045617321709638",
+      "attachments": [
+        {
+          "id": "1477045617027973180",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1443174533271130132/1477045617027973180/image.png?ex=6aa1c6ed&is=6aa0756d&hm=060b9c1205282c2e74a0f030ba27d238ea220588d97e0b0af4d911187063d665&",
+          "content_type": "image/png",
+          "size": 21558
+        }
+      ]
+    },
+    {
+      "message_id": "1513253164642603189",
+      "channel_id": "1145677539738665020",
+      "guild_id": "1076117621407223829",
+      "channel_name": "comfyui",
+      "author": "psylent_gamer",
+      "created_at": "2026-06-07T18:47:49.335+00:00",
+      "tier": "EASY",
+      "likely_fix": "ENVIRONMENT/INFRA",
+      "content": "Anyone understand what python dependancy handles loading models etc into vram?\nJust finished training a lora with musubi tuner in its own uv, and comfyui started oom'ing, which it didn't before i started training the lora. ALso yes, comfyui is in its own uv.\nI tried restarting my pc, but now it acts like my workflow is trying to load everything through the SSD instead of reading the model data, clip, etc and shoving it into my gpu, instead it just pulls from the SSD at ~250MB/s.\nmonitoring it with the memory visualizer its like aimdo does nothing.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1145677539738665020/1513253164642603189",
+      "attachments": [
+        {
+          "id": "1513253164328161551",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1145677539738665020/1513253164328161551/image.png?ex=6aa1a9d5&is=6aa05855&hm=5348f264908e4d9049b01167bfbadb8533f4964463af7f43664105576c6d3a4b&",
+          "content_type": "image/webp",
+          "size": 89058
+        }
+      ]
+    },
+    {
+      "message_id": "1535383774790156318",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "Toad (bug guy) 5060ti 16gb_64ram",
+      "created_at": "2026-08-07T20:26:57.961+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "ENVIRONMENT/INFRA",
+      "content": "Here is what happened with something I updated that destroyed the audio.\n\nand people can say \"oh you should be using this node, or this model\"\nbut that isn't the solution, because, I can run it on a new install of comfyui with the exact same models and exact same workflow and not have the issue.\nSo it isn't a model/workflow issue.\nWell, except for the install of \"MiniMaxH3 Cache\"\nwhich is says \"this modifies core comfyui files, delete the node if it causes problems\"\nwhich i didn't test on the new comfyui install yet.\nIt takes a VERY LONG time to boot comfyui and switch things on my PC.\nso everything i test, takes a long time\n\n`the young man is standing next to a computer with a screen that displays ComfyUI workflow. The man says \"how does the audio sound?\"`",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1535383774790156318",
+      "attachments": [
+        {
+          "id": "1535383774538371234",
+          "filename": "ComfyUI_2026-08-07-162222Hailuoai_minimax_h3_00002_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535383774538371234/ComfyUI_2026-08-07-162222Hailuoai_minimax_h3_00002_.mp4?ex=6aa1c111&is=6aa06f91&hm=d956582c42cc2e09a04cdad37348abeaf1bc2b45413ffde3461e1e5005e7d970&",
+          "content_type": "video/mp4",
+          "size": 360569
+        }
+      ]
+    },
+    {
+      "message_id": "1477767829251035290",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Samuca",
+      "created_at": "2026-03-01T20:41:46.092+00:00",
+      "tier": "HARD",
+      "likely_fix": "ENVIRONMENT/INFRA",
+      "content": "Hi everyone, I'm having trouble using a GGUF model. I'm testing the same workflow on two different computers. On the machine with an RTX 5070 Ti 16GB, the final image comes out with noise, while on an RTX 3060 12GB, it generates perfectly fine. What could be happening?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1477767829251035290",
+      "attachments": [
+        {
+          "id": "1477767828844318750",
+          "filename": "ltx2_combi_1.3.json",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1477767828844318750/ltx2_combi_1.3.json?ex=6aa1c489&is=6aa07309&hm=84d4806425660838420d6d6337320663f416bb16113d0e000264f5b27075ed62&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 473482
+        }
+      ]
+    },
+    {
+      "message_id": "1477767829251035290",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Samuca",
+      "created_at": "2026-03-01T20:41:46.092+00:00",
+      "tier": "HARD",
+      "likely_fix": "ENVIRONMENT/INFRA",
+      "content": "Hi everyone, I'm having trouble using a GGUF model. I'm testing the same workflow on two different computers. On the machine with an RTX 5070 Ti 16GB, the final image comes out with noise, while on an RTX 3060 12GB, it generates perfectly fine. What could be happening?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1477767829251035290",
+      "attachments": [
+        {
+          "id": "1477767828844318750",
+          "filename": "ltx2_combi_1.3.json",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1477767828844318750/ltx2_combi_1.3.json?ex=6aa1c489&is=6aa07309&hm=84d4806425660838420d6d6337320663f416bb16113d0e000264f5b27075ed62&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 473482
+        }
+      ]
+    },
+    {
+      "message_id": "1536343083992490115",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "David Snow",
+      "created_at": "2026-08-10T11:58:55.098+00:00",
+      "tier": "HARD",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "I've just got this error on a workflow I've been using for two days. No console errors, no red nodes or anything else to indicate what's causing it. anyone run into this?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1536343083992490115",
+      "attachments": [
+        {
+          "id": "1536343083585904721",
+          "filename": "Screenshot_2026-08-10_125346.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1536343083585904721/Screenshot_2026-08-10_125346.png?ex=6aa149ff&is=6a9ff87f&hm=86b0fe9300ffc55c2bc02fec554fa87dabad52f0907ab1d80a858c5db8e66fc0&",
+          "content_type": "image/webp",
+          "size": 12386
+        }
+      ]
+    },
+    {
+      "message_id": "1507311306389061702",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "cocktailprawn1212",
+      "created_at": "2026-05-22T09:16:59.933+00:00",
+      "tier": "HARD",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "<@866436780995903558> had it pretty stable after switching to that other workflow yesterday and did a few gens earlier but did another 3 just now and randomly in the middle on fails, all gens using pretty much the same settings other than different seeds, wasn't the typical cuda error which would kill comfy but a vram grow error? failed at initializing on upscale and then continued on with the next gen",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1507311306389061702",
+      "attachments": [
+        {
+          "id": "1507311306586198087",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1507311306586198087/image.png?ex=6aa1cccb&is=6aa07b4b&hm=fbf89c087f76cbcff6958a801ca675acc7df738726207cdc6cc48e0e6855c886&",
+          "content_type": "image/png",
+          "size": 17627
+        }
+      ]
+    },
+    {
+      "message_id": "1475948580174041151",
+      "channel_id": "1471683791239250075",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx-living-dead-comp",
+      "author": "MysteryShack",
+      "created_at": "2026-02-24T20:12:43.312+00:00",
+      "tier": "HARD",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "[to it's terrible i should give up]\nHow is this part fun??? \ud83d\ude35\u200d\ud83d\udcab \n\nMan spirits and evil spirits are definitely real. \n\nGet this error out of nowhere  for no reason, close browser tab. open up workflow again, suddenly no error.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1471683791239250075/1475948580174041151",
+      "attachments": [
+        {
+          "id": "1475948580274438276",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1471683791239250075/1475948580274438276/image.png?ex=6aa1bdbb&is=6aa06c3b&hm=2c64ab63a73e06d73474574f112f9cdd97fca28e9f26337fe3d7db68c76e1289&",
+          "content_type": "image/webp",
+          "size": 8766
+        }
+      ]
+    },
+    {
+      "message_id": "1477767829251035290",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Samuca",
+      "created_at": "2026-03-01T20:41:46.092+00:00",
+      "tier": "HARD",
+      "likely_fix": "ENVIRONMENT/INFRA",
+      "content": "Hi everyone, I'm having trouble using a GGUF model. I'm testing the same workflow on two different computers. On the machine with an RTX 5070 Ti 16GB, the final image comes out with noise, while on an RTX 3060 12GB, it generates perfectly fine. What could be happening?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1477767829251035290",
+      "attachments": [
+        {
+          "id": "1477767828844318750",
+          "filename": "ltx2_combi_1.3.json",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1477767828844318750/ltx2_combi_1.3.json?ex=6aa1c489&is=6aa07309&hm=84d4806425660838420d6d6337320663f416bb16113d0e000264f5b27075ed62&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 473482
+        }
+      ]
+    },
+    {
+      "message_id": "1472123703247769664",
+      "channel_id": "1443174533271130132",
+      "guild_id": "1076117621407223829",
+      "channel_name": "z-image",
+      "author": "Toad (bug guy) 5060ti 16gb_64ram",
+      "created_at": "2026-02-14T06:54:01.59+00:00",
+      "tier": "HARD",
+      "likely_fix": "WORKFLOW REQUEST",
+      "content": "Anyone have issues with Z-Image Base model now?\n\nComfyUI 0.13.0\nComfyUI_frontend v1.38.13\nevery few preview frames, it injects noise of a completely unrelated image, which screws everything up\n\nI've tried embedded workflows in images i've created before that worked then, but do not now\nthis is what i get",
+      "permalink": "https://discord.com/channels/1076117621407223829/1443174533271130132/1472123703247769664",
+      "attachments": [
+        {
+          "id": "1472123703394304021",
+          "filename": "ComfyUI_2026-02-14-014741z-image-base__00001_.png",
+          "url": "https://cdn.discordapp.com/attachments/1443174533271130132/1472123703394304021/ComfyUI_2026-02-14-014741z-image-base__00001_.png?ex=6aa1ab49&is=6aa059c9&hm=ae48c7fc097df564c7f4130629947503688070fb5963d33c817b44be79470493&",
+          "content_type": "image/png",
+          "size": 556482
+        }
+      ]
+    },
+    {
+      "message_id": "1460737414120345733",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Nathan Shipley",
+      "created_at": "2026-01-13T20:48:58.715+00:00",
+      "tier": "EASY",
+      "likely_fix": "WORKFLOW REQUEST",
+      "content": "Has anyone gotten the `RuntimeError: a Tensor with 2 elements cannot be converted to Scalar` error?\n\nI'm working on video extension using Kijai's `LTXVAudioVideoMask` and getting it intermittently, and only with <@228118453062467585> 's bf16 model set to higher steps..\n\nFor example, with my workflow set to 15 steps:\n- I get through one sampling step, then the error appears once\n- then the **workflow runs if i requeue** second time around\n\nWith the workflow **set to 25 steps:**\n**- the error always appears..**\n- running twice doesn't fix it.\n\nThen sometimes it will render 15 steps without erroring.  Or setting to 18 steps, it'll error on the second step.\n\nattaching full error message",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1460737414120345733",
+      "attachments": [
+        {
+          "id": "1460737412127916315",
+          "filename": "Scalar_error.txt",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1460737412127916315/Scalar_error.txt?ex=6aa1c63a&is=6aa074ba&hm=5bb95a202619f9234a27b70646791514e64cb7e30b443a68873f4364b1cafc61&",
+          "content_type": "text/plain; charset=utf-8",
+          "size": 4405
+        },
+        {
+          "id": "1460737412694278389",
+          "filename": "Screenshot_from_2026-01-13_15-39-37_2.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1460737412694278389/Screenshot_from_2026-01-13_15-39-37_2.png?ex=6aa1c63a&is=6aa074ba&hm=62342e696161814f8992f87e1a37f126ef81dbdbefcfad21587b47a798194e5b&",
+          "content_type": "image/webp",
+          "size": 80122
+        },
+        {
+          "id": "1460737413658706116",
+          "filename": "Screenshot_from_2026-01-13_15-43-18.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1460737413658706116/Screenshot_from_2026-01-13_15-43-18.png?ex=6aa1c63a&is=6aa074ba&hm=d85581274ba27aab2c6136ab08ac34408d8e4cf5f5188f4acba4e06b18a21312&",
+          "content_type": "image/webp",
+          "size": 48266
+        }
+      ]
+    },
+    {
+      "message_id": "1458939530827534543",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Choowkee",
+      "created_at": "2026-01-08T21:44:49.935+00:00",
+      "tier": "EASY",
+      "likely_fix": "WORKFLOW REQUEST",
+      "content": "Anyone got I2V workflow working with the split files from Kijai? I get an error after connecting everything",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1458939530827534543",
+      "attachments": [
+        {
+          "id": "1458939530248716502",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1458939530248716502/image.png?ex=6aa1d351&is=6aa081d1&hm=9a9535816abd3c4feac7e8d8b3b364670f8d030c78c9bc1415f643d712a103d6&",
+          "content_type": "image/webp",
+          "size": 45854
+        }
+      ]
+    },
+    {
+      "message_id": "1539296563866894399",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "Daflon",
+      "created_at": "2026-08-18T15:34:59.573+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "WORKFLOW REQUEST",
+      "content": "Does anyone have a good workflow for editing videos? I tried this one and almost lost my mind but I can't continue",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1539296563866894399",
+      "attachments": [
+        {
+          "id": "1539296561765425170",
+          "filename": "Frieren.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1539296561765425170/Frieren.mp4?ex=6aa17ca3&is=6aa02b23&hm=b46d761714eb86250de62e5d5408eb5faf494f509d68dcc9979fb8bcbe7d431f&",
+          "content_type": "video/mp4",
+          "size": 29605749
+        },
+        {
+          "id": "1539296563162255430",
+          "filename": "test.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1539296563162255430/test.mp4?ex=6aa17ca3&is=6aa02b23&hm=7cbf562edb03a4468002a988132264dc13a875c7c7f36284ce9264aff1cd3691&",
+          "content_type": "video/mp4",
+          "size": 8856710
+        }
+      ]
+    },
+    {
+      "message_id": "1499764073372450957",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "mustafa1034",
+      "created_at": "2026-05-01T13:26:59.361+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "WORKFLOW REQUEST",
+      "content": "When running LTX video workflows, ComfyUI crashes every time it reaches the \"load latent upscale model\" node. Does anyone have any ideas?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1499764073372450957",
+      "attachments": [
+        {
+          "id": "1499764072953155584",
+          "filename": "Ekran_Resmi_2026-05-01_16.26.48.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1499764072953155584/Ekran_Resmi_2026-05-01_16.26.48.png?ex=6aa15ea3&is=6aa00d23&hm=6c989cc2c60d20d41848c59786a11643737f83ea8a571ebb182f32850ed6dba4&",
+          "content_type": "image/png",
+          "size": 711029
+        }
+      ]
+    },
+    {
+      "message_id": "1479169225766600754",
+      "channel_id": "1138859346487410828",
+      "guild_id": "1076117621407223829",
+      "channel_name": "chatter",
+      "author": "MACBETH",
+      "created_at": "2026-03-05T17:30:25.058+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "WORKFLOW REQUEST",
+      "content": "does anyone know of a workflow that could batch resize/outpaint a folder of images? \nsimilar to how freepik/midjourney allow you to zoom out and gen fill. \n\nits just so tedious doing this one-by-one",
+      "permalink": "https://discord.com/channels/1076117621407223829/1138859346487410828/1479169225766600754",
+      "attachments": [
+        {
+          "id": "1479169225380728852",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1138859346487410828/1479169225380728852/image.png?ex=6aa197b0&is=6aa04630&hm=729ffbaf24c5b725cca36af9a2bc46785a3d934a47dd0257fa8746c0d6214e27&",
+          "content_type": "image/webp",
+          "size": 425576
+        }
+      ]
+    },
+    {
+      "message_id": "1507311306389061702",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "cocktailprawn1212",
+      "created_at": "2026-05-22T09:16:59.933+00:00",
+      "tier": "HARD",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "<@866436780995903558> had it pretty stable after switching to that other workflow yesterday and did a few gens earlier but did another 3 just now and randomly in the middle on fails, all gens using pretty much the same settings other than different seeds, wasn't the typical cuda error which would kill comfy but a vram grow error? failed at initializing on upscale and then continued on with the next gen",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1507311306389061702",
+      "attachments": [
+        {
+          "id": "1507311306586198087",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1507311306586198087/image.png?ex=6aa1cccb&is=6aa07b4b&hm=fbf89c087f76cbcff6958a801ca675acc7df738726207cdc6cc48e0e6855c886&",
+          "content_type": "image/png",
+          "size": 17627
+        }
+      ]
+    },
+    {
+      "message_id": "1534638426446495967",
+      "channel_id": "1138859346487410828",
+      "guild_id": "1076117621407223829",
+      "channel_name": "chatter",
+      "author": "placebo_yue",
+      "created_at": "2026-08-05T19:05:13.068+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "why do my minimax generations look like this? i tried several different sizes and settings... it's the only model i can fit on my VRAM.. i don't think the worst GGUF of the list is this broken, i'd accept bad quality but this is just unuseable. I share a screen of my workflow so maybe you see my mistake",
+      "permalink": "https://discord.com/channels/1076117621407223829/1138859346487410828/1534638426446495967",
+      "attachments": [
+        {
+          "id": "1534638425481678878",
+          "filename": "ComfyUI_00007_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1138859346487410828/1534638425481678878/ComfyUI_00007_.mp4?ex=6aa1ade8&is=6aa05c68&hm=599587bc424fac70189940f4c0853ff992cabaf824df15850ceecf6a4e00af73&",
+          "content_type": "video/mp4",
+          "size": 1380879
+        },
+        {
+          "id": "1534638426035322942",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1138859346487410828/1534638426035322942/image.png?ex=6aa1ade8&is=6aa05c68&hm=dc958ac3d96535e62684504a254a5899fb0e51aa846b3915ac581a9f85732402&",
+          "content_type": "image/webp",
+          "size": 238414
+        }
+      ]
+    },
+    {
+      "message_id": "1534520351764123708",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "IrrationalSoup",
+      "created_at": "2026-08-05T11:16:01.87+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "not sure why yours has so much ghosting, especially for an API, but here is a gen i did right when the model dropped on my computer (GTX 3060 12GB/32GB RAM) Ref mode, prompt was bad for this one, before i read the prompt guide, but it has significantly less ghosting than yours. what workflow/settings are you running?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1534520351764123708",
+      "attachments": [
+        {
+          "id": "1534520351424249906",
+          "filename": "MiniMax_H3_00001_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1534520351424249906/MiniMax_H3_00001_.mp4?ex=6aa13ff1&is=6a9fee71&hm=a11def92f33abbd4bca37d0998d6692dc0eaf743236f0ad29151472a585c0b0c&",
+          "content_type": "video/mp4",
+          "size": 1259693
+        }
+      ]
+    },
+    {
+      "message_id": "1479526630564040880",
+      "channel_id": "1372956328276000828",
+      "guild_id": "1076117621407223829",
+      "channel_name": "chroma",
+      "author": "DaxRedding",
+      "created_at": "2026-03-06T17:10:37.002+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "Im coming back to this model after not being able to get it to work awhile ago.\nAnd nomatter what I do, still doesnt work for me.\n\nUsing official workflow, downloaded the exact Model, VAE and CLIP im told.\nUsed the perfect settings, sampler and scheduler. Everything I generate comes out like crap.\nEverything is just blurry and fuzzy looking, and like no detail on anything.\n\nAnyone have a clue what this is?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1372956328276000828/1479526630564040880",
+      "attachments": [
+        {
+          "id": "1479526630215909376",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1372956328276000828/1479526630215909376/image.png?ex=6aa1930c&is=6aa0418c&hm=a6e6f0ad3ab3adda831444178d4f0192475094fcabc1636b1b9459461b2771c2&",
+          "content_type": "image/png",
+          "size": 618637
+        }
+      ]
+    },
+    {
+      "message_id": "1473237964539822101",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "mustafa1034",
+      "created_at": "2026-02-17T08:41:42.184+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "Does anyone know why it gives a pastel-like, phosphorescent color? Which settings do I need to change? I'm using the LTX-2 - I2V and T2V Simple (1-pass) workflow. as you can see the result is very close to VEO3, I like it, but the colors are overdone.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1473237964539822101",
+      "attachments": [
+        {
+          "id": "1473237964674043995",
+          "filename": "Screenshot_2026-02-17_113249.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1473237964674043995/Screenshot_2026-02-17_113249.png?ex=6aa1c486&is=6aa07306&hm=cc001ff82e3b453985395d2e1bc923009baa746123f6b1114c82037832649b8b&",
+          "content_type": "image/png",
+          "size": 1239698
+        },
+        {
+          "id": "1473237965114441862",
+          "filename": "Screenshot_2026-02-17_113222.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1473237965114441862/Screenshot_2026-02-17_113222.png?ex=6aa1c486&is=6aa07306&hm=7605d38b3cff869a30a09c740ffc86bd14bb564ec2a13d36e38f1afe616c9ae1&",
+          "content_type": "image/png",
+          "size": 1596658
+        }
+      ]
+    },
+    {
+      "message_id": "1466954947827597437",
+      "channel_id": "1145677539738665020",
+      "guild_id": "1076117621407223829",
+      "channel_name": "comfyui",
+      "author": "placebo_yue",
+      "created_at": "2026-01-31T00:35:14.267+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "i can't improve the quality, i tried different samplers, different amount of steps... what can i try? goddamit. I'll share my workflow",
+      "permalink": "https://discord.com/channels/1076117621407223829/1145677539738665020/1466954947827597437",
+      "attachments": [
+        {
+          "id": "1466954947353645240",
+          "filename": "ltx2_00012.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1145677539738665020/1466954947353645240/ltx2_00012.mp4?ex=6aa15282&is=6aa00102&hm=3b138d2668495d5f59abb09e0a7f262f5eb5a035d9d1ef808091e40f5af74757&",
+          "content_type": "video/mp4",
+          "size": 4531619
+        }
+      ]
+    },
+    {
+      "message_id": "1462086120866185267",
+      "channel_id": "1458032975982755861",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_gens",
+      "author": "Nathan Shipley",
+      "created_at": "2026-01-17T14:08:15.461+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "hey <@421446598703317015> - pasting a screenshot showing my workflow!   this is dev bf16, euler, 25 steps, CFG at 5, resolution at 1920x1024...   i had chatgpt write me a long prompt:\n\n> A medium close-up of Arnold Schwarzenegger standing in a warmly lit classroom. He has a strong jaw, short brown hair neatly combed back, and wears a slightly oversized dark corduroy jacket over a crisp white button-down shirt. His posture is rigid and authoritative, contrasting humorously with the childlike environment around him.\n> \n> Behind him, the classroom walls are decorated with colorful children\u2019s drawings of boats, oceans, and simple landscapes, taped in a slightly crooked line along a corkboard. The lighting is soft and natural, late-morning daylight filtering in, giving the scene a grounded, domestic feel.\n> \n> The camera remains steady at chest height, slowly pushing in by a few percent to emphasize his serious expression. His brow furrows as he looks downward toward unseen children seated in front of him. His expression is intense but controlled, clearly out of place in a kindergarten setting.\n> \n> He speaks in a deep, deliberate voice with a thick accent, pausing between phrases as if carefully choosing his words:\n> \n> \u201cI want to ask you a bunch of questions\u2026\u201d\n> (brief pause, eyes narrowing slightly)\n> \u201cWhat does six seven mean?\u201d\n> Another pause, genuine confusion mixed with authority.\n> \u201cWhy do you keep saying six seven?\u201d\n> \n> As he speaks, his mouth movements are precise and slightly exaggerated, enhancing the comedic contrast between his intimidating presence and the innocent confusion of the children he\u2019s addressing. The room remains still, no camera shake, no dramatic motion, letting the humor land through delivery and expression alone.\n\ncaveat that i haven't had time to really test much more than this!",
+      "permalink": "https://discord.com/channels/1076117621407223829/1458032975982755861/1462086120866185267",
+      "attachments": [
+        {
+          "id": "1462086120635629568",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1458032975982755861/1462086120635629568/image.png?ex=6aa1684f&is=6aa016cf&hm=c5ed9e4a1913dd538160184c58e8a4312ed4405c6d44fa49bfb8b077da8c38b4&",
+          "content_type": "image/webp",
+          "size": 268490
+        }
+      ]
+    },
+    {
+      "message_id": "1460130314494935246",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "Bernie \u2018Hot Dog\u2019 Madoff",
+      "created_at": "2026-01-12T04:36:34.885+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "I tried re-creating this 3 sampler setup in my comfycore workflow, but the results are garbage. Any insight as to what I am doing wrong? The first sampler is high noise fp16 / no lora, the second is high noise fp16 with Seko lora, third is low noise fp16 with seko lora",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1460130314494935246",
+      "attachments": [
+        {
+          "id": "1460130314448932904",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1460130314448932904/image.png?ex=6aa18b12&is=6aa03992&hm=af45674d3e40d808e4929121dd457eaccbfb4503cace4492f032c8adaa8005a5&",
+          "content_type": "image/webp",
+          "size": 48816
+        }
+      ]
+    },
+    {
+      "message_id": "1450611749521985587",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "\u4f01\u9d5d\uff08100% AI\uff09",
+      "created_at": "2025-12-16T22:13:12.149+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "output still super bugged when trying the resize upscale trick not sure why. i saw cseti's workflow use it just fine. but i think its cause the end steps and start steps are messing up the sigmas and making it not denoise?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1450611749521985587",
+      "attachments": [
+        {
+          "id": "1450611748678664464",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1450611748678664464/image.png?ex=6aa1d9f7&is=6aa08877&hm=19cf20383ee7151e43349ddc29e1b22ea6b05df85e8f1effbc5304fb97d495af&",
+          "content_type": "image/webp",
+          "size": 143352
+        },
+        {
+          "id": "1450611749203083334",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1450611749203083334/image.png?ex=6aa1d9f8&is=6aa08878&hm=2f67ededc81896635e62aba9b06fd178a31252b0082b04651b99dce8d18dce19&",
+          "content_type": "image/webp",
+          "size": 68382
+        }
+      ]
+    },
+    {
+      "message_id": "1507311306389061702",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "cocktailprawn1212",
+      "created_at": "2026-05-22T09:16:59.933+00:00",
+      "tier": "HARD",
+      "likely_fix": "SETTINGS/CONFIG",
+      "content": "<@866436780995903558> had it pretty stable after switching to that other workflow yesterday and did a few gens earlier but did another 3 just now and randomly in the middle on fails, all gens using pretty much the same settings other than different seeds, wasn't the typical cuda error which would kill comfy but a vram grow error? failed at initializing on upscale and then continued on with the next gen",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1507311306389061702",
+      "attachments": [
+        {
+          "id": "1507311306586198087",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1507311306586198087/image.png?ex=6aa1cccb&is=6aa07b4b&hm=fbf89c087f76cbcff6958a801ca675acc7df738726207cdc6cc48e0e6855c886&",
+          "content_type": "image/png",
+          "size": 17627
+        }
+      ]
+    },
+    {
+      "message_id": "1536343083992490115",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "David Snow",
+      "created_at": "2026-08-10T11:58:55.098+00:00",
+      "tier": "HARD",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "I've just got this error on a workflow I've been using for two days. No console errors, no red nodes or anything else to indicate what's causing it. anyone run into this?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1536343083992490115",
+      "attachments": [
+        {
+          "id": "1536343083585904721",
+          "filename": "Screenshot_2026-08-10_125346.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1536343083585904721/Screenshot_2026-08-10_125346.png?ex=6aa149ff&is=6a9ff87f&hm=86b0fe9300ffc55c2bc02fec554fa87dabad52f0907ab1d80a858c5db8e66fc0&",
+          "content_type": "image/webp",
+          "size": 12386
+        }
+      ]
+    },
+    {
+      "message_id": "1475948580174041151",
+      "channel_id": "1471683791239250075",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx-living-dead-comp",
+      "author": "MysteryShack",
+      "created_at": "2026-02-24T20:12:43.312+00:00",
+      "tier": "HARD",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "[to it's terrible i should give up]\nHow is this part fun??? \ud83d\ude35\u200d\ud83d\udcab \n\nMan spirits and evil spirits are definitely real. \n\nGet this error out of nowhere  for no reason, close browser tab. open up workflow again, suddenly no error.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1471683791239250075/1475948580174041151",
+      "attachments": [
+        {
+          "id": "1475948580274438276",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1471683791239250075/1475948580274438276/image.png?ex=6aa1bdbb&is=6aa06c3b&hm=2c64ab63a73e06d73474574f112f9cdd97fca28e9f26337fe3d7db68c76e1289&",
+          "content_type": "image/webp",
+          "size": 8766
+        }
+      ]
+    },
+    {
+      "message_id": "1545918098102681662",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "Meru",
+      "created_at": "2026-09-05T22:06:36.357+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Same seed+prompt. Someone suggested I should be using some attention node in my workflow. Checked Spectrum and it increases my performance by a good 30% but the results are so bad... What am I doing wrong?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1545918098102681662",
+      "attachments": [
+        {
+          "id": "1545918096693403658",
+          "filename": "0001-0124.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1545918096693403658/0001-0124.mp4?ex=6aa12fac&is=6a9fde2c&hm=2c2447043e5bb848d6c6e2dd249cc3407bc467be683b018ade415e8534a3f184&",
+          "content_type": "video/mp4",
+          "size": 1225570
+        },
+        {
+          "id": "1545918097196584970",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1545918097196584970/image.png?ex=6aa12fac&is=6a9fde2c&hm=73500eac1ee783ebb6d962c34dfec6675f93d1c45e0ca2bd33245614373ee5ea&",
+          "content_type": "image/png",
+          "size": 99102
+        },
+        {
+          "id": "1545918097649565777",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1545918097649565777/image.png?ex=6aa12fac&is=6a9fde2c&hm=528a9e160d3a60f0a0fb162824e850fa26d89450c8f6ffb1cf8b07e2a86eee69&",
+          "content_type": "image/png",
+          "size": 40453
+        }
+      ]
+    },
+    {
+      "message_id": "1545197103717023795",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "ipc",
+      "created_at": "2026-09-03T22:21:37.9+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "anyone know why i keep seeing this in workflows? does it actually do anything?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1545197103717023795",
+      "attachments": [
+        {
+          "id": "1545197103377289216",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1545197103377289216/image.png?ex=6aa13331&is=6a9fe1b1&hm=4a723b7d502aa77611d2eef3ac3200bb32c63d106815c571f57805b6fac1a827&",
+          "content_type": "image/webp",
+          "size": 11780
+        }
+      ]
+    },
+    {
+      "message_id": "1544811975668932658",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "foxydits",
+      "created_at": "2026-09-02T20:51:16.218+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "anyone know how to prevent/disable these evil little fuckers from magically appearing in my workflow and connecting to things? I find they've been appearing just by me navigating around my workflow not meaning to make changes whatsoever... and they actually do damage to the workflow, replacing connections I don't mean to. This never used to happen until about 2 or 3 weeks ago, so I'm assuming there's some shortcut or mouse gesture that can generate them",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1544811975668932658",
+      "attachments": [
+        {
+          "id": "1544811975354228766",
+          "filename": "evilfuckers.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1544811975354228766/evilfuckers.png?ex=6aa1c6c4&is=6aa07544&hm=c999e5f1b08f1484a8445e88b63e4e44d91da93fab3ed50c96d28a4dda49ea25&",
+          "content_type": "image/webp",
+          "size": 4930
+        }
+      ]
+    },
+    {
+      "message_id": "1539699665115684956",
+      "channel_id": "1147637190713692160",
+      "guild_id": "1076117621407223829",
+      "channel_name": "nsfw",
+      "author": "CJ",
+      "created_at": "2026-08-19T18:16:46.4+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "i know quality shared his character swap workflow, curious if anyone else has a consistent process going? I've got a decent quick 4 step turbo setup going now that we have the ref2va turbo lora, but still trying to improve.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1147637190713692160/1539699665115684956",
+      "attachments": [
+        {
+          "id": "1539699664725475379",
+          "filename": "concatenation_00027.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1147637190713692160/1539699664725475379/concatenation_00027.mp4?ex=6aa1a28e&is=6aa0510e&hm=fbb5b20cf86be26ddb83bf44b3a3e175c015973d962496ea9e8cdbb8bb0c6103&",
+          "content_type": "video/mp4",
+          "size": 245264
+        }
+      ]
+    },
+    {
+      "message_id": "1537503875769311405",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "GoldSphere",
+      "created_at": "2026-08-13T16:51:29.424+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Does anyone know if the compression and decoding artifacts in the videos created are because of the model itself, prompting, or the workflow?<:pepethink:852623136573882368>",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1537503875769311405",
+      "attachments": [
+        {
+          "id": "1537503875567845376",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1537503875567845376/image.png?ex=6aa18e91&is=6aa03d11&hm=21b2b551a716e77d1bb8440e5f1524bab84b07885c5a7193e65ef3acb9210492&",
+          "content_type": "image/webp",
+          "size": 231624
+        }
+      ]
+    },
+    {
+      "message_id": "1535742234153058354",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "meakwa23",
+      "created_at": "2026-08-08T20:11:21.333+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "why my gens are cursed? it's a default T2V workflow with SageAttention only",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1535742234153058354",
+      "attachments": [
+        {
+          "id": "1535742233863790603",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535742233863790603/image.png?ex=6aa1bd69&is=6aa06be9&hm=29ce8f929b8f2fa271fb1770b963c89d686eebed5e1efa3e989ab15756443911&",
+          "content_type": "image/png",
+          "size": 702285
+        }
+      ]
+    },
+    {
+      "message_id": "1535670992142204938",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "Rena_Felicia",
+      "created_at": "2026-08-08T15:28:15.914+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "I'm not sure what the problem is\u2014whether I use Lora 4-step or not, the audio is still ugly broken. any idea what should i try to fix this audio issue?\n\nHere's the ComfyUI version I'm using:\n[INFO] ComfyUI version: 0.31.0\n[INFO] comfy-aimdo version: 0.4.13\n[INFO] comfy-kitchen version: 0.2.28\n[INFO] comfyui-frontend-package version: 1.48.7\n[INFO] comfyui-workflow-templates version: 0.11.34\n[INFO] comfyui-embedded-docs version: 0.5.9\n[INFO] comfy-kitchen version: 0.2.28\n[INFO] comfy-aimdo version: 0.4.13",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1535670992142204938",
+      "attachments": [
+        {
+          "id": "1535670991030722701",
+          "filename": "221922_MiniMaxH3_T2V__00001-audio.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535670991030722701/221922_MiniMaxH3_T2V__00001-audio.mp4?ex=6aa17b0f&is=6aa0298f&hm=ee239314cb7df5ec7fbf58e43442d8514b2d385597567631688a7f3716b381d8&",
+          "content_type": "video/mp4",
+          "size": 703309
+        },
+        {
+          "id": "1535670991437430954",
+          "filename": "124720_MiniMaxH3_T2V__00001-audio.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535670991437430954/124720_MiniMaxH3_T2V__00001-audio.mp4?ex=6aa17b0f&is=6aa0298f&hm=60ed3a43df36d578c35af79ce1cc70f4adfc6dbf6b3abf3f637bd5b82700b3a0&",
+          "content_type": "video/mp4",
+          "size": 833050
+        },
+        {
+          "id": "1535670991748071434",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535670991748071434/image.png?ex=6aa17b0f&is=6aa0298f&hm=1e7712a3895beafe4d868b301d85560812acb79242910d1d368f994278a49192&",
+          "content_type": "image/webp",
+          "size": 103436
+        }
+      ]
+    },
+    {
+      "message_id": "1535514206802157608",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "piscesbody",
+      "created_at": "2026-08-08T05:05:15.376+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "<@786014691628810271>  I used your sample workflow to zoom in, but I got such an effect that it was blurred. Why is this?The original video is clear 480p",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1535514206802157608",
+      "attachments": [
+        {
+          "id": "1535514205392863312",
+          "filename": "MiniMax_H3_00106_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535514205392863312/MiniMax_H3_00106_.mp4?ex=6aa191cb&is=6aa0404b&hm=81314aae6818b31fdab25fdd371e16549a62e56908fe63d9010dbb9f2ea99f7c&",
+          "content_type": "video/mp4",
+          "size": 3285892
+        },
+        {
+          "id": "1535514206219014254",
+          "filename": "MiniMax_H3_00106_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535514206219014254/MiniMax_H3_00106_.mp4?ex=6aa191cb&is=6aa0404b&hm=0a93e50eeff13d4b5e21b899e81fa50f34e1d84dddbe52b56311babc92f5029e&",
+          "content_type": "video/mp4",
+          "size": 3285892
+        }
+      ]
+    },
+    {
+      "message_id": "1535383313403871255",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "WorldX",
+      "created_at": "2026-08-07T20:25:07.958+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "can anyone help me figure this out? im using these models with the reference workflow, but i cant get the first frame to look like my first image reference.\ni know its not suppose to be the best in first last image, but i want to use a starting frame ref_image_0 with a character sheet on ref_image_1 but im getting weird results like completely off the first frame and also bad quality",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1535383313403871255",
+      "attachments": [
+        {
+          "id": "1535383313009868902",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1535383313009868902/image.png?ex=6aa1c0a3&is=6aa06f23&hm=1b74c8516b81b88cf7580e09c439539a99180e96f3dd6ef58d5f578360e30e79&",
+          "content_type": "image/webp",
+          "size": 71324
+        }
+      ]
+    },
+    {
+      "message_id": "1534591490163216414",
+      "channel_id": "1145677539738665020",
+      "guild_id": "1076117621407223829",
+      "channel_name": "comfyui",
+      "author": "TK_999",
+      "created_at": "2026-08-05T15:58:42.586+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Can someone help me verify a possible bug here, real quick? Using H3. I'll post the image with metadata for the workflow, since that's how i'm loading it on my end.\nCan you load it up, fix paths as needed.\nUnhook the reference video that goes into the reference to video node.\nChange the image to whatever.\nChange the prompt to whatever.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1145677539738665020/1534591490163216414",
+      "attachments": [
+        {
+          "id": "1534591489819148329",
+          "filename": "H3_Ref_00010.png",
+          "url": "https://cdn.discordapp.com/attachments/1145677539738665020/1534591489819148329/H3_Ref_00010.png?ex=6aa18232&is=6aa030b2&hm=e10d488d4d4b93b0c50c5f1a33dc3c9e34c1c158d9e1b354ee56b1b4e86e18db&",
+          "content_type": "image/png",
+          "size": 915434
+        }
+      ]
+    },
+    {
+      "message_id": "1533879278641483796",
+      "channel_id": "1532625331960152124",
+      "guild_id": "1076117621407223829",
+      "channel_name": "minimax_h3_chatter",
+      "author": "CherrySock",
+      "created_at": "2026-08-03T16:48:38.127+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Hey, guys, why do I always have this weird piece of soundtrack at the beginning of videos? I'm using the standard i2v workflow. Like it takes a second of audio from the end and adds it at the start.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1532625331960152124/1533879278641483796",
+      "attachments": [
+        {
+          "id": "1533879278150881422",
+          "filename": "2026-08-03-19_35_00001_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1532625331960152124/1533879278150881422/2026-08-03-19_35_00001_.mp4?ex=6aa18de6&is=6aa03c66&hm=e7d177700dbca334ebb4e93e8c0dadf8f88fd54aaec32ab468c31c245539f56f&",
+          "content_type": "video/mp4",
+          "size": 3246337
+        }
+      ]
+    },
+    {
+      "message_id": "1516820158641869050",
+      "channel_id": "1138859346487410828",
+      "guild_id": "1076117621407223829",
+      "channel_name": "chatter",
+      "author": "D\u2019Squarius",
+      "created_at": "2026-06-17T15:01:46.976+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "im getting even weirder results with that lol... workflow issue?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1138859346487410828/1516820158641869050",
+      "attachments": [
+        {
+          "id": "1516820158222565456",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1138859346487410828/1516820158222565456/image.png?ex=6aa174da&is=6aa0235a&hm=91ce609b5a2a3437511e8c06f1b9ce7e9c21aa7ea98cdfbb4b8b43d18e350839&",
+          "content_type": "image/png",
+          "size": 534928
+        }
+      ]
+    },
+    {
+      "message_id": "1512430101101285466",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "Stef",
+      "created_at": "2026-06-05T12:17:15.695+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "This workflow raises another question. When using several reference images, you can connect each ref image to its slot \"image_0\" \"image_1\" etc. in the Bernini conditioning wrapper. But why is there a second node  'Batch images' which you can connect the reference images too ? This node goes into another entry point of the Bernini wrapper \"reference_images\". Or perhaps should we connect -when multiple references- the images twice, one time individually to their input slots and another time to the Image Batch node ?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1512430101101285466",
+      "attachments": [
+        {
+          "id": "1512430100539379823",
+          "filename": "Bernini_testing_video_edit.json",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1512430100539379823/Bernini_testing_video_edit.json?ex=6aa14e4b&is=6a9ffccb&hm=88a0cab896c10ae7b3099eeee59da6f286efb8875ecc79a77e1e1ed429e7b927&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 23066
+        }
+      ]
+    },
+    {
+      "message_id": "1512180816036499637",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "trykiss",
+      "created_at": "2026-06-04T19:46:41.504+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "<@256636116763934731>  Please excuse the tag, but I can't figure this out without your help\n\n\nWhen I want to perform an inpainting using two control nets with DIFFERENT weights (depth 0.4 and pose 0.9, for example), what is the correct way to set up the workflow before moving on to KSampler? \n\nBoth of methods (screenshots) produced different\u2014and not very good\u2014results. Do you have any advice? \ud83d\ude4f \ud83e\udd1e \ud83d\udc99",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1512180816036499637",
+      "attachments": [
+        {
+          "id": "1512180815511949362",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1512180815511949362/image.png?ex=6aa1b7a1&is=6aa06621&hm=40315955b9db598a4aa52b312162fce8fc2f9c54d1d587e3aee48def52ed9e53&",
+          "content_type": "image/webp",
+          "size": 134414
+        },
+        {
+          "id": "1512180815843430541",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1512180815843430541/image.png?ex=6aa1b7a1&is=6aa06621&hm=290b6e81a7af81479512ed80778204d11f671f66957d840c2d6be607d1468bf4&",
+          "content_type": "image/webp",
+          "size": 196012
+        }
+      ]
+    },
+    {
+      "message_id": "1511786182428856421",
+      "channel_id": "1145677539738665020",
+      "guild_id": "1076117621407223829",
+      "channel_name": "comfyui",
+      "author": "metahades",
+      "created_at": "2026-06-03T17:38:33.52+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "any idea why the hell all the workflows of PiD Nvidia i have trash results?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1145677539738665020/1511786182428856421",
+      "attachments": [
+        {
+          "id": "1511786181950439434",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1145677539738665020/1511786181950439434/image.png?ex=6aa19999&is=6aa04819&hm=696bb8de6d0041a2f34d5281bcde4c8b7cbaca14e02dde1c31e2b12a59ef82e1&",
+          "content_type": "image/png",
+          "size": 1380651
+        }
+      ]
+    },
+    {
+      "message_id": "1502449773612110025",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "trykiss",
+      "created_at": "2026-05-08T23:19:00.196+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "https://github.com/kijai/ComfyUI-WanVideoWrapper/tree/main/example_workflows\nIs Wan already dead?\n<@228118453062467585> , I hope you haven't forgotten about this place. A lot of people still have it bookmarked, and we're always eager to see something new...\n\n\nI still don't get it\u2014is LTX2.3 maybe more powerful than VACE in inpainting? If not, then why is there such silence surrounding the new research on WAN?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1502449773612110025",
+      "attachments": [
+        {
+          "id": "1502449773657980949",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1502449773657980949/image.png?ex=6aa140a4&is=6a9fef24&hm=f5974d0976857ee3cf09bee3498c16cc83fc8007c8247bdec4c6ffd4d85140d1&",
+          "content_type": "image/png",
+          "size": 65012
+        }
+      ]
+    },
+    {
+      "message_id": "1496376853189890049",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "psylent_gamer",
+      "created_at": "2026-04-22T05:07:23.138+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "What the hell, can anyone see why this workflow would fail the save video node only when audio is connected?\nI have tested to make sure that the comfyui T2V template works, as do my other workflows.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1496376853189890049",
+      "attachments": [
+        {
+          "id": "1496376852883964065",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1496376852883964065/image.png?ex=6aa1924b&is=6aa040cb&hm=011dfee768a2c96a4c8e85b9a06bb5b0c80cd818e9e71d8057e4a3e52233f9b6&",
+          "content_type": "image/png",
+          "size": 621409
+        }
+      ]
+    },
+    {
+      "message_id": "1491156603741929605",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "aniroka",
+      "created_at": "2026-04-07T19:23:58.682+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "can someone maybe explain to me why my workflow barely changes anything in this vid 2 vid ltx 2.3 workflow? i't supposed to be a vid 2 vid ltx 2.3 detailer where its supposed to add detail and upscale 2x but it just outputs same video slightly different but same size etc not sure what i'm doing wrong",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1491156603741929605",
+      "attachments": [
+        {
+          "id": "1491156603771031723",
+          "filename": "LTX_00003.json",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1491156603771031723/LTX_00003.json?ex=6aa1b24e&is=6aa060ce&hm=6c3311a822c8005c063e04303af59c47cfb7490766df337f3cd56d7559426366&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 29034
+        }
+      ]
+    },
+    {
+      "message_id": "1490537512748191764",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Jonathan Scott Schneberg",
+      "created_at": "2026-04-06T02:23:55.887+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Why are my videos coming out muddy with runexx new 3 pass workflow?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1490537512748191764",
+      "attachments": [
+        {
+          "id": "1490537512047738992",
+          "filename": "LTX-2_00010-audio.mov",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1490537512047738992/LTX-2_00010-audio.mov?ex=6aa16bfb&is=6aa01a7b&hm=ac8b70bb7d5e1cc5807b6593f61ce96712a2a84a7ef6ffd3095e80c5682b57f7&",
+          "content_type": "video/quicktime",
+          "size": 2003236
+        },
+        {
+          "id": "1490537512404390011",
+          "filename": "LTX-2_00005-audio.mov",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1490537512404390011/LTX-2_00005-audio.mov?ex=6aa16bfb&is=6aa01a7b&hm=54d0ced9e9fe94cbe2f3e5c9ae479c98046ad90862477aa678a3bcf970f95c45&",
+          "content_type": "video/quicktime",
+          "size": 1954947
+        }
+      ]
+    },
+    {
+      "message_id": "1485587352121507840",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "cocktailprawn1212",
+      "created_at": "2026-03-23T10:33:45.624+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "can someone please clarify for me once and for all, do you need to load the embeddings connector when using transformers only model, what is it doing?  i did run int8 transformers without it and it worked fine and i am looking at nerdy rodents workflow and he doesnt appear to be running it along with transformers only model, with 2.0 you  definitely needed it but with 2.3 its optional?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1485587352121507840",
+      "attachments": [
+        {
+          "id": "1485587351869587486",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1485587351869587486/image.png?ex=6aa13609&is=6a9fe489&hm=d3bd0d879c633aca34ff1a36ade918abd0ee701fe271141eec560dce76cb3c70&",
+          "content_type": "image/png",
+          "size": 747486
+        }
+      ]
+    },
+    {
+      "message_id": "1483204544702845223",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Choowkee",
+      "created_at": "2026-03-16T20:45:20.065+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Anyone know what would be the cause for 2.3 animation prompts giving me these washed out/dull colors? I am using fp8+ distill lora at 0.5 str on the official T2V 2-stage workflow",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1483204544702845223",
+      "attachments": [
+        {
+          "id": "1483204544455245954",
+          "filename": "no_lora_output_00043_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1483204544455245954/no_lora_output_00043_.mp4?ex=6aa1c560&is=6aa073e0&hm=965b1f6d0a16ecc40c9c04361795427c04943dc48cb3b7b26a06e1d2a0a347a8&",
+          "content_type": "video/mp4",
+          "size": 724535
+        }
+      ]
+    },
+    {
+      "message_id": "1481050906517835797",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "kai",
+      "created_at": "2026-03-10T22:07:32.709+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "I'm kind of perplexed why I was getting such bad results using the full model (the template workflow on comfyui) vs. the RuneXX workflow with a Q4 GGUF.  Could the vram optimization be making the results so poor?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1481050906517835797",
+      "attachments": [
+        {
+          "id": "1481050904881922202",
+          "filename": "LTX_2.3_i2v_00008_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1481050904881922202/LTX_2.3_i2v_00008_.mp4?ex=6aa12fe4&is=6a9fde64&hm=26b15142ad4c466b4bddd9363935b8384870533f7a292f0fab66c74bd83d290f&",
+          "content_type": "video/mp4",
+          "size": 2417477
+        },
+        {
+          "id": "1481050905754341519",
+          "filename": "LTX-2_00002-audio.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1481050905754341519/LTX-2_00002-audio.mp4?ex=6aa12fe4&is=6a9fde64&hm=12b95954a196ee896e6d2838c4645323e5bcee78667c80f8f81a6fedab5fb4e3&",
+          "content_type": "video/mp4",
+          "size": 4493649
+        }
+      ]
+    },
+    {
+      "message_id": "1480313785863508200",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Kompicka",
+      "created_at": "2026-03-08T21:18:29.45+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "So i have been trying the prompt that has been going around here with my lora.\nThe first pass i think its decent, the second pass is better, but why do i always get those colours?\nUsing the official 2pass workflow, fp8 minimal changes.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1480313785863508200",
+      "attachments": [
+        {
+          "id": "1480313783925735549",
+          "filename": "output-downscaled_00004_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1480313783925735549/output-downscaled_00004_.mp4?ex=6aa1cd24&is=6aa07ba4&hm=d418855143b51809457ac2ee9b6225fed818979cae9879962321dd5d8cd76b67&",
+          "content_type": "video/mp4",
+          "size": 4402682
+        },
+        {
+          "id": "1480313785016385618",
+          "filename": "output-upscape-hfd_00001_.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1480313785016385618/output-upscape-hfd_00001_.mp4?ex=6aa1cd25&is=6aa07ba5&hm=f294b830030884b0fceef73ea240ae16cf6d041eed7fd9336c233e4c39ec2523&",
+          "content_type": "video/mp4",
+          "size": 10179633
+        }
+      ]
+    },
+    {
+      "message_id": "1480290361548083211",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "Kompicka",
+      "created_at": "2026-03-08T19:45:24.658+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Just trying the offical 2step workflow, as i find the first step is very good, but why is the second step so broke always? Colours, and everything. Anybody knows a fix?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1480290361548083211",
+      "attachments": [
+        {
+          "id": "1480290361296556264",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1480290361296556264/image.png?ex=6aa1b754&is=6aa065d4&hm=24c4e5ecbf959dedf0cd25dda6e09d9380f92ccb077a0db02ff331a8feab449b&",
+          "content_type": "image/png",
+          "size": 1028211
+        }
+      ]
+    },
+    {
+      "message_id": "1479352596710822019",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "abysswatcher",
+      "created_at": "2026-03-06T05:39:04.098+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "<@228118453062467585> i tried your new workflow with 2.3 and it works really well with the distill model and t2v but i2v seems to be slightly bugged, changing the workflow to use i2v works semi well with the distill model but any attempt to get the full dev model to do i2v ends up quite broken, any clue why? you think its a model issue or a comfyui issue?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1479352596710822019",
+      "attachments": [
+        {
+          "id": "1479352596136333412",
+          "filename": "ltx23_00002-audio.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1479352596136333412/ltx23_00002-audio.mp4?ex=6aa199b7&is=6aa04837&hm=dc8e6b4f307bcf77ce5746f096fc2c6d5b44d19135ed9144c405e327dfdc627f&",
+          "content_type": "video/mp4",
+          "size": 6123194
+        }
+      ]
+    },
+    {
+      "message_id": "1476347135766040747",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "yukass",
+      "created_at": "2026-02-25T22:36:26.37+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Has anyone tried mixing FML workflows with IC lora workflows with Depth_anything? I am trying to do something similar to what could be done in VACE of adding 3 style frames plus the control video. I tried to mix the workflows but I don't know if I did it right or if there is a way to merge it better...",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1476347135766040747",
+      "attachments": [
+        {
+          "id": "1476347133840850954",
+          "filename": "LTX-IC-Pose-Compare_00013.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1476347133840850954/LTX-IC-Pose-Compare_00013.mp4?ex=6aa136a9&is=6a9fe529&hm=c1ad7b66e0f0379c27a82e7f39b987fc76914bda56a569e0eb9b1730d7400f01&",
+          "content_type": "video/mp4",
+          "size": 3330674
+        },
+        {
+          "id": "1476347134570926282",
+          "filename": "LTX-2-IC-Control_00030-audio.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1476347134570926282/LTX-2-IC-Control_00030-audio.mp4?ex=6aa136aa&is=6a9fe52a&hm=a4f96e9c2c1315f198fe53b9d5d5d68b22894a3db1cad81b3cf4036c2ba4dd49&",
+          "content_type": "video/mp4",
+          "size": 5167499
+        },
+        {
+          "id": "1476347135527096320",
+          "filename": "LTX-2_Depth_FML.json",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1476347135527096320/LTX-2_Depth_FML.json?ex=6aa136aa&is=6a9fe52a&hm=855168e99c7e1b66f1f9f8181f88995e18279853966533c607966f7de00f91ca&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 197590
+        }
+      ]
+    },
+    {
+      "message_id": "1474093161965031454",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "Immac",
+      "created_at": "2026-02-19T17:19:57.139+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Hello, I'd like to see if maybe someone has had this same issue with SVI, left is just wan normally (no SVI lora), middle is the first gen and the final gen on the right, I keep getting distorted results with this, why might this be? I'm using this workflow.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1474093161965031454",
+      "attachments": [
+        {
+          "id": "1474093160811729059",
+          "filename": "Kooha-2026-02-19-10-57-09.mp4",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1474093160811729059/Kooha-2026-02-19-10-57-09.mp4?ex=6aa1953c&is=6aa043bc&hm=f8957bce3f0f74fe6977344c0c0378fd5b860e0d11f40da0dd02c913dfbef279&",
+          "content_type": "video/mp4",
+          "size": 5058269
+        },
+        {
+          "id": "1474093161554116753",
+          "filename": "wan22_SVI_Pro_native_example_KJ.json",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1474093161554116753/wan22_SVI_Pro_native_example_KJ.json?ex=6aa1953d&is=6aa043bd&hm=8f1123cd6f90ebef151d753cf9c9ca59746a5d9a2398e754b33aff9b9334c88a&",
+          "content_type": "application/json; charset=utf-8",
+          "size": 129222
+        }
+      ]
+    },
+    {
+      "message_id": "1472901132283154494",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "D-EFFECTS",
+      "created_at": "2026-02-16T10:23:15.116+00:00",
+      "tier": "MEDIUM",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Guys I need some help please. As per usual trying to use a CivitAI workflow takes a million years to fix all the issues. If I send a png of the workflow could someone please help me fix this issue?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1472901132283154494",
+      "attachments": [
+        {
+          "id": "1472901132689866802",
+          "filename": "Screenshot_2026-02-16_115415.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1472901132689866802/Screenshot_2026-02-16_115415.png?ex=6aa13393&is=6a9fe213&hm=c9fca57eca988277c878332b5171f5dfa3d8c59bbc76f2e18a17c359b525e60d&",
+          "content_type": "image/webp",
+          "size": 115398
+        }
+      ]
+    },
+    {
+      "message_id": "1481198524149530635",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "\u036f\ud835\udd91\ud835\udd9a\ud835\udd88\ud835\udd8e\ud835\udd8b\ud835\udd8a\ud835\udd97",
+      "created_at": "2026-03-11T07:54:07.495+00:00",
+      "tier": "EASY",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Am I the only one who gets this error when running this workflow ?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1481198524149530635",
+      "attachments": [
+        {
+          "id": "1481198523654606939",
+          "filename": "Screenshot_2026-03-11_131845.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1481198523654606939/Screenshot_2026-03-11_131845.png?ex=6aa1b95f&is=6aa067df&hm=2b30a12cd0245d3ba329bf9fbe91bd35dc01cafd373b08ea8cfb5526de192707&",
+          "content_type": "image/webp",
+          "size": 17256
+        },
+        {
+          "id": "1481198523889225788",
+          "filename": "message.txt",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1481198523889225788/message.txt?ex=6aa1b95f&is=6aa067df&hm=49aa8d46da6008546f3ff5f0b32f0e9c03ba7ac376a6b7f28359d45d34ae3f20&",
+          "content_type": "text/plain; charset=utf-8",
+          "size": 4548
+        }
+      ]
+    },
+    {
+      "message_id": "1475180540113064017",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "Widdy The Kid",
+      "created_at": "2026-02-22T17:20:48.292+00:00",
+      "tier": "EASY",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Guys, is using Stand-In outdated? I\u2019m just starting to work with video now, I\u2019m trying to use a Stand-In workflow with face swap and I\u2019m getting this error. What should I do? Is there another alternative? I want to bring more consistency to my character\u2019s face, I\u2019d like to fine-tune it. I need some tips, I\u2019m just starting to work with video now.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1475180540113064017",
+      "attachments": [
+        {
+          "id": "1475180539840561184",
+          "filename": "file_00000000fd28720ea1d3974e1294ee06.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1475180539840561184/file_00000000fd28720ea1d3974e1294ee06.png?ex=6aa19570&is=6aa043f0&hm=2b14e50a0a6a1a2f993e08fd6afd0e0aaf051088b16035662e8d67540d9e1510&",
+          "content_type": "image/png",
+          "size": 22363
+        }
+      ]
+    },
+    {
+      "message_id": "1461310422480191612",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "avillabon",
+      "created_at": "2026-01-15T10:45:54.554+00:00",
+      "tier": "EASY",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Is <@228118453062467585> 's infintetalk workflow meant to only be used with a maximum of 4 steps? I tired removing the lightx2v lora and increase the steps and cfg but I always get this error.",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1461310422480191612",
+      "attachments": [
+        {
+          "id": "1461310422257897624",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1461310422257897624/image.png?ex=6aa138e2&is=6a9fe762&hm=01f1a18cee2fce9cbd62735e838e9bee7f0565f63c450b658db7404291518653&",
+          "content_type": "image/png",
+          "size": 14125
+        }
+      ]
+    },
+    {
+      "message_id": "1461267714977955915",
+      "channel_id": "1309520535012638740",
+      "guild_id": "1076117621407223829",
+      "channel_name": "ltx_chatter",
+      "author": "TheBorgQueen",
+      "created_at": "2026-01-15T07:56:12.292+00:00",
+      "tier": "EASY",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Thank you \ud83d\ude42\n\nAny idea why it throws this error now in the workflow?",
+      "permalink": "https://discord.com/channels/1076117621407223829/1309520535012638740/1461267714977955915",
+      "attachments": [
+        {
+          "id": "1461267714852262041",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1309520535012638740/1461267714852262041/image.png?ex=6aa1b9dc&is=6aa0685c&hm=33f663d7ab3d664fac38f0374501da98ac8c466da70f4dc089bb83b99e21f5bf&",
+          "content_type": "image/png",
+          "size": 959052
+        }
+      ]
+    },
+    {
+      "message_id": "1457232648635416700",
+      "channel_id": "1342763350815277067",
+      "guild_id": "1076117621407223829",
+      "channel_name": "wan_chatter",
+      "author": "AIGambino",
+      "created_at": "2026-01-04T04:42:17.508+00:00",
+      "tier": "EASY",
+      "likely_fix": "SYMPTOM DIAGNOSIS",
+      "content": "Anyone know why I'm getting this error? I never got it before in the same workflow",
+      "permalink": "https://discord.com/channels/1076117621407223829/1342763350815277067/1457232648635416700",
+      "attachments": [
+        {
+          "id": "1457232648291356692",
+          "filename": "image.png",
+          "url": "https://cdn.discordapp.com/attachments/1342763350815277067/1457232648291356692/image.png?ex=6aa18c69&is=6aa03ae9&hm=2cfb29b4ab43abc6a4fe6324c9594c6bc4341e962f6e92d042b4679875fb2eca&",
+          "content_type": "image/webp",
+          "size": 2814
+        }
+      ]
+    }
+  ]
+}

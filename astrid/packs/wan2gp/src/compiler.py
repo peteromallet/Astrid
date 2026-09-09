@@ -48,6 +48,57 @@ PORTABLE_KEYS: tuple[str, ...] = (
     "image_refs_strengths",
 )
 
+# Residency identity is intentionally a different contract from
+# ``portable_digest``.  A task's prompt, seed, dimensions, frame count, fps,
+# sampling controls, and output location may change without requiring a model
+# or engine reload.  Only fields that describe resident model artifacts or
+# effective engine policy belong here.  The allow-list is fail-closed: an
+# arbitrary extra setting cannot silently turn a task field into a reload key.
+RESIDENT_KEYS: tuple[str, ...] = (
+    "model",
+    "model_type",
+    "model_artifact_digest",
+    "model_artifact_digests",
+    "vae",
+    "vae_digest",
+    "text_encoder",
+    "text_encoder_digest",
+    "lora_artifact_digests",
+    "lora_digests",
+    "quantization",
+    "dtype",
+    "memory_policy",
+    "offload_policy",
+    "attention",
+    "attention_backend",
+    "compile",
+    "compile_policy",
+    "device_policy",
+    "runtime_profile",
+    "cache_policy",
+    "sampling_backend",
+    "scheduler",
+    "tea_cache_setting",
+    "slg_switch",
+    "cfg_star_switch",
+    "lora_activation",
+    "lora_activations",
+    "lora_fusion_mode",
+    "wan2gp_pin",
+    "wan2gp_sha",
+)
+
+RESIDENT_KEY_VERSION = "wan2gp-resident-v2"
+_TASK_ONLY_KEYS = frozenset(PORTABLE_KEYS) | {
+    "frames",
+    "fps",
+    "steps",
+    "task_id",
+    "invocation_id",
+    "attempt_id",
+    "output_dir",
+}
+
 # Inputs that are intentionally excluded from the portable digest.
 MACHINE_LOCAL_KEYS: tuple[str, ...] = (
     "wan2gp_path",
@@ -220,6 +271,57 @@ def runner_fingerprint(
         "engine_identity": str(engine_identity),
         "portable_digest": portable_digest(settings),
         "runner_kind": str(runner_kind),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def resident_key(
+    settings: dict[str, Any],
+    *,
+    runner_kind: str = "wan2gp",
+    engine_identity: str = DEFAULT_ENGINE_IDENTITY,
+    warmth_profile: str = "default",
+    resident_fields: dict[str, Any] | None = None,
+) -> str:
+    """Return the identity of model/engine state that may stay resident.
+
+    This key is deliberately not a synonym for :func:`runner_fingerprint`.
+    The latter describes a task/output contract and therefore changes when a
+    prompt or sampling input changes.  ``resident_key`` only changes when the
+    resident artifacts or effective engine policy changes.  A caller may add
+    attested fields through ``resident_fields``; those fields are namespaced
+    under ``attested`` and are still part of the explicit residency contract.
+    """
+    if not isinstance(settings, dict):
+        raise TypeError("settings must be a dict")
+    if not runner_kind or not engine_identity or not warmth_profile:
+        raise ValueError("runner_kind, engine_identity, and warmth_profile are required")
+    unknown = set(settings) - set(RESIDENT_KEYS) - _TASK_ONLY_KEYS - set(MACHINE_LOCAL_KEYS)
+    if unknown:
+        raise ValueError(
+            "unclassified settings cannot enter resident admission: "
+            + ", ".join(sorted(str(key) for key in unknown))
+        )
+    resident = {
+        key: settings[key]
+        for key in RESIDENT_KEYS
+        if key in settings and settings[key] is not None
+    }
+    if resident_fields is not None:
+        if not isinstance(resident_fields, dict):
+            raise TypeError("resident_fields must be a dict")
+        resident["attested"] = {
+            str(key): value
+            for key, value in resident_fields.items()
+            if value is not None
+        }
+    canonical = {
+        "engine_identity": str(engine_identity),
+        "key_version": RESIDENT_KEY_VERSION,
+        "resident": resident,
+        "runner_kind": str(runner_kind),
+        "warmth_profile": str(warmth_profile),
     }
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

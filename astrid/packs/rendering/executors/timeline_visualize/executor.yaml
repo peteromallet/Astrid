@@ -178,6 +178,13 @@
       "description": "Exact successful rendering.render run id, or latest; filmstrip defaults to latest matching timeline render."
     },
     {
+      "name": "include_media",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Explicitly include a relative, digest-verified copy of the admitted rendered video for offline playback."
+    },
+    {
       "name": "columns",
       "type": "integer",
       "required": false,
@@ -376,6 +383,11 @@
       {
         "input": "page_size",
         "flag": "--page-size",
+        "optional": true
+      },
+      {
+        "input": "include_media",
+        "flag": "--include-media",
         "optional": true
       }
     ]

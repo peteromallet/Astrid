@@ -10,6 +10,11 @@ Leaf evidence manifests make this boundary explicit with
 for navigation from an existing view. `resolved_project` and
 `resolved_timelines` carry the exact selected identities.
 
+Use the canonical [Astrid timeline skill](../../skill/SKILL.md) for the
+end-to-end workflow and its [timeline cookbook](../../skill/references/timeline-cookbook.md)
+for renderable document examples; this stage is the executor contract for the
+evidence-producing visualization path.
+
 ULID spelling has one deliberate compatibility seam. Public v10 timeline
 `create`, `list`, and `show` DTOs use the kernel's canonical lowercase
 Crockford spelling. Frozen timeline-visualize v1 identity and snapshot fields
@@ -29,13 +34,13 @@ Use `--view filmstrip` for continuity review. The existing diagram remains
 `--view structure`, which is the compatibility default. Filmstrip inputs are
 `sample` (`interval`, `clips`, `cuts`, `shots`), `every` (seconds, default 0.5)
 or `every_frames` (positive integer, mutually exclusive with `every`),
-`render_run` (exact successful run id or `latest`), `columns` (default 5), and
-`page_size` (default 50). Existing range, timestamp/context, clip, asset, and
-shot selectors restrict frame selection.
+`render_run` (exact successful run id or `latest`), `columns` (default 5),
+`page_size` (default 50), and the opt-in `include_media` flag. Existing range,
+timestamp/context, clip, asset, and shot selectors restrict frame selection.
 
 ```bash
 python3 -m astrid timelines visualize main --project demo \
-  --view filmstrip --render-run latest --every 0.5
+  --view filmstrip --render-run latest --every 0.5 --include-media
 python3 -m astrid timelines visualize main --project demo \
   --view filmstrip --render-run <exact-run-id> --range 10..20 --every-frames 6
 ```
@@ -49,7 +54,10 @@ data, never a public caller override.
 
 The frame index records integer frames, rational times, active clips, authored
 script segments, sample reasons, render provenance, and commands pinned to
-the exact render run. Intervals retain neighboring visual cut frames;
+the exact render run. When audio is present it also records a digest-scoped
+analysis identity, bounded channel-preserving waveform levels, measured
+low-amplitude quiet gaps, and (when explicitly admitted in the frozen input)
+projected speech phrases. Intervals retain neighboring visual cut frames;
 `clips` means picture clips, `cuts` means cut boundaries, and `shots` means
 authored story beat midpoints. There is no inferred scene detection.
 Sampling is bounded at 2,000 cards and fails with guidance to narrow the
@@ -60,8 +68,9 @@ PNG and SVG contact sheets, Markdown, and JSON frame cards. Cards show time,
 frame, human shot name, and wrapped script text. The filmstrip view is the
 unified inspector: it adds expandable declared visual/audio track lanes on the
 same time ruler and uses the frozen snapshot's integer clip intervals. Empty
-tracks remain visible; audio is a placement interval, not a fabricated
-waveform. A lane row means timing overlap at the selected time; it does not
+tracks remain visible; declared audio lanes are placement intervals, while
+rendered waveform rows appear only when the admitted render has an audio stream.
+A lane row means timing overlap at the selected time; it does not
 assert that the clip contributes visible or audible output when tracks are
 muted, occluded, transparent, or otherwise composited away. Preserve those
 frozen track flags in the lane metadata. Frame and clip selection share one
@@ -76,7 +85,10 @@ produce finer sampling from already captured frames; rerun the command for
 that. Script captions are segment-level, not word-aligned. “No script” is
 separate from any claim about acoustic silence. Filmstrip navigation uses
 its frame actions; legacy `--from-view` object navigation belongs to the
-structural view.
+structural view. Missing or uncertain speech timing is unavailable rather than
+approximated, opening the viewer never invokes a provider, and `--include-media`
+adds only a relative digest-verified video; the rendered mix is never presented
+as an isolated stem.
 
 ## Read-only contract
 
@@ -97,8 +109,9 @@ a gateway command).
 The rendered view writes `filmstrip-view/` and publishes `filmstrip-bundle.zip`,
 a standalone HTML file, and its result manifest as managed objects. The SDK
 verifies and extracts the bundle into a disposable local delivery directory,
-returning `html`, `pages`, `frame_index`, and `manifest_path`. The runtime
-objects remain the durable record.
+returning `html`, `pages`, `frame_index`, and `manifest_path`, plus verified
+`audio_analysis` and `media` paths when those members are present. The runtime
+objects remain the durable record and the result manifest covers every member.
 
 The structural view writes `agent-view/manifest.json` plus the mandatory machine bundle:
 
@@ -117,7 +130,8 @@ clock time are excluded from pack content identity.
 Cold selectors mirror the timeline-navigation façade of the executor: optional
 timeline reference (slug, UUID, or ULID), `--all`, `--shot`, `--range`, `--at`,
 `--clip`, `--asset`, `--context`, `--neighbors`, `--layout`, repeatable
-`--format`, `--filmstrip`, and `--rendered-video`. `project_slug` is the
+`--format`, `--filmstrip`, `--rendered-video`, and `--include-media`.
+`project_slug` is the
 executor-level project identity and is derived from `project=<slug>` for a
 managed SDK invocation. All selectors resolve canonical runtime timelines
 created/saved through the public timeline SDK. Standalone timeline paths and

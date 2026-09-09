@@ -23,6 +23,23 @@ python3 -m astrid --help
 python3 -m astrid projects list --json
 ```
 
+### Default Hivemind pack
+
+Astrid setup provisions the canonical Hivemind repository at an immutable
+revision, validates its strict v2 pack manifest, and composes its skill view.
+The same managed source inventory is used by discovery and the generic host:
+
+```bash
+python3 -m astrid.setup
+python3 -m astrid.setup --check --offline
+python3 -m astrid.setup --disable-pack hivemind
+python3 -m astrid.setup --restore-pack hivemind
+```
+
+Use `ASTRID_SOURCE_DECLARATIONS` or `--declarations` for a local Git mirror
+when developing offline. Skill sync is read-only with respect to source
+acquisition; Hivemind corpus search and retrieval still require network access.
+
 Use that environment for later commands too. The render worker checks its
 dependencies in an isolated Python process, so user-site-only installations
 are insufficient; install rendering dependencies into the active environment.

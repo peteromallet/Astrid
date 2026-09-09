@@ -390,9 +390,14 @@ def invoke_local_visualization(slug: str, *, run_module: Any, **extra_inputs: An
         "asset": "--asset", "context": "--context", "neighbors": "--neighbors",
         "from_view": "--from-view", "focus": "--focus", "layout": "--layout",
         "filmstrip": "--filmstrip", "rendered_video": "--rendered-video",
+        "include_media": "--include-media",
     }
     for key, flag in scalar_flags.items():
         value = inputs.get(key)
+        if key == "include_media":
+            if value:
+                argv.append(flag)
+            continue
         if value is not None:
             argv.extend([flag, str(value)])
     raw_sources = inputs.get("timeline_source")

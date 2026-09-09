@@ -784,6 +784,7 @@ def test_timelines_visualize_help_separates_legacy_input_from_manifest_compatibi
     assert "Timeline slug, UUID, or ULID" in normalized
     assert "Prior visualization manifest for frozen navigation" in normalized
     assert "returned durable manifest_path" in normalized
+    assert "--include-media" in normalized
 
 
 @pytest.mark.parametrize(

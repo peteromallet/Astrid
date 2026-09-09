@@ -300,7 +300,7 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     for name in (
         "layout", "filmstrip", "rendered_video", "shot",
         "view", "sample", "every", "every_frames", "render_run", "columns", "page_size",
-        "range", "at", "clip", "asset", "context", "neighbors", "from_view",
+        "include_media", "range", "at", "clip", "asset", "context", "neighbors", "from_view",
         "focus",
     ):
         value = getattr(parsed, name, None)
@@ -642,6 +642,10 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
                            help="Filmstrip contact sheet columns (default: 5).")
     subparser.add_argument("--page-size", type=int, default=None,
                            help="Filmstrip cards per static page (default: 50).")
+    subparser.add_argument(
+        "--include-media", action="store_true", default=None,
+        help="Include a relative, digest-verified rendered video for offline filmstrip playback.",
+    )
     subparser.add_argument("--layout", choices=("time-scaled", "linear", "both"), default=None)
     subparser.add_argument(
         "--filmstrip", choices=("auto", "off", "assets", "rendered"), default=None,

@@ -1,15 +1,15 @@
 """Freeze a managed render and its exact script identities for visual review."""
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from copy import deepcopy
 from fractions import Fraction
-import hashlib
 from typing import Any
 
 from .exceptions import CapabilityValidationError
 from .pagination import paged_rows
-from .project_render import _identifier, _state, _render_capability, _SUCCESS_STATES
+from .project_render import _SUCCESS_STATES, _identifier, _render_capability, _state
 
 
 def _fail(message: str) -> None:
@@ -73,7 +73,11 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
     if fps <= 0:
         _fail('Render frame rate is invalid.')
     tracks = {t['id']: t.get('kind', '') for t in config.get('tracks', [])}
-    from astrid.core.timeline.duration import clip_start_frame, clip_end_frame, timeline_duration_frames
+    from astrid.core.timeline.duration import (
+        clip_end_frame,
+        clip_start_frame,
+        timeline_duration_frames,
+    )
     clips = []
     for raw in config['clips']:
         clip = deepcopy(dict(raw))
@@ -119,7 +123,32 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
                 'binding_id': binding['binding_id'], 'head': binding['head'],
                 'media_id': binding['media_id'], 'timing_basis': 'shot_script',
                 'label': 'Shot script (not word-aligned)'})
-    return {'project_slug': project, 'timeline_id': authority['timeline_id'],
+    # A render may carry an immutable provider-independent annotation set in
+    # its frozen input envelope.  Project it here only; opening a filmstrip
+    # never discovers a transcript or calls an ASR provider.
+    from astrid.packs.rendering.executors.timeline_visualize.speech_projection import (
+        project_speech_annotations,
+    )
+    raw_annotations = inputs.get('speech_annotations', inputs.get('transcript_annotations'))
+    # Shot occurrences carry render placement, not source-audio bounds.  Only
+    # an explicitly admitted speech occurrence may be used for projection;
+    # falling back would make an unrelated phrase look word-aligned.
+    raw_occurrences = inputs.get('speech_occurrences')
+    audio_analysis = inputs.get('audio_analysis')
+    audio = deepcopy(audio_analysis) if isinstance(audio_analysis, Mapping) else None
+    if raw_annotations is not None or audio is not None:
+        audio = audio or {}
+        audio['speech'] = project_speech_annotations(
+            raw_annotations if isinstance(raw_annotations, list) else [],
+            raw_occurrences if isinstance(raw_occurrences, list) else [],
+            source_audio_digest=inputs.get('source_audio_digest') or audio.get('source_audio_digest'),
+            transcript_digest=inputs.get('transcript_digest'),
+            annotation_digest=inputs.get('annotation_digest'),
+            correction_version=inputs.get('correction_version', 0),
+            timing_method=inputs.get('timing_method'),
+            coverage=inputs.get('speech_coverage'),
+        )
+    result = {'project_slug': project, 'timeline_id': authority['timeline_id'],
         'timeline_name': authority.get('timeline_slug', authority['timeline_id']),
         'render_run_id': run_id, 'video_digest': video_digest,
         'fps_rational': [fps.numerator, fps.denominator],
@@ -130,6 +159,9 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
             'script_timing': 'shot_script',
             'script_mapping_available': bool(occurrences and frozen_shots),
             'script_mapping_note': 'Frozen shot script; no word alignment.' if occurrences and frozen_shots else 'Render did not pin shot placements and scripts; rerender for script labels.'}}
+    if audio is not None:
+        result['audio'] = audio
+    return result
 
 
 def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> dict:
@@ -204,4 +236,5 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
     snapshot['metadata']['selection'] = 'explicit_render' if exact else 'latest_current_render'
     return {'mode': 'filmstrip', 'filmstrip_snapshot': snapshot,
         'video_object_id': digest, 'video_digest': digest, 'render_run_id': run_id,
-        'project_id': project_id, 'timeline_id': authority['timeline_id']}
+        'project_id': project_id, 'timeline_id': authority['timeline_id'],
+        'include_media': bool(inputs.get('include_media', False))}

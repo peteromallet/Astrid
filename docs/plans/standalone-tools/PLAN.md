@@ -1,7 +1,8 @@
 # One canonical Hivemind source, consumed by Astrid
 
-Status: H1 implemented and H2 independently reviewed; Astrid integration is a plan,
-not an implemented or certified feature. This plan supersedes the exploratory
+Status: H1/H2 and local H3/A1/A2/A3 integration are implemented and boundary-
+certified on 2026-09-08; upstream publication is still separate. This plan
+supersedes the exploratory
 two-level integration proposals. It extends, rather than replaces,
 `../astrid-default-packs-and-skills/PLAN.md`.
 

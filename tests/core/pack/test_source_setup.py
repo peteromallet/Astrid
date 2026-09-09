@@ -9,9 +9,13 @@ import pytest
 from astrid.core.execution.generic_host import GenericPackHost
 from astrid.core.pack.discovery import discover_canonical_pack_metadata, discover_pack_metadata
 from astrid.core.pack.source_setup import (
+    DEFAULT_HIVEMIND_REPOSITORY,
+    DEFAULT_HIVEMIND_REVISION,
     SourceDeclaration,
     SourceSetupError,
     active_source_inventory,
+    declarations_from_json,
+    default_source_declarations,
     provision,
 )
 from astrid.sdk.discovery import _discover_pack_inventory
@@ -51,6 +55,19 @@ def _fixture_repo(root: Path, *, schema_version: int = 2) -> str:
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "fixture")
     return _git(root, "rev-parse", "HEAD")
+
+
+def test_default_source_policy_pins_the_canonical_external_hivemind_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ASTRID_SOURCE_DECLARATIONS", raising=False)
+    declarations = default_source_declarations()
+    assert declarations == (
+        SourceDeclaration(
+            pack_id="hivemind",
+            repository=DEFAULT_HIVEMIND_REPOSITORY,
+            revision=DEFAULT_HIVEMIND_REVISION,
+        ),
+    )
+    assert declarations_from_json() == declarations
 
 
 def test_local_git_v2_source_is_staged_once_and_shared(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

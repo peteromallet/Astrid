@@ -1,6 +1,9 @@
 # Default packs and pack-owned skills: implementation plan
 
-Status: planning complete; implementation has NOT been performed or certified.
+Status: local delivery implemented and boundary-certified on 2026-09-09; the
+canonical Hivemind source is pinned locally at the corrected get_item revision.
+Upstream publication remains an explicit external prerequisite before the
+remote default can be consumed by a fresh installation.
 Implementation bindings follow the prepared run configuration: Luna ordinarily,
 Sol for justified XHARD assignments. Exploration: three GPT-5.6 Luna agents,
 followed by coordinator source review. This document resolves the recommendations
@@ -76,7 +79,11 @@ unknown fields. Do not add a runtime-wide pack manager on speculation. Only
 change the neutral runtime if a concrete integration test demonstrates an API
 requirement that Astrid's existing host handoff cannot satisfy.
 
-## Verified gaps
+## Verified gaps (baseline inventory)
+
+The table below records the pre-implementation gaps that drove this plan. The
+required work in those rows is implemented in the current checkout; the final
+acceptance ledger and receipts below are the authoritative completion evidence.
 
 | Gap | Source evidence | Required work |
 | --- | --- | --- |
@@ -91,13 +98,16 @@ requirement that Astrid's existing host handoff cannot satisfy.
 | Prototype reports source availability using a copied bundle | Dirty generic-host branch and ledger additions | Remove bundle-specific shortcut; validate actual external source/admission |
 
 External Hivemind exists at the source path recorded in `source-state.json` and
-already has a pack manifest. Do not repeat the earlier mistaken claim that it is
-only a bare skill directory. Its present v1 manifest is the incompatibility.
+has a validated v2 pack manifest at local revision
+`50ff509240c5582a7335dc71920533b59be7792c`. This continuation closes the
+independent QA gap: canonical `get_item` keeps Discord/Snowflake identifiers as
+strings, uses the narrow `message_feed` lookup for messages, and preserves
+numeric resource/distillation IDs.
 
-## Proposed user/API surface
+## Implemented user/API surface
 
-The spelling below is a proposal for implementation, not a claim these commands
-already work. Keep setup outside the seven-family creative product gateway.
+These commands are implemented and covered by the setup, offline, discovery and
+skills receipts. Keep setup outside the seven-family creative product gateway.
 
 - `python -m astrid.setup`: provision configured default packs, then sync skills.
 - `python -m astrid.setup --check`: inspect installation/link readiness, no changes.
@@ -228,9 +238,10 @@ Use pack-owned imports and source layout, not `astrid.packs.hivemind` imports.
 Validate every referenced resource and module; preserve actual permissions,
 credential requirements and result contracts. Record source provenance.
 
-Pin the completed revision in Astrid's default source declaration. The present
-`abe41fdf72df3bbcfe45087eae64ccf50a1bb809` is inspection provenance, NOT an approved
-post-migration release pin. Never ship a placeholder SHA or silently follow HEAD.
+Pin the completed revision in Astrid's default source declaration. The local
+pin is `50ff509240c5582a7335dc71920533b59be7792c`; it is not yet published on
+`origin/main`, so remote publication remains a separate release action. Never
+ship a placeholder SHA or silently follow HEAD.
 Local Git fixtures/commits suffice for implementation tests; remote publication
 is a separate release operation, not authorized merely by this plan.
 
@@ -310,6 +321,25 @@ Existing suites to select from after reading current tests: `tests/test_skills.p
 `tests/v10/test_docs_cli_alignment.py`. Add source/host parity and composed-view
 resource tests rather than tests that merely assert rewritten prose.
 
+## Continuation correction — 2026-09-09
+
+Independent Hivemind QA identified one actionable acceptance gap after the
+2026-09-08 receipt: canonical `get_item` needed a narrow message-feed lookup
+and string-safe Discord/Snowflake identifiers. Hivemind now closes that gap at
+`50ff509240c5582a7335dc71920533b59be7792c`; numeric resource/distillation IDs
+remain accepted. Astrid's default declaration and managed local declaration
+both point to that immutable revision.
+
+The pinned Hivemind suite is `135 passed`. Managed setup, offline check,
+seven-executor discovery, all three harness skill views, and brokered live
+read-only search/get_item receipts passed against the managed tree. The exact
+receipt is in `.otto/runs/astrid-default-packs-and-skills/h3-t1-final-receipt.md`.
+The remote Git origin still advertises only `45927adc9a2738f4650a58b15b1a8ab510682554`;
+publication is unauthorized and was not attempted, so fresh remote installation
+at the new pin remains an external prerequisite and this is not release-ready.
+The three stale runtime schema-digest fixture failures remain recorded and no
+fixture was changed.
+
 ## Scope, estimate, and stopping point
 
 Expected effort: approximately 2–4 focused engineering days, depending
@@ -321,11 +351,10 @@ marketplace/catalog UI, new runtime state stores, arbitrary dependency solvers,
 background auto-updating packs, broad pack taxonomy redesign, and fixing unrelated
 creative pipelines. A small explicit default-source list is sufficient.
 
-This turn delivers a plan only. Implementation should stop when the complete
-fresh-install → skill-navigation → read-only search/retrieval path and the key
-recovery/opt-out cases pass. Do not certify completion from symlink or unit tests
-alone. The exact post-migration Hivemind pin is an implementation output, not an
-unanswered user preference.
+The local implementation stops after the complete managed-install →
+skill-navigation → read-only search/retrieval path passes. Do not certify
+remote release readiness until the immutable Hivemind pin is published by an
+authorized upstream actor and a fresh remote installation resolves it.
 
 ## Evidence and corrections to agent memos
 
@@ -339,3 +368,43 @@ memos: the neutral setup owner was not established; Astrid host bootstrap is a
 concrete existing seam. A skill view must contain root SKILL.md. Default policy
 must not depend on a v2-invalid install_tier field. Historical installed counts
 are not live discovery. Unrelated dirty files are to preserve, not revert.
+
+## Final Megado completion audit — 2026-09-09
+
+This audit rechecked the current dirty `main` checkout rather than inheriting
+the earlier delivery verdict. Source remained at Astrid `HEAD`
+`82736138dd8b44a6dbaa7d229f38ef5c065bc79a`; no worktree, checkout, reset,
+clean, discard, push, merge, deploy, publish, or corpus write was performed.
+
+The audit fixed two genuine in-scope integration defects: the public timeline
+parser now accepts the documented `--include-media` option, and `skills doctor`
+now validates the composed gateway view used by managed installations. A direct
+CLI regression assertion was added and passed.
+
+Current acceptance receipts:
+
+- Pinned Hivemind suite in `/Users/peteromalley/Documents/banodoco-workspace/hivemind`:
+  `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_cli.py tests/test_search.py tests/test_get_item.py` — **135 passed**.
+- Plan-1 setup/discovery/identity/skills/package/docs gate: **135 passed, 8
+  subtests passed**.
+- Full relevant Astrid gate: **173 passed, 1 skipped, 3 deselected, 8
+  subtests passed** when the three incompatible daemon-schema fixtures are
+  excluded. The unfiltered run reproduced exactly those three failures; each
+  is blocked by daemon schema `sha256:64f9c5ff...` versus generated-client
+  schema `sha256:4be7e530...`. The health/identity check remains intact.
+- Managed setup and `--check --offline --deep` succeeded against a fresh local
+  bare clone pinned to Hivemind `50ff509240c5582a7335dc71920533b59be7792c`.
+  The resulting source was managed, its manifest/tree identities were stable,
+  skill doctor returned code 0 with zero failed, drift, or healed entries, and
+  discovery exposed all seven Hivemind executors.
+- Existing live receipt remains valid for the same immutable pin: brokered
+  read-only `hivemind.search` and `hivemind.get_item` succeeded; no write route
+  or corpus publication was used. Full raw details are in
+  `.otto/runs/astrid-default-packs-and-skills/h3-t1-final-receipt.md` and the
+  final acceptance ledger.
+
+Final local verdict: **complete locally, with an explicit external publication
+prerequisite**. The local Hivemind revision is `50ff509...`; the recorded
+remote origin remains `45927adc...`. Because upstream publication is not
+authorized, fresh remote installation and release readiness remain unclaimed.
+The independent current-candidate verdict is recorded in the run ledger.

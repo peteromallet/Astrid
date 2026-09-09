@@ -9,8 +9,8 @@ def test_shipped_ledger_reconciles_historical_capability_sets():
     ledger = load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
     sources = ledger["sources"]
 
-    assert sources["counts"]["pack_labels"] == 94
-    assert sources["counts"]["historical_pack_labels"] == 99
+    assert sources["counts"]["pack_labels"] == 86
+    assert sources["counts"]["historical_pack_labels"] == 91
     assert sources["counts"]["executor_inventory"] == 74
     assert sources["counts"]["legacy_ids"] == 19
     assert all(section["complete"] for section in sources["coverage"].values())
@@ -35,7 +35,7 @@ def test_host_consumes_the_reconciled_ledger_before_readiness_matrix():
     from astrid.core.execution.generic_host import GenericPackHost
 
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])
-    assert host.ledger["sources"]["counts"]["pack_labels"] == 94
+    assert host.ledger["sources"]["counts"]["pack_labels"] == 86
     assert len(host.matrix) == 72
 
 
@@ -103,15 +103,15 @@ def test_removed_reigh_registry_is_historical_and_inert():
     assert all(row["executable"] is False for row in rows)
 
 
-def test_hivemind_census_matches_the_seven_shipped_executors():
+def test_hivemind_census_keeps_the_external_contract_without_claiming_installation():
     ledger = load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
     census = ledger["sources"]["hivemind"]["external_census"]
 
     assert census == {
         "declared_count": 7,
-        "installed_count": 7,
-        "unresolved": False,
-        "note": "Seven Hivemind executors are shipped by the default pack; no historical eighth item is guessed.",
+        "installed_count": 0,
+        "unresolved": True,
+        "note": "Seven Hivemind executors are declared by the optional external pack; installation is proven by the managed source inventory.",
     }
 
 
@@ -150,30 +150,10 @@ def test_source_census_still_rejects_unreviewed_pack_labels(monkeypatch):
         load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
 
 
-def test_hivemind_source_labels_have_shipped_matrix_executors():
-    from astrid.core.pack.loader import _load_manifest_payload
-
+def test_hivemind_matrix_contract_is_not_mistaken_for_bundled_source():
     ledger = load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
-    labels = {
-        row["label"] for row in ledger["sources"]["pack_labels"]
-        if row["pack"] == "hivemind"
-    }
-    label_to_executor = {
-        "search_corpus": "search",
-        "get_item": "get_item",
-        "refresh_media": "refresh_media",
-        "contribute_resource": "contribute",
-        "contribute_distillation": "contribute",
-        "ingest_article": "ingest_article",
-        "ingest_workflow": "ingest_workflow",
-        "ingest_youtube": "ingest_youtube",
-    }
-    assert labels == set(label_to_executor)
-    expected_ids = {f"hivemind.{name}" for name in label_to_executor.values()}
-    shipped_ids = {
-        _load_manifest_payload(path)["id"]
-        for path in Path("astrid/packs/hivemind/executors").glob("*/executor.yaml")
-    }
+    assert not any(row["pack"] == "hivemind" for row in ledger["sources"]["pack_labels"])
+    assert ledger["sources"]["hivemind"]["disposition"] == "optional_external"
+    assert len(ledger["sources"]["hivemind"]["executor_ids"]) == 7
     matrix_ids = {row["id"] for row in ledger["capabilities"]}
-    assert shipped_ids == expected_ids
-    assert expected_ids <= matrix_ids
+    assert set(ledger["sources"]["hivemind"]["executor_ids"]) <= matrix_ids

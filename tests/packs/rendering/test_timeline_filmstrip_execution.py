@@ -1,6 +1,9 @@
 import hashlib
 import json
+import shutil
+import subprocess
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -38,3 +41,40 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
 def test_execution_requires_admitted_authority(tmp_path):
     with pytest.raises(ValueError, match='admission'):
         execution.execute_filmstrip(Namespace(filmstrip_authority=None))
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='ffmpeg required')
+def test_execution_delivers_audio_sidecar_optional_media_and_reuses_cache(tmp_path, monkeypatch):
+    video = tmp_path / 'video.mp4'
+    subprocess.run([
+        'ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=blue:size=64x64:rate=4:duration=1',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=8000:duration=1',
+        '-c:v', 'libx264', '-c:a', 'aac', '-shortest', '-y', str(video)
+    ], check=True)
+    digest = 'sha256:' + hashlib.sha256(video.read_bytes()).hexdigest()
+    snapshot = dict(project_slug='demo', timeline_id='main', timeline_name='Main', render_run_id='run',
+                    video_digest=digest, fps_rational=[4, 1], duration_frames=4, clips=[], tracks=[], scripts=[])
+    authority = dict(mode='filmstrip', filmstrip_snapshot=snapshot, video_digest=digest)
+    calls = []
+    original = execution.analyze_audio
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(execution, 'analyze_audio', counted)
+
+    def args(out):
+        return Namespace(filmstrip_authority=json.dumps(authority), project_slug='demo', rendered_video=video,
+                         range_value=None, out=out, include_media=True)
+
+    first = execution.execute_filmstrip(args(tmp_path / 'one'))
+    second = execution.execute_filmstrip(args(tmp_path / 'two'))
+    assert len(calls) == 1
+    for result in (first, second):
+        index = json.loads((Path(result['outputs']['pack_root']) / 'frame-index.json').read_text())
+        assert index['audio']['status'] == 'ok'
+        assert index['audio_sidecar']['verified'] is True
+        assert index['audio_sidecar']['digest'].startswith('sha256:')
+        assert index['media']['source_digest'] == digest
+        manifest = json.loads(open(result['manifest_path']).read())
+        paths = {entry['path'] for entry in manifest['outputs']}
+        assert 'audio-analysis.json' in paths and 'media/rendered-video.mp4' in paths

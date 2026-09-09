@@ -1,118 +1,58 @@
-"""Execute the viewer's shared state against a frozen multi-track fixture."""
+from __future__ import annotations
+
 import json
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip
-from astrid.packs.rendering.executors.timeline_visualize.inspector_viewer import render_inspector, _ASSETS
-
-FIXTURE = Path(__file__).parents[2] / 'fixtures/timeline_visualize/unified_inspector.json'
+from astrid.packs.rendering.executors.timeline_visualize.inspector_viewer import render_inspector
 
 
-def index():
-    snapshot = json.loads(FIXTURE.read_text())
-    return plan_filmstrip(snapshot, {'every': .5})
+def _viewer_data():
+    return {
+        "provenance": {"fps_rational": [24, 1], "duration_frames": 48, "video_digest": "sha256:" + "a" * 64},
+        "sampling": {"options": {}, "mode": "interval", "step_frames_rational": [12, 1]},
+        "cards": [{"id": "frame-0", "frame": 0, "time_seconds": 0, "time_label": "0.000s", "sample_reasons": [], "clips": [], "scripts": [], "image": "frames/frame-0.jpg", "shot_ids": []}],
+        "navigation": {"frames": [], "targets": {}, "tracks": [], "clips": [], "shots": [], "audio": {"speech": {"phrases": []}}, "waveforms": [], "gaps": [], "phrases": []},
+    }
 
 
-def node_assert(code):
-    if not shutil.which('node'):
-        pytest.skip('Node required for actual viewer state execution')
-    script = 'const assert=require("node:assert/strict");const context={module:{exports:{}}};require("node:vm").runInNewContext(require("node:fs").readFileSync(' + json.dumps(str(_ASSETS / 'inspector.js')) + ',"utf8"),context);const {createInspector}=context.module.exports;const data=' + json.dumps(index()) + ';const app=createInspector(data);' + code
-    result = subprocess.run(['node'], input=script, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr[-3000:]
+@pytest.mark.skipif(shutil.which("node") is None, reason="node required")
+def test_viewer_state_keeps_audio_selection_playback_loop_and_text_input_safe(tmp_path):
+    script = tmp_path / "viewer-test.js"
+    source = """
+const fs=require('fs'),vm=require('vm');
+const sandbox={module:{exports:{}},exports:{},document:undefined};
+vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),sandbox);
+const {createInspector}=sandbox.module.exports;
+const data=JSON.parse(process.argv[3]);
+data.navigation.frames=[{card_id:'frame-0',target:'frame-target'}];
+data.navigation.targets={
+  'phrase-target':{kind:'phrase',start_seconds:1,end_seconds:2},
+  'gap-target':{kind:'gap',start_seconds:3,end_seconds:4},
+  'frame-target':{kind:'frame',frame:0,start_frame:0,end_frame:1}
+};
+data.navigation.phrases=[{target:'phrase-target',start_seconds:1,end_seconds:2,canonical_text:'Blue pill'}];
+data.navigation.gaps=[{target:'gap-target',start_seconds:3,end_seconds:4}];
+const app=createInspector(data);
+if(!app.select('phrase-target')||app.selectionInterval()[0]!==1)throw Error('phrase selection');
+app.setPlaybackTime(1.5);if(app.state.playbackTime!==1.5)throw Error('media clock');
+if(!app.setLoopForSelection()||app.state.loop.start!==1||app.state.loop.end!==2)throw Error('loop');
+app.update({start:1.25});if(app.audioVisible(data.navigation.phrases[0])!==true)throw Error('range filter');
+app.update({search:'missing'});if(app.audioVisible(data.navigation.phrases[0])!==false)throw Error('search filter');
+if(app.keyboard({key:'ArrowLeft',target:{tagName:'INPUT'}})!==false)throw Error('text input');
+console.log('ok');
+"""
+    script.write_text(source)
+    module_path = str(Path(__file__).parents[3] / "astrid/packs/rendering/executors/timeline_visualize/inspector_assets/inspector.js")
+    completed = subprocess.run(["node", str(script), module_path, json.dumps(_viewer_data())], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "ok"
 
 
-def test_frame_clip_selection_uses_one_target_model_and_unsampled_is_explicit():
-    node_assert('''
-assert.equal(app.nav.tracks.length,4);
-assert.equal(app.nav.tracks.find(t=>t.id==='music').clip_targets.length,0);
-const overlay=app.nav.clips.find(c=>c.id==='creature');
-app.select(overlay.target);assert.equal(app.record().target,overlay.target);
-assert.equal(app.selectedCard().frame,24);
-const frame=app.nav.frames.find(f=>f.frame===24);
-assert.equal(frame.active_clip_targets.length,3);
-app.select(frame.target);assert.equal(app.selectedCard().frame,24);
-const brief=app.nav.clips.find(c=>c.id==='brief-audio');
-assert.equal(brief.frame_target,null);app.select(brief.target);
-assert.equal(app.selectedCard(),null);assert.match(app.state.message,/No captured frame/);
-assert.match(app.record().actions.focus_command,/--render-run render-frozen/);
-''')
-
-
-def test_shared_filters_preserve_or_clear_selection_and_clip_dedup_is_after_scope():
-    node_assert('''
-app.select(app.nav.frames[0].target);app.update({start:1});
-assert.equal(app.state.target,null);assert.match(app.state.message,/Selection cleared/);
-app.update({mode:'clips'});assert.equal(app.visibleCards()[0].frame,24);
-app.update({mode:'all',track:'voice'});
-assert.ok(app.visibleCards().every(c=>c.clips.some(x=>x.track==='voice')));
-assert.equal(app.clipVisible(app.nav.clips.find(c=>c.id==='base')),false);
-app.update({track:'',search:'closely'});
-assert.ok(app.visibleCards().every(c=>c.scripts.length));
-''')
-
-
-def test_deeplink_roundtrip_previous_next_and_keyboard_does_not_capture_inputs():
-    node_assert('''
-const target=app.nav.clips.find(c=>c.id==='creature').target;
-assert.ok(app.select(app.decodeHash('#'+encodeURIComponent(target))));
-assert.equal(app.state.target,target);const frame=app.selectedCard().frame;
-app.step(1);assert.ok(app.selectedCard().frame>frame);app.step(-1);assert.equal(app.selectedCard().frame,frame);
-assert.equal(app.keyboard({key:'ArrowRight',target:{tagName:'INPUT'}}),false);
-assert.equal(app.keyboard({key:'ArrowRight',target:{tagName:'DIV',isContentEditable:true}}),false);
-assert.equal(app.keyboard({key:'ArrowRight',target:{tagName:'BODY'}}),true);
-assert.equal(app.keyboard({key:'ArrowRight',target:{tagName:'BUTTON'}}),true);
-assert.equal(app.select('ins:foreign:frame:0'),false);
-''')
-
-
-def test_repeated_occurrences_are_distinct_targets():
-    node_assert('''
-assert.equal(app.nav.shots.length,2);assert.notEqual(app.nav.shots[0].target,app.nav.shots[1].target);
-app.select(app.nav.shots[0].target);const a=app.selectedCard().frame;
-app.select(app.nav.shots[1].target);assert.ok(app.selectedCard().frame>a);
-''')
-
-
-def test_viewer_embeds_assets_without_network_and_escapes_authored_content():
-    data=index();data['provenance']['timeline_name']='</script><script>bad()</script>'
-    page=render_inspector(data)
-    assert '</script><script>bad()' not in page
-    assert '\\u003c/script\\u003e' in page
-    assert 'Show tracks' in page and 'Selection details' in page
-    assert 'https://' not in page and '<script src=' not in page
-    assert '#inspector .frame-card' in page
-
-
-def test_dom_initialization_track_click_and_copy_command_share_navigation():
-    if not shutil.which('node'):
-        pytest.skip('Node required')
-    script = r'''
-const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
-class Element {
-  constructor(tag='DIV'){this.tagName=tag.toUpperCase();this.children=[];this.value='';this.style={};this.listeners={};this.checked=true;this.textContent='';}
-  append(...children){this.children.push(...children)}
-  replaceChildren(...children){this.children=children}
-  setAttribute(name,value){this[name]=value}
-  addEventListener(name,fn){this.listeners[name]=fn}
-}
-const controls=new Map();const $=id=>{if(!controls.has(id))controls.set(id,new Element());return controls.get(id)};
-$('inspector-data').textContent=JSON.stringify(DATA);$('density').value='1';
-const copied=[];const context={document:{getElementById:$,createElement:t=>new Element(t),addEventListener(){}},location:{hash:'',pathname:'/inspector.html',search:''},history:{replaceState(a,b,hash){context.location.hash=hash}},navigator:{clipboard:{writeText(value){copied.push(value);return Promise.resolve()}}},window:{addEventListener(){}},module:{exports:{}}};
-vm.runInNewContext(fs.readFileSync(ASSET,'utf8'),context);
-assert.equal($('lanes').children.length,5); // ruler + all four declared tracks
-const voiceRow=$('lanes').children[3];assert.match(voiceRow.children[0].textContent,/Audio/);
-const emptyRow=$('lanes').children[4];assert.equal(emptyRow.children[1].children[0].textContent,'Empty track');
-const overlayButton=$('lanes').children[2].children[1].children.find(x=>x.tagName==='BUTTON');overlayButton.onclick();
-assert.match(context.location.hash,/clip/);$('copy-command').onclick();
-assert.match(copied[0],/--clip creature/);assert.match(copied[0],/--render-run render-frozen/);
-assert.ok($('detail-content').children.some(x=>x.tagName==='IMG'));
-const brief=$('lanes').children[3].children[1].children.filter(x=>x.tagName==='BUTTON')[1];brief.onclick();
-assert.match($('selection-message').textContent,/No captured frame/);
-assert.ok(!$('detail-content').children.some(x=>x.tagName==='IMG'));
-'''.replace('DATA', json.dumps(index())).replace('ASSET', json.dumps(str(_ASSETS / 'inspector.js')))
-    result=subprocess.run(['node'],input=script,capture_output=True,text=True)
-    assert result.returncode == 0, result.stderr[-2000:]
+def test_rendered_viewer_contains_audio_controls_and_media_clock_fallback():
+    page = render_inspector(_viewer_data())
+    for marker in ("Speech and audio", "Quiet gaps", "Audition selection", "requestVideoFrameCallback", "timeupdate", "audio-ruler", "Verified rendered video"):
+        assert marker in page

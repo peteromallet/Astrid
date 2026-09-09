@@ -19,20 +19,30 @@ from .harnesses import ADAPTERS, HarnessAdapter, adapter_for, all_adapters
 def default_descriptors(
     descriptors: Iterable[SkillDescriptor] | None = None,
 ) -> list[SkillDescriptor]:
-    """Return the gateway plus explicitly taxonomy-default skill packs.
+    """Return the gateway plus setup-selected default skill packs.
 
-    First-party manifests historically omit ``install_tier`` and retain their
-    existing explicit-install behavior.  Packs that explicitly declare a
-    default tier are installed on first harness discovery through this
-    existing skill layer.  Hivemind is retained as the compatibility default
-    while older canonical manifests are upgraded to carry that declaration.
+    Setup policy owns default external-pack selection.  Managed sources are
+    therefore defaults only after they are provisioned and admitted; a v2
+    pack manifest does not need a forbidden installer-specific field.
+    First-party manifests that explicitly declare a legacy taxonomy tier keep
+    their existing behavior.
     """
     from astrid.core.pack import load_pack_manifest, pack_manifest_path
+    from astrid.core.pack.source_setup import active_source_inventory
 
     available = list(descriptors if descriptors is not None else list_skills())
     result: list[SkillDescriptor] = [d for d in available if d.pack_id == "_core"]
+    try:
+        managed_default_ids = {
+            source.pack_id for source in active_source_inventory().sources
+        }
+    except Exception:
+        managed_default_ids = set()
     for descriptor in available:
         if descriptor.pack_id == "_core":
+            continue
+        if descriptor.pack_id in managed_default_ids:
+            result.append(descriptor)
             continue
         manifest_path = pack_manifest_path(descriptor.skill_dir.parent)
         if manifest_path is None:
@@ -383,7 +393,25 @@ def doctor(*, state_path: Path | None = None, heal: bool = False) -> dict:
     state_changed = False
     for harness_name, adapter in detected.items():
         installed_ids = set(current_state["installs"].get(harness_name, {}).keys())
-        for descriptor in descriptors:
+        descriptors_for_harness = descriptors
+        core_install = current_state["installs"].get(harness_name, {}).get("_core")
+        if isinstance(core_install, dict) and isinstance(core_install.get("target"), str):
+            from .view import compose_view
+
+            view_root = (state_path or state.state_path()).parent / "skills" / harness_name
+            try:
+                points_to_view = Path(core_install["target"]).expanduser().resolve() == view_root.resolve()
+            except OSError:
+                points_to_view = False
+            if points_to_view:
+                core = next(d for d in descriptors if d.pack_id == "_core")
+                pack_descriptors = [d for d in descriptors if d.pack_id != "_core"]
+                gateway, _steps, view_packs = compose_view(
+                    view_root, core, pack_descriptors, dry_run=True
+                )
+                descriptors_for_harness = [gateway, *view_packs]
+
+        for descriptor in descriptors_for_harness:
             fs_record = adapter.discover_installed(descriptor)
             in_state = descriptor.pack_id in installed_ids
             in_fs = fs_record is not None

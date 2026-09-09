@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import base64
-from fractions import Fraction
 import html
 import json
 import math
-from pathlib import Path
+import shutil
 import subprocess
 import textwrap
+from fractions import Fraction
+from pathlib import Path
 
-from astrid.core.timeline.duration import clip_start_frame, clip_end_frame
+from astrid.core.timeline.duration import clip_end_frame, clip_start_frame
+
 from .inspector_navigation import build_inspector_navigation
 from .inspector_viewer import render_inspector
 
@@ -145,7 +147,11 @@ def plan_filmstrip(snapshot: dict, options: dict) -> dict:
     for card, target in zip(cards, navigation['frames']):
         card['navigation_target'] = target['target']
         card['actions']['focus_command'] = target['actions']['focus_command']
-    return {'navigation': navigation, 'schema': 'astrid.filmstrip.v1', 'provenance': {k: snapshot.get(k) for k in ('project_slug', 'timeline_id', 'timeline_name', 'render_run_id', 'video_digest', 'fps_rational', 'duration_frames', 'metadata')}, 'sampling': {'mode': mode, 'range': [float(lo), float(hi)], 'step_frames_rational': [step.numerator, step.denominator], 'options': options}, 'cards': cards}
+    return {'navigation': navigation, 'schema': 'astrid.filmstrip.v1',
+            'provenance': {k: snapshot.get(k) for k in ('project_slug', 'timeline_id', 'timeline_name', 'render_run_id', 'video_digest', 'fps_rational', 'duration_frames', 'metadata')},
+            'audio': navigation['audio'],
+            'sampling': {'mode': mode, 'range': [float(lo), float(hi)], 'step_frames_rational': [step.numerator, step.denominator], 'options': options},
+            'cards': cards}
 
 
 def _lines(card):
@@ -243,6 +249,29 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
     out_root.mkdir(parents=True, exist_ok=True)
     cards = index['cards']
     _extract(video_path, cards, out_root)
+    media_record = None
+    if options.get('include_media'):
+        media_root = out_root / 'media'
+        media_root.mkdir(parents=True, exist_ok=True)
+        suffix = video_path.suffix.lower() if video_path.suffix.lower() in {'.mp4', '.mov', '.webm', '.mkv'} else '.mp4'
+        destination = media_root / f'rendered-video{suffix}'
+        shutil.copyfile(video_path, destination)
+        digest = 'sha256:' + __import__('hashlib').sha256(destination.read_bytes()).hexdigest()
+        media_record = {'path': destination.relative_to(out_root).as_posix(), 'digest': digest,
+                        'bytes': destination.stat().st_size, 'verified': True, 'kind': 'rendered_video'}
+        media_record['source_digest'] = snapshot.get('video_digest')
+        index['media'] = media_record
+        index['provenance']['media'] = media_record
+    audio = index.get('audio')
+    if isinstance(audio, dict) and audio.get('status') not in (None, 'not_analyzed'):
+        audio_path = out_root / 'audio-analysis.json'
+        audio_path.write_text(json.dumps(audio, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+        audio_digest = 'sha256:' + __import__('hashlib').sha256(audio_path.read_bytes()).hexdigest()
+        index['audio_sidecar'] = {'path': audio_path.relative_to(out_root).as_posix(),
+                                  'analysis_identity': audio.get('analysis_identity'),
+                                  'render_digest': audio.get('render_digest'),
+                                  'digest': audio_digest, 'bytes': audio_path.stat().st_size,
+                                  'verified': audio.get('render_digest') == snapshot.get('video_digest')}
     paths = _static(cards, out_root, columns, page_size, snapshot.get('timeline_name') or snapshot['timeline_id'], snapshot['render_run_id'], (snapshot.get('metadata') or {}).get('selection') or options.get('render_run') or 'latest')
     for name, filename in [('json', 'frame-index.json'), ('html', 'filmstrip.html'), ('markdown', 'filmstrip.md')]:
         paths[name] = str(out_root / filename)

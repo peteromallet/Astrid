@@ -68,21 +68,49 @@ def test_corpus_write_still_requires_project(monkeypatch, project):
     client = SimpleNamespace(projects=SimpleNamespace(current=lambda: DomainResult.failure(
         ErrorObject("not_found", "no project is selected", {})
     )))
+    fake_capability = SimpleNamespace(
+        id="fixture.write", capability_type="executor", native_kind="external",
+        definition={"metadata": {"project_scope": "required"}},
+    )
+    fake_registry = SimpleNamespace(
+        get=lambda executor_id: SimpleNamespace(
+            to_dict=lambda: {"id": executor_id, "version": "1"}
+        )
+    )
+    fake_sdk = SimpleNamespace(
+        _load_registries=lambda **kwargs: (fake_registry, None, None),
+        get_capability=lambda *args, **kwargs: fake_capability,
+    )
+    monkeypatch.setattr(invocation, "_sdk_module", lambda: fake_sdk)
     monkeypatch.setattr(invocation, "_kernel_invoke", lambda *args, **kwargs: pytest.fail("must not admit"))
     with pytest.raises(invocation.CapabilityPreconditionError, match="project is required"):
-        invocation.invoke("hivemind.contribute", kind="executor", client=client, project=project)
+        invocation.invoke("fixture.write", kind="executor", client=client, project=project)
 
 
 def test_project_work_reuses_last_selection(monkeypatch):
     client = SimpleNamespace(projects=SimpleNamespace(current=lambda: DomainResult.success(
         {"project": {"project_id": "P-selected"}}
     )))
+    fake_capability = SimpleNamespace(
+        id="fixture.write", capability_type="executor", native_kind="external",
+        definition={"metadata": {"project_scope": "required"}},
+    )
+    fake_registry = SimpleNamespace(
+        get=lambda executor_id: SimpleNamespace(
+            to_dict=lambda: {"id": executor_id, "version": "1"}
+        )
+    )
+    fake_sdk = SimpleNamespace(
+        _load_registries=lambda **kwargs: (fake_registry, None, None),
+        get_capability=lambda *args, **kwargs: fake_capability,
+    )
+    monkeypatch.setattr(invocation, "_sdk_module", lambda: fake_sdk)
     seen = []
     def admit(capability, **kwargs):
         seen.append(kwargs["project"])
         return "R-1", "T-1", "A-1", None, {"ok": True}, True, None
     monkeypatch.setattr(invocation, "_kernel_invoke", admit)
-    result = invocation.invoke("hivemind.contribute", kind="executor", client=client)
+    result = invocation.invoke("fixture.write", kind="executor", client=client)
     assert result.ok
     assert seen == ["P-selected"]
 

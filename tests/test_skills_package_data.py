@@ -6,12 +6,12 @@ from astrid.skills import default_pack_ids
 from astrid.skills import state
 
 
-def test_default_hivemind_skill_is_a_package_resource() -> None:
+def test_hivemind_is_not_bundled_into_the_astrid_package() -> None:
     root = resources.files("astrid")
     skill = root.joinpath("packs", "hivemind", "skill", "SKILL.md")
     manifest = root.joinpath("packs", "hivemind", "pack.yaml")
-    assert skill.is_file()
-    assert manifest.is_file()
+    assert not skill.exists()
+    assert not manifest.exists()
 
 
 def test_hivemind_is_not_hardcoded_as_a_default_skill() -> None:

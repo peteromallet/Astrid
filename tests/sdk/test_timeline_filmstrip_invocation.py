@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -94,6 +95,42 @@ def test_bundle_traversal_rejected():
     client = SimpleNamespace(media=SimpleNamespace(read_bytes=lambda _: data))
     with pytest.raises(invocation.CapabilityInvocationError, match='unsafe'):
         invocation._materialize_filmstrip_outputs(raw, client)
+
+
+def test_bundle_rehydration_exposes_verified_audio_and_media(tmp_path):
+    import hashlib
+    import io
+    import json
+    import shutil
+    import zipfile
+
+    members = {
+        'filmstrip.html': b'<html>review</html>',
+        'filmstrip-001.png': b'png',
+        'audio-analysis.json': b'{"status":"ok"}\n',
+        'media/rendered-video.mp4': b'video',
+    }
+    index = json.dumps({'media': {'path': 'media/rendered-video.mp4'}, 'audio_sidecar': {'path': 'audio-analysis.json'}}).encode()
+    members['frame-index.json'] = index
+    manifest_members = [
+        {'path': name, 'content_hash': 'sha256:' + hashlib.sha256(content).hexdigest(), 'bytes': len(content)}
+        for name, content in members.items()
+    ]
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w') as bundle:
+        bundle.writestr('manifest.json', json.dumps({'kind': 'timeline_filmstrip', 'outputs': manifest_members}))
+        for name, content in members.items():
+            bundle.writestr(name, content)
+    data = archive.getvalue()
+    raw = {'outputs': {'artifacts': [{'name': 'filmstrip_bundle', 'digest': 'sha256:' + hashlib.sha256(data).hexdigest(), 'size': len(data)}]}}
+    client = SimpleNamespace(media=SimpleNamespace(read_bytes=lambda _: data))
+    manifest = invocation._materialize_filmstrip_outputs(raw, client)
+    try:
+        assert raw['outputs']['audio_analysis'].endswith('audio-analysis.json')
+        assert raw['outputs']['media'].endswith('rendered-video.mp4')
+        assert Path(raw['outputs']['audio_analysis']).read_bytes() == members['audio-analysis.json']
+    finally:
+        shutil.rmtree(Path(manifest).parent)
 
 
 def test_structure_rejects_filmstrip_controls():

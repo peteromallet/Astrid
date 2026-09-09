@@ -43,7 +43,8 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
     if sample != 'interval' and (every is not None or frames is not None):
         raise ValueError('every/every_frames apply only to sample=interval')
     result: dict[str, Any] = {'sample': sample, 'every': every if every is not None else (None if frames else 0.5),
-                              'every_frames': frames, 'max_frames': 2000}
+                              'every_frames': frames, 'max_frames': 2000,
+                              'include_media': bool(values.get('include_media', False))}
     for name, default, maximum in [('columns', 5, 8), ('page_size', 50, 100)]:
         n = values.get(name, default)
         if n is None:

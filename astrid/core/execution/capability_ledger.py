@@ -351,17 +351,13 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
         if row.get("discovery_status") != "discovered":
             row.setdefault("executable", False)
     expected_hivemind = sorted(row["id"] for row in executors if row["id"].startswith("hivemind."))
-    # Blessed census baseline. Advance these counts only when new source
-    # labels are real, implemented, and matrix-covered: 2026-09-04 adds the
-    # local/discord_local/seedance_local packs (6 labels) and vibecomfy
-    # inspect/edit (2 labels); all implemented, pack tests passing, matrix
-    # entries present in config/astrid-beta-capabilities.json. On 2026-09-08,
-    # the shipped Hivemind pack adds eight labels backed by seven matrix
-    # executors (resource/distillation contributions share one executor), and
-    # the accepted Wan2GP pack adds two further labels.
+    # Blessed census baseline. Hivemind remains represented by the optional
+    # external contract below; it is deliberately absent from the in-tree
+    # source-label census. Only labels backed by manifests in this checkout
+    # advance these counts.
     coverage = {
-        "source_labels": {"source": 94, "ledger": len(labels), "missing": [], "complete": len(labels) == 94},
-        "historical_source_labels": {"source": 99, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 99},
+        "source_labels": {"source": 86, "ledger": len(labels), "missing": [], "complete": len(labels) == 86},
+        "historical_source_labels": {"source": 91, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 91},
         "executor_inventory": {"source": 74, "ledger": len(executors), "missing": [], "complete": len(executors) == 74},
         "legacy_ids": {"source": 19, "ledger": len(legacy), "missing": [], "complete": len(legacy) == 19},
     }
@@ -382,11 +378,11 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
             "executor_ids": expected_hivemind,
             "external_census": {
                 "declared_count": 7,
-                "installed_count": len(expected_hivemind),
-                "unresolved": len(expected_hivemind) != 7,
-                "note": "Seven Hivemind executors are shipped by the default pack; no historical eighth item is guessed."
+                "installed_count": 0,
+                "unresolved": True,
+                "note": "Seven Hivemind executors are declared by the optional external pack; installation is proven by the managed source inventory."
                 if len(expected_hivemind) == 7
-                else "Historical Hivemind census exceeds the seven shipped executors; no additional ID is guessed.",
+                else "Historical Hivemind contract is incomplete; no additional ID is guessed.",
             },
         },
         "coverage": coverage,

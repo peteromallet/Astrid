@@ -386,9 +386,10 @@ def _enforceable_network_gateway(policy: Mapping[str, Any] | None) -> bool:
 def _hivemind_source_preflight(record: "CapabilityRecord") -> dict[str, Any] | None:
     """Require Hivemind to come from a clean, revision-pinned checkout.
 
-    Hivemind is an optional external provider pack.  Its public read key must
-    not turn an arbitrary dirty install into an advertised capability.  Other
-    external packs retain their own manifest/readiness semantics.
+    Hivemind is an external provider pack.  Its public read key must not turn
+    an arbitrary dirty install into an advertised capability.  The managed
+    source inventory performs the immutable revision/digest admission; this
+    boundary rechecks checkout cleanliness immediately before readiness.
     """
     if str(record.definition.metadata.get("source_pack") or "") != "hivemind":
         return None
@@ -396,28 +397,6 @@ def _hivemind_source_preflight(record: "CapabilityRecord") -> dict[str, Any] | N
     pack_root = Path(str(raw_root)).expanduser().resolve() if raw_root else None
     if pack_root is None or not pack_root.is_dir():
         return {"ok": False, "reason": "hivemind source root is unavailable"}
-    # Wheels and editable Astrid installs carry the verified Hivemind pack
-    # under the product's own packs root.  There is no Git metadata in a
-    # wheel, so the capability admission/source digest is the integrity
-    # authority for this bundled source.
-    bundled_root = (Path(__file__).resolve().parents[3] / "astrid" / "packs" / "hivemind").resolve()
-    if pack_root == bundled_root:
-        source_roots = _admitted_source_roots(record.source_root, record.definition)
-        digest = _source_digest_for_roots(source_roots)
-        expected_digest = str(getattr(record, "source_digest", "") or "")
-        if expected_digest and digest != expected_digest:
-            return {
-                "ok": False,
-                "source": "bundled",
-                "reason": "bundled Hivemind source digest changed",
-                "source_digest": digest,
-                "expected_source_digest": expected_digest,
-            }
-        return {
-            "ok": True,
-            "source": "bundled",
-            "source_digest": digest,
-        }
     checkout = next((candidate for candidate in (pack_root, *pack_root.parents) if (candidate / ".git").exists()), None)
     if checkout is None:
         return {"ok": False, "reason": "hivemind source is not a Git checkout"}

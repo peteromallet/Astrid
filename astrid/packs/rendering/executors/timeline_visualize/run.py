@@ -394,6 +394,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--filmstrip", choices=StaticChoices(("auto", "off", "assets", "rendered")), default="auto"
     )
     parser.add_argument("--rendered-video", type=Path)
+    parser.add_argument(
+        "--include-media", action="store_true",
+        help="include a relative, digest-verified rendered video for offline filmstrip playback",
+    )
     parser.add_argument("--materialized-root", type=Path)
     parser.add_argument("--materialized-objects")
     return parser

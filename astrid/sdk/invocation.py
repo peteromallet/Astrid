@@ -643,7 +643,7 @@ def _validate_timeline_visualize_inputs(
             raise CapabilityValidationError(str(exc)) from exc
         return prepare_filmstrip(values, project=project, client=_client)
     if any(values.get(key) is not None for key in (
-        "render_run", "sample", "every", "every_frames", "columns", "page_size"
+        "render_run", "sample", "every", "every_frames", "columns", "page_size", "include_media"
     )):
         raise CapabilityValidationError("filmstrip controls require view=filmstrip")
 
@@ -1288,12 +1288,39 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
         actual_members = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
         if actual_members != verified_members | {"manifest.json"}:
             raise CapabilityInvocationError("filmstrip bundle has unrecorded members")
+        index_path = root / "frame-index.json"
+        try:
+            frame_index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise CapabilityInvocationError("filmstrip frame index is invalid") from exc
+
+        def verified_relative_member(value: object, label: str) -> Path | None:
+            if value is None:
+                return None
+            if not isinstance(value, str):
+                raise CapabilityInvocationError(f"filmstrip {label} path is invalid")
+            relative = PurePosixPath(value)
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts or "\\" in value:
+                raise CapabilityInvocationError(f"filmstrip {label} path is unsafe")
+            candidate = root.joinpath(*relative.parts)
+            if not candidate.is_file() or value not in verified_members:
+                raise CapabilityInvocationError(f"filmstrip {label} path is not verified")
+            return candidate
+
+        media = frame_index.get("media") if isinstance(frame_index, Mapping) else None
+        audio_sidecar = frame_index.get("audio_sidecar") if isinstance(frame_index, Mapping) else None
+        media_path = verified_relative_member(media.get("path") if isinstance(media, Mapping) else None, "media")
+        audio_path = verified_relative_member(audio_sidecar.get("path") if isinstance(audio_sidecar, Mapping) else None, "audio sidecar")
         raw_result["outputs"].update({
             "pack_root": str(root), "manifest_path": str(manifest),
             "html": str(root / "filmstrip.html"),
             "pages": [str(p) for p in sorted(root.glob("filmstrip-*.png"))],
             "frame_index": str(root / "frame-index.json"),
         })
+        if media_path is not None:
+            raw_result["outputs"]["media"] = str(media_path)
+        if audio_path is not None:
+            raw_result["outputs"]["audio_analysis"] = str(audio_path)
         return str(manifest)
     except Exception:
         import shutil

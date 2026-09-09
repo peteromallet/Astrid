@@ -32,6 +32,8 @@ SOURCE_DECLARATIONS_ENV = "ASTRID_SOURCE_DECLARATIONS"
 SOURCE_STATE_ENV = "ASTRID_SOURCE_STATE"
 SOURCE_DATA_ENV = "ASTRID_SOURCE_DATA"
 _OID_LENGTHS = {40, 64}
+DEFAULT_HIVEMIND_REPOSITORY = "https://github.com/banodoco/hivemind.git"
+DEFAULT_HIVEMIND_REVISION = "50ff509240c5582a7335dc71920533b59be7792c"
 
 
 class SourceSetupError(RuntimeError):
@@ -92,6 +94,25 @@ class SourceDeclaration:
         if self.tree_sha256:
             result["tree_sha256"] = self.tree_sha256
         return result
+
+
+def default_source_declarations() -> tuple[SourceDeclaration, ...]:
+    """Return the versioned default external source policy.
+
+    The repository pin is intentionally separate from the installed source
+    inventory.  Setup may be pointed at a local Git mirror through
+    ``ASTRID_SOURCE_DECLARATIONS`` for offline development, while a normal
+    installation uses the canonical upstream URL at the same immutable
+    revision.
+    """
+    return (
+        SourceDeclaration(
+            pack_id="hivemind",
+            repository=DEFAULT_HIVEMIND_REPOSITORY,
+            revision=DEFAULT_HIVEMIND_REVISION,
+            pack_subpath=".",
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -437,7 +458,7 @@ def inventory_report(state: Mapping[str, Any] | None = None, *, check: bool = Tr
 def declarations_from_json(path: str | Path | None = None) -> tuple[SourceDeclaration, ...]:
     configured = str(path or os.environ.get(SOURCE_DECLARATIONS_ENV, "")).strip()
     if not configured:
-        return ()
+        return default_source_declarations()
     value = json.loads(Path(configured).expanduser().read_text(encoding="utf-8"))
     if isinstance(value, Mapping):
         value = value.get("sources", ())
@@ -472,10 +493,11 @@ def _cli(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
-    "DEFAULT_PROFILE", "InstalledSource", "ManagedSourceInventory", "SOURCE_DATA_ENV",
+    "DEFAULT_HIVEMIND_REPOSITORY", "DEFAULT_HIVEMIND_REVISION", "DEFAULT_PROFILE",
+    "InstalledSource", "ManagedSourceInventory", "SOURCE_DATA_ENV",
     "SOURCE_DECLARATIONS_ENV", "SOURCE_STATE_ENV", "SourceDeclaration", "SourceSetupError",
     "active_source_inventory", "active_sources",
-    "declarations_from_json", "inventory_report", "provision", "source_data_root",
+    "default_source_declarations", "declarations_from_json", "inventory_report", "provision", "source_data_root",
     "source_inventory_identity", "source_state_path",
 ]
 

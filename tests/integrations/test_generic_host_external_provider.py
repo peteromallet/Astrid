@@ -7,7 +7,6 @@ import hashlib
 import textwrap
 import os
 import socket
-import shutil
 import subprocess
 import sys
 import sysconfig
@@ -31,82 +30,6 @@ if RUNTIME.is_dir():
     sys.path.insert(0, str(RUNTIME))
 from banodoco_workspace_client import ApiError, WorkspaceClient
 from runtime_protocol.daemon import RuntimeDaemon
-
-
-@pytest.fixture
-def bundled_hivemind_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Discover the real bundled manifest from an isolated, Git-free install."""
-    import astrid.core.execution.generic_host as generic_host
-
-    original_root = Path(generic_host.__file__).resolve().parents[3]
-    pack_root = tmp_path / "astrid" / "packs" / "hivemind"
-    shutil.copytree(original_root / "astrid" / "packs" / "hivemind", pack_root)
-    monkeypatch.setattr(
-        generic_host, "__file__",
-        str(tmp_path / "astrid" / "core" / "execution" / "generic_host.py"),
-    )
-    host = GenericPackHost(pack_roots=[pack_root], attempt_root=tmp_path / "attempt")
-    record = next(record for record in host.discover() if record.id == "hivemind.search")
-    return record, pack_root
-
-
-def test_bundled_hivemind_source_preflight_accepts_wheel_layout(bundled_hivemind_record) -> None:
-    record, _ = bundled_hivemind_record
-    result = _hivemind_source_preflight(record)
-    assert result is not None
-    assert result["ok"] is True
-    assert result["source"] == "bundled"
-    assert result["source_digest"] == record.source_digest
-
-
-@pytest.mark.parametrize("changed_path", ["executors/search/run.py", "pack.yaml"])
-def test_bundled_hivemind_source_preflight_rejects_changed_admission_digest(
-    bundled_hivemind_record, changed_path: str,
-) -> None:
-    record, pack_root = bundled_hivemind_record
-    path = pack_root / changed_path
-    path.write_text(path.read_text() + "\n# changed after admission\n")
-    result = _hivemind_source_preflight(record)
-    assert result is not None
-    assert result["ok"] is False
-    assert "digest changed" in result["reason"]
-    assert result["expected_source_digest"] == record.source_digest
-
-
-@pytest.mark.parametrize("capability", ["hivemind.search", "hivemind.get_item", "hivemind.refresh_media"])
-def test_bundled_hivemind_public_reads_need_no_secret_passthrough(
-    bundled_hivemind_record, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    capability: str,
-) -> None:
-    _, pack_root = bundled_hivemind_record
-    monkeypatch.setenv("HIVEMIND_ANON_KEY", "ambient-key-must-not-leak")
-    host = GenericPackHost(pack_roots=[pack_root], credential_source={})
-    record = next(record for record in host.discover() if record.id == capability)
-    host.preflight()
-    record = host.capabilities[capability]
-    assert record.preflight["credentials"]["ok"]
-    env, secrets = host._child_environment(record, tmp_path / "child")
-    assert "HIVEMIND_ANON_KEY" not in env
-    assert secrets == {}
-
-
-@pytest.mark.parametrize("capability", [
-    "hivemind.contribute", "hivemind.ingest_article",
-    "hivemind.ingest_workflow", "hivemind.ingest_youtube",
-])
-def test_bundled_hivemind_writes_use_declared_secret_channel(
-    bundled_hivemind_record, tmp_path: Path, capability: str,
-) -> None:
-    _, pack_root = bundled_hivemind_record
-    host = GenericPackHost(pack_roots=[pack_root], credential_source={})
-    record = next(record for record in host.discover() if record.id == capability)
-    host.preflight()
-    record = host.capabilities[capability]
-    assert record.preflight["credentials"]["missing"] == ["HIVEMIND_CONTRIBUTOR_KEY"]
-    host.credential_source = {"HIVEMIND_CONTRIBUTOR_KEY": "fixture-contributor"}
-    env, secrets = host._child_environment(record, tmp_path / "child")
-    assert env["HIVEMIND_CONTRIBUTOR_KEY"] == "fixture-contributor"
-    assert secrets == {"HIVEMIND_CONTRIBUTOR_KEY": "fixture-contributor"}
 
 
 @pytest.mark.parametrize("project_id", [None, "existing-project"])
@@ -328,10 +251,13 @@ def test_hivemind_without_clean_pinned_source_is_optional_unavailable(tmp_path: 
     executor_root = pack_root / "executors" / "search"
     executor_root.mkdir(parents=True)
     (pack_root / "pack.yaml").write_text(
-        "schema_version: 1\nid: hivemind\nname: Hivemind\nversion: 2.0\n"
-        "content:\n  executors: executors\n",
+        "schema_version: 2\nid: hivemind\nname: Hivemind\nversion: 2.0\n"
+        "capabilities: [search_corpus]\ncontent:\n  executors: executors\n"
+        "documentation:\n  kind: skill\n  path: skill/SKILL.md\n",
         encoding="utf-8",
     )
+    (pack_root / "skill").mkdir()
+    (pack_root / "skill" / "SKILL.md").write_text("# Hivemind fixture\n", encoding="utf-8")
     (executor_root / "executor.yaml").write_text(
         json.dumps(
             {
@@ -744,9 +670,13 @@ def test_clean_pinned_hivemind_pack_publishes_through_real_runtime(tmp_path: Pat
     executor_root.mkdir(parents=True)
     pack_root = checkout / "packs" / "hivemind"
     (pack_root / "pack.yaml").write_text(
-        "schema_version: 1\nid: hivemind\nname: Hivemind\nversion: 2.0\ncontent:\n  executors: executors\n",
+        "schema_version: 2\nid: hivemind\nname: Hivemind\nversion: 2.0\n"
+        "capabilities: [search_corpus]\ncontent:\n  executors: executors\n"
+        "documentation:\n  kind: skill\n  path: skill/SKILL.md\n",
         encoding="utf-8",
     )
+    (pack_root / "skill").mkdir()
+    (pack_root / "skill" / "SKILL.md").write_text("# Hivemind fixture\n", encoding="utf-8")
     (executor_root / "executor.yaml").write_text(json.dumps({
         "schema_version": 1, "id": "hivemind.search", "name": "Hivemind Search",
         "kind": "external", "version": "2.0",

@@ -46,7 +46,7 @@ digest-verified bundle/manifest, not those disposable local paths.
 
 ```bash
 python3 -m astrid timelines visualize <slug-or-id> --project <project> \
-  --view filmstrip --render-run latest --every 0.5 --columns 5 --page-size 50 --json
+  --view filmstrip --render-run latest --every 0.5 --columns 5 --page-size 50 --include-media --json
 python3 -m astrid timelines visualize <slug-or-id> --project <project> \
   --view filmstrip --render-run <exact-render-run-id> --at 12 --context 3 --every-frames 6
 ```
@@ -57,21 +57,30 @@ for authored story beat midpoints. Shots require authored shot metadata.
 Interval samples retain adjacent visual cut frames even between sample ticks.
 Use `--range 10..20`, `--shot`, `--clip`, or `--asset` to restrict the view.
 The unified inspector can search dialogue, filter shots and time ranges, reduce
-density, expand declared visual/audio tracks on one shared ruler, and enlarge a
-frame or copy its time, render-scoped target, and pinned focus command. Track
-rows are frozen placements from the selected render snapshot; audio rows do not
-imply a waveform. Selecting a frame and selecting a clip use the same target
-model. If a clip has no captured frame in its interval, the inspector says so
-and exposes the exact focus command.
+density, expand declared visual/audio tracks on one shared absolute-time ruler,
+and enlarge a frame or copy its time, render-scoped target, and pinned focus
+command. When the admitted render has audio, the disclosure adds bounded
+multi-resolution waveform bins, measured “Quiet gap” intervals, and only
+explicitly admitted immutable speech annotations. Audio rows are frozen to the
+render; they never turn missing script into silence or present the rendered mix
+as an isolated stem. Selecting an audio interval seeks the optional bundled
+media and keeps the same frame/clip/track target model. If a clip has no
+captured frame in its interval, the inspector says so and exposes the exact
+focus command.
 Density controls only select already captured frames; rerun with a finer
 interval for additional detail. Extraction is bounded at 2,000 frames, so use
 a coarser interval or a narrower range for long renders.
 
 Filmstrips require a successful render with its frozen timeline snapshot and
 managed video. They do not substitute source asset thumbnails. Script captions
-are authored segment text, not word-aligned transcription; “no script” does
-not establish acoustic silence. A pinned render keeps old visual evidence
-associated with its own timeline state even after later edits.
+remain authored segment text, not word-aligned transcription. Missing or
+uncertain speech timing is reported as unavailable/partial, while waveform
+inspection remains usable; opening the inspector never starts a provider call.
+`--include-media` explicitly adds a relative, hash-verified video member for
+offline playback. Analysis sidecars are bounded, keyed by immutable render and
+settings identity, and verified in the bundle manifest. A pinned render keeps
+old visual evidence associated with its own timeline state even after later
+edits.
 
 For the structural timeline diagram and frozen object navigation, use
 `--view structure` (the compatibility default):

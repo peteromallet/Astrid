@@ -4,6 +4,9 @@ Read this reference when authoring or validating a timeline document. The
 runtime owns the saved document; these examples describe the renderable JSON
 boundary rather than a local storage format.
 
+The canonical end-to-end workflow is the [Astrid timeline skill](../SKILL.md);
+the executable evidence contract is [Timeline Visualize](../../executors/timeline_visualize/STAGE.md).
+
 ## Minimal renderable config
 
 Use explicit tracks, explicit clip types, and an output contract:
@@ -68,11 +71,12 @@ timeline input.
 
 For a successful managed render, `--view filmstrip` opens the unified
 inspector: composited frame cards plus expandable visual/audio lanes on one
-canonical integer-frame ruler. It uses the render's frozen timeline snapshot,
-so empty declared tracks remain visible and current edits cannot annotate an
-older render. Audio clips are placement intervals; the inspector does not infer
-waveforms or silence. Frame and clip selections share a render-scoped target,
-and a clip with no captured frame reports that state instead of selecting an
-unrelated card. `--view structure` remains the structural evidence view and its
-legacy `--from-view`/`--focus` object references remain distinct from the
-filmstrip inspector's frame/clip/track targets.
+absolute-time ruler. When a render carries audio, bounded waveform bins and
+measured low-amplitude “Quiet gap” intervals are available; immutable speech
+annotations remain distinct from acoustic gaps and expose canonical/recognized
+wording, provenance, uncertainty, and coverage. `--include-media` explicitly
+bundles a relative hash-verified video for offline seek/audition. No provider is
+called when the inspector opens, and missing audio, stems, or transcript spans
+are explicit states. Frame, clip, phrase, and gap selections share render-scoped
+targets; `--view structure` remains the structural evidence view and its legacy
+`--from-view`/`--focus` object references remain distinct from filmstrip targets.

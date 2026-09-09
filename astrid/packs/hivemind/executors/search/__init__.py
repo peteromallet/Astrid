@@ -1,1 +1,0 @@
-# hivemind.search executor package.

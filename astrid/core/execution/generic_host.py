@@ -1800,6 +1800,7 @@ class GenericPackHost:
         attempt: Path,
         *,
         authorized_input_object_ids: list[str] | tuple[str, ...] | None = None,
+        task_param_ports: tuple[str, ...] | list[str] | None = None,
     ) -> dict[str, Any]:
         """Materialize digest inputs and managed registry objects in *attempt*.
 
@@ -1842,6 +1843,21 @@ class GenericPackHost:
             raise HostError("runtime task is missing its immutable spec envelope")
         input_spec = admitted
         values = dict(input_spec.get("inputs", {})) if isinstance(input_spec.get("inputs", {}), Mapping) else {}
+        params = input_spec.get("params")
+        if task_param_ports is not None:
+            if not isinstance(params, Mapping):
+                raise HostError("HC-04 task spec params must be an object")
+            declared = tuple(str(name) for name in task_param_ports)
+            declared_set = set(declared)
+            unknown = sorted(str(name) for name in params if str(name) not in declared_set)
+            if unknown:
+                raise HostError("HC-04 task spec contains undeclared parameter(s): " + ", ".join(unknown))
+            for name in declared:
+                if name not in params:
+                    continue
+                if name in values and values[name] != params[name]:
+                    raise HostError(f"HC-04 task parameter conflicts with input binding: {name}")
+                values[name] = params[name]
         for key in _HOST_OWNED_ENVELOPE_PORTS + ("family", "params", "output_policy"):
             if key in spec and not values.get(key):
                 values[key] = spec[key]
@@ -2902,10 +2918,17 @@ class GenericPackHost:
             if deadline_exceeded:
                 terminalize_deadline()
         try:
+            raw_task_param_ports = record.definition.metadata.get("hc04_param_ports")
+            task_param_ports = (
+                tuple(str(value) for value in raw_task_param_ports)
+                if isinstance(raw_task_param_ports, (list, tuple))
+                else None
+            )
             inputs = self._materialize_inputs(
                 spec,
                 root,
                 authorized_input_object_ids=authorized_input_object_ids,
+                task_param_ports=task_param_ports,
             )
             immutable_input_baseline = {}
             for input_root in (root / "inputs", root / "managed-objects"):

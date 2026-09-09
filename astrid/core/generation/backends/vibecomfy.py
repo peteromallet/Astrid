@@ -238,6 +238,23 @@ class VibeComfyBackend(BackendAdapter):
         """Run a workflow through the local embedded VibeComfy runtime."""
         from vibecomfy.runtime.run import run_sync
 
+        # Production VibeComfy runtime admission is typed: it accepts the
+        # approved projection together with its canonical workflow bundle.
+        # Keep the one-argument call only for the lightweight test doubles
+        # used by the backend unit suite; a real VibeWorkflow must cross the
+        # reviewed bundle/compiler boundary before launch.
+        try:
+            from vibecomfy.workflow import VibeWorkflow
+            from vibecomfy.workflow_bundle import load_bundle
+        except ImportError:
+            VibeWorkflow = None  # type: ignore[assignment,misc]
+            load_bundle = None  # type: ignore[assignment]
+        if VibeWorkflow is not None and isinstance(workflow, VibeWorkflow):
+            if load_bundle is None:
+                raise RuntimeError("VibeComfy canonical workflow bundle support is unavailable")
+            bundle = load_bundle(workflow)
+            bundle.require_canonical_authority("runtime execution")
+            return run_sync(bundle.compile(), bundle)
         return run_sync(workflow)
 
     def _collect_outputs(self, result: Any, out_dir: Path) -> list[Path]:

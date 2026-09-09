@@ -199,6 +199,38 @@ def test_input_materialization_rejects_traversal_names(tmp_path):
         )
 
 
+def test_hc04_params_bind_only_definition_declared_ports(tmp_path):
+    host = GenericPackHost(pack_roots=[tmp_path])
+    bound = host._materialize_inputs(
+        {
+            "input_object_ids": [],
+            "spec": {
+                "family": "generation.generate_image",
+                "params": {"prompt": "a lighthouse", "model": "z-image"},
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt",
+        task_param_ports=("prompt", "model"),
+    )
+    assert bound["prompt"] == "a lighthouse"
+    assert bound["model"] == "z-image"
+
+    with pytest.raises(HostError, match="undeclared parameter"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [],
+                "spec": {
+                    "family": "generation.generate_image",
+                    "params": {"prompt": "a lighthouse", "unknown": True},
+                    "output_policy": {},
+                },
+            },
+            tmp_path / "attempt-unknown",
+            task_param_ports=("prompt",),
+        )
+
+
 def test_input_materialization_rejects_foreign_nested_digest(tmp_path):
     authorized = hashlib.sha256(b"authorized").hexdigest()
     foreign = hashlib.sha256(b"foreign").hexdigest()

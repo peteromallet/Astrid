@@ -3,12 +3,35 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from astrid.core.execution.executor.folder import load_folder_executors
 from astrid.core.execution.executor.registry import load_default_registry
+from astrid.packs.vibecomfy.executors.run.run import _run_and_settle
+
+
+def _fake_vibecomfy_modules(result: object) -> tuple[dict[str, types.ModuleType], Mock]:
+    load_workflow = Mock(return_value=object())
+    package = types.ModuleType("vibecomfy")
+    package.__path__ = []  # type: ignore[attr-defined]
+    package.load_workflow_any = load_workflow  # type: ignore[attr-defined]
+    runtime = types.ModuleType("vibecomfy.runtime")
+    runtime.__path__ = []  # type: ignore[attr-defined]
+    run_module = types.ModuleType("vibecomfy.runtime.run")
+    run_module.run_sync = Mock(return_value=result)  # type: ignore[attr-defined]
+    package.runtime = runtime  # type: ignore[attr-defined]
+    runtime.run = run_module  # type: ignore[attr-defined]
+    return {
+        "vibecomfy": package,
+        "vibecomfy.runtime": runtime,
+        "vibecomfy.runtime.run": run_module,
+    }, load_workflow
 
 
 class VibeComfyStructuredMetadataTest(unittest.TestCase):
@@ -18,7 +41,18 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
         metadata = payload["metadata"]
 
         self.assertEqual(payload["id"], "vibecomfy.run")
-        self.assertEqual(payload["command"]["argv"], ["{python_exec}", "-m", "astrid.packs.vibecomfy.executors.run.run", "run", "{workflow}"])
+        self.assertEqual(
+            payload["command"]["argv"],
+            [
+                "{python_exec}",
+                "-m",
+                "astrid.packs.vibecomfy.executors.run.run",
+                "run",
+                "{workflow}",
+                "--out",
+                "{out}",
+            ],
+        )
         self.assertEqual(payload["isolation"]["requirements"], ["vibecomfy"])
         self.assertTrue(payload["isolation"]["network"])
         self.assertEqual(metadata["pack_id"], "vibecomfy")
@@ -43,6 +77,57 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
         self.assertEqual(metadata["workflows"], [])
         self.assertEqual(metadata["nodes"], [])
         self.assertEqual(metadata["prompts"], [])
+        self.assertTrue(metadata["output_result_manifest"])
+        self.assertEqual(
+            [(output["name"], output["type"]) for output in payload["outputs"]],
+            [("vibecomfy_run", "file"), ("result_manifest", "file")],
+        )
+
+    def test_run_settles_every_engine_output_with_port_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_a = root / "source-a.png"
+            source_b = root / "source-b.mp4"
+            source_a.write_bytes(b"image")
+            source_b.write_bytes(b"video")
+            out = root / "spool"
+            result = SimpleNamespace(
+                outputs=[str(source_a), str(source_b)],
+                run_id="run-1",
+                prompt_id="prompt-1",
+            )
+            modules, load_workflow = _fake_vibecomfy_modules(result)
+            with patch.dict(sys.modules, modules):
+                manifest = _run_and_settle(root / "workflow.json", out)
+
+            load_workflow.assert_called_once_with(str(root / "workflow.json"))
+            self.assertEqual(len(manifest["outputs"]), 2)
+            for ordinal, entry in enumerate(manifest["outputs"]):
+                self.assertEqual(entry["name"], "vibecomfy_run")
+                self.assertEqual(entry["ordinal"], ordinal)
+                self.assertEqual(entry["role"], "result")
+                self.assertEqual(entry["is_primary"], ordinal == 0)
+                self.assertTrue(entry["content_hash"].startswith("sha256:"))
+                self.assertGreater(entry["bytes"], 0)
+                self.assertTrue((out / entry["path"]).is_file())
+            self.assertEqual(
+                json.loads((out / "manifest.json").read_text(encoding="utf-8")),
+                manifest,
+            )
+
+    def test_run_rejects_missing_or_empty_engine_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = ([root / "missing.png"], [])
+            for inventory in cases:
+                result = SimpleNamespace(outputs=inventory)
+                modules, _ = _fake_vibecomfy_modules(result)
+                with (
+                    self.subTest(inventory=inventory),
+                    patch.dict(sys.modules, modules),
+                ):
+                    with self.assertRaises((FileNotFoundError, ValueError)):
+                        _run_and_settle(root / "workflow.json", root / "spool")
 
     def test_vibecomfy_validate_metadata_is_structured_and_network_false(self) -> None:
         validate = load_default_registry().get("vibecomfy.validate")

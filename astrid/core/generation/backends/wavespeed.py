@@ -142,9 +142,10 @@ class WavespeedBackend(BackendAdapter):
         for idx, url in enumerate(asset_urls):
             try:
                 data = self._client.get_bytes(url, timeout=300)
-            except Exception as exc:  # noqa: BLE001 - one failed download must not abort the batch
-                logger.warning("Failed to download wavespeed result %d: %s", idx, exc)
-                continue
+            except Exception as exc:
+                raise ValueError(
+                    f"Failed to download wavespeed result output {idx}: {exc}"
+                ) from exc
             suffix = _guess_suffix(url)
             dst = out_dir / f"output_{idx:03d}{suffix}"
             if dst.exists():

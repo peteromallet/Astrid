@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -13,16 +12,20 @@ from functools import lru_cache
 from importlib import import_module
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from astrid.core._shared.capability_common import (
-    _PLACEHOLDER_RE,
-    _expand_placeholders,
     _has_value,
     _output_value,
     _stringify_value,
     _validate_required_inputs,
 )
+from astrid.core.contracts.binding import (
+    BindingError,
+    assert_provided_inputs_bound,
+    expand_command,
+)
+from astrid.core._shared.result_manifest import HarvestError, harvest_staged_outputs
 from astrid.core.contracts.capability_runner import CapabilityRunner
 from astrid.core.contracts.exec_error import (
     ExecError,
@@ -154,7 +157,7 @@ class ExecutorRunResult:
     error: ExecError | None = None
     # ── A1 identity fields (backward-compatible defaults) ─────────────────
     run_root: Path | str | None = None
-    outputs: Mapping[str, Any] = field(default_factory=dict)
+    outputs: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
     executor_version: str = ""  # derived from executor_definition_digest
     run_id: str | None = None
 
@@ -301,34 +304,33 @@ def _run_executor_inner(request: ExecutorRunRequest, executor: ExecutorDefinitio
 def _resolve_declared_outputs(
     executor: ExecutorDefinition,
     request: ExecutorRunRequest,
-) -> dict[str, str]:
-    """Resolve declared-output paths and return only those that exist on disk.
+) -> list[dict[str, Any]]:
+    """Harvest concrete files from the assigned spool.
 
-    Uses only the ``executor.outputs`` declaration — never scans directories.
-    Expected paths are derived from ``request.out`` (falling back to
-    ``request.run_root``) via the same ``_placeholder_values`` pipeline that
-    the executor command expansion uses.
-
-    Returns an empty mapping when there are no declared outputs or when no
-    base output directory (``out`` / ``run_root``) is available.
+    A present ``{out}/manifest.json`` is exclusive. Only legacy, non-media
+    definitions without the receipt flag may fall back to concrete files at
+    their declared ``path_template`` locations.
     """
-    if not executor.outputs:
-        return {}
     effective_out = request.out if request.out not in (None, "") else request.run_root
     if effective_out is None or effective_out == "":
-        return {}
+        return []
     try:
         temp_request = replace(request, out=effective_out)
         values = _request_values(temp_request)
         placeholders = _placeholder_values(executor, temp_request, values)
     except ExecutorRunnerError:
-        return {}
-    resolved: dict[str, str] = {}
-    for output in executor.outputs:
-        output_path_str = placeholders.get(output.name)
-        if output_path_str and Path(output_path_str).exists():
-            resolved[output.name] = output_path_str
-    return resolved
+        placeholders = {"out": str(effective_out)}
+        values = {}
+    try:
+        return harvest_staged_outputs(
+            Path(str(effective_out)).expanduser().resolve(),
+            definition=executor,
+            declared_outputs=executor.outputs,
+            values={**values, **placeholders, "out": str(effective_out)},
+            require=False,
+        )
+    except HarvestError as exc:
+        raise ExecutorRunnerError(str(exc)) from exc
 
 
 def resolve_declared_output_paths(
@@ -482,7 +484,7 @@ def _run_builtin_executor(executor: ExecutorDefinition, request: ExecutorRunRequ
         run_id=request.run_id,
         run_root=request.run_root,
         executor_version=executor_definition_digest(executor),
-        outputs=_resolve_declared_outputs(executor, request) if returncode == 0 else {},
+        outputs=_resolve_declared_outputs(executor, request) if returncode == 0 else [],
     )
 
 
@@ -541,7 +543,7 @@ def _run_explicit_command_executor(
         run_id=request.run_id,
         run_root=request.run_root,
         executor_version=executor_definition_digest(executor),
-        outputs=_resolve_declared_outputs(executor, request) if returncode == 0 else {},
+        outputs=_resolve_declared_outputs(executor, request) if returncode == 0 else [],
     )
 
 
@@ -557,128 +559,27 @@ def _expand_external_command(
     if executor.command is None:
         raise ExecutorRunnerError(f"executor {executor.id!r} has no command")
     placeholders = _placeholder_values(executor, request, values)
-    argv = tuple(
-        _expand_placeholders(part, placeholders, error_cls=ExecutorRunnerError)
-        for part in executor.command.argv
-    )
-    consumed = _consumed_input_names(executor)
-    argv = _insert_input_arg_mappings(argv, executor, values)
-    argv = (*argv, *_auto_forward_untemplated_inputs(executor, values, consumed))
-    cwd = (
-        _expand_placeholders(executor.command.cwd, placeholders, error_cls=ExecutorRunnerError)
-        if executor.command.cwd
-        else None
-    )
-    env = {
-        key: _expand_placeholders(value, placeholders, error_cls=ExecutorRunnerError)
-        for key, value in executor.command.env.items()
-    }
-    return argv, cwd, env
-
-
-# Truthy/falsey string forms used when an `--input name=value` boolean reaches
-# the runner (CLI inputs arrive as strings, so a declared boolean port is a
-# string like "true"/"false").
-_BOOLEAN_TRUE = frozenset({"1", "true", "yes", "on"})
-_BOOLEAN_FALSE = frozenset({"", "0", "false", "no", "off"})
-
-
-def _consumed_input_names(executor: ExecutorDefinition) -> set[str]:
-    """Names already routed into the command by a placeholder or input_arg mapping.
-
-    An input is "consumed" when its ``name`` (or its declared ``placeholder``
-    alias) appears as a ``{token}`` anywhere in ``command.argv``/``cwd``/``env``,
-    or when it is the target of a ``command.input_args`` mapping. Auto-forwarding
-    skips consumed inputs so they are never double-passed.
-    """
-    consumed: set[str] = set()
-    if executor.command is None:
-        return consumed
-    tokens: set[str] = set()
-    for part in executor.command.argv:
-        tokens.update(_PLACEHOLDER_RE.findall(part))
-    if executor.command.cwd:
-        tokens.update(_PLACEHOLDER_RE.findall(executor.command.cwd))
-    for value in executor.command.env.values():
-        tokens.update(_PLACEHOLDER_RE.findall(value))
-    for mapping in executor.command.input_args:
-        consumed.add(mapping.input)
+    binding_values: dict[str, Any] = dict(placeholders)
     for port in executor.inputs:
-        if port.name in tokens:
-            consumed.add(port.name)
-        if port.placeholder and port.placeholder in tokens:
-            consumed.add(port.name)
-    return consumed
-
-
-def _input_flag(name: str) -> str:
-    """Convert a snake_case input name to its ``--kebab-case`` CLI flag."""
-    return "--" + name.replace("_", "-")
-
-
-def _stringify_declared_input(name: str, value: Any) -> str:
-    """Preserve the generate-image recipe as JSON across the argv boundary."""
-    if name == "shot_generation_recipe" and isinstance(value, Mapping):
-        return json.dumps(value, sort_keys=True, separators=(",", ":"))
-    return _stringify_value(value)
-
-
-def _auto_forward_untemplated_inputs(
-    executor: ExecutorDefinition,
-    values: Mapping[str, Any],
-    consumed: set[str],
-) -> tuple[str, ...]:
-    """Forward declared inputs that were not templated into the command.
-
-    For every declared input that (a) has a non-empty provided value, (b) was
-    not already consumed by a ``{placeholder}`` token, and (c) is not covered by
-    a ``command.input_args`` mapping, append it as ``--<kebab-name> <value>``
-    (or just ``--<kebab-name>`` for a truthy boolean port). This makes inputs
-    like ``--input prompt=hello`` reach the executor's ``run.py`` argparse, which
-    were otherwise silently dropped.
-
-    Opt-out via metadata for executors whose ``run.py`` does not accept the
-    derived flags:
-
-    * ``metadata.auto_forward_inputs: false`` disables forwarding entirely.
-    * ``metadata.auto_forward_skip: [name, ...]`` skips specific input names.
-    """
-    if executor.command is None:
-        return ()
-    metadata = executor.metadata or {}
-    if metadata.get("auto_forward_inputs") is False:
-        return ()
-    skip = set(metadata.get("auto_forward_skip") or ())
-    argv: list[str] = []
-    for port in executor.inputs:
-        if port.name in consumed or port.name in skip:
-            continue
-        value = values.get(port.name)
-        if not _has_value(value):
-            continue
-        if port.type == "boolean":
-            if _is_truthy_flag(value):
-                argv.append(_input_flag(port.name))
-            continue
-        for item in _iter_input_values(value):
-            if not _has_value(item):
-                continue
-            argv.append(_input_flag(port.name))
-            argv.append(_stringify_declared_input(port.name, item))
-    return tuple(argv)
-
-
-def _is_truthy_flag(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in _BOOLEAN_TRUE:
-        return True
-    if text in _BOOLEAN_FALSE:
-        return False
-    # Unknown non-empty string: treat as truthy so an explicitly-provided flag
-    # is not silently dropped.
-    return bool(text)
+        if port.name not in values and port.default is not None:
+            binding_values[port.name] = port.default
+    binding_values.update(values)
+    try:
+        result = expand_command(
+            executor.command,
+            executor.inputs,
+            binding_values,
+            executor.metadata,
+        )
+        assert_provided_inputs_bound(
+            result,
+            executor.inputs,
+            binding_values,
+            executor.metadata,
+        )
+    except BindingError as exc:
+        raise ExecutorRunnerError(f"executor {executor.id!r}: {exc}") from exc
+    return result.argv, result.cwd, result.env
 
 
 def _prepare_project_request(
@@ -1054,73 +955,6 @@ def _placeholder_values(executor: ExecutorDefinition, request: ExecutorRunReques
         if output.placeholder:
             placeholders[output.placeholder] = output_path
     return placeholders
-
-
-def _expand_input_arg_mappings(executor: ExecutorDefinition, values: Mapping[str, Any]) -> tuple[str, ...]:
-    if executor.command is None or not executor.command.input_args:
-        return ()
-    argv: list[str] = []
-    for mapping in executor.command.input_args:
-        value = values.get(mapping.input)
-        if not _has_value(value):
-            if mapping.optional:
-                continue
-            raise ExecutorRunnerError(f"executor {executor.id!r} missing mapped input {mapping.input!r}")
-        items = list(_iter_input_values(value))
-        if len(items) > 1 and not mapping.repeatable:
-            raise ExecutorRunnerError(f"executor {executor.id!r} input {mapping.input!r} is not repeatable")
-        for item in items:
-            if mapping.flag:
-                argv.append(mapping.flag)
-            argv.append(_stringify_value(item))
-    return tuple(argv)
-
-
-def _insert_input_arg_mappings(
-    argv: tuple[str, ...],
-    executor: ExecutorDefinition,
-    values: Mapping[str, Any],
-) -> tuple[str, ...]:
-    if executor.command is None or not executor.command.input_args:
-        return argv
-    result = list(argv)
-    appended: list[str] = []
-    for mapping in executor.command.input_args:
-        expanded = _expand_one_input_arg_mapping(executor, values, mapping)
-        if not expanded:
-            continue
-        if mapping.before is None:
-            appended.extend(expanded)
-            continue
-        try:
-            index = result.index(mapping.before)
-        except ValueError:
-            appended.extend(expanded)
-            continue
-        result[index:index] = expanded
-    result.extend(appended)
-    return tuple(result)
-
-
-def _expand_one_input_arg_mapping(
-    executor: ExecutorDefinition,
-    values: Mapping[str, Any],
-    mapping: Any,
-) -> list[str]:
-    value = values.get(mapping.input)
-    if not _has_value(value):
-        if mapping.optional:
-            return []
-        raise ExecutorRunnerError(f"executor {executor.id!r} missing mapped input {mapping.input!r}")
-    items = list(_iter_input_values(value))
-    if len(items) > 1 and not mapping.repeatable:
-        raise ExecutorRunnerError(f"executor {executor.id!r} input {mapping.input!r} is not repeatable")
-    argv: list[str] = []
-    for item in items:
-        if mapping.flag:
-            argv.append(mapping.flag)
-        argv.append(_stringify_declared_input(mapping.input, item))
-    return argv
 
 
 def _resolve_python_exec(executor: ExecutorDefinition, request: ExecutorRunRequest, values: Mapping[str, Any]) -> str | None:

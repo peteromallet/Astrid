@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TypedDict
 
 from astrid.core.contracts.errors import AstridError
 from astrid.core.foundation.atomic_io import write_json_atomic as _atomic_write_json
@@ -549,12 +549,325 @@ def read_result_manifest(
     return validate_result_manifest(payload, staging_root=staging_root)
 
 
+# ---------------------------------------------------------------------------
+# Host-agnostic harvest: {out}/manifest.json is the receipt
+# ---------------------------------------------------------------------------
+
+RESULT_MANIFEST_NAME = "manifest.json"
+
+class HarvestError(ResultManifestError):
+    """Raised when staged outputs cannot be harvested into concrete files."""
+
+
+class HarvestedOutput(TypedDict):
+    """One receipt-authoritative file ready for host settlement."""
+
+    name: str
+    path: str
+    ordinal: int
+    content_hash: str
+    bytes: int
+    role: str
+    is_primary: bool
+
+
+def outputs_required(definition: Any) -> bool:
+    """Return whether a capability must produce harvestable files.
+
+    True when the definition declares output ports or opts into the universal
+    result-manifest receipt. Side-effect-only commands (empty outputs, no
+    receipt flag) may still complete with an empty harvest.
+    """
+    if tuple(getattr(definition, "outputs", ()) or ()):
+        return True
+    metadata = getattr(definition, "metadata", None) or {}
+    if isinstance(metadata, Mapping) and metadata.get("output_result_manifest"):
+        return True
+    return False
+
+
+def declares_media_outputs(definition: Any) -> bool:
+    """Return whether any declared output is media rather than a receipt/json."""
+    for output in tuple(getattr(definition, "outputs", ()) or ()):
+        artifact_hint = str(getattr(output, "artifact_type", None) or "").lower()
+        type_hint = str(getattr(output, "type", None) or "").lower()
+        name_hint = str(getattr(output, "name", None) or "").lower()
+        explicit_hint = f"{artifact_hint} {type_hint}"
+        if any(
+            token in explicit_hint
+            for token in ("video", "clip", "image", "audio", "media")
+        ):
+            return True
+        if "manifest" not in name_hint and "receipt" not in name_hint:
+            if any(
+                token in name_hint
+                for token in ("video", "clip", "image", "audio", "media")
+            ):
+                return True
+    return False
+
+
+def harvest_staged_outputs(
+    output_root: str | Path,
+    *,
+    declared_outputs: Sequence[Any] = (),
+    values: Mapping[str, Any] | None = None,
+    require: bool = False,
+    definition: Any | None = None,
+) -> list[HarvestedOutput]:
+    """Harvest concrete files from a host-assigned ``{out}`` spool.
+
+    ``{out}/manifest.json``, when present, is the exclusive artifact receipt.
+    Its entries provide port identity directly via ``name`` or ``port``; the
+    harvester never guesses identity from file names or suffixes.  The only
+    legacy path is declared ``path_template`` files for non-media definitions
+    that have not opted into ``output_result_manifest``.
+    """
+    root = Path(output_root).expanduser().resolve()
+    placeholders = dict(values or {})
+    if definition is not None:
+        if not declared_outputs:
+            declared_outputs = tuple(getattr(definition, "outputs", ()) or ())
+        metadata = getattr(definition, "metadata", None) or {}
+        receipt_required = bool(
+            isinstance(metadata, Mapping)
+            and metadata.get("output_result_manifest")
+        )
+        media_required = declares_media_outputs(definition)
+    else:
+        receipt_required = False
+        proxy = type("HarvestDefinition", (), {"outputs": declared_outputs})()
+        media_required = declares_media_outputs(proxy)
+
+    if not root.is_dir():
+        if require or receipt_required or media_required:
+            raise HarvestError(f"output root is not a directory: {root}")
+        return []
+
+    manifest_path = root / RESULT_MANIFEST_NAME
+    if manifest_path.exists():
+        harvested = _collect_manifest_files(root, manifest_path)
+        if (require or media_required) and not harvested:
+            raise HarvestError(f"no concrete outputs harvested under {root}")
+        return harvested
+
+    if receipt_required or media_required:
+        raise HarvestError(f"missing result manifest receipt: {manifest_path}")
+
+    harvested = _collect_declared_files(root, declared_outputs, placeholders)
+    if require and not harvested:
+        raise HarvestError(f"no concrete outputs harvested under {root}")
+    return harvested
+
+
+def _expand_declared_path(
+    output: Any, root: Path, values: Mapping[str, Any]
+) -> Path | None:
+    template = getattr(output, "path_template", None)
+    if not template:
+        return None
+    path = str(template)
+    for key, value in values.items():
+        path = path.replace("{" + key + "}", str(value))
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else (root / candidate)
+
+
+def _collect_manifest_files(
+    root: Path, manifest_path: Path
+) -> list[HarvestedOutput]:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HarvestError(f"cannot read result manifest {manifest_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise HarvestError(f"result manifest {manifest_path} must be a JSON object")
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, list):
+        raise HarvestError("manifest outputs must be a list")
+
+    flattened: list[tuple[int, Mapping[str, Any]]] = []
+    for index, entry in enumerate(outputs):
+        if not isinstance(entry, Mapping):
+            raise HarvestError(f"outputs[{index}] must be an object")
+        entries = entry.get("entries")
+        if entries is None:
+            flattened.append((index, entry))
+            continue
+        if not isinstance(entries, list):
+            raise HarvestError(f"outputs[{index}].entries must be a list")
+        raw_parent = entry.get("path")
+        if not isinstance(raw_parent, str) or not raw_parent.strip():
+            raise HarvestError(f"outputs[{index}].path must be a non-empty string")
+        for child_index, child in enumerate(entries):
+            if not isinstance(child, Mapping):
+                raise HarvestError(
+                    f"outputs[{index}].entries[{child_index}] must be an object"
+                )
+            raw_child = child.get("path")
+            if not isinstance(raw_child, str) or not raw_child.strip():
+                raise HarvestError(
+                    f"outputs[{index}].entries[{child_index}].path must be a non-empty string"
+                )
+            concrete = dict(entry)
+            concrete.pop("entries", None)
+            # Parent directory metadata describes the directory inventory,
+            # never a child's concrete bytes.  Every flattened file must
+            # carry its own path, hash, and byte count in the receipt.
+            concrete.pop("content_hash", None)
+            concrete.pop("bytes", None)
+            concrete.update(child)
+            concrete["path"] = (Path(raw_parent) / raw_child).as_posix()
+            # A directory-level primary marks its first concrete child only.
+            if "is_primary" not in child and entry.get("is_primary") is True:
+                concrete["is_primary"] = child_index == 0
+            # Directory ordinals cannot identify multiple children. Each child
+            # therefore receives its own flattened-position default.
+            if "ordinal" not in child:
+                concrete.pop("ordinal", None)
+            flattened.append((index, concrete))
+
+    collected: list[HarvestedOutput] = []
+    seen_ordinals: set[int] = set()
+    primary_count = 0
+    for flat_index, (source_index, entry) in enumerate(flattened):
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise HarvestError(f"outputs[{source_index}].path must be a non-empty string")
+        try:
+            _relative, resolved = _contained_output_path(
+                root, raw_path, entry_index=source_index
+            )
+        except ResultManifestError as exc:
+            raise HarvestError(str(exc)) from exc
+        if not resolved.exists():
+            raise HarvestError(f"output {raw_path!r} is missing")
+        if not resolved.is_file():
+            raise HarvestError(f"output {raw_path!r} is not a concrete file")
+
+        name = entry.get("name")
+        port = entry.get("port")
+        if name is not None and port is not None and name != port:
+            raise HarvestError(
+                f"output {raw_path!r} has conflicting name and port identities"
+            )
+        identity = name if name is not None else port
+        if not isinstance(identity, str) or not identity.strip():
+            raise HarvestError(f"output {raw_path!r} must declare name or port")
+
+        declared_hash = entry.get("content_hash")
+        if not isinstance(declared_hash, str) or not declared_hash:
+            raise HarvestError(f"output {raw_path!r} must declare content_hash")
+        actual_hash = f"sha256:{sha256_file(resolved)}"
+        if declared_hash != actual_hash:
+            raise HarvestError(
+                f"output {raw_path!r} declares content_hash {declared_hash!r} "
+                f"but the file hashes to {actual_hash!r}"
+            )
+
+        declared_bytes = entry.get("bytes")
+        if (
+            not isinstance(declared_bytes, int)
+            or isinstance(declared_bytes, bool)
+            or declared_bytes < 0
+        ):
+            raise HarvestError(
+                f"output {raw_path!r} must declare bytes as a non-negative integer"
+            )
+        actual_bytes = resolved.stat().st_size
+        if declared_bytes != actual_bytes:
+            raise HarvestError(
+                f"output {raw_path!r} declares bytes {declared_bytes} but "
+                f"the file is {actual_bytes} bytes"
+            )
+
+        ordinal = entry.get("ordinal", flat_index)
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 0:
+            raise HarvestError(
+                f"output {raw_path!r} ordinal must be a non-negative integer"
+            )
+        if ordinal in seen_ordinals:
+            raise HarvestError(f"duplicate output ordinal {ordinal} for {raw_path!r}")
+        seen_ordinals.add(ordinal)
+
+        role = entry.get("role", "result")
+        if role not in ("result", "auxiliary"):
+            raise HarvestError(
+                f"output {raw_path!r} role must be 'result' or 'auxiliary'"
+            )
+        if resolved == manifest_path.resolve() and role == "result":
+            raise HarvestError(
+                "manifest.json is the receipt and cannot be a result artifact"
+            )
+        is_primary = entry.get("is_primary", False)
+        if not isinstance(is_primary, bool):
+            raise HarvestError(f"output {raw_path!r} is_primary must be a boolean")
+        if is_primary and role != "result":
+            raise HarvestError(
+                f"output {raw_path!r} with role {role!r} cannot be primary"
+            )
+        primary_count += int(is_primary)
+        if primary_count > 1:
+            raise HarvestError("more than one primary output is not allowed")
+
+        collected.append(
+            {
+                "name": identity,
+                "path": str(resolved),
+                "ordinal": ordinal,
+                "content_hash": declared_hash,
+                "bytes": actual_bytes,
+                "role": role,
+                "is_primary": is_primary,
+            }
+        )
+    return collected
+
+
+def _collect_declared_files(
+    root: Path,
+    declared_outputs: Sequence[Any],
+    values: Mapping[str, Any],
+) -> list[HarvestedOutput]:
+    collected: list[HarvestedOutput] = []
+    for ordinal, output in enumerate(declared_outputs):
+        expanded = _expand_declared_path(output, root, values)
+        if expanded is None:
+            continue
+        candidate = expanded.resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            raise HarvestError(f"declared output path escapes output root: {candidate}") from None
+        if not candidate.is_file() or candidate.name == RESULT_MANIFEST_NAME:
+            continue
+        digest = f"sha256:{sha256_file(candidate)}"
+        collected.append(
+            {
+                "name": str(getattr(output, "name")),
+                "path": str(candidate),
+                "ordinal": ordinal,
+                "content_hash": digest,
+                "bytes": candidate.stat().st_size,
+                "role": "result",
+                "is_primary": False,
+            }
+        )
+    return collected
+
+
 __all__ = [
+    "HarvestError",
+    "HarvestedOutput",
+    "RESULT_MANIFEST_NAME",
     "ResultManifestError",
     "ValidatedResultManifest",
     "ValidatedResultOutput",
     "build_manifest",
     "complete_output_metadata",
+    "declares_media_outputs",
+    "harvest_staged_outputs",
+    "outputs_required",
     "read_result_manifest",
     "validate_result_manifest",
     "write_manifest",

@@ -580,18 +580,7 @@ def generate_core(
 
             # Convert GenerationResult to manifest output dicts
             for img_path in result.image_paths:
-                content_hash = (
-                    "sha256:"
-                    + hashlib.sha256(img_path.read_bytes()).hexdigest()
-                )
                 rel = str(img_path.relative_to(out))
-                output_entry: dict[str, Any] = {
-                    "path": rel,
-                    "content_hash": content_hash,
-                    "bytes": img_path.stat().st_size,
-                }
-                all_outputs.append(output_entry)
-
                 # Embed Astrid metadata as astrid_* tEXt chunks (PR-017).
                 _embed_fields: dict[str, str] = {
                     "prompt": prompt_text or getattr(args, "prompt", ""),
@@ -605,6 +594,22 @@ def generate_core(
                 if params.get("loras"):
                     _embed_fields["loras"] = str(params["loras"])
                 embed_png_text(img_path, _embed_fields)
+
+                # Embedding metadata mutates the PNG, so settle the final bytes.
+                content_hash = (
+                    "sha256:"
+                    + hashlib.sha256(img_path.read_bytes()).hexdigest()
+                )
+                output_entry: dict[str, Any] = {
+                    "path": rel,
+                    "name": "generated_images",
+                    "ordinal": len(all_outputs),
+                    "role": "result",
+                    "is_primary": not all_outputs,
+                    "content_hash": content_hash,
+                    "bytes": img_path.stat().st_size,
+                }
+                all_outputs.append(output_entry)
 
             final_seed = result.seed_used
             model_actual = result.model_actual

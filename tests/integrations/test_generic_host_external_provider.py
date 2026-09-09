@@ -65,6 +65,7 @@ def test_output_publication_uses_canonical_cas_with_optional_project(
         "name": "results", "kind": "object", "media_type": "application/json",
         "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
         "size": path.stat().st_size,
+        "ordinal": 0, "role": "result", "is_primary": False,
     }]
 
 

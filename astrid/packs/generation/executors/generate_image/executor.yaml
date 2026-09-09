@@ -235,11 +235,10 @@
   "name": "Generate Image",
   "outputs": [
     {
-      "description": "Directory containing generated image files.",
+      "description": "Generated image files identified by receipt entries.",
       "mode": "create_or_replace",
       "name": "generated_images",
-      "path_template": "{out}/images",
-      "type": "directory",
+      "type": "file",
       "artifact_type": "image"
     },
     {

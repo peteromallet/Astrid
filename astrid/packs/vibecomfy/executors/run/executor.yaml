@@ -9,7 +9,9 @@
       "-m",
       "astrid.packs.vibecomfy.executors.run.run",
       "run",
-      "{workflow}"
+      "{workflow}",
+      "--out",
+      "{out}"
     ]
   },
   "conditions": [
@@ -24,7 +26,8 @@
       "workflow"
     ],
     "provides": [
-      "vibecomfy_run"
+      "vibecomfy_run",
+      "result_manifest"
     ]
   },
   "id": "vibecomfy.run",
@@ -74,6 +77,7 @@
     "requirements_source": "requirements.txt",
     "runtime_file": "run.py",
     "runtime_module": "astrid.packs.vibecomfy.executors.run.run",
+    "output_result_manifest": true,
     "vibecomfy_command": "run",
     "workflow_input_contract": {
       "description": "VibeComfy workflow JSON file.",
@@ -85,6 +89,21 @@
     "workflows": [],
     "network_policy": {"allowed_protocols":["dns","tcp"],"allowed_destinations":["127.0.0.1:8188"],"allow_redirects":false}},
   "name": "VibeComfy Run",
-  "short_description": "Run a VibeComfy / ComfyUI workflow JSON through the VibeComfy CLI.",
+  "outputs": [
+    {
+      "description": "Workflow result files identified by receipt entries.",
+      "mode": "create_or_replace",
+      "name": "vibecomfy_run",
+      "type": "file"
+    },
+    {
+      "description": "Universal result manifest for this workflow run.",
+      "mode": "create_or_replace",
+      "name": "result_manifest",
+      "path_template": "{out}/manifest.json",
+      "type": "file"
+    }
+  ],
+  "short_description": "Run a VibeComfy / ComfyUI workflow and settle its artifact inventory.",
   "version": "0.1.0"
 }

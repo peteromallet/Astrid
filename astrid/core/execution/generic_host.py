@@ -14,38 +14,56 @@ import hmac
 import importlib.util
 import json
 import os
-import shutil
 import secrets as secrets_module
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from types import SimpleNamespace
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from astrid.core.contracts.binding import (
+    BindingError,
+    assert_provided_inputs_bound,
+    expand_command,
+)
+from astrid.core._shared.result_manifest import (
+    HarvestError,
+    harvest_staged_outputs,
+    outputs_required,
+)
 from astrid.core.env_vars import (
     ASTRID_INTERNAL_INVOCATION,
     ASTRID_PACKS_PATH,
 )
 from astrid.core.execution.capability_ledger import load_capability_ledger
-from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.core.execution.process_group import (
     _process_snapshot,
-    group_exists as _owned_group_exists,
     popen_owned_group,
+)
+from astrid.core.execution.process_group import (
+    group_exists as _owned_group_exists,
+)
+from astrid.core.execution.process_group import (
     release_group as _release_owned_group,
+)
+from astrid.core.execution.process_group import (
     signal_group as _signal_owned_group,
+)
+from astrid.core.execution.process_group import (
     terminate_group as _terminate_owned_group,
 )
 from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantAuthority,
     ProviderRouteGrantError,
 )
+from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -58,6 +76,208 @@ class HostError(RuntimeError):
 
 class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
+
+
+_EXECUTION_FACT_EXACT_KEYS = frozenset(
+    {
+        "interpreter",
+        "runtime_lock",
+        "engine_lock",
+        "model_digest",
+        "custom_node_digest",
+        "driver",
+        "root",
+        "port",
+    }
+)
+_EXECUTION_FACT_MINIMUM_KEYS = frozenset({"vram_bytes", "scratch_bytes"})
+_MAX_EXECUTION_FACT_BYTES = (1 << 53) - 1
+_HOST_OWNED_ENVELOPE_PORTS = (
+    "task_spec_json",
+    "input_object_paths_json",
+    "task_identity",
+    "engine_python",
+    "readiness_profile_json",
+)
+_TYPED_FAMILIES = {
+    "z_image_turbo": "z_image_t2i",
+}
+
+
+def _normalize_verified_facts(value: Any) -> dict[str, dict[str, Any]]:
+    """Apply the runtime's small, engine-neutral facts wire contract."""
+    if not isinstance(value, Mapping):
+        raise HostError("readiness profile verified_facts must be an object")
+    unknown = set(value) - {"exact", "minimum"}
+    if unknown:
+        raise HostError(
+            "readiness profile verified_facts contains unsupported fields: "
+            + ", ".join(sorted(str(item) for item in unknown))
+        )
+    exact = value.get("exact", {})
+    minimum = value.get("minimum", {})
+    if not isinstance(exact, Mapping) or not isinstance(minimum, Mapping):
+        raise HostError(
+            "readiness profile verified_facts exact and minimum must be objects"
+        )
+    unknown_exact = set(exact) - _EXECUTION_FACT_EXACT_KEYS
+    unknown_minimum = set(minimum) - _EXECUTION_FACT_MINIMUM_KEYS
+    if unknown_exact or unknown_minimum:
+        unknown_facts = sorted(str(item) for item in unknown_exact | unknown_minimum)
+        raise HostError(
+            "readiness profile verified_facts contains unsupported facts: "
+            + ", ".join(unknown_facts)
+        )
+    normalized_exact: dict[str, Any] = {}
+    for key, fact in exact.items():
+        if key == "port":
+            if (
+                isinstance(fact, bool)
+                or not isinstance(fact, (str, int))
+                or not fact
+                or (isinstance(fact, int) and not 0 <= fact <= 65535)
+            ):
+                raise HostError("readiness profile verified_facts port is invalid")
+        elif not isinstance(fact, str) or not fact:
+            raise HostError(
+                f"readiness profile verified_facts {key} is invalid"
+            )
+        normalized_exact[str(key)] = fact
+    normalized_minimum: dict[str, int] = {}
+    for key, fact in minimum.items():
+        if (
+            isinstance(fact, bool)
+            or not isinstance(fact, int)
+            or fact < 0
+            or fact > _MAX_EXECUTION_FACT_BYTES
+        ):
+            raise HostError(
+                f"readiness profile verified_facts {key} is invalid"
+            )
+        normalized_minimum[str(key)] = fact
+    return {"exact": normalized_exact, "minimum": normalized_minimum}
+
+
+def _registration_verified_facts() -> dict[str, dict[str, Any]] | dict[str, Any]:
+    """Read configured evidence fail-closed; profile-free hosts publish none."""
+    profile_path = os.environ.get("ASTRID_HOST_READINESS_PROFILE_PATH")
+    if not profile_path:
+        return {}
+    try:
+        profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HostError(f"readiness profile is unreadable: {exc}") from exc
+    if not isinstance(profile, Mapping) or "verified_facts" not in profile:
+        raise HostError("readiness profile is missing verified_facts")
+    return _normalize_verified_facts(profile["verified_facts"])
+
+
+def _mapping_value(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        return value
+    return None
+
+
+def _completed_process_evidence(
+    *,
+    capability_id: str,
+    attempt_id: str | None,
+    fence: int | None,
+    result: Any,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Stamp subprocess identity fail-closed onto a completed settlement."""
+    result_payload = _mapping_value(getattr(result, "payload", None))
+    process_id = _first_int(
+        getattr(result, "process_id", None),
+        result_payload.get("process_id"),
+        payload.get("process_id"),
+    )
+    returncode = _first_int(
+        getattr(result, "returncode", None),
+        result_payload.get("returncode"),
+        payload.get("returncode"),
+    )
+    if process_id is None or process_id <= 0:
+        raise HostError("completed capability is missing process evidence process_id")
+    if returncode is None:
+        raise HostError("completed capability is missing process evidence returncode")
+    if returncode != 0:
+        raise HostError(f"completed capability process evidence returncode is {returncode}")
+    if not attempt_id or fence is None:
+        raise HostError("completed capability is missing process evidence attempt identity")
+    return {
+        "capability_id": capability_id,
+        "attempt_id": attempt_id,
+        "fence": fence,
+        "child_boundary": "subprocess",
+        "process_id": process_id,
+        "returncode": returncode,
+    }
+
+
+def _bind_host_owned_command_values(
+    record: "CapabilityRecord",
+    values: dict[str, Any],
+    *,
+    attempt: Path,
+    admission: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fill declared host-owned envelope ports the child command interpolates."""
+    declared = {port.name for port in record.definition.inputs}
+    if "task_spec_json" in declared and not values.get("task_spec_json"):
+        params = values.get("params") if isinstance(values.get("params"), Mapping) else None
+        if not isinstance(params, Mapping):
+            skip = {
+                "out",
+                "run_root",
+                "python_exec",
+                *_HOST_OWNED_ENVELOPE_PORTS,
+                "input_object_ids",
+                "materialized_root",
+                "materialized_objects",
+                "family",
+                "params",
+                "output_policy",
+            }
+            params = {key: item for key, item in values.items() if key not in skip}
+        family = values.get("family") or _TYPED_FAMILIES.get(record.id)
+        envelope = {
+            "capability_id": record.id,
+            "input_object_ids": list(
+                values.get("input_object_ids")
+                or (admission or {}).get("input_object_ids")
+                or []
+            ),
+            "spec": {
+                "family": family,
+                "params": params,
+                "output_policy": values.get("output_policy") or {"artifact_count": 1},
+            },
+        }
+        values["task_spec_json"] = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
+    if "input_object_paths_json" in declared:
+        values.setdefault("input_object_paths_json", "[]")
+    if "task_identity" in declared:
+        values.setdefault(
+            "task_identity",
+            str((admission or {}).get("task_id") or attempt.name),
+        )
+    if "engine_python" in declared:
+        values.setdefault("engine_python", sys.executable)
+    if "readiness_profile_json" in declared and not values.get("readiness_profile_json"):
+        profile_path = os.environ.get("ASTRID_HOST_READINESS_PROFILE_PATH")
+        if profile_path and Path(profile_path).is_file():
+            values["readiness_profile_json"] = Path(profile_path).read_text(encoding="utf-8")
+        else:
+            values["readiness_profile_json"] = "{}"
+    return values
 
 
 def _dependency_pythonpath() -> tuple[str, ...]:
@@ -709,7 +929,7 @@ class RuntimeProtocolClient:
             raise HostError("runtime health returned no runtime_epoch")
         return int(epoch)
 
-    def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None):
+    def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None, verified_facts: Mapping[str, Any] | None = None):
         # Runtime schema identity is negotiated through health/compatibility;
         # source, dependency, and source-epoch identity remain part of the
         # executor registration admission envelope.  ``schema_digest`` is
@@ -726,6 +946,8 @@ class RuntimeProtocolClient:
             "dependency_digest": dependency_digest,
             "runtime_epoch": runtime_epoch,
         }
+        if verified_facts is not None:
+            payload["verified_facts"] = dict(verified_facts)
         return self.generated.register_executor(
             payload,
             idempotency_key=f"executor-{executor_id}-{_canonical_digest(payload)}",
@@ -1256,6 +1478,7 @@ class GenericPackHost:
                 invalidations.append("source epoch changed")
         if invalidations and not deliberate:
             raise HostError("registration invalidated; " + "; ".join(invalidations) + "; deliberate re-registration required")
+        verified_facts = _registration_verified_facts()
         if self.client is None:
             self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
             self._registered_state = state
@@ -1316,6 +1539,7 @@ class GenericPackHost:
             "protocol_version": runtime_state.get("protocol", "workspace.v1"),
             "schema_digest": runtime_state.get("schema_digest"),
             "runtime_epoch": runtime_state.get("runtime_epoch"),
+            "verified_facts": verified_facts,
         }
         registration = self.client.register_executor(self.executor_id, **registration_kwargs)
         self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
@@ -1445,6 +1669,11 @@ class GenericPackHost:
             raise HostError("runtime task is missing its immutable spec envelope")
         input_spec = admitted
         values = dict(input_spec.get("inputs", {})) if isinstance(input_spec.get("inputs", {}), Mapping) else {}
+        for key in _HOST_OWNED_ENVELOPE_PORTS + ("family", "params", "output_policy"):
+            if key in spec and not values.get(key):
+                values[key] = spec[key]
+            if key in input_spec and not values.get(key):
+                values[key] = input_spec[key]
         # Timeline visualization tasks carry their canonical registry inside
         # the immutable snapshot rather than as a separate input file. Expose
         # it to the same host-only materialization path used by render tasks.
@@ -1694,21 +1923,66 @@ class GenericPackHost:
         self._pending_provider_grants[task_id] = token
         return token
 
-    def _typed_outputs(self, record: CapabilityRecord, result: Any, attempt: Path) -> list[dict[str, Any]]:
-        paths = getattr(result, "outputs", {}) or {}
+    def _typed_outputs(
+        self,
+        record: CapabilityRecord,
+        descriptors: Sequence[Mapping[str, Any]],
+        attempt: Path,
+    ) -> list[dict[str, Any]]:
+        """Bind validated harvest descriptors to their declared output ports."""
         outputs: list[dict[str, Any]] = []
         by_name = {output.name: output for output in record.definition.outputs}
-        for name, raw_path in paths.items():
+        seen_identities: set[tuple[str, int]] = set()
+        for index, harvested in enumerate(descriptors):
+            if not isinstance(harvested, Mapping):
+                raise HostError(f"harvested output {index} is not a descriptor")
+            name = harvested.get("name")
+            if not isinstance(name, str) or name not in by_name:
+                raise HostError(
+                    f"harvested output {index} names undeclared port {name!r}"
+                )
+            ordinal = harvested.get("ordinal", index)
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
+                raise HostError(
+                    f"harvested output {name!r} has invalid ordinal {ordinal!r}"
+                )
+            identity = (name, ordinal)
+            if identity in seen_identities:
+                raise HostError(
+                    f"harvested output {name!r} repeats ordinal {ordinal}"
+                )
+            seen_identities.add(identity)
+            raw_path = harvested.get("path")
+            if not isinstance(raw_path, str) or not raw_path:
+                raise HostError(f"harvested output {name!r} has no concrete path")
             path = Path(raw_path).resolve()
             if not path.is_file() or not path.is_relative_to(attempt):
                 raise HostError(f"declared output {name!r} is not inside the attempt directory")
             output = by_name.get(name)
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            declared_hash = harvested.get("content_hash")
+            normalized_hash = (
+                declared_hash.removeprefix("sha256:")
+                if isinstance(declared_hash, str)
+                else None
+            )
+            if normalized_hash != digest:
+                raise HostError(f"harvested output {name!r} content hash does not match")
+            size = path.stat().st_size
+            if harvested.get("bytes") != size:
+                raise HostError(f"harvested output {name!r} byte count does not match")
+            role = harvested.get("role", "result")
+            if role not in {"result", "auxiliary"}:
+                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
             outputs.append({
                 "name": name,
+                "ordinal": ordinal,
                 "artifact_type": getattr(output, "artifact_type", None),
-                "digest": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "size": path.stat().st_size,
+                "digest": f"sha256:{digest}",
+                "size": size,
                 "path": str(path),
+                "role": role,
+                "is_primary": bool(harvested.get("is_primary", False)),
             })
         return outputs
 
@@ -1873,7 +2147,7 @@ class GenericPackHost:
             )
         uploaded: list[dict[str, Any]] = []
         inline = bool(getattr(self.client, "INLINE_SETTLEMENT_OUTPUTS", False))
-        for descriptor in outputs:
+        for index, descriptor in enumerate(outputs):
             descriptor = dict(descriptor)
             raw_path = descriptor.pop("path", None)
             if not raw_path:
@@ -1887,7 +2161,24 @@ class GenericPackHost:
                 descriptor["size"] = len(data)
                 descriptor["kind"] = "object"
                 descriptor["data_base64"] = base64.b64encode(data).decode("ascii")
-                uploaded.append({key: descriptor[key] for key in ("name", "kind", "media_type", "digest", "size", "data_base64")})
+                descriptor.setdefault("ordinal", index)
+                descriptor.setdefault("role", "result")
+                descriptor.setdefault("is_primary", False)
+                uploaded.append({
+                    key: descriptor[key]
+                    for key in (
+                        "name",
+                        "kind",
+                        "media_type",
+                        "digest",
+                        "size",
+                        "data_base64",
+                        "ordinal",
+                        "role",
+                        "is_primary",
+                    )
+                    if key in descriptor
+                })
                 continue
             object_row = upload_object(
                 path,
@@ -1904,6 +2195,9 @@ class GenericPackHost:
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
+                "ordinal": descriptor.get("ordinal", index),
+                "role": descriptor.get("role", "result"),
+                "is_primary": descriptor.get("is_primary", False),
             })
         return uploaded
 
@@ -1918,33 +2212,35 @@ class GenericPackHost:
             raise HostError(f"capability {record.id!r} has no dispatchable command")
         if admission is not None:
             _verify_admitted_source(admission)
-        values = {"out": str(output_root), "run_root": str(attempt), "python_exec": sys.executable, **inputs}
+        values = {**inputs, "out": str(output_root), "run_root": str(attempt), "python_exec": sys.executable}
         for port in record.definition.inputs:
             if port.name not in values and port.default is not None:
                 values[port.name] = port.default
+        values = _bind_host_owned_command_values(
+            record,
+            values,
+            attempt=attempt,
+            admission=admission if isinstance(admission, Mapping) else None,
+        )
         for output in record.definition.outputs:
             if output.name == "video" and "output_name" not in values:
                 values["output_name"] = "hype.mp4"
-        argv = [str(part) for part in command.argv]
-        for index, part in enumerate(argv):
-            for key, value in values.items():
-                argv[index] = argv[index].replace("{" + key + "}", str(value))
-        for input_arg in command.input_args:
-            value = values.get(input_arg.input)
-            if value in (None, "") or any("{" + input_arg.input + "}" in part for part in command.argv):
-                continue
-            items = value if input_arg.repeatable and isinstance(value, (list, tuple)) else (value,)
-            for item in items:
-                if input_arg.flag:
-                    port = next((candidate for candidate in record.definition.inputs if candidate.name == input_arg.input), None)
-                    if port is not None and str(port.type).lower() in {"boolean", "bool"}:
-                        # Store-true CLI options are presence flags, not
-                        # ``--flag True`` value options.  A false admitted
-                        # value is intentionally omitted.
-                        if bool(item):
-                            argv.append(input_arg.flag)
-                    else:
-                        argv.extend((input_arg.flag, str(item)))
+        try:
+            binding = expand_command(
+                command,
+                record.definition.inputs,
+                values,
+                record.definition.metadata,
+            )
+            assert_provided_inputs_bound(
+                binding,
+                record.definition.inputs,
+                values,
+                record.definition.metadata,
+            )
+        except BindingError as exc:
+            raise HostError(f"capability {record.id!r}: {exc}") from exc
+        argv = list(binding.argv)
         # Start from the canonical child environment: only safe process
         # variables and manifest-declared provider configuration cross the
         # boundary.  In particular, an unrelated ambient API key must never
@@ -1958,7 +2254,7 @@ class GenericPackHost:
             explicit_env={
                 "PYTHONPATH": os.pathsep.join((package_parent, *_dependency_pythonpath())),
                 ASTRID_INTERNAL_INVOCATION: "1",
-                **{str(key): str(value) for key, value in command.env.items()},
+                **binding.env,
             },
         )
         # Pack runtime modules reserve their direct module entry points for
@@ -1982,7 +2278,7 @@ class GenericPackHost:
                     else os.pathsep.join((pack_parent, existing_pythonpath))
                 )
         cwd = _confined_cwd(
-            command.cwd,
+            binding.cwd,
             attempt=attempt,
             source_root=record.source_root,
             values=values,
@@ -2006,22 +2302,33 @@ class GenericPackHost:
             stdout, stderr = process.communicate()
             if cancelled is not None and cancelled():
                 raise HostCancelled(f"capability {record.id!r} cancelled")
-            if process.returncode != 0:
+            returncode = process.returncode
+            process_id = process.pid
+            if returncode != 0:
                 detail = self._scrub_secret_text((stderr or stdout).strip(), secrets)
-                raise HostError(f"capability {record.id!r} exited {process.returncode}: {detail}")
-            outputs = {}
-            for output in record.definition.outputs:
-                template = output.path_template or output.placeholder
-                if template:
-                    path = str(template)
-                    for key, value in values.items():
-                        path = path.replace("{" + key + "}", str(value))
-                else:
-                    path = str(output_root / output.name)
-                candidate = Path(path)
-                if candidate.is_file():
-                    outputs[output.name] = str(candidate)
-            return type("CommandResult", (), {"outputs": outputs, "payload": {"returncode": process.returncode, "capability_digest": record.capability_digest, "process_id": process.pid}})()
+                raise HostError(f"capability {record.id!r} exited {returncode}: {detail}")
+            if not isinstance(process_id, int) or process_id <= 0:
+                raise HostError(f"capability {record.id!r} child process_id is missing")
+            try:
+                outputs = harvest_staged_outputs(
+                    output_root,
+                    definition=record.definition,
+                    declared_outputs=record.definition.outputs,
+                    values=values,
+                    require=False,
+                )
+            except HarvestError as exc:
+                raise HostError(f"capability {record.id!r}: {exc}") from exc
+            return SimpleNamespace(
+                outputs=outputs,
+                payload={
+                    "returncode": returncode,
+                    "capability_digest": record.capability_digest,
+                    "process_id": process_id,
+                },
+                returncode=returncode,
+                process_id=process_id,
+            )
         finally:
             self._untrack_process(process)
             _release_owned_group(process)
@@ -2154,11 +2461,18 @@ class GenericPackHost:
                 raise HostError(f"capability {capability_id!r} child result is not an object")
             if not result.get("ok", False):
                 raise HostError(str(result.get("error") or f"capability {capability_id!r} failed"))
+            process_id = process.pid
+            returncode = result.get("returncode")
+            if returncode is None:
+                returncode = process.returncode
+            child_payload = dict(result.get("payload") or {})
+            child_payload.setdefault("process_id", process_id)
+            child_payload.setdefault("returncode", returncode)
             return SimpleNamespace(
                 ok=True,
-                returncode=result.get("returncode"),
-                outputs=dict(result.get("outputs") or {}),
-                payload=dict(result.get("payload") or {}),
+                returncode=returncode,
+                outputs=result.get("outputs") or [],
+                payload=child_payload,
                 stdout=self._scrub_secret_text(stdout, {
                     key: value for key, value in env.items()
                     if key.upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))
@@ -2167,7 +2481,7 @@ class GenericPackHost:
                     key: value for key, value in env.items()
                     if key.upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))
                 }),
-                process_id=process.pid,
+                process_id=process_id,
             )
         finally:
             self._untrack_process(process)
@@ -2356,7 +2670,42 @@ class GenericPackHost:
             if cancelled():
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
-            typed_outputs = self._typed_outputs(record, result, root)
+            harvest_values = {**inputs, "out": str(output_root), "run_root": str(root), "python_exec": sys.executable}
+            try:
+                harvested = harvest_staged_outputs(
+                    output_root,
+                    definition=record.definition,
+                    declared_outputs=record.definition.outputs,
+                    values=harvest_values,
+                    require=False,
+                )
+            except HarvestError as exc:
+                raise HostError(f"capability {record.id!r}: {exc}") from exc
+            typed_outputs = self._typed_outputs(record, harvested, root)
+            result_names = {
+                descriptor["name"]
+                for descriptor in harvested
+                if descriptor.get("role", "result") == "result"
+                and Path(str(descriptor.get("path", ""))).name != "manifest.json"
+            }
+            media_ports = {
+                output.name
+                for output in record.definition.outputs
+                if any(
+                    token in str(getattr(output, "artifact_type", "") or "").lower()
+                    for token in ("video", "clip", "image", "audio", "media")
+                )
+            }
+            missing_media_ports = sorted(media_ports.difference(result_names))
+            if missing_media_ports:
+                raise HostError(
+                    f"capability {record.id!r} produced no result files for declared "
+                    f"media port(s): {', '.join(missing_media_ports)}"
+                )
+            if outputs_required(record.definition) and not typed_outputs:
+                raise HostError(
+                    f"capability {record.id!r} produced no typed settled outputs"
+                )
             project_id = task_data.get("project_id")
             if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
                 raise HostError("runtime task project_id must be a non-empty string or None")
@@ -2392,23 +2741,13 @@ class GenericPackHost:
             provenance = self.boot_manifest_provenance()
             if provenance is not None:
                 payload["provenance"] = provenance
-            result_payload = getattr(result, "payload", None)
-            if not isinstance(result_payload, Mapping):
-                result_payload = {}
-            process_id = getattr(result, "process_id", None)
-            if process_id is None:
-                process_id = result_payload.get("process_id")
-            returncode = getattr(result, "returncode", None)
-            if returncode is None:
-                returncode = result_payload.get("returncode")
-            payload["process_evidence"] = {
-                "capability_id": capability_id,
-                "attempt_id": attempt_id,
-                "fence": fence,
-                "child_boundary": "subprocess",
-                "process_id": process_id,
-                "returncode": returncode,
-            }
+            payload["process_evidence"] = _completed_process_evidence(
+                capability_id=capability_id,
+                attempt_id=attempt_id,
+                fence=fence,
+                result=result,
+                payload=payload,
+            )
             effect = task_data.get("expected_effect")
             if isinstance(effect, list):
                 effect = effect[0] if effect else None

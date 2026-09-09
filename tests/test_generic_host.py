@@ -19,6 +19,7 @@ from astrid.core.execution.generic_host import (
     HostCancelled,
     HostError,
     RuntimeProtocolClient,
+    _completed_process_evidence,
     _terminate_process_group,
 )
 
@@ -712,6 +713,81 @@ def test_runtime_protocol_client_settlement_preserves_structured_result(monkeypa
     assert "schema_digest" not in wire
 
 
+def test_register_without_readiness_profile_publishes_empty_verified_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ASTRID_HOST_READINESS_PROFILE_PATH", raising=False)
+    _write_manifest(tmp_path / "echo")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+
+    host.register()
+
+    assert runtime.registrations[0][1]["verified_facts"] == {}
+
+
+def test_register_with_profile_missing_verified_facts_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_manifest(tmp_path / "echo")
+    profile = tmp_path / "readiness.json"
+    profile.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
+    monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+
+    with pytest.raises(HostError, match="missing verified_facts"):
+        host.register()
+
+    assert runtime.capability_registrations == []
+    assert runtime.registrations == []
+
+
+def test_register_with_profile_publishes_valid_verified_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_manifest(tmp_path / "echo")
+    facts = {
+        "exact": {"driver": "cuda-12.4/driver-550", "port": 8188},
+        "minimum": {"vram_bytes": 16 * 1024**3, "scratch_bytes": 8 * 1024**3},
+    }
+    profile = tmp_path / "readiness.json"
+    profile.write_text(json.dumps({"verified_facts": facts}), encoding="utf-8")
+    monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+
+    host.register()
+
+    assert runtime.registrations[0][1]["verified_facts"] == facts
+
+
+@pytest.mark.parametrize(
+    "profile_value",
+    [
+        {"verified_facts": []},
+        {"verified_facts": {"exact": {"driver": ""}, "minimum": {}}},
+        {"verified_facts": {"exact": {}, "minimum": {"vram_bytes": True}}},
+    ],
+)
+def test_register_rejects_malformed_verified_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile_value: object,
+) -> None:
+    _write_manifest(tmp_path / "echo")
+    profile = tmp_path / "readiness.json"
+    profile.write_text(json.dumps(profile_value), encoding="utf-8")
+    monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    runtime = FakeRuntime()
+
+    with pytest.raises(HostError, match="verified_facts"):
+        GenericPackHost(pack_roots=[tmp_path], client=runtime).register()
+
+    assert runtime.capability_registrations == []
+    assert runtime.registrations == []
+
+
 def test_runtime_protocol_client_uses_a_fresh_idempotency_key_for_each_heartbeat(
     monkeypatch,
 ):
@@ -762,7 +838,23 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert settled["task"]["status"] == "completed"
     assert runtime.heartbeats == [("task-1", "lease-1", "attempt-1", 1)]
     outputs = runtime.settlements[0][2]["outputs"]
+    evidence = runtime.settlements[0][2]["result"]["process_evidence"]
+    assert evidence["capability_id"] == "test.echo"
+    assert evidence["attempt_id"] == "attempt-1"
+    assert evidence["fence"] == 1
+    assert evidence["child_boundary"] == "subprocess"
+    assert evidence["returncode"] == 0
+    assert isinstance(evidence["process_id"], int) and evidence["process_id"] > 0
     assert outputs[0]["name"] == "answer"
+    assert set(outputs[0]) <= {
+        "name", "kind", "digest", "media_type", "size", "data_base64",
+        "ordinal", "role", "is_primary",
+    }
+    assert outputs[0]["ordinal"] == 0
+    assert outputs[0]["role"] == "result"
+    assert outputs[0]["is_primary"] is False
+    assert "path" not in outputs[0]
+    assert "artifact_type" not in outputs[0]
     assert outputs[0]["digest"]
     assert "content_base64" not in outputs[0]
     result = runtime.settlements[0][2]["result"]
@@ -774,6 +866,30 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert result["process_evidence"]["returncode"] == 0
     assert isinstance(result["process_evidence"]["process_id"], int)
     assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_completed_process_evidence_reads_settlement_payload_when_result_omits_identity():
+    evidence = _completed_process_evidence(
+        capability_id="wan2gp.generate_video",
+        attempt_id="attempt-1",
+        fence=1,
+        result=object(),
+        payload={"process_id": 257745, "returncode": 0},
+    )
+    assert evidence["process_id"] == 257745
+    assert evidence["returncode"] == 0
+    assert evidence["child_boundary"] == "subprocess"
+
+
+def test_completed_process_evidence_fails_closed_without_returncode():
+    with pytest.raises(HostError, match="missing process evidence returncode"):
+        _completed_process_evidence(
+            capability_id="wan2gp.generate_video",
+            attempt_id="attempt-1",
+            fence=1,
+            result=object(),
+            payload={"process_id": 257745},
+        )
 
 
 def test_unready_capability_is_not_dispatched(tmp_path, monkeypatch):
@@ -963,3 +1079,201 @@ def test_register_preserves_declared_dispositions_and_block_reasons(tmp_path, mo
     assert registered["unsupported.provider"]["unavailable_reason"] == "Provider is not shipped"
     assert registered["retired.provider"]["status"] == "retired"
     assert registered["retired.provider"]["unavailable_reason"] == "Provider was retired"
+
+
+def test_command_host_harvests_result_manifest_media(tmp_path: Path) -> None:
+    root = tmp_path / "wanlike"
+    root.mkdir()
+    (root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "test.generate",
+                "name": "Generate",
+                "kind": "external",
+                "version": "1.0",
+                "command": {
+                    "argv": [
+                        "{python_exec}",
+                        "-c",
+                        (
+                            "from pathlib import Path; import json, hashlib; "
+                            "out=Path('{out}'); out.mkdir(parents=True, exist_ok=True); "
+                            "a=out/'a.mp4'; a.write_bytes(b'a'); "
+                            "b=out/'b.mp4'; b.write_bytes(b'bb'); "
+                            "(out/'manifest.json').write_text(json.dumps({"
+                            "'schema_version':1,'kind':'video','inputs':{},"
+                            "'outputs':["
+                            "{'path':'a.mp4','name':'generated_videos','ordinal':0,'role':'result',"
+                            "'is_primary':True,'content_hash':'sha256:'+hashlib.sha256(a.read_bytes()).hexdigest(),'bytes':1},"
+                            "{'path':'b.mp4','name':'generated_videos','ordinal':1,'role':'result',"
+                            "'content_hash':'sha256:'+hashlib.sha256(b.read_bytes()).hexdigest(),'bytes':2}],"
+                            "'created':'t','warnings':[]}))"
+                        ),
+                    ]
+                },
+                "outputs": [
+                    {"name": "generated_videos", "type": "file", "artifact_type": "video/clip"},
+                    {"name": "video_manifest", "type": "file", "path_template": "{out}/manifest.json"},
+                ],
+                "metadata": {"output_result_manifest": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = GenericPackHost(pack_roots=[tmp_path])
+    host.discover()
+    attempt = tmp_path / "attempt"
+    output_root = attempt / "outputs"
+    output_root.mkdir(parents=True)
+    result = host._run_command_definition(
+        host.capabilities["test.generate"], {}, output_root, attempt
+    )
+    assert [item["name"] for item in result.outputs] == [
+        "generated_videos",
+        "generated_videos",
+    ]
+    assert [item["ordinal"] for item in result.outputs] == [0, 1]
+    assert [Path(item["path"]).name for item in result.outputs] == ["a.mp4", "b.mp4"]
+
+    runtime = FakeRuntime()
+    publishing_host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    publishing_host.discover()
+    task = {
+        "task": {
+            "id": "task-collection",
+            "capability": "test.generate",
+            "project_id": "demo",
+            "attempt_id": "attempt-collection",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-collection"] = task
+    publishing_host.run_task(task, lease_token="lease-1")
+    settled = runtime.settlements[0][2]["outputs"]
+    assert [item["name"] for item in settled] == [
+        "generated_videos",
+        "generated_videos",
+    ]
+    assert all(
+        set(item)
+        <= {
+            "name", "kind", "digest", "media_type", "size", "data_base64",
+            "ordinal", "role", "is_primary",
+        }
+        for item in settled
+    )
+    assert [item["ordinal"] for item in settled] == [0, 1]
+    assert [item["role"] for item in settled] == ["result", "result"]
+    assert [item["is_primary"] for item in settled] == [True, False]
+    assert all("path" not in item and "artifact_type" not in item for item in settled)
+
+
+def test_command_host_fail_closes_success_without_media(tmp_path: Path) -> None:
+    root = tmp_path / "emptygen"
+    root.mkdir()
+    (root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "test.emptygen",
+                "name": "Empty",
+                "kind": "external",
+                "version": "1.0",
+                "command": {
+                    "argv": [
+                        "{python_exec}",
+                        "-c",
+                        (
+                            "from pathlib import Path; import json; "
+                            "out=Path('{out}'); out.mkdir(parents=True, exist_ok=True); "
+                            "(out/'manifest.json').write_text(json.dumps({"
+                            "'schema_version':1,'kind':'video','inputs':{},'outputs':[],"
+                            "'created':'t','warnings':[]}))"
+                        ),
+                    ]
+                },
+                "outputs": [
+                    {"name": "generated_videos", "type": "file", "artifact_type": "video/clip"},
+                ],
+                "metadata": {"output_result_manifest": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-empty",
+            "capability": "test.emptygen",
+            "project_id": "demo",
+            "attempt_id": "attempt-empty",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-empty"] = task
+    with pytest.raises(HostError, match="no concrete outputs|no result files"):
+        host.run_task(task, lease_token="lease-1")
+    assert runtime.settlements == []
+
+
+def test_command_host_rejects_media_receipt_with_wrong_port_name(tmp_path: Path) -> None:
+    root = tmp_path / "wrong-port"
+    root.mkdir()
+    (root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "test.wrong-port",
+                "name": "Wrong port",
+                "kind": "external",
+                "version": "1.0",
+                "command": {
+                    "argv": [
+                        "{python_exec}",
+                        "-c",
+                        (
+                            "from pathlib import Path; import json, hashlib; "
+                            "out=Path('{out}'); out.mkdir(parents=True, exist_ok=True); "
+                            "clip=out/'clip.mp4'; clip.write_bytes(b'mp4'); "
+                            "(out/'manifest.json').write_text(json.dumps({"
+                            "'schema_version':1,'kind':'video','inputs':{},"
+                            "'outputs':[{'path':'clip.mp4','name':'wrong_port','ordinal':0,"
+                            "'role':'result','content_hash':'sha256:'+hashlib.sha256(clip.read_bytes()).hexdigest(),"
+                            "'bytes':3}],'created':'t','warnings':[]}))"
+                        ),
+                    ]
+                },
+                "outputs": [
+                    {
+                        "name": "generated_videos",
+                        "type": "file",
+                        "artifact_type": "video/clip",
+                    }
+                ],
+                "metadata": {"output_result_manifest": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-wrong-port",
+            "capability": "test.wrong-port",
+            "project_id": "demo",
+            "attempt_id": "attempt-wrong-port",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-wrong-port"] = task
+    with pytest.raises(HostError, match="undeclared port|declared output port"):
+        host.run_task(task, lease_token="lease-1")
+    assert runtime.settlements == []

@@ -11,7 +11,7 @@ def test_shipped_ledger_reconciles_historical_capability_sets():
 
     assert sources["counts"]["pack_labels"] == 86
     assert sources["counts"]["historical_pack_labels"] == 91
-    assert sources["counts"]["executor_inventory"] == 74
+    assert sources["counts"]["executor_inventory"] == 78
     assert sources["counts"]["legacy_ids"] == 19
     assert all(section["complete"] for section in sources["coverage"].values())
     assert not sources["coverage"]["source_labels"]["missing"]

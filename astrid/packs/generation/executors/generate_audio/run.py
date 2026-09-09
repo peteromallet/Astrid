@@ -466,6 +466,10 @@ def generate_core(
 
                 output_entry: dict[str, Any] = {
                     "path": rel,
+                    "name": "generated_audio",
+                    "ordinal": len(all_outputs),
+                    "role": "result",
+                    "is_primary": not all_outputs,
                     "content_hash": content_hash,
                     "bytes": audio_path.stat().st_size,
                     "duration_seconds": probe.duration_seconds,

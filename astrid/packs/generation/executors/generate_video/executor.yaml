@@ -225,11 +225,10 @@
   "name": "Generate Video",
   "outputs": [
     {
-      "description": "Directory containing generated video files.",
+      "description": "Generated video files identified by receipt entries.",
       "mode": "create_or_replace",
       "name": "generated_videos",
-      "path_template": "{out}/videos",
-      "type": "directory",
+      "type": "file",
       "artifact_type": "video/clip"
     },
     {

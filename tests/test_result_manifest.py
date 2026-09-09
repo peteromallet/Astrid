@@ -8,10 +8,13 @@ from unittest.mock import patch
 import pytest
 
 from astrid.core._shared.result_manifest import (
+    HarvestError,
     ResultManifestError,
     ValidatedResultManifest,
     build_manifest,
     complete_output_metadata,
+    harvest_staged_outputs,
+    outputs_required,
     read_result_manifest,
     validate_result_manifest,
     write_manifest,
@@ -696,3 +699,271 @@ def test_read_result_manifest_rejects_unreadable_file(tmp_path: Path) -> None:
 
     with pytest.raises(ResultManifestError, match="cannot read result manifest"):
         read_result_manifest(missing, staging_root=staging)
+
+
+def test_harvest_reads_manifest_files_and_flattens_directories(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    videos = spool / "videos"
+    videos.mkdir(parents=True)
+    clip = videos / "shot.mp4"
+    clip.write_bytes(b"fake-mp4")
+    extra = videos / "shot-b.mp4"
+    extra.write_bytes(b"fake-mp4-b")
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(
+            kind="video",
+            inputs={"prompt": "x"},
+            outputs=[
+                {
+                    "path": "videos",
+                    "type": "directory",
+                    "name": "generated_videos",
+                    "role": "result",
+                }
+            ],
+            created="2026-09-08T00:00:00Z",
+        ),
+    )
+    harvested = harvest_staged_outputs(spool, require=True)
+    assert [item["name"] for item in harvested] == [
+        "generated_videos",
+        "generated_videos",
+    ]
+    assert [item["ordinal"] for item in harvested] == [0, 1]
+    assert {Path(item["path"]).name for item in harvested} == {
+        "shot.mp4",
+        "shot-b.mp4",
+    }
+
+
+def test_harvest_uses_entry_name_and_port_not_suffix(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    first = spool / "looks-like-video.mp4"
+    first.write_bytes(b"first")
+    second = spool / "opaque.bin"
+    second.write_bytes(b"second")
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(
+            kind="video",
+            inputs={},
+            outputs=[
+                {"path": first.name, "name": "analysis", "role": "auxiliary"},
+                {"path": second.name, "port": "generated_videos"},
+            ],
+            created="2026-09-08T00:00:00Z",
+        ),
+    )
+    harvested = harvest_staged_outputs(spool, require=True)
+
+    assert [(item["name"], Path(item["path"]).name) for item in harvested] == [
+        ("analysis", "looks-like-video.mp4"),
+        ("generated_videos", "opaque.bin"),
+    ]
+    assert [item["role"] for item in harvested] == ["auxiliary", "result"]
+
+
+def test_harvest_preserves_collection_name_and_distinct_ordinals(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    (spool / "first.mp4").write_bytes(b"one")
+    (spool / "second.mp4").write_bytes(b"two")
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(
+            kind="video",
+            inputs={},
+            outputs=[
+                {
+                    "path": "first.mp4",
+                    "name": "generated_videos",
+                    "ordinal": 0,
+                    "role": "result",
+                    "is_primary": True,
+                },
+                {
+                    "path": "second.mp4",
+                    "name": "generated_videos",
+                    "ordinal": 1,
+                    "role": "result",
+                },
+            ],
+            created="2026-09-08T00:00:00Z",
+        ),
+    )
+
+    harvested = harvest_staged_outputs(spool, require=True)
+
+    assert [item["name"] for item in harvested] == [
+        "generated_videos",
+        "generated_videos",
+    ]
+    assert [item["ordinal"] for item in harvested] == [0, 1]
+    assert [item["is_primary"] for item in harvested] == [True, False]
+
+
+def test_harvest_empty_receipt_is_exclusive_and_required_fails(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    fallback = spool / "fallback.txt"
+    fallback.write_text("must not be harvested", encoding="utf-8")
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(kind="test", inputs={}, outputs=[], created="t"),
+    )
+    declared = type(
+        "Out",
+        (),
+        {"name": "text", "path_template": "{out}/fallback.txt"},
+    )()
+
+    with pytest.raises(HarvestError, match="no concrete outputs"):
+        harvest_staged_outputs(
+            spool,
+            declared_outputs=(declared,),
+            values={"out": str(spool)},
+            require=True,
+        )
+
+
+def test_harvest_empty_receipt_for_media_fails_without_require(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(kind="video", inputs={}, outputs=[], created="t"),
+    )
+    media = type(
+        "Out",
+        (),
+        {
+            "name": "generated_videos",
+            "path_template": None,
+            "artifact_type": "video/clip",
+            "type": "file",
+        },
+    )()
+
+    with pytest.raises(HarvestError, match="no concrete outputs"):
+        harvest_staged_outputs(spool, declared_outputs=(media,))
+
+
+def test_harvest_require_empty_spool_fails(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    with pytest.raises(HarvestError, match="no concrete outputs"):
+        harvest_staged_outputs(spool, require=True)
+
+
+def test_harvest_rejects_escaping_manifest_path(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    outside = tmp_path / "escape.mp4"
+    outside.write_bytes(b"nope")
+    (spool / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "video",
+                "inputs": {},
+                "outputs": [
+                    {
+                        "path": str(outside),
+                        "name": "generated_videos",
+                        "content_hash": _digest(b"nope"),
+                        "bytes": 4,
+                    }
+                ],
+                "created": "t",
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(HarvestError, match="escapes"):
+        harvest_staged_outputs(spool, require=True)
+
+
+def test_harvest_rejects_missing_hash(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    (spool / "clip.mp4").write_bytes(b"mp4")
+    (spool / "manifest.json").write_text(
+        json.dumps(
+            _base_manifest(
+                spool,
+                [
+                    {
+                        "path": "clip.mp4",
+                        "name": "generated_videos",
+                        "bytes": 3,
+                    }
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HarvestError, match="must declare content_hash"):
+        harvest_staged_outputs(spool, require=True)
+
+
+def test_harvest_directory_child_must_declare_its_own_hash(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    videos = spool / "videos"
+    videos.mkdir(parents=True)
+    (videos / "clip.mp4").write_bytes(b"mp4")
+    (spool / "manifest.json").write_text(
+        json.dumps(
+            _base_manifest(
+                spool,
+                [
+                    {
+                        "path": "videos",
+                        "name": "generated_videos",
+                        "content_hash": _digest(b"mp4"),
+                        "bytes": 3,
+                        "entries": [{"path": "clip.mp4", "bytes": 3}],
+                    }
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HarvestError, match="must declare content_hash"):
+        harvest_staged_outputs(spool, require=True)
+
+
+def test_harvest_rejects_missing_file_without_fallback(tmp_path: Path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    fallback = spool / "fallback.mp4"
+    fallback.write_bytes(b"fallback")
+    (spool / "manifest.json").write_text(
+        json.dumps(
+            _base_manifest(
+                spool,
+                [
+                    {
+                        "path": "missing.mp4",
+                        "name": "generated_videos",
+                        "content_hash": _digest(b"missing"),
+                        "bytes": 7,
+                    }
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HarvestError, match="missing"):
+        harvest_staged_outputs(spool, require=True)
+
+
+def test_outputs_required_from_receipt_flag() -> None:
+    definition = type("Def", (), {"outputs": (), "metadata": {"output_result_manifest": True}})()
+    assert outputs_required(definition) is True
+    assert outputs_required(type("Def", (), {"outputs": (), "metadata": {}})()) is False

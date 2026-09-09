@@ -1,0 +1,14 @@
+{
+  "phase": "cloud_execution",
+  "batch": "E0.4",
+  "checkpoint": "tooling-and-model-routes-proven",
+  "next_action": "cloud Sol owner completes remaining E0 proof, runs fresh pre-execution review, then dispatches B1 Luna execution cards",
+  "validation_state": "luna-pass-sol-pass-baseline-pending",
+  "last_receipt": "/workspace/astrid-canonical-pack-beta-20260831-a1/luna-smoke.log;/workspace/astrid-canonical-pack-beta-20260831-a1/sol-smoke.log",
+  "last_evidence": "owner=gpt-5.6-sol;normal=gpt-5.6-luna;oracle=gpt-5.6-sol;omp=17.4.0;python=3.11.11;luna=LUNA_OK;sol=SOL_OK;deps=installed",
+  "head_sha": "7ac50c12e8e4d90988fee603ffdb9896e5628792",
+  "supervisor_state": "running",
+  "session": "astrid-canonical-pack-beta-20260831-a1-orchestrator",
+  "supervisor_path": "/workspace/astrid-canonical-pack-beta-20260831-a1/Astrid/.oracle/cloud/agentbox-supervisor.sh",
+  "heartbeat_ttl_minutes": "30"
+}

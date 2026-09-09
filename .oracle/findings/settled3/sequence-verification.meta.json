@@ -1,0 +1,21 @@
+{
+  "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled3/sequence-verification.md",
+  "elapsed_s": 106.313,
+  "error": null,
+  "error_class": null,
+  "finish_reason": null,
+  "finished_at": "2026-08-31T07:33:31Z",
+  "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled3/sequence-verification.meta.json",
+  "model": "codex:gpt-5.6-luna",
+  "pid": 34807,
+  "raw_result_keys": [
+    "stdout"
+  ],
+  "response_chars": 3052,
+  "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled3/sequence-verification.txt",
+  "started_at": "2026-08-31T07:31:45Z",
+  "status": "ok",
+  "stem": "sequence-verification",
+  "task_timeout_s": 1800,
+  "tool_calls": 0
+}

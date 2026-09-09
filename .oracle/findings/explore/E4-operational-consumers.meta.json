@@ -1,0 +1,21 @@
+{
+  "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E4-operational-consumers.md",
+  "elapsed_s": 386.158,
+  "error": null,
+  "error_class": null,
+  "finish_reason": null,
+  "finished_at": "2026-08-30T21:55:23Z",
+  "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E4-operational-consumers.meta.json",
+  "model": "codex:gpt-5.6-luna",
+  "pid": 48361,
+  "raw_result_keys": [
+    "stdout"
+  ],
+  "response_chars": 2792,
+  "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E4-operational-consumers.txt",
+  "started_at": "2026-08-30T21:48:57Z",
+  "status": "ok",
+  "stem": "E4-operational-consumers",
+  "task_timeout_s": 1800,
+  "tool_calls": 0
+}

@@ -1,0 +1,17 @@
+### Ranked verified facts
+
+1. **Runaway is extended-only today; plan confirms.** Both standard builders hard-code only `timeline`, `shots`, `references` (`astrid/packs/__init__.py:68-110`; `astrid/core/schema_packs/standard.py:27-45`). `tests/sdk/test_extended_composition.py:18-27` manually adds runaway; `:61-64` expects five migration rows. This directly confirms `.oracle/plan.md:26-29,113-115`.
+
+2. **Runaway contributes exactly one table, one migration, one command, and one repository—no stream/event/CLI/bridge surface.** Manifest evidence: `astrid/packs/runaway/schema-pack.yaml:15-35`; DDL adds `runaway_transitions`, two indexes, and FKs to `projects`, `runs`, `tasks` (`migrations/0001_initial.sql:21-40`). Static composition confirms migration order becomes `core, references, runaway, shots, timeline`.
+
+3. **Standard inclusion changes opens materially.** Writable opens probe first, then apply pending migrations (`astrid/core/store/database.py:67-98`; runner `:387-457`). Existing standard databases go from 20 to 21 tables and gain `schema_migrations(runaway,1)`. Existing extended databases currently fail default reads/writes with `MigrationTooNewError` (`test_extended_composition.py:66-71`); final composition must accept them unchanged. Read-only opens must see pending runaway without applying it (`database.py:73-79`). Backup restore validation uses the same standard probe (`backup/operations.py:1253-1296`).
+
+4. **`builtin.*` is compatibility residue, not implementation ownership.** The `builtin` pack has no capabilities and says it ships no live components (`astrid/packs/builtin/pack.yaml:13-20`; directory contains only `pack.yaml`). All 49 `builtin.*` aliases are declared by canonical packs, all deprecated; resolver maps aliases to canonical IDs (`alias_resolver.py:109-125`). Alias behavior is currently tested (`tests/test_external_app_contract.py:148-155`; `tests/test_sdk_public_surface.py:295-311`), but hard-cut policy supports deleting these compatibility assertions/declarations.
+
+### Exact hard-cut tests/scenarios
+
+- Rewrite fixed-three/20-table assertions: `tests/v10/test_registry.py:154-181,219-224`; `test_standard_application.py:299-314`; `test_m6_gate.py:47-48,132-136`; `test_m8_installed_contract.py:243-250`.
+- Replace extended-only characterization with: fresh four-pack open; existing three-pack writable apply; existing four-pack reopen; read-only pending nonmutation; checksum/name drift rejection; unknown-pack rejection; backup/restore for both states.
+- Preserve runaway repository/round-trip coverage (`tests/test_runaway_transitions.py:32-63,304-374`), but its referenced `projects/runaway-piano-colour-demo` fixture is absent in this checkout (`:28-29`): restore/provide it before relying on that gate.
+- Simplest seam: one canonical bundled catalog supplies both standard builders and all operational consumers; convert runaway to v2 `pack.yaml`, then delete schema-pack builders and aliases.
+0

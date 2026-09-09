@@ -1,0 +1,13 @@
+**Not CLEAN — three material gaps remain.**
+
+1. **P0 — installed revision root is not explicitly confined to the managed store.**  
+   §III.6–8 verifies record identity, complete file inventory, manifest digest, and Python origins, but never requires the resolved active revision to be the realpath of `<packs_home>/<pack_id>/revisions/<revision_identity>`, nor rejects path-escaping active pointers. The current seam confirms the risk: `astrid/core/pack/store.py:121-133` resolves `active` and only checks `is_dir()`; `:414-429` then reads the record through that resolved path. A valid v2 record and complete payload outside the installed store could therefore pass capture, and §III.8’s “beneath captured revision root” check would bless source/ambient code as installed code. This bypasses installed ownership and the “no source-origin installed execution” anti-pattern. Required investigation: exact realpath/store-root confinement and an escape test.
+
+2. **P1 — external undeclared payload resources remain accepted.**  
+   §III.6 explicitly inventories “any otherwise unclassified external payload file” as `classification: other`; classification is diagnostic-only. §III.7 captures only admitted resource handles and defines no external analogue to the bundled closure gate in §IV.1–3. Thus an external capability can ship and consume pack-relative files absent from `pack.yaml`; inventory proves byte integrity, not canonical resource ownership or discoverability. This leaves a resource authority outside the manifest. Required investigation: whether external capability-only packs intentionally permit undeclared pack-local resources; if not, the installed admission proof is incomplete.
+
+3. **P1 — bundled wheel Python is set/origin-checked, not byte-bound.**  
+   §IV.5 and §X require logical Python-module-set equality and wheel import origins, but no source-to-wheel Python-file digest comparison. A same-named stale or substituted `.py` module can satisfy both checks while differing from the reviewed source. `pyproject.toml:66-133` delegates Python packaging to ordinary module inclusion, so no independent byte receipt currently closes this gap. Either build provenance must be explicitly accepted as the authority, or the clean-wheel proof remains incomplete.
+
+I checked frozen criteria 1–15, all accepted Wave 1–6 dispositions, and each North Star anti-pattern; the previously accepted objections are not repeated. **North Star disposition: conditionally aligned**, pending these authority-boundary investigations.
+0

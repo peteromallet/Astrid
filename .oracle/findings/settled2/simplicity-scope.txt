@@ -1,0 +1,14 @@
+1. **P0 unresolved: dependency-version semantics are not frozen.**  
+   The v2 contract (§2, “database”) names dependencies but does not define their shape or whether a minimum version targets the dependency’s release version, migration head, or both. WP3 says to enforce “minimum database migration versions,” while exploration evidence says current code ignores `dependency.version` (E3). Without an executable rule and fixtures, criterion 6 remains implementation-defined and dependency safety is unproven.
+
+2. **P1 unresolved: resource-closure completeness lacks a deterministic audit boundary.**  
+   The resource-closure section requires auditing “opaque assets reached by pack code,” and WP2 lists current examples, but neither specifies how dynamic/runtime accesses are enumerated or how the gate proves completeness without broad scans. A source/wheel digest comparison only proves equality of the declared subset; it cannot detect an undeclared dynamically accessed file. This leaves criteria 8 and 10, plus the “missing/undeclared required assets” anti-pattern, dependent on manual judgment.
+
+3. **P1 unresolved: catalog snapshot consistency across discovery consumers.**  
+   The plan permits one cached bundled catalog and separate dynamic local/external candidate snapshots (§3), but does not define duplicate-ID resolution or require operational consumers to share one snapshot per operation. Existing layered discovery has precedence and provenance semantics (E2/E8). Independent snapshot construction could make registry, trust, inspect, SDK, and database projections disagree, violating criteria 2, 7, and 12 and the “one authority” anti-pattern rejection.
+
+4. **Material simplification: remove redundant ledger/matrix regenerations within the same cumulative boundary.**  
+   WP2 and WP3 each regenerate/update the ledger and behavior matrix, while Boundary B immediately regenerates both again; WP4 similarly precedes Boundary C. Retain the required boundary gates and final exact gate, but make intermediate package updates local checks rather than repeated cumulative artifacts. This reduces ceremony without weakening criteria 3, 5, or 15.
+
+**Criterion disposition:** Criteria 1–5 and 7–15 have named implementation/validation coverage; criterion 6 is not fully closed because dependency semantics are unspecified. The anti-patterns are explicitly rejected, but catalog snapshot consistency and resource-audit completeness remain enforcement risks. Not CLEAN.
+0

@@ -1,0 +1,14 @@
+1. **Verified inventory — 19 capability packs.** IDs are fixed by `tests/packs/test_pack_layout_contract.py:46-69`: `blender`, `builtin`, `comfy_wrap`, `editorial`, `fal`, `foley`, `generation`, `iteration`, `media`, `moirae`, `reigh`, `rendering`, `runpod`, `stream_content`, `training`, `understanding`, `vibecomfy`, `video_editing`, `youtube`. Current scan: **64 executors, 12 orchestrators, 10 elements, 18 skill files**. Discovery grammar is `core/pack/_common.py:16-24`; canonical roots are `core/pack/validate_layout.py:84-93`.
+
+2. **Database/product packs.** `timeline` owns one table plus stream/events/commands/repository/conformance, CLI and bridge mounts (`astrid/packs/timeline/schema-pack.yaml:12-48`); `shots` owns two tables and nested CLI mount (`shots/schema-pack.yaml:16-51`); `references` owns three tables and nested CLI mount (`references/schema-pack.yaml:17-59`); `runaway` owns one table, command, and repository but no stream/mount (`runaway/schema-pack.yaml:15-35`). Repository evidence: timeline (`timeline/repository.py:1-35`), shots (`shots/repository.py:1-12`), references (`references/repository.py:1-8`), runaway (`runaway/repository.py:1-18`).
+
+3. **Protocol extensions.** `rendering` declares 3 renderers, 3 planners, 2 finalizers (`rendering/pack.yaml:43-58`) and element manifests; path confinement is already mechanically defined (`core/pack/registry.py:260-303`).
+
+4. **Recommended static taxonomy.** Ledger keys:  
+   `capability.{executor|orchestrator|element}`, `protocol.{renderer|planner|finalizer}`, `database.{migration|table}`, `vocabulary.{stream|event|command}`, `repository`, `conformance`, `surface.{cli|sdk|bridge}`, `resource`, `documentation`, `alias`, `consumer.{application|doctor|backup|restore|inspect}`.  
+   Each row stores `surface_id`, `owner`, `evidence_paths`, and `projection_consumers`; never runtime settings. Discover rows from manifests, descriptors, SQL, and import/callsite scans. Pack ownership requires qualified-id/manifest-root evidence (`core/pack/_common.py:78-92`); kernel ownership requires core declarations (`core/migrations/catalog.py:51-89`, `core/events/registry.py:64-177`). Consumers are projections, not owners (`application.py:163-198`).
+
+5. **Conflict/risk.** Both standard builders independently hard-code only three packs (`packs/__init__.py:68-110`; `core/schema_packs/standard.py:27-45`), while the frozen goal requires four (`.oracle/agent_goal.md:21-25`). `blender` has no structured skill; the skill test is only a non-exhaustive floor (`tests/packs/test_pack_layout_contract.py:353-383`).
+
+**Affected tests:** catalog/migrations, four repository/conformance suites, CLI/SDK domain suites, rendering-extension tests, doctor/backup composition, and wheel closure (`.oracle/agent_goal.md:174-187`).
+0

@@ -1,0 +1,11 @@
+1. **P1 — Runaway fixture is executed redundantly.**  
+   `tests/packs/test_runaway_canonical_roundtrip.py::test_generated_temporary_project_round_trip` is included by the first WP6 command’s `tests/packs` directory, then run again by the exact receipt command, then included again by `python3 -m pytest`. This conflicts with §VII.2’s “final evidence command runs once” intent and WP6’s one-authoritative-owner/each-expensive-validation-once rule. The focused command needs an explicit exclusion or the receipt run must be the sole focused execution.
+
+2. **P1 — Wheel validation commands are not operationally isolated.**  
+   §IX requires an outside-checkout interpreter, `-I -P`, scrubbed path variables, and origin assertions. WP6 only supplies bare commands such as `python3 -m pytest` and `python3 -m astrid doctor`, followed by “Using the same wheel,” without an exact `InstalledArtifactHarness` invocation, working directory, interpreter path, or isolation wrapper. `ASTRID_PREBUILT_WHEEL` alone cannot prevent source-tree imports. This leaves criterion 10 and source/wheel comparison vulnerable to false source-mode proof.
+
+3. **P2 — Criterion-15 evidence closure lacks an executable completeness contract.**  
+   Criterion 15 requires every row to map to commands, artifacts, results, and independent reviewer disposition. §XI names a “fifteen-row evidence matrix,” and §XIII provides broad primary-proof labels, but neither defines the matrix schema, required non-empty fields, artifact paths, or a completeness/freshness gate. WP6’s “final matrix candidate” wording permits a manually incomplete matrix while still claiming closure. This remains an unresolved proof contract, not a prior Wave 1–5 objection.
+
+**Disposition:** Wave 5’s capture-time admission supersession, strict records, direct-child closure, documentation/Python ownership rules, concrete receipt identity, and no-fingerprint constraints are consistently represented. No other frozen criterion or North Star anti-pattern exposes a material new defect; no new exploration or `[XHARD]` work is indicated.
+0

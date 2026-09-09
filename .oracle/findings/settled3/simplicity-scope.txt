@@ -1,0 +1,11 @@
+1. **P1 — External trust admission remains underspecified.**  
+   Plan §II.3 permits installed capability execution only for an “active validated revision with accepted permissions,” but defines neither the acceptance predicate nor the single projection owning it. Evidence E8 shows trust is currently rendering-specific (`astrid/core/rendering/registry.py:717-780`) while executor/orchestrator admission lacks equivalent enforcement. This leaves criteria 2, 7, and 12 vulnerable to divergent consumers and preserves a potential trust-bypass anti-pattern. The plan needs one explicit existing trust/admission owner and observable disposition.
+
+2. **P1 — Snapshot fingerprint/freshness machinery is unsubstantiated overhead.**  
+   Plan §II.4 adds a fingerprint over definitions, every resource, provenance, rejected diagnostics, and layer ordering; unstable-read retries; and pre-execution stale-handle verification. No frozen criterion requires a fingerprint, no consumer is specified, and resource handles already carry size/hash while source/wheel audits independently compare hashes. This is a new abstraction, error surface, and repeated I/O cost beyond the accepted Wave-2 one-snapshot contract. Either identify a required consumer/security invariant or drop the fingerprint and limit freshness checks to the specific external-resource boundary that needs them.
+
+3. **P2 — Bundled legacy filename detection has a sequencing hole.**  
+   Plan §II.1 first says to ignore directories without `pack.yaml`, then says alternate manifest filenames are errors. A `pack.yml`-only or `pack.json`-only directory is therefore ignored by catalog construction and cannot fail criterion 1/11 there; later WP5 gates may catch it, but the canonical catalog contract remains contradictory. “Without `pack.yaml`” must distinguish non-pack directories from legacy-manifest directories.
+
+**Coverage:** Criteria 3–6, 8–10, and 13–15 have direct planned proofs; criteria 1/11 inherit finding 3, and criteria 2/7/12 inherit finding 1. Wave-1 accepted changes and Wave-2 contracts are otherwise represented without a new parser, ledger authority, fixed composition list, lifecycle machinery, service locator, YAML DDL, external SQL, or other North Star anti-pattern.
+0

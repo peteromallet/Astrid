@@ -1,0 +1,86 @@
+{
+  "briefs_dir": ".oracle/briefs/settled2",
+  "default_model": "codex:gpt-5.6-luna",
+  "failed_count": 0,
+  "isolation": "threads",
+  "max_tokens": 65536,
+  "max_workers": 3,
+  "model_map": [],
+  "output_dir": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2",
+  "project_dir": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta",
+  "stopped_by_signal": false,
+  "succeeded_count": 3,
+  "sum_agent_seconds": 234.491,
+  "task_timeout_s": 1800,
+  "tasks": [
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled2/reuse-architecture.md",
+      "elapsed_s": 67.153,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T22:21:16Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/reuse-architecture.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 99820,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2815,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/reuse-architecture.txt",
+      "started_at": "2026-08-30T22:20:08Z",
+      "status": "ok",
+      "stem": "reuse-architecture",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled2/sequence-verification.md",
+      "elapsed_s": 99.171,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T22:21:48Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/sequence-verification.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 99821,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2655,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/sequence-verification.txt",
+      "started_at": "2026-08-30T22:20:08Z",
+      "status": "ok",
+      "stem": "sequence-verification",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled2/simplicity-scope.md",
+      "elapsed_s": 68.167,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T22:21:17Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/simplicity-scope.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 99823,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2484,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/simplicity-scope.txt",
+      "started_at": "2026-08-30T22:20:08Z",
+      "status": "ok",
+      "stem": "simplicity-scope",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    }
+  ],
+  "toolsets": [
+    "('file'",
+    "'web')"
+  ],
+  "total_count": 3,
+  "wall_clock_s": 99.178
+}

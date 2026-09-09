@@ -1,0 +1,14 @@
+**Ranked verified inventory**
+
+1. **P0 conflict — active second schema-pack species.** Four shipped `schema-pack.yaml` files are parsed by `astrid/core/schema_packs/manifest.py:34-50,369-421`. Two independent builders hard-code `("timeline","shots","references")` in `astrid/core/schema_packs/standard.py:27-45` and `astrid/packs/__init__.py:68-100`; `runaway/schema-pack.yaml:1-35` is excluded. Affected: `tests/v10/test_registry.py:154-181`, `test_m6_gate.py:132-135`, `test_pack_factoring.py:52-95`, `scripts/reshape/m4_gate.py:94-103,559-599`, `scripts/reshape/check_pack_factoring.py:91-204`.
+
+2. **P0 conflict — legacy pack filenames and flat parsing execute.** `PACK_MANIFEST_NAMES` accepts `pack.yaml`, `pack.yml`, and `pack.json` (`astrid/core/pack/_common.py:16`); `loader.py:184-240` selects them and implements `_parse_flat_yaml`. The same contract is enforced by `validate.py:257-275`, `validate_layout.py:84-85,149`, `validate_first_party.py:20-45,131-149`, and `install_git.py:247-285`. Active schema: `astrid/core/pack/schemas/v1/pack.json`. Affected: `tests/packs/test_pack_yaml_schema.py`, `test_pack_layout_contract.py:75-88,229-305`, `test_packs_validate.py`.
+
+3. **P0 conflict — independent consumers.** CLI mounts reread fixed schema manifests (`astrid/core/cli/domain_product.py:154-174`); `agent_index.py:102-120,393-422` reparses raw YAML/JSON; installed-wheel tests regex-parse YAML (`tests/v10/test_m8_installed_contract.py:55-83`); `install_git.py:470-484` reparses versions.
+
+4. **P1 conflict — packaging/docs encode the split.** `pyproject.toml:109-125`, `tests/v10/test_m8_packaging.py:46-53,216-220`, and `scripts/smoke_wheel_install.sh:82-87` enumerate only three schema packs. Active v1 docs: `docs/contracts/platform-contract.md:161-186`, `docs/packs/creating-packs.md:111-154`. Generated `_core/skill/SKILL.md:566-570` is capability-only, not a pack census.
+
+**Historical/non-authoritative:** `.oracle/**`, `findings/**`, `planning/**`, `inputs/astrid-first/**`, and `docs/astrid-v10-implementation-decisions.md:1-8,61-79`; exclude from scans. Training flat manifests (`tests/packs/builtin/test_training_run_manifest_input.py:66-129`) are unrelated.
+
+**Zero-legacy seam:** extend `scripts/reshape/authority_lint.py`; invoke from `.github/workflows/ci.yml:116-123`. Fail on any legacy filename, schema-pack import, fixed tuple/list, flat parser, or raw pack-manifest parse. Require every bundled pack, including `runaway`, to load through one catalog and pass clean-wheel closure.
+0

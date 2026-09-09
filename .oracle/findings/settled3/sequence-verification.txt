@@ -1,0 +1,16 @@
+1. **P1 — Bundled catalog cache conflicts with freshness/lifetime semantics.**  
+   §II.1 caches `BundledCatalog` once per process and package root. §II.4 performs post-construction freshness checks only before **external** capability execution, installation admission, or external resource validation. §II.5 says filesystem changes become visible in a later operation or lifetime. A source-tree manifest/resource mutation can therefore remain invisible across later operations, or bundled capability/application execution can consume changed files without a `CatalogSnapshotStaleError`. Database migration handles may detect changed SQL when read, but the general invariant is not established for bundled consumers. The plan needs an explicit immutability assumption for installed bundles or a defined recapture/verification boundary for source and bundled execution.
+
+2. **P1 — Bundled alternate manifests can be silently ignored.**  
+   §II.1 step 2 says to “ignore ... directories without `pack.yaml`”; step 3 says alternate pack filenames are errors. A child containing only `pack.yml`, `pack.json`, or `schema-pack.yaml` satisfies the ignore branch and never reaches the error branch. WP5 static legacy gates may catch this eventually, but the executable bundled catalog itself does not enforce the frozen exactly-one-manifest rule. This also leaves a transient path for an unclassified bundled directory.
+
+3. **P1 — Criterion 14’s baseline-failure proof is underspecified.**  
+   WP0 explicitly forbids the full suite. WP6 says to reproduce only an apparently unrelated failing scenario against the pinned source, but does not require recording a controlled before/after result, environment, and exact revision sufficient to prove baseline independence. The frozen criterion requires reproducible before/after evidence, not merely a source-side rerun.
+
+4. **P2 — Clean-wheel isolation is asserted but not operationally specified.**  
+   §III.4 requires a “source-isolated wheel audit”; WP5 introduces `InstalledArtifactHarness`, and WP6 lists installed audits, but no acceptance check proves the subprocess cannot import the checkout or source pack roots. A source fallback could make normalized-definition/resource equality and documentation census checks pass without proving wheel closure.
+
+**Wave-1/Wave-2 disposition:** accepted findings are otherwise resolved without added ceremony: graph-derived composition, one catalog/snapshot boundary, executable v2 contract, bounded closure, ledger lifecycle, four-pack matrix, and one-build proof are all explicit. No material simplification remains.
+
+**Criteria check:** 1, 3–9, 11–13, and 15 have named implementation/proof paths; 2 is affected by freshness, 10 by wheel isolation, and 14 by baseline evidence. North Star anti-patterns are rejected in scope, but items 1–2 leave residual risks for stale/alternate authority bypass; no service locator, lock/lifecycle, external SQL, duplicate DDL, dynamic kernel, fixed composition list, broad scanner, or repeated-build ceremony is introduced.
+0

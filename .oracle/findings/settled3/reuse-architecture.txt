@@ -1,0 +1,24 @@
+## Findings
+
+**P1 — Source inventory exclusions are not an executable contract.**  
+§III.1 excludes “prohibited cache/build metadata” from the one-classification rule, but never defines the exact allowlist, matching rule, or whether exclusions are permitted only at fixed paths. WP0 says to “record exact audit exclusions,” leaving a material contract decision to execution. An undeclared runtime file could therefore escape the `typed | supplemental | authoring_only` gate, weakening criteria 10–11 and the North Star’s undeclared-resource prohibition. This is the only material resource-closure ambiguity.
+
+**P1 — Provenance identity is underspecified despite being fingerprinted.**  
+§II.4 includes a “stable provenance identity” in `snapshot_fingerprint`, while §II.3 defines only provenance classes and broad source categories. The plan does not specify whether identity is pack/version, manifest digest, revision, or another root-independent value. This affects source-versus-wheel fingerprint equality, duplicate-candidate deduplication, and freshness checks. Wave 2 explicitly required frozen provenance semantics; this remains an unresolved boundary detail.
+
+## Frozen criteria check
+
+Criteria **1–2**: strict v2 loader and snapshot-owned identity.  
+**3**: coverage ledger and zero-unclassified gate.  
+**4**: manifest-derived database graph.  
+**5–6**: four-pack matrix and owner-relative migration handles.  
+**7**: snapshot threaded through operational consumers.  
+**8–9**: structured docs, census, inspect, and doctor.  
+**10**: source/wheel closure, subject to finding 1.  
+**11–13**: deletion gates, external fail-closed behavior, and golden fixtures.  
+**14–15**: single-build validation, evidence matrix, and oracle review.
+
+Wave 1 and Wave 2 accepted findings are otherwise incorporated without introducing a service locator, runtime ledger, dependency solver, lifecycle machinery, duplicate DDL, fixed composition authority, broad static scanner, or repeated-build ceremony.
+
+North Star alignment is therefore **conditionally clean**: architecture is aligned, but the two contract details above must be frozen before implementation is considered stability-complete.
+0

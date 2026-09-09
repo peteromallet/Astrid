@@ -1,0 +1,21 @@
+{
+  "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled2/reuse-architecture.md",
+  "elapsed_s": 67.153,
+  "error": null,
+  "error_class": null,
+  "finish_reason": null,
+  "finished_at": "2026-08-30T22:21:16Z",
+  "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/reuse-architecture.meta.json",
+  "model": "codex:gpt-5.6-luna",
+  "pid": 99820,
+  "raw_result_keys": [
+    "stdout"
+  ],
+  "response_chars": 2815,
+  "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled2/reuse-architecture.txt",
+  "started_at": "2026-08-30T22:20:08Z",
+  "status": "ok",
+  "stem": "reuse-architecture",
+  "task_timeout_s": 1800,
+  "tool_calls": 0
+}

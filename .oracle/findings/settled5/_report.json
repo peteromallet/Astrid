@@ -1,0 +1,86 @@
+{
+  "briefs_dir": ".oracle/briefs/settled5",
+  "default_model": "codex:gpt-5.6-luna",
+  "failed_count": 0,
+  "isolation": "threads",
+  "max_tokens": 65536,
+  "max_workers": 3,
+  "model_map": [],
+  "output_dir": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5",
+  "project_dir": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta",
+  "stopped_by_signal": false,
+  "succeeded_count": 3,
+  "sum_agent_seconds": 435.742,
+  "task_timeout_s": 1800,
+  "tasks": [
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled5/authority-architecture.md",
+      "elapsed_s": 179.661,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-31T08:04:48Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5/authority-architecture.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 58752,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2534,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5/authority-architecture.txt",
+      "started_at": "2026-08-31T08:01:48Z",
+      "status": "ok",
+      "stem": "authority-architecture",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled5/sequence-proof.md",
+      "elapsed_s": 126.71,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-31T08:03:55Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5/sequence-proof.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 58753,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2408,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5/sequence-proof.txt",
+      "started_at": "2026-08-31T08:01:48Z",
+      "status": "ok",
+      "stem": "sequence-proof",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled5/simplicity-scope.md",
+      "elapsed_s": 129.371,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-31T08:03:58Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5/simplicity-scope.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 58751,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2227,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled5/simplicity-scope.txt",
+      "started_at": "2026-08-31T08:01:48Z",
+      "status": "ok",
+      "stem": "simplicity-scope",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    }
+  ],
+  "toolsets": [
+    "('file'",
+    "'web')"
+  ],
+  "total_count": 3,
+  "wall_clock_s": 179.667
+}

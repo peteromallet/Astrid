@@ -1,0 +1,16 @@
+Not CLEAN. Four material issues remain.
+
+1. **Catalog snapshot consistency is unresolved.**  
+   Plan §3 permits dynamic local/external discovery, while WP4 says consumers receive projections but never requires one catalog snapshot to be threaded through an operation. Existing discovery loses provenance when reducing `DiscoveredPack` to `PackDefinition` (`astrid/core/pack/discovery.py:262-282`, E8). An install/revision change between application, SDK, backup, doctor, or inspect calls can produce different ownership/trust/composition views. This threatens frozen criteria **2** and **7**. The plan needs an explicit snapshot/lifetime invariant, not merely a shared loader.
+
+2. **Resource-closure proof lacks a bounded executable audit.**  
+   §5 and WP1/WP2 require auditing opaque runtime assets, but do not define how runtime-use inventory is produced or made complete. Evidence already shows non-declarative consumers such as Blender’s service unit and executor `requirements.txt` (`blender/deploy.py:46-59,282-293`; `execution/executor/folder.py:155-175`, E7). Recursive declared-resource walking cannot prove dynamically referenced assets were found. This leaves criterion **10** and the “undeclared required asset” anti-pattern under-specified.
+
+3. **The ledger lifecycle has no concrete generator/diff contract.**  
+   §7 and WP0/WP5 say “regenerate and compare,” and mention stale/duplicate/conflicting rows, but specify neither canonical input enumeration, normalization, deleted-surface handling, nor the exact artifact/command. The WP0 snapshot could therefore become a human-reviewed stale baseline rather than a reproducible zero-unclassified gate. This directly affects criterion **3** and the “nothing remains unclassified” North Star requirement.
+
+4. **WP6 likely duplicates expensive wheel validation.**  
+   The focused suite includes `tests/v10/test_m8_packaging.py`, whose existing harness contains `build_once` (`:303-370`, E7), then WP6 separately runs `python3 -m build` and a clean-wheel audit. “One authoritative owner” does not prevent multiple builds or conflicting expectations. Define whether packaging tests become non-building contract tests or are excluded from the single final build path.
+
+Criteria **1, 4–6, 8–9, 11–13, and 15** have explicit package/gate coverage; criteria **2–3, 7, 10, and 14** retain the gaps above. The written plan explicitly rejects fixed authorities, service locators, runtime ledgers, lifecycle machinery, external SQL, YAML DDL, compatibility shims, and custom packaging; no additional anti-pattern is intentionally introduced, but the snapshot and closure gaps leave bypasses unproven.
+0

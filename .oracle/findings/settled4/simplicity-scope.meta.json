@@ -1,0 +1,21 @@
+{
+  "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled4/simplicity-scope.md",
+  "elapsed_s": 77.235,
+  "error": null,
+  "error_class": null,
+  "finish_reason": null,
+  "finished_at": "2026-08-31T07:47:48Z",
+  "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled4/simplicity-scope.meta.json",
+  "model": "codex:gpt-5.6-luna",
+  "pid": 46978,
+  "raw_result_keys": [
+    "stdout"
+  ],
+  "response_chars": 1844,
+  "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled4/simplicity-scope.txt",
+  "started_at": "2026-08-31T07:46:31Z",
+  "status": "ok",
+  "stem": "simplicity-scope",
+  "task_timeout_s": 1800,
+  "tool_calls": 0
+}

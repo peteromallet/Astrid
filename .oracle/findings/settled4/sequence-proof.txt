@@ -1,0 +1,8 @@
+1. **P0 — replacement is explicitly not `STABLE`.**  
+   The plan header states `Status: complete replacement issued; not STABLE`, while accepted Wave 3 disposition explicitly requires Sol to “return exact `STABLE`” before this fresh settled-plan wave. This is a direct unresolved plan-state defect, independent of implementation quality. The architecture otherwise incorporates the accepted Wave 1–3 corrections: canonical composition, catalog lifetime, v2 contract, resource closure, provenance identity, external admission, legacy rejection, wheel isolation, and baseline receipts.
+
+2. **P1 — Runaway round-trip prerequisite remains unresolved.**  
+   Exploration evidence `E10-runaway-builtin.txt` reports the referenced `projects/runaway-piano-colour-demo` fixture is absent and requires restoration/provision before relying on the gate. The revised plan still says only: “Runaway’s missing demo input remains a deterministic temporary-project fixture repair unless custody evidence proves it is an intentional packaged asset” (§I; repeated in WP0). No custody evidence, exact fixture decision, or executable acceptance receipt is specified. Yet WP6 requires “References and runaway round trips,” and criterion 5 requires preservation of runaway behavior. This contradicts “Open planning questions: none” and leaves a material criterion-5/14 failure path.
+
+**North Star disposition:** Conditionally aligned. The revised design rejects the named architectural anti-patterns and resolves all accepted Wave 1–3 technical objections, but it is not procedurally settled until the status is `STABLE` and the Runaway fixture prerequisite receives a deterministic disposition and evidence path.
+0

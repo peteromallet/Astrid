@@ -1,0 +1,21 @@
+{
+  "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/settled7/sequence-proof.md",
+  "elapsed_s": 85.651,
+  "error": null,
+  "error_class": null,
+  "finish_reason": null,
+  "finished_at": "2026-08-31T08:36:55Z",
+  "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled7/sequence-proof.meta.json",
+  "model": "codex:gpt-5.6-luna",
+  "pid": 7181,
+  "raw_result_keys": [
+    "stdout"
+  ],
+  "response_chars": 1837,
+  "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/settled7/sequence-proof.txt",
+  "started_at": "2026-08-31T08:35:30Z",
+  "status": "ok",
+  "stem": "sequence-proof",
+  "task_timeout_s": 1800,
+  "tool_calls": 0
+}

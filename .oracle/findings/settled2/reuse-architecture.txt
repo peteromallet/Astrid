@@ -1,0 +1,14 @@
+1. **P0 — v2 contract is not actually frozen.**  
+   The “V2 field contract” lists categories, not an executable field-level contract. Exact types, enums, required/nullable rules, version grammar, alias semantics, permission shape, typed-root grammar, database dependency syntax/version comparison, documentation-route schema, and supplemental-resource semantics remain unspecified. WP1 says these will be defined later, while WP2–WP5 depend on them. This is a material unresolved investigation affecting criteria 1, 2, 6, 8, 10, 12, and 13. Evidence: plan §“V2 field contract”, WP1; E1 `loader.py:110-152,184-240`; E3 dependency-version finding.
+
+2. **P0 — resource closure has no complete enforcement mechanism.**  
+   The invariant requires every runtime-required file to be declared exactly once, including opaque files reached by pack code, but the plan specifies no static/runtime audit algorithm for discovering those accesses or distinguishing required assets from authoring files. Existing evidence already identifies omitted `requirements.txt` and Blender’s `.service` unit (E7, `pyproject.toml:66-133`, `execution/executor/folder.py:155-175`, `blender/deploy.py:46-59`). Cross-pack shared-resource ownership and duplicate declarations are also undefined. Criteria 8 and 10 therefore remain proof-dependent, with direct North Star risk of undeclared packaged resources.
+
+3. **P1 — catalog lifetime and admission semantics remain ambiguous.**  
+   The plan permits one cached bundled catalog plus dynamic local/external candidate snapshots, but does not define the canonical boundary that prevents registries, SDK, rendering, skills, install, and trust code from independently rescanning or applying precedence/shadowing. “Trusted and bundled” is asserted as a selection predicate without exact provenance transition, override, or duplicate-ID rules. This leaves criteria 2, 7, and 12 vulnerable to the current bypasses documented in E2/E4/E8 (`discovery.py:262-282`, `sdk/discovery.py:98-131`, `agent_index.py:329-374`).
+
+4. **P1 — database composition algorithm lacks deterministic semantic detail.**  
+   “Topologically order contributions with a deterministic tie-break” does not define graph nodes, whether dependency versions compare pack releases or migration heads, how core participates, or the exact tie-break preserving current migration order. E3 confirms current dependency minimum versions are not enforced (`schema_packs/runner.py:146-201`). Criteria 4–6 and four-pack behavior preservation need this resolved at the contract gate.
+
+**Disposition:** Every criterion 1–15 has traceability, and every North Star anti-pattern is explicitly rejected. No alternate architecture is required; the four unresolved contracts above must be closed before implementation can credibly be called stable.
+0

@@ -1,0 +1,1222 @@
+Reading additional input from stdin...
+2026-08-30T22:03:42.607675Z ERROR codex_core::session::session: failed to load skill /Users/peteromalley/Documents/Arnold/arnold_pipelines/megaplan/pipelines/epic-blitz/SKILL.md: missing YAML frontmatter delimited by ---
+2026-08-30T22:03:42.607721Z ERROR codex_core::session::session: failed to load skill /Users/peteromalley/Documents/Arnold/arnold_pipelines/megaplan/planning/skills/planning/SKILL.md: missing YAML frontmatter delimited by ---
+2026-08-30T22:03:42.607731Z ERROR codex_core::session::session: failed to load skill /Users/peteromalley/Documents/Arnold/arnold_pipelines/megaplan/planning/skills/planning/SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.149.0
+--------
+workdir: /Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 01a054b3-25c9-7e00-944d-9e1d580e2a1a
+--------
+user
+You are the Phase 3 plan reviser for a Megado run in Astrid. Work read-only. Do not edit files, run mutating commands, create branches, or dispatch models.
+
+Update the ENTIRE implementation plan using all exploration findings while staying strictly inside the frozen agent goal and advancing the complete North Star. Explicitly reject every named North Star anti-pattern. Bias toward elegance and simplicity: KISS, YAGNI, cut scope or abstraction that is not pulling its weight, preserve existing mechanisms, and identify the simplest dependency order. Resolve evidence questions where the findings answer them. List only genuinely new exploration areas, if any. Reassess effort and huge-run status. If and only if nothing material changes, answer exactly STABLE. Otherwise return a complete replacement plan, not a patch or commentary.
+
+COMPLETE NORTH STAR:
+
+# North Star — one canonical Astrid pack
+
+Astrid has one understandable pack concept. Every bundled product extension is
+owned by one strict `pack.yaml`; a pack may contribute capabilities, SQLite
+schema, agent documentation, or any combination. `timeline`, `shots`,
+`references`, and `runaway` are ordinary bundled packs rather than a second
+schema-pack species.
+
+Opening a pack directory should reveal one authoritative declaration of its
+identity, resources, custom capabilities, database ownership, migrations,
+events, commands, CLI surface, and agent guidance. Runtime systems consume
+typed projections of that declaration instead of independently rediscovering
+or reinterpreting the pack. Every existing bundled customization is either
+owned by a canonical pack or explicitly classified as irreducible kernel
+behavior; nothing remains unclassified.
+
+## Enduring principles
+
+- One pack identity, manifest grammar, parser/validator, normalized definition,
+  and bundled catalog.
+- SQLite remains the per-project authority. Migration SQL owns columns,
+  constraints, indexes, and transformations; YAML does not duplicate DDL.
+- Reuse the strong machinery already present: typed registries, migration
+  ordering/checksums/drift/transactions, `DatabaseWriter`, `UnitOfWork`,
+  repositories, SDK behavior, and conformance tests.
+- Bundled trusted packs may contribute database schema; external packs remain
+  capability-only during beta.
+- Every pack-relative resource is confined, discoverable, and present in the
+  built wheel.
+- Every user/agent-facing bundled pack ships structured agent documentation;
+  the `_core` skill exposes a generated canonical pack census and routes agents
+  to the owning pack documentation.
+- With no users to migrate, cut directly to the final form and delete alternate
+  authorities instead of maintaining shims.
+- Keep beta scope proportionate: unify today's bundled system without
+  prebuilding a marketplace or variable project-composition lifecycle.
+
+## Anti-patterns
+
+- Hiding the old schema-pack subsystem inside `pack.yaml` while retaining its
+  parser, identity, discovery, or hard-coded standard list.
+- Replacing useful typed registries with a giant universal service locator.
+- Duplicating SQLite DDL or mutable runtime facts in YAML or skill prose.
+- Per-project pack locks, enable/disable/purge state machines, dynamic database
+  plugins, or migration ceremony without an observed beta need.
+- Allowing external packs to execute SQL.
+- Making the irreducible kernel dynamically unloadable for conceptual symmetry.
+- Compatibility shims, dual reads, schema-less manifests, or legacy fallbacks.
+- Declaring success while any bundled customization, documentation surface,
+  operational consumer, or packaged resource bypasses canonical ownership.
+
+COMPLETE FROZEN AGENT GOAL:
+
+# Agent goal — canonical pack beta hard cut
+
+Status: **frozen**.
+
+[North Star](./northstar.md)
+
+This run advances the North Star by replacing Astrid's split and partially
+duplicated pack authorities with one complete canonical bundled-pack path,
+covering all existing bundled custom functionality and its packaged agent
+documentation without adding post-beta composition machinery.
+
+## Objective
+
+Implement the direct beta end state in which every bundled Astrid product pack
+uses strict `pack.yaml` v2, every existing bundled customization is mapped to a
+canonical pack or explicitly justified kernel owner, database-bearing packs
+declare an optional `database` contribution, all existing typed systems consume
+projections of one complete canonical definition, and every user/agent-facing
+pack ships validated agent documentation discoverable from the `_core` skill.
+
+Convert the four current schema packs (`timeline`, `shots`, `references`, and
+`runaway`), derive standard database composition from bundled manifests, make
+resources pack-relative and wheel-complete, rewire every relevant operational
+consumer, expose useful inspection/doctor output, and delete obsolete manifest
+forms and alternate authorities. Preserve existing feature semantics.
+
+## Authoritative inputs and immutable source
+
+- [North Star](./northstar.md).
+- This frozen agent goal.
+- Source ref: `7ac50c12e8e4d90988fee603ffdb9896e5628792`.
+- Source branch at custody: `codex/live-ux-pre-phase-b-20260824`.
+- Worktree branch: `megado/canonical-pack-beta`.
+- [Custody baseline](./custody.md).
+- Existing source and tests, except tests intentionally enforcing forms named
+  for deletion below.
+
+## Settled decisions
+
+1. Exactly one canonical manifest filename: `pack.yaml`.
+2. Schema version 2 is a hard cut. No `pack.yml`, `pack.json`, schema-less/flat
+   YAML, or `schema-pack.yaml` compatibility.
+3. A pack may contribute capabilities, SQLite schema, agent documentation, or
+   a combination.
+4. Database contribution is an optional `database` block; detailed DDL remains
+   authoritative in migration SQL.
+5. Migrations/resources resolve relative to the owning pack root/revision.
+6. Parse/normalize/validate once into one complete immutable canonical object.
+7. Existing typed registry/database mechanics remain subordinate projections.
+8. Every existing bundled customization gets a canonical pack owner or an
+   explicit kernel classification recorded in a coverage ledger.
+9. Standard beta composition is derived from bundled manifests, not duplicated
+   fixed tuples.
+10. Existing `schema_migrations` remains the sole applied database-state record.
+    No per-project composition lock in beta.
+11. Standard writable open may continue applying trusted bundled migrations;
+    read-only paths probe compatibility. No enable/disable/purge lifecycle.
+12. External packs remain capability-only; external `database` declarations
+    fail closed.
+13. The irreducible kernel stays code; `_core` is not dynamically unloadable.
+14. Static typed application/service/CLI/bridge wiring may remain where dynamic
+    factories add no beta value, but ownership and documentation cannot bypass
+    the canonical catalog.
+15. Every user/agent-facing bundled pack has structured `AGENTS.md` or
+    `skill/SKILL.md`; intentional opt-outs require a manifest reason and must be
+    limited to non-user-facing internal utility packs.
+16. The `_core` skill contains or links a generated canonical pack census.
+17. `references` becomes the exemplar combined data/SDK/CLI/documentation pack
+    without changing its three-table model or semantics.
+18. Application, doctor, backup, restore, inspect, validation, and packaging
+    consume the same canonical ownership/resource data.
+
+## In scope
+
+- V2 schema, complete canonical model, single loader/validator, deterministic
+  bundled catalog, root confinement, and resource closure.
+- Capability-only, database-only, and combined golden fixtures/scaffolds.
+- Conversion of every bundled pack manifest and the four schema manifests.
+- Database projection into existing collision/migration mechanics.
+- Pack-relative migration/resource loading and enforced dependency semantics.
+- One standard bundled composition path used by application, doctor, backup,
+  restore, SDK/read probes, and package validation.
+- Canonical customization coverage ledger and a zero-unclassified-surface gate.
+- Pack inspection output in text and JSON for identity, source, capabilities,
+  database ownership/head, agent docs, and resource closure.
+- Doctor canonical pack census and migration status.
+- Structured pack agent documentation, `_core` census/routing, and wheel
+  inclusion/validation of declared skills and docs.
+- CI gates for legacy authorities, path escapes, missing/undeclared resources,
+  missing documentation, and clean-wheel closure.
+- Focused documentation and end-to-end examples, with `references` as exemplar.
+- Deletion of obsolete schema-pack and legacy manifest paths after cutover.
+
+## Non-goals
+
+- Per-project pack locks or variable project composition.
+- Enable/disable/purge/database-aware uninstall lifecycle.
+- Third-party database packs or arbitrary external SQL.
+- Marketplace, sandbox, signing, dependency solver, remote activation, or UI.
+- General dynamic repository/service/CLI/bridge factory framework.
+- Moving every global model/LoRA/type/taxonomy or kernel primitive into packs
+  unless source evidence shows it is existing pack-owned customization required
+  by the zero-unclassified gate.
+- Down migrations, data rollback, or compatibility shims.
+- Merge to main, deployment, or promotion.
+
+## Authorization
+
+Authorized:
+
+- create and mutate the dedicated worktree/branch above;
+- run the full Megado plan/explore/revise/execute/oracle/validation process;
+- invoke GPT-5.6 Luna and GPT-5.6 Sol under the declared routing policy;
+- edit code, tests, docs, and run artifacts within goal scope;
+- commit reviewed checkpoints;
+- push the reviewed final branch to `origin` using explicit refspec
+  `HEAD:refs/heads/megado/canonical-pack-beta`;
+- open the completed worktree.
+
+Not authorized:
+
+- modify, clean, stage, or restore the original dirty checkout;
+- merge, rebase onto a moving branch, deploy, promote, publish a release, or
+  mutate any other worktree;
+- switch pinned models without user approval;
+- widen the frozen goal under cover of the North Star or review findings.
+
+## Model policy
+
+- Planner: GPT-5.6 Sol, high reasoning.
+- Normal explorer/executor/sense-check work: **GPT-5.6 Luna**, user-selected.
+- Oracle and exceptional `[XHARD]` work: **GPT-5.6 Sol**, user-selected.
+- Automatic switching: not authorized.
+
+Normal is presumed. Cross-cutting size or importance is not `[XHARD]` evidence.
+Every proposed `[XHARD]` task must satisfy the skill's full exceptional test.
+
+## Exact done criteria
+
+1. Every bundled product pack loads from one v2 `pack.yaml` into the complete
+   canonical object; no shipped `schema-pack.yaml` remains.
+2. No active consumer independently reparses or reconstructs canonical pack
+   identity; typed capability/database projections share the same catalog.
+3. A reviewed coverage ledger maps every existing bundled custom surface to a
+   canonical pack/projection or justified kernel owner, with none unclassified.
+4. Standard database composition derives from bundled manifests with no
+   duplicate `("timeline", "shots", "references")` authority.
+5. `timeline`, `shots`, `references`, and `runaway` preserve migration,
+   repository, event, command, CLI, SDK, and conformance behavior.
+6. Migrations resolve from owner roots and preserve collision/order/checksum/
+   drift/transaction guarantees; dependency declarations are enforced.
+7. Application, SDK/read probes, doctor, backup, restore, inspect, and package
+   validation agree on canonical ownership and expected composition.
+8. Every user/agent-facing bundled pack has valid packaged agent docs; every
+   opt-out is explicit and justified; `_core` exposes the canonical census.
+9. Pack inspection and doctor expose useful canonical pack/database/resource/
+   documentation state in stable text and JSON where applicable.
+10. A clean wheel contains and can load every declared bundled resource,
+    migration, skill, and agent document.
+11. Legacy manifest/schema-pack parsers, standard builders, duplicate authority,
+    and compatibility tests/docs are deleted or clearly historical/non-active.
+12. External capability-only packs still work; external `database` fails closed.
+13. Golden capability-only/database-only/combined examples validate.
+14. Focused suites and full authoritative test suite pass, or any unrelated
+    baseline failure is proven with reproducible before/after evidence.
+15. Final evidence matrix maps every criterion to commands, artifacts, results,
+    and independent reviewer disposition; final oracle review passes.
+
+## Validation contract
+
+The stable plan must discover exact project commands and may refine this list,
+but final validation includes:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+python3 -m astrid doctor
+python3 -m build
+```
+
+Also required: fresh and existing SQLite scenarios; checksum drift rejection;
+complete `references` round trip; external capability success/database failure;
+clean-wheel load/resource audit; agent-doc/census audit; pack inspect text/JSON;
+and zero-legacy/zero-unclassified checks. One authoritative owner runs the full
+suite and each expensive validation once.
+
+## Stop and sync policy
+
+- Stop for user reconciliation if the source ref, model policy, North Star,
+  scope, or authorization must change.
+- Treat implementation blockers as owned work until genuinely exhausted.
+- Commit only paths reviewed at each checkpoint.
+- Push only after the final evidence matrix and oracle gate pass.
+- Never merge, deploy, or promote.
+
+CURRENT LIVING PLAN:
+
+# Phase 1 plan — canonical pack beta hard cut
+
+Status: **forming pending Luna exploration and Sol revision**.
+
+The full immutable planner transcript and source evidence are in
+`findings/plan-v1.txt`. This file is the host-normalized living plan.
+
+## Determination
+
+- Estimated effort: **5.6–8.5 engineer-weeks**.
+- Huge run: **yes**.
+- Difficulty: **5/5**, driven by persistence, packaging, operational-consumer,
+  and public inspection/documentation contracts.
+- Proposed `[XHARD]` implementation tasks: **none**. Normal Luna work remains
+  presumed; Sol owns revision and oracle gates.
+
+## Frozen architecture
+
+1. `pack.yaml` v2 is the only accepted manifest form.
+2. `PackDefinition` evolves in place into the complete deeply immutable
+   canonical object; there is no parallel database-pack identity.
+3. A normal pack may optionally declare `database`; migration SQL remains the
+   detailed DDL authority.
+4. The bundled catalog loads trusted built-ins deterministically and supplies
+   typed projections to existing capability and database registries.
+5. Standard database composition is core plus every trusted bundled pack with a
+   database contribution—currently timeline, shots, references, and runaway.
+6. External v2 capability packs remain supported, but external `database`
+   declarations fail before registration or SQL access.
+7. Migration registration retains owner provenance/root and enforces dependency
+   versions while preserving order, checksums, drift detection, and transactions.
+8. Operational consumers receive the catalog or a projection; none reparses
+   identity or rebuilds standard composition independently.
+9. Static typed repository/service/CLI/bridge factories may remain; this is not
+   a dynamic service-locator project.
+10. Every existing bundled custom surface is in a non-runtime coverage ledger as
+    `pack:<id>` or justified `kernel:<subsystem>` ownership.
+11. User/agent-facing packs declare structured docs; `_core` generates a pack
+    census and routes to them. Skill prose does not duplicate DDL/runtime state.
+12. Resource closure is owner-relative, realpath-confined, deterministic, and
+    verified from a clean installed wheel.
+13. No project lock, enable/disable/purge lifecycle, dependency solver,
+    marketplace, dynamic database plugin, down migration, or compatibility shim.
+
+## Luna exploration docket
+
+Each explorer returns ranked facts under 300 words with file/line evidence,
+tests affected, risks, unknowns, and whether findings confirm the plan or expose
+a frozen-goal conflict.
+
+| ID | Area |
+| --- | --- |
+| E1 | Complete manifest/loader/validator/discovery call graph and duplicate parsing authorities. |
+| E2 | Capability registry projections, source precedence, caching, aliases, forks, and overrides. |
+| E3 | Schema registry/migration dependency/provenance/checksum behavior and exact safe reuse seam. |
+| E4 | All database/operational consumers, import-layer constraints, and one composition boundary. |
+| E5 | Complete custom-surface inventory and mechanically checkable coverage-ledger taxonomy. |
+| E6 | Pack agent-documentation census, legitimate opt-outs, `_core` generator inputs, and drift gates. |
+| E7 | Source/wheel resource closure: setuptools patterns, recursive assets, skills, SQL, and clean-wheel tests. |
+| E8 | External-pack admission/security across local, extra, environment, Git, and installed sources. |
+| E9 | CI/tests/scripts/docs enforcing legacy manifest forms, fixed tuples, and first-party lists. |
+| E10 | Runaway standard-inclusion effects; builtin pack/alias current behavior versus compatibility residue. |
+
+## Work packages
+
+### WP0 — exploration, coverage ledger, characterization
+
+Estimate: **0.4–0.6 engineer-week**. Depends on nothing.
+
+- Complete E1–E10.
+- Create an audit-only coverage ledger with exactly one pack/projection or
+  justified kernel owner for every discovered custom surface.
+- Add deterministic missing/stale/multi-owner checks.
+- Characterize migrations, CLI mounts, references behavior, external capability
+  loading, doctor read-only behavior, and runaway inclusion impact.
+
+Exit: no silent omission and no unresolved evidence question.
+
+### WP1 — strict v2 definition, loader, catalog, and closure
+
+Estimate: **0.9–1.3 engineer-weeks**. Depends on WP0.
+
+- Add strict v2 schema and delete alternate/flat parsing in the same cut.
+- Implement one deeply immutable normalized object and one parser/validator.
+- Resolve typed resources once with symlink-aware root confinement.
+- Implement trusted bundled provenance, external database rejection, and the
+  deterministic catalog/projection interface.
+- Update scaffold/local creation and add capability-only, database-only, and
+  combined golden fixtures.
+
+Exit: one parser, filename, definition, catalog; legacy/malformed input fails.
+
+### WP2 — convert all bundled packs and docs
+
+Estimate: **0.7–1.0 engineer-week**. Depends on WP1.
+
+- Convert all retained bundled manifests to v2.
+- Fold timeline, shots, references, and runaway schema declarations into their
+  normal manifests without changing SQL bytes or feature semantics.
+- Make references the combined data/SDK/CLI/docs exemplar.
+- Complete structured agent docs and explicit justified internal opt-outs.
+- Resolve builtin/legacy aliases from E10 and record `_core` kernel/doc ownership.
+
+Exit: every retained product extension has one v2 manifest; no schema manifest.
+
+### WP3 — database projection and migration cutover
+
+Estimate: **0.9–1.4 engineer-weeks**. Depends on WP1–WP2.
+
+- Relocate/rename useful schema registry mechanics as the database projection.
+- Add core plus every bundled `database` contribution from the catalog.
+- Carry owner roots/revisions into migrations and enforce minimum versions.
+- Preserve collision/order/checksum/drift/transaction behavior.
+- Characterize and test existing databases receiving runaway as pending bundled
+  schema on writable open while read-only probes never mutate.
+
+Exit: manifest-derived deterministic bundled DB composition with all safety
+invariants intact.
+
+### WP4 — operational and CLI convergence
+
+Estimate: **0.7–1.1 engineer-weeks**. Depends on WP3.
+
+- Rewire application/bridge, SDK invocation, kernel reads, timeline/rendering
+  helpers, backup, and restore to the same projection.
+- Drive CLI ownership/mount validation from canonical declarations while keeping
+  static parser factories and exact public paths.
+- Prohibit raw manifest parsing outside the canonical loader.
+
+Exit: no operational consumer rebuilds identity or standard composition.
+
+### WP5 — inspect, doctor, agent discovery, and census
+
+Estimate: **0.6–0.9 engineer-week**. Depends on WP2–WP4.
+
+- Render inspect text/JSON from canonical definitions: provenance, capabilities,
+  DB ownership/head, docs, and closure.
+- Add doctor pack census and expected/applied/pending/head database status with
+  an explicit non-mutation test.
+- Rewire skill discovery/agent index and extend `_core` census generation with
+  deterministic check-mode drift tests.
+
+Exit: inspect, doctor, and `_core` agree on one bundled catalog.
+
+### WP6 — packaging and clean-wheel closure
+
+Estimate: **0.5–0.8 engineer-week**. Depends on WP2 and WP5.
+
+- Package every declared canonical resource, SQL migration, skill, and agent doc.
+- Continue excluding tests, authoring fixtures, caches, and undeclared files.
+- Make wheel tests/smoke enumerate the installed catalog and open all resources.
+- Prove installed provenance distinguishes bundled from external content.
+
+Exit: source and clean-wheel identities/resource closures match.
+
+### WP7 — coverage gate and hard deletion
+
+Estimate: **0.4–0.6 engineer-week**. Depends on WP3–WP6.
+
+- Enable the zero-unclassified checker.
+- Delete schema manifests/parser/standard builders, fixed tuples, alternate
+  filename detection, schema-less parsing, independent first-party lists, and
+  independent inspect/CLI/agent reparsing.
+- Relocate useful algorithms without compatibility re-exports.
+- Rewrite factoring/authority tests as v2 zero-legacy gates.
+
+Exit: zero active legacy authorities and zero unclassified surfaces.
+
+### WP8 — authoritative validation and evidence closure
+
+Estimate: **0.5–0.8 engineer-week**. Depends on WP7.
+
+- Run focused scenarios, clean-wheel/build, and one authoritative full suite.
+- Reproduce unrelated failures against the custody SHA rather than rerunning the
+  entire expensive suite.
+- Produce the criterion/evidence/reviewer matrix and pass final Sol review.
+- Commit reviewed paths, push the explicit branch, open the worktree; do not
+  merge or deploy.
+
+Exit: all frozen done criteria have evidence and independent PASS disposition.
+
+## Cumulative huge-run boundaries
+
+1. **A — canonical contract:** after WP1–WP2.
+2. **B — persistence convergence:** after WP3–WP4.
+3. **C — product closure:** after WP5–WP7.
+4. **Final:** after WP8 evidence closure.
+
+Routine per-batch reviews continue; each cumulative gate reviews the integrated
+state and must pass before dependent work advances.
+
+## Principal risks and controls
+
+- Old schema packs hidden behind new YAML → delete identity/parser/imports and
+  enforce static zero-legacy checks.
+- Catalog becomes a service locator → restrict it to ownership and typed
+  declarations; retain existing runtime registries/factories.
+- External pack self-declares bundled trust → derive trust from discovery
+  provenance, never manifest metadata.
+- Migration identity/checksum drift → preserve SQL bytes/id/name/version and
+  change only the owner-root resource handle.
+- Runaway inclusion changes opens → characterize before cutover; separately test
+  writable apply and read-only pending behavior.
+- Missing recursive/symlinked assets → recursive typed closure, realpath checks,
+  installed-wheel enumeration.
+- Documentation/census drift → deterministic generator check mode in CI.
+- Scope expansion → reject lifecycle, marketplace, dynamic DB/plugin/factory
+  proposals at every review.
+
+## North Star gate
+
+Every review checks: one identity/parser; typed projections; SQLite/SQL authority;
+writer/UoW/migration safety preserved; explicit kernel ownership; external DB
+fail-closed; wheel-complete resources/docs; real hard cut; beta-proportionate
+scope; zero unclassified custom surfaces.
+COMPLETE ACCEPTED EXPLORATION EVIDENCE:
+
+
+
+===== .oracle/findings/explore/E1-manifest-authorities.txt =====
+**Ranked verified findings**
+
+1. **Two pack grammars and three filename authorities.**  
+   `astrid/core/pack/_common.py:16-25` accepts `pack.yaml`, `pack.yml`, `pack.json`; component manifests likewise accept YAML/YML/JSON. `loader.py:184-216` probes those names in order, parses JSON directly, YAML via `safe_load`, then falls back to a schema-less flat `key: value` parser (`:219-240`). Direct `load_pack_manifest()` also accepts arbitrary non-JSON paths. Generic parsing separately lives at `manifest.py:19-65`. Layout validation repeats the filename list at `validate_layout.py:84-93,146-150`. This directly conflicts with frozen `pack.yaml`-only v2.
+
+2. **`PackDefinition` is reconstructed twice.**  
+   Runtime loading constructs it at `loader.py:110-152`; static validation reparses raw data and reconstructs a divergent object at `validate.py:518-539` for component discovery. The validator hardcodes `pack.yaml` in `manifest_path`, while the loader preserves the selected path. `PackDefinition` is frozen only shallowly: its dict fields remain mutable (`definition.py:31-53`).
+
+3. **Raw pack mapping consumers bypass normalization.**  
+   `validate.py:1035-1043` (`extract_trust_summary`), `cli_inspect.py:57-85`, `install_local.py:121-145,711-734`, `install_git.py:470-483`, `scaffold.py:110-140`, and `agent_index.py:393-399` independently parse/read fields. Agent index also directly parses component YAML/JSON (`:102-120`). Folder extractors parse emitted JSON separately (`execution/*/folder.py:93-105`).
+
+4. **Discovery fan-out.**  
+   `discovery.py:88-111,127-257` scans source, auto-local, extra, env, and installed roots; registries consume it through executor/orchestrator, element, rendering, generation, timeline, SDK, skills, CLI list/inspect (`execution/*/registry.py:292-303`; `element/registry.py:206-212`; `sdk/discovery.py:139-146`).
+
+5. **Database authority remains separate.**  
+   `schema_packs/manifest.py:34-46,407-421`, `schema_packs/standard.py:27-45`, and `packs/__init__.py:68-110` maintain schema-pack identity plus duplicate fixed tuples. Consumers include application, doctor, backup, kernel reads, SDK invocation, timeline helpers, rendering assets, and runaway migration (`doctor.py:636-642`; `backup/operations.py:1287-1292`; `scripts/migrations/runaway_v1_migrate.py:108-117`).
+
+6. **Automatic local-pack creation.**  
+   `loader.py:35-72` creates `astrid/packs/local/pack.yaml`; called by executor/orchestrator forks, discovery when local elements exist, and `html_canvas_effect/run.py:109-124`.
+
+**Tests affected:** `tests/packs/test_pack_yaml_schema.py:1647-1677`; `tests/v10/test_registry.py:162-216`; `tests/v10/test_pack_factoring.py:82-95`; `tests/v10/test_m8_packaging.py:46-53,207-220`; discovery/local tests around `tests/packs/test_pack_discovery_metadata.py:98-102`.
+
+**Simplest seam:** make one strict loader return the immutable canonical definition plus resolved resources/database/docs; make discovery produce that catalog, then pass projections to validation, registries, install/inspect, CLI, skills, and database composition. Delete `schema_packs`, duplicate builders, legacy filename probes, and raw mapping consumers. This confirms `.oracle/plan.md` WP1/WP4/WP7; current code violates the frozen goal.
+0
+
+===== .oracle/findings/explore/E2-capability-projections.txt =====
+1. **[CONFLICT] Identity/parser authority split.** `PackDefinition` is only shallowly frozen (`dict` fields remain mutable): `astrid/core/pack/definition.py:31-53`. Loader still accepts `pack.yml/json`, schema-less flat YAML, and a legacy parser: `astrid/core/pack/_common.py:16-19`; `astrid/core/pack/loader.py:184-240`. Validation independently reconstructs a `PackDefinition`: `astrid/core/pack/validate.py:518-539`. This directly violates the one v2 parser/object requirement.
+
+2. **[CONFIRMS] Reusable typed mechanics.** Generic ordered winner/shadow storage, conflict reporting, aliases, and override hooks are well-factored in `CapabilityRegistry`: `astrid/core/registry/base.py:54-71,88-185`. Executor/orchestrator registries specialize validation/graph checks; elements specialize tuple keys; rendering shares `_RenderingRegistry`; generation has typed backend/taxonomy descriptors: `astrid/core/execution/executor/registry.py:66-149`; `astrid/core/execution/orchestrator/registry.py:55-142`; `astrid/core/rendering/registry.py:168-243`; `astrid/core/generation/backends/registry.py:28-124`.
+
+3. **[CONFLICT] Discovery/trust duplication.** Shared layered discovery exists—source, local, extra, env, installed—with explicit path de-duplication: `astrid/core/pack/discovery.py:39-107,127-259`. Yet SDK loads three registries independently (`astrid/sdk/discovery.py:98-131`), rendering and generation each rescan manifests, and the agent index has a separate `discover_packs()` plus `InstalledPackStore` overlay: `astrid/core/pack/agent_index.py:11-27,329-374`. Trust is rendering-specific (`registry.py:687-780`), while executor/orchestrator loading does not apply equivalent admission.
+
+4. **[CONFIRMS/CONFLICT] Resolution mechanics.** Alias graphs, precedence peeling, canonical-id overrides, fork provenance, and hash/git dirty detection are reusable: `alias_resolver.py:19-125`; `rendering/registry.py:939-1088`; `executor/registry.py:191-246`; `dirty.py:20-119`. Element forks are documented but no element fork implementation was found; this is an ownership gap.
+
+5. **[CONFLICT] Priorities/caches/docs.** Element/executor priorities collapse most layers to `30` (`element/registry.py:351-404`; `executor/registry.py:333-358`), unlike rendering’s explicit discovery index (`rendering/registry.py:589-594`). Element registries have duplicated caches (`element/registry.py:186-246`; `catalog.py:83-107`). `_core/SKILL.md` contains static runtime census prose (`:12-25,386-390`) while the generator independently loads registries (`scripts/gen_capability_index.py:21-83`).
+
+**Affected tests:** registry, fork, override, dirty, rendering registry/matrix, generation model registry, skills sync, pack factoring, packaging, authority lint.  
+**Seam:** make one strict loader/catalog return immutable pack projections; retain typed registries as projections; route SDK, rendering, generation, skills, index, and trust through that catalog.
+0
+
+===== .oracle/findings/explore/E3-database-projection.txt =====
+1. **[CONFLICT] Split authority is real.** `schema-pack.yaml` is an independent strict 11-field species: identity/version/dependencies/migrations/vocabularies/repositories/conformance/mounts (`astrid/core/schema_packs/manifest.py:34-59`, `369-404`). Both kernel and pack layers hard-code `("timeline","shots","references")` and load schema manifests independently (`astrid/core/schema_packs/standard.py:27-45`; `astrid/packs/__init__.py:68-110`). `runaway` is excluded from standard composition and manually appended in tests (`tests/test_runaway_transitions.py:32-39`; `tests/sdk/test_extended_composition.py:18-27`). This directly conflicts with the frozen one-`pack.yaml`/four-pack goal.
+
+2. **[CONFIRMS mechanics; CONFLICTS dependency requirement]** Parsing accepts only `pack >= positive-integer`, rejects duplicate *raw strings*, and returns immutable dependencies (`manifest.py:167-195`). Ordering rejects missing packs and cycles, but ignores `dependency.version`; `core >= 1` and `core >= 99` are not compared with the dependency manifest version (`runner.py:146-201`). Plan requirement for minimum-version enforcement is currently unmet (`.oracle/plan.md:106-115`).
+
+3. **[CONFIRMS collision guarantees]** Registration is atomic per manifest and reports deterministic sorted collisions. Global table/vocabulary/repository/mount collisions are rejected; migration version/name collisions are scoped to `(pack, version/name)` (`registry.py:162-180`, `221-294`). Freeze yields sorted immutable mappings (`registry.py:183-202`). This is the strongest reusable database projection seam.
+
+4. **[CONFLICT] Migration provenance/resource lookup is insufficient.** `RegisteredMigration` carries only pack/version/name/path/tables (`registry.py:53-65`). `source_path` exists on manifests but is discarded. The runner reconstructs roots from pack id, with a special core path (`runner.py:113-138`); no owner root/revision handle exists. External/resource-package loading cannot reuse this safely.
+
+5. **[CONFIRMS safety]** Applied state records `(pack,version,name,checksum,applied_at)` (`runner.py:209-230`; core SQL `0001_initial.sql:27-35`). Probe validates unregistered/too-new versions, missing descriptors, name drift, and exact-byte SHA-256 drift without writes (`runner.py:233-322`). Writable opens apply PRAGMAs, then each migration’s DDL plus ledger row in its own `BEGIN IMMEDIATE` transaction (`runner.py:387-457`; `store/database.py:67-98`). Covered by `tests/v10/test_catalog_migrations.py:627-663`, `777-940`.
+
+6. **Clean seam:** evolve `FrozenSchemaPackRegistry` into the canonical catalog’s typed **database projection**; add owner-relative resource handles/provenance to `RegisteredMigration`; retain `open_database`/`DatabaseWriter` signatures and runner guarantees. Generate core plus trusted bundled contributions from one catalog. Add dependency-version tests, runaway standard-composition tests, and wheel resource probes (`tests/v10/test_m8_packaging.py:276-300`).
+0
+
+===== .oracle/findings/explore/E4-operational-consumers.txt =====
+1. **Split authority (conflict with frozen goal; confirms WP1/WP3/WP7).** `astrid/packs/__init__.py:68-110` hard-codes `(timeline, shots, references)`; `astrid/core/schema_packs/standard.py:27-45` repeats the tuple and builder. `runaway` is a fourth shipped schema pack (`astrid/packs/runaway/schema-pack.yaml:1-5,15-30`) but is omitted. `tests/v10/test_registry.py:154-181,201-216` explicitly asserts both duplication and omission; these tests must be deleted or rewritten.
+
+2. **Write/open seam (conflict; confirms WP4).** `open_database()` is the correct migration/probe gate (`astrid/core/store/database.py:67-98`), and `DatabaseWriter` routes writable/read-only opens through it (`astrid/core/store/writer.py:303-325,408-430`). Application composition uses `build_standard_registry`/`open_standard_writer` (`astrid/application.py:315-338`); bridge composition directly constructs another writer (`astrid/packs/__init__.py:247-278`); SDK invocation constructs one itself (`astrid/sdk/invocation.py:868-874`). Writer lint only exempts store, conformance, and `astrid/packs/__init__.py` (`scripts/reshape/authority_lint.py:397-432`).
+
+3. **Read/operational bypasses (conflict; confirms WP4/WP5).** Kernel reads and doctor use the duplicate registry (`astrid/core/kernel/read.py:32-52`; `astrid/core/doctor.py:636-642`). Backup creation snapshots migration rows without a registry (`astrid/core/backup/operations.py:1122-1172,334-375`); restore rebuilds the duplicate (`:1253-1296`). SDK events, media resolution, and render/visualize readers use raw RO SQLite (`astrid/sdk/events.py:69-101`; `astrid/core/io/managed_media_resolver.py:79-108`; `astrid/packs/rendering/executors/render/managed_timeline.py:244-248`; `.../timeline_visualize/select.py:212-219`).
+
+4. **Least-disruptive boundary (confirms plan).** Core cannot import packs except `gateway/dispatch.py`; pack-to-pack imports are forbidden (`scripts/reshape/authority_lint.py:11-22,59-61,335-393`). Evolve the existing `astrid.core.pack` `PackDefinition`/discovery (`definition.py:31-53`; `discovery.py:1-15,88-108`) into the single trusted bundled catalog, then derive `FrozenSchemaPackRegistry` once. Keep `open_database(path, registry)` as the SQLite boundary and inject that projection everywhere. CLI ownership currently reparses fixed manifests (`astrid/core/cli/domain_product.py:154-174`); timeline helpers cache another registry (`astrid/core/timeline/_edit_helpers.py:56-72,384-390`).
+
+5. **Affected tests.** `tests/v10/conftest.py:24-41`, `test_registry.py`, `test_pack_factoring.py`, `test_m8_packaging.py:16-40`, `tests/sdk/test_extended_composition.py:18-27,61-72`, and `test_runaway_transitions.py:32-46`; preserve application, kernel-read, backup/restore, doctor, CLI, rendering, and conformance behavior suites.
+0
+
+===== .oracle/findings/explore/E5-coverage-ledger.txt =====
+1. **Verified inventory — 19 capability packs.** IDs are fixed by `tests/packs/test_pack_layout_contract.py:46-69`: `blender`, `builtin`, `comfy_wrap`, `editorial`, `fal`, `foley`, `generation`, `iteration`, `media`, `moirae`, `reigh`, `rendering`, `runpod`, `stream_content`, `training`, `understanding`, `vibecomfy`, `video_editing`, `youtube`. Current scan: **64 executors, 12 orchestrators, 10 elements, 18 skill files**. Discovery grammar is `core/pack/_common.py:16-24`; canonical roots are `core/pack/validate_layout.py:84-93`.
+
+2. **Database/product packs.** `timeline` owns one table plus stream/events/commands/repository/conformance, CLI and bridge mounts (`astrid/packs/timeline/schema-pack.yaml:12-48`); `shots` owns two tables and nested CLI mount (`shots/schema-pack.yaml:16-51`); `references` owns three tables and nested CLI mount (`references/schema-pack.yaml:17-59`); `runaway` owns one table, command, and repository but no stream/mount (`runaway/schema-pack.yaml:15-35`). Repository evidence: timeline (`timeline/repository.py:1-35`), shots (`shots/repository.py:1-12`), references (`references/repository.py:1-8`), runaway (`runaway/repository.py:1-18`).
+
+3. **Protocol extensions.** `rendering` declares 3 renderers, 3 planners, 2 finalizers (`rendering/pack.yaml:43-58`) and element manifests; path confinement is already mechanically defined (`core/pack/registry.py:260-303`).
+
+4. **Recommended static taxonomy.** Ledger keys:  
+   `capability.{executor|orchestrator|element}`, `protocol.{renderer|planner|finalizer}`, `database.{migration|table}`, `vocabulary.{stream|event|command}`, `repository`, `conformance`, `surface.{cli|sdk|bridge}`, `resource`, `documentation`, `alias`, `consumer.{application|doctor|backup|restore|inspect}`.  
+   Each row stores `surface_id`, `owner`, `evidence_paths`, and `projection_consumers`; never runtime settings. Discover rows from manifests, descriptors, SQL, and import/callsite scans. Pack ownership requires qualified-id/manifest-root evidence (`core/pack/_common.py:78-92`); kernel ownership requires core declarations (`core/migrations/catalog.py:51-89`, `core/events/registry.py:64-177`). Consumers are projections, not owners (`application.py:163-198`).
+
+5. **Conflict/risk.** Both standard builders independently hard-code only three packs (`packs/__init__.py:68-110`; `core/schema_packs/standard.py:27-45`), while the frozen goal requires four (`.oracle/agent_goal.md:21-25`). `blender` has no structured skill; the skill test is only a non-exhaustive floor (`tests/packs/test_pack_layout_contract.py:353-383`).
+
+**Affected tests:** catalog/migrations, four repository/conformance suites, CLI/SDK domain suites, rendering-extension tests, doctor/backup composition, and wheel closure (`.oracle/agent_goal.md:174-187`).
+0
+
+===== .oracle/findings/explore/E6-agent-documentation.txt =====
+1. **P0 — frozen-goal conflict: split manifest species remains.**  
+   Nineteen bundled `pack.yaml` files are all `schema_version: 1`, `pack_type: capability`, with no `database` or declared documentation block (`astrid/packs/blender/pack.yaml:1-11`; `astrid/packs/stream_content/pack.yaml:1-11`). `timeline`, `shots`, `references`, and `runaway` remain separate `schema-pack.yaml` authorities (`astrid/packs/references/schema-pack.yaml:1-24`; `astrid/packs/runaway/schema-pack.yaml:1-30`). Two duplicate fixed standard builders enumerate only `timeline`, `shots`, `references` (`astrid/packs/__init__.py:68-110`; `astrid/core/schema_packs/standard.py:27-45`). Conflicts with plan §§17, 26, WP1–3.
+
+2. **P0 — documentation census is incomplete.**  
+   Among 24 bundled directories: direct `skill/SKILL.md` exists for `_core`, `comfy_wrap`, `editorial`, `fal`, `foley`, `generation`, `iteration`, `media`, `moirae`, `reigh`, `rendering`, `runpod`, `stream_content`, `training`, `understanding`, `vibecomfy`, `video_editing`, `youtube`; absent for `blender`, `builtin`, `timeline`, `shots`, `references`, `runaway`. No pack-level `AGENTS.md` exists. Only nested skill found: `generation.generate_image`. `media/SKILL.md` lacks frontmatter (`astrid/packs/media/skill/SKILL.md:1-10`). Validator only checks explicitly declared docs and component `STAGE.md` (`astrid/core/pack/validate.py:285-291,501-510,636-640`). Conflicts with plan §38/WP2/WP5.
+
+3. **P1 — discovery/status has multiple authorities.**  
+   Loader accepts `pack.yaml`, `.yml`, `.json`, and schema-less flat YAML (`astrid/core/pack/_common.py:16-19`; `astrid/core/pack/loader.py:184-216`). Skill discovery independently scans files and skips only deprecated/hidden manifests (`astrid/skills/discovery.py:161-209`). `agent_index.py` separately layers `discover_packs()` and `InstalledPackStore`, reporting README/AGENTS/STAGE—not skills (`astrid/core/pack/agent_index.py:296-319,459-470`). Main CLI explicitly excludes `packs`/`skills` (`astrid/packs/_core/skill/SKILL.md:21-25`); `registry.is_current()` is false.
+
+4. **P1 — current opt-outs are not legitimate manifest opt-outs.**  
+   `_core` is a permanent skill-only shell (`astrid/core/pack/validate_layout.py:116-129`). The test suite excludes two “user-owned in-flight” nested docs by hard-coded path (`tests/v10/test_docs_cli_alignment.py:19-22,66-93`); no manifest reason/classification exists. `builtin` is merely `status: deprecated` (`astrid/packs/builtin/pack.yaml:1-18`).
+
+5. **Affected tests and seam.**  
+   Legacy gates include `tests/packs/test_pack_layout_contract.py:46-69,308-390`, `tests/packs/test_packs_validate.py:1-10`, `tests/v10/test_registry.py:162-181`, `tests/v10/test_m8_packaging.py:46-74`, and skill tests. Smallest complete seam: make one strict v2 loader/catalog own pack identity, resources, docs, DB projections, and census; replace both standard builders and skill/agent indexes with catalog projections. CI drift gate: enumerate bundled roots, require exactly one v2 `pack.yaml`, reject schema packs/alternate names, require documented opt-out only for internal non-user-facing packs, verify wheel resource closure, and byte-compare generated `_core` census against catalog.
+0
+
+===== .oracle/findings/explore/E7-packaging-closure-r2.txt =====
+[launch_hermes_agent] model=codex:gpt-5.6-luna → resolved=openai-codex/gpt-5.6-luna toolsets=['file', 'web'] max_tokens=65536 context_budget_tokens=(auto)
+[launch_hermes_agent] NOTE: omp gives the full toolset (Bash, Read, Edit, web, …); the file/web/terminal subset is a superset here.
+[launch_hermes_agent] cwd=/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta
+Working...
+1. **Critical split authority — conflicts with frozen goal and plan WP1/WP2/WP7.** `timeline`, `shots`, `references`, and `runaway` still use separate `schema-pack.yaml` manifests (`astrid/packs/timeline/schema-pack.yaml:1-19`; `runaway/schema-pack.yaml:1-24`). Two independent standard builders hard-code only `timeline, shots, references` (`astrid/core/schema_packs/standard.py:27-45`; `astrid/packs/__init__.py:88-110`), while CLI mounts repeat the same fixed paths (`astrid/core/cli/domain_product.py:154-174`). Legacy filename/parser fallback still accepts `pack.yml`, `pack.json`, and flat YAML (`astrid/core/pack/_common.py:16-19`; `loader.py:184-216`).
+
+2. **Wheel policy directly violates clean-wheel documentation/resource closure.** `include-package-data=false`; package data excludes every `skill/` tree and includes no Markdown, TXT, or `.service` patterns (`pyproject.toml:66-133`). The wheel test explicitly forbids `/skill/`, `STAGE.md`, and `requirements.txt` (`tests/v10/test_m8_packaging.py:63-74`). This conflicts with goal criteria 8/10 and plan WP6.
+
+3. **Current recursive inclusion is extension-based, not manifest/resource-based.** YAML/JSON/HTML/CSS/JS/TS/TSX/TTF are recursively included (`pyproject.toml:103-133`), covering training schemas/UI (`dataset_build/config.py:20-22`; `phases.py:37-38`) and the visualization font (`render_png.py:72-89`). Opaque runtime files are omitted: Blender reads `server/blender-render-api.service` (`blender/deploy.py:46-59,282-293`); executor discovery/installation can consume `requirements.txt` (`execution/executor/folder.py:155-175`; `install.py:182-201`).
+
+4. **Path/symlink risk remains uneven.** Declared content roots resolve without confinement (`pack/walkers.py:84-115`); docs and entrypoint checks join paths and follow symlinks (`pack/validate.py:501-510,736-743`). Rendering extension paths and migration paths do enforce containment (`pack/registry.py:293-301`; `schema_packs/manifest.py:322-334`). Confirms plan’s realpath-risk control.
+
+5. **Simplest seam:** extend `tests/v10/test_m8_packaging.py`’s `build_once` harness (`:303-370`) with an installed-process, manifest-driven closure audit: load the canonical catalog, enumerate every declared pack resource/migration/skill/document, assert existence/readability, and reject source-tree imports. Replace hard-coded `EXPECTED_RESOURCES`; broaden `test_package_data.py:57-86` and the nine-pack skill floor (`test_pack_layout_contract.py:367-390`). Actual wheel membership remains unobserved because this was read-only exploration.
+[launch_hermes_agent] done in 297.5s (exit=0)
+0
+
+
+===== .oracle/findings/explore/E8-external-security.txt =====
+1. **Earliest common seam: `discover_pack_metadata._add`.** All layered discovery converges there with provenance already known: `source`, `local`, `extra`, `env`, `installed` are ordered at `astrid/core/pack/discovery.py:39-41`; `_add(pack, source_kind)` creates the shared metadata at `:116-123`. Reject external `database` declarations there—before any typed registry projection or schema registry registration. This confirms `.oracle/plan.md` §6-7 and WP1.
+
+2. **Admission paths traced.**
+   - Bundled source packs: `discover_packs()` at `astrid/core/pack/loader.py:84-107`.
+   - Project-local packs: materialized/discovered at `astrid/core/pack/loader.py:53-72` and `astrid/core/pack/discovery.py:216-219`; `local` is external to the bundled catalog.
+   - Explicit extra roots and `ASTRID_PACKS_PATH`: `discovery.py:127-209`, `:227-234`.
+   - Installed packs: active revisions from `InstalledPackStore` at `store.py:195-216`, consumed at `discovery.py:235-257`.
+   - Git installs: clone/pin/detect, then re-enter local install at `install_git.py:300-355`; publication is active revision plus `install.json` at `install_local.py:375-434`.
+   - Trust inspection is separate: `extract_trust_summary()` parses manifest-derived data at `validate.py:1028-1130`; installed trust audit runs later in rendering at `rendering/registry.py:717-780`.
+
+3. **Critical provenance loss.** `discover_packs_ordered()` strips `DiscoveredPack` to bare `PackDefinition` at `discovery.py:262-282`; executor/orchestrator registries consume that at `execution/executor/registry.py:292-329`. This conflicts with the plan’s “derive trust from discovery provenance” control. All capability consumers must retain canonical provenance.
+
+4. **Current database boundary is independently fixed.** `core/schema_packs/standard.py:31-45` loads only hard-coded bundled schema manifests; `SchemaPackRegistry.register_pack()` never opens SQL at `schema_packs/registry.py:142-144`; SQLite admission begins at `migrations/runner.py:301-322`. The future catalog must replace the fixed builder, not add a second guard downstream.
+
+5. **Affected tests/risks.** Existing provenance coverage: `tests/core/rendering/test_registry_matrix.py:242-273`, `:609-650`, `:653-686`; Git/revision coverage: `tests/packs/test_git_pack_install.py:1-5`. Add capability-only success plus external database fail-closed cases across local, extra, env, Git-installed, and active-revision discovery. `pack.yaml` currently accepts self-declared `origin`/`install_tier` (`loader.py:161-172`) and cannot authorize trust.
+0
+
+===== .oracle/findings/explore/E9-legacy-ci.txt =====
+**Ranked verified inventory**
+
+1. **P0 conflict — active second schema-pack species.** Four shipped `schema-pack.yaml` files are parsed by `astrid/core/schema_packs/manifest.py:34-50,369-421`. Two independent builders hard-code `("timeline","shots","references")` in `astrid/core/schema_packs/standard.py:27-45` and `astrid/packs/__init__.py:68-100`; `runaway/schema-pack.yaml:1-35` is excluded. Affected: `tests/v10/test_registry.py:154-181`, `test_m6_gate.py:132-135`, `test_pack_factoring.py:52-95`, `scripts/reshape/m4_gate.py:94-103,559-599`, `scripts/reshape/check_pack_factoring.py:91-204`.
+
+2. **P0 conflict — legacy pack filenames and flat parsing execute.** `PACK_MANIFEST_NAMES` accepts `pack.yaml`, `pack.yml`, and `pack.json` (`astrid/core/pack/_common.py:16`); `loader.py:184-240` selects them and implements `_parse_flat_yaml`. The same contract is enforced by `validate.py:257-275`, `validate_layout.py:84-85,149`, `validate_first_party.py:20-45,131-149`, and `install_git.py:247-285`. Active schema: `astrid/core/pack/schemas/v1/pack.json`. Affected: `tests/packs/test_pack_yaml_schema.py`, `test_pack_layout_contract.py:75-88,229-305`, `test_packs_validate.py`.
+
+3. **P0 conflict — independent consumers.** CLI mounts reread fixed schema manifests (`astrid/core/cli/domain_product.py:154-174`); `agent_index.py:102-120,393-422` reparses raw YAML/JSON; installed-wheel tests regex-parse YAML (`tests/v10/test_m8_installed_contract.py:55-83`); `install_git.py:470-484` reparses versions.
+
+4. **P1 conflict — packaging/docs encode the split.** `pyproject.toml:109-125`, `tests/v10/test_m8_packaging.py:46-53,216-220`, and `scripts/smoke_wheel_install.sh:82-87` enumerate only three schema packs. Active v1 docs: `docs/contracts/platform-contract.md:161-186`, `docs/packs/creating-packs.md:111-154`. Generated `_core/skill/SKILL.md:566-570` is capability-only, not a pack census.
+
+**Historical/non-authoritative:** `.oracle/**`, `findings/**`, `planning/**`, `inputs/astrid-first/**`, and `docs/astrid-v10-implementation-decisions.md:1-8,61-79`; exclude from scans. Training flat manifests (`tests/packs/builtin/test_training_run_manifest_input.py:66-129`) are unrelated.
+
+**Zero-legacy seam:** extend `scripts/reshape/authority_lint.py`; invoke from `.github/workflows/ci.yml:116-123`. Fail on any legacy filename, schema-pack import, fixed tuple/list, flat parser, or raw pack-manifest parse. Require every bundled pack, including `runaway`, to load through one catalog and pass clean-wheel closure.
+0
+
+===== .oracle/findings/explore/E10-runaway-builtin.txt =====
+### Ranked verified facts
+
+1. **Runaway is extended-only today; plan confirms.** Both standard builders hard-code only `timeline`, `shots`, `references` (`astrid/packs/__init__.py:68-110`; `astrid/core/schema_packs/standard.py:27-45`). `tests/sdk/test_extended_composition.py:18-27` manually adds runaway; `:61-64` expects five migration rows. This directly confirms `.oracle/plan.md:26-29,113-115`.
+
+2. **Runaway contributes exactly one table, one migration, one command, and one repository—no stream/event/CLI/bridge surface.** Manifest evidence: `astrid/packs/runaway/schema-pack.yaml:15-35`; DDL adds `runaway_transitions`, two indexes, and FKs to `projects`, `runs`, `tasks` (`migrations/0001_initial.sql:21-40`). Static composition confirms migration order becomes `core, references, runaway, shots, timeline`.
+
+3. **Standard inclusion changes opens materially.** Writable opens probe first, then apply pending migrations (`astrid/core/store/database.py:67-98`; runner `:387-457`). Existing standard databases go from 20 to 21 tables and gain `schema_migrations(runaway,1)`. Existing extended databases currently fail default reads/writes with `MigrationTooNewError` (`test_extended_composition.py:66-71`); final composition must accept them unchanged. Read-only opens must see pending runaway without applying it (`database.py:73-79`). Backup restore validation uses the same standard probe (`backup/operations.py:1253-1296`).
+
+4. **`builtin.*` is compatibility residue, not implementation ownership.** The `builtin` pack has no capabilities and says it ships no live components (`astrid/packs/builtin/pack.yaml:13-20`; directory contains only `pack.yaml`). All 49 `builtin.*` aliases are declared by canonical packs, all deprecated; resolver maps aliases to canonical IDs (`alias_resolver.py:109-125`). Alias behavior is currently tested (`tests/test_external_app_contract.py:148-155`; `tests/test_sdk_public_surface.py:295-311`), but hard-cut policy supports deleting these compatibility assertions/declarations.
+
+### Exact hard-cut tests/scenarios
+
+- Rewrite fixed-three/20-table assertions: `tests/v10/test_registry.py:154-181,219-224`; `test_standard_application.py:299-314`; `test_m6_gate.py:47-48,132-136`; `test_m8_installed_contract.py:243-250`.
+- Replace extended-only characterization with: fresh four-pack open; existing three-pack writable apply; existing four-pack reopen; read-only pending nonmutation; checksum/name drift rejection; unknown-pack rejection; backup/restore for both states.
+- Preserve runaway repository/round-trip coverage (`tests/test_runaway_transitions.py:32-63,304-374`), but its referenced `projects/runaway-piano-colour-demo` fixture is absent in this checkout (`:28-29`): restore/provide it before relying on that gate.
+- Simplest seam: one canonical bundled catalog supplies both standard builders and all operational consumers; convert runaway to v2 `pack.yaml`, then delete schema-pack builders and aliases.
+0
+
+EXCLUDED RESULT:
+
+The first E7 response was unusable and is not evidence; only E7-packaging-closure-r2.txt is accepted.
+codex
+# Phase 3 revised plan — canonical pack beta hard cut
+
+Status: **ready for execution against pinned source `7ac50c12e8e4d90988fee603ffdb9896e5628792`**.
+
+## Determination
+
+- Estimated effort: **5.9–8.7 engineer-weeks**.
+- Huge run: **yes**.
+- Difficulty: **5/5**.
+- Proposed `[XHARD]` implementation tasks: **none**. The work is broad but the mechanisms and cutover seams are now understood.
+- Simplest dependency order: **baseline → canonical contract → pack conversion → database cutover → consumer convergence → deletion/package closure → final validation**.
+- New exploration areas: **none**. E1–E10 resolve the plan-shaping questions. The missing runaway demo fixture is an implementation-test issue; replace its external fixture dependency with a deterministic temporary project unless custody evidence proves it is an intentionally packaged artifact.
+
+The estimate rises slightly because agent-documentation and wheel closure are materially broader than the original plan assumed. This is partly offset by deleting the empty `builtin` compatibility pack and its aliases instead of preserving or converting them.
+
+## Resolved evidence
+
+1. There are two active manifest species, three accepted pack filenames, schema-less parsing, two `PackDefinition` construction paths, and several raw-mapping consumers. The cutover must replace them together.
+2. Existing typed capability registries are suitable projections. Their ordering, conflict, alias, override, fork, and graph-validation mechanics remain; they are not replaced by a generic registry.
+3. The schema registry’s collision, freeze, migration checksum, drift, probe, and transaction machinery is reusable. Dependency minimum versions and owner-root provenance are the missing pieces.
+4. `open_database(path, registry)` and `DatabaseWriter` are the correct SQLite boundaries. Other project-opening read paths need a common read-only compatibility probe rather than independent composition.
+5. The baseline contains 19 capability pack directories, four schema-pack directories, and `_core`. `builtin` contains no live customization and exists only as deprecated compatibility residue.
+6. After deleting `builtin`, the target catalog contains **22 ordinary bundled product packs** plus the irreducible `_core` kernel documentation shell.
+7. Baseline capability reconciliation starts from 64 executors, 12 orchestrators, 10 elements, eight rendering protocol extensions, four database packs, and the recorded repository/vocabulary/CLI/SDK/bridge surfaces. These are audit baselines, not permanent hard-coded counts.
+8. All retained product packs should have structured documentation. Add docs for `blender`, `timeline`, `shots`, `references`, and `runaway`; repair `media` frontmatter. No retained bundled product pack currently qualifies for a documentation opt-out.
+9. Wheel configuration currently excludes skills, Markdown, requirements files, and Blender’s service file. Wheel policy and tests must be reversed to include every declared runtime/documentation resource.
+10. External provenance is known at the common discovery boundary and is then lost. The canonical catalog must retain it. Trust can never come from manifest-declared `origin` or `install_tier`.
+11. Runaway’s standard inclusion adds one migration and one table. Writable opens of three-pack databases apply it; read-only opens report it pending without mutation; existing four-pack databases become standard and reopen unchanged.
+12. The 49 `builtin.*` aliases and the empty `builtin` pack are compatibility shims. Delete them and rewrite compatibility assertions as hard-cut assertions.
+13. Historical paths such as `.oracle/**`, `findings/**`, `planning/**`, `inputs/astrid-first/**`, and explicitly historical documents are excluded from active-authority scans. Unrelated training run manifests are not pack manifests.
+
+## Final architecture
+
+### Canonical definition and catalog
+
+- Evolve `PackDefinition` in place into the single complete, deeply immutable v2 object.
+- Load only `pack.yaml` with required `schema_version: 2`.
+- Reject `pack.yml`, `pack.json`, schema-less YAML, unknown legacy shapes, and `schema-pack.yaml`.
+- Parse and validate once. Static validation, installation, inspection, agent indexing, registries, and packaging consume the same normalized definition.
+- Include normalized identity, resources, capabilities, database contribution, vocabularies, repositories, conformance declarations, static CLI/bridge ownership, and agent-documentation routes.
+- Attach source kind, pack root, installed revision, and bundled trust as loader/catalog provenance. They are not self-declared manifest authority.
+- Keep install metadata only as transport/revision state; it must not reconstruct canonical pack identity.
+- Preserve automatic local-pack creation, but emit strict capability-only v2 and hard-fail existing legacy local manifests.
+
+### Typed projections
+
+- The catalog exposes narrow projections for executor, orchestrator, element, rendering, generation, database, CLI ownership, skills, inspection, and resource closure.
+- Existing typed registries retain their specialized behavior and validation.
+- Discovery order and provenance are preserved through projections; no API strips catalog entries to identity-only objects before admission checks.
+- Static application, repository, service, CLI, and bridge factories remain where already useful. The catalog does not instantiate arbitrary services.
+
+### Database contribution
+
+- Core migrations remain explicit irreducible kernel behavior.
+- A bundled pack may declare an optional database contribution containing ownership and typed migration/resource metadata. SQL remains authoritative for columns, constraints, indexes, and transformations.
+- Standard composition is core plus all trusted bundled database contributions from the catalog: `references`, `runaway`, `shots`, and `timeline` in deterministic dependency order.
+- Reuse the existing collision registry and migration runner after relocating them out of schema-pack identity code.
+- `RegisteredMigration` gains its owner-relative resolved resource handle and provenance/revision information.
+- Enforce dependency existence, cycles, and declared minimum versions before registration.
+- Preserve exact SQL bytes, migration identity, checksums, drift detection, probe behavior, and per-migration `BEGIN IMMEDIATE` transactions.
+- External packs with `database` fail at catalog admission across local, extra-root, environment, Git-installed, and active installed-revision paths, before SQL resolution or registration.
+
+### Documentation and census
+
+- Every retained bundled product pack declares a structured `skill/SKILL.md`.
+- Add direct pack guidance for the five documented gaps and repair `media` frontmatter.
+- `_core` remains kernel-owned and non-unloadable. It links a generated, packaged canonical census containing stable pack identity, capability categories, database ownership, and routes to owning documentation.
+- The census contains no duplicated DDL or mutable database status.
+- Use one deterministic generator with check mode; remove independent skill and agent-index manifest parsing.
+
+### Coverage ledger
+
+Create a reviewed, non-runtime coverage ledger with:
+
+- `surface_id`
+- `kind`
+- `owner` as `pack:<id>` or `kernel:<subsystem>`
+- `evidence_paths`
+- `projection_consumers`
+
+Kinds cover capability components, rendering protocols, database migrations/table ownership, vocabularies, repositories, conformance, CLI/SDK/bridge surfaces, resources, documentation, and operational consumers.
+
+The checker must reject missing, stale, duplicate, or conflicting ownership. Consumers are recorded as consumers, never treated as owners. `builtin` and its aliases are recorded as deleted compatibility residue, not converted into artificial ownership.
+
+## Work packages
+
+### WP0 — baseline reconciliation and executable gates
+
+Estimate: **0.4–0.6 engineer-week**. Depends on nothing.
+
+- Establish the coverage ledger from the verified inventory.
+- Classify core migrations, kernel event/command primitives, and `_core` as irreducible kernel behavior.
+- Record the retirement of empty `builtin` and all 49 `builtin.*` aliases.
+- Add characterization tests for:
+  - fresh standard database composition;
+  - existing three-pack writable upgrade;
+  - read-only pending runaway without mutation;
+  - existing four-pack reopen;
+  - external capability success and database rejection;
+  - current repository, event, command, CLI, SDK, and bridge behavior.
+- Replace the missing runaway demo-project dependency with a self-contained temporary fixture unless the pinned custody tree proves the asset should be packaged.
+- Define active-authority scan exclusions so historical artifacts and unrelated training manifests do not cause false positives.
+- Start the final criterion/evidence matrix and populate it throughout execution.
+
+Exit: every baseline surface is owned, deliberately deleted, or explicitly kernel-classified; characterization failures are understood before architectural edits.
+
+### WP1 — strict v2 loader and deterministic catalog
+
+Estimate: **1.0–1.4 engineer-weeks**. Depends on WP0.
+
+- Define the strict v2 schema and complete deeply immutable `PackDefinition`.
+- Replace loader/static-validator duplication with one parse-normalize-validate path.
+- Accept only `pack.yaml`; remove arbitrary-path and flat-YAML behavior.
+- Resolve all declared resources relative to the owner root with realpath/symlink confinement.
+- Retain source kind, root, revision, and trust through catalog entries and typed projections.
+- Reject external database contributions at the shared admission boundary.
+- Rewire source, local, extra, environment, installed, and Git-install validation to the same loader.
+- Remove manifest authority from self-declared origin/install-tier fields.
+- Update scaffold and automatic local creation to emit capability-only v2.
+- Add strict capability-only, database-only, and combined golden fixtures.
+
+Exit: one filename, schema, parser, immutable definition, provenance-bearing catalog, and resource resolver; malformed or legacy forms fail closed.
+
+### WP2 — convert the bundled catalog and documentation
+
+Estimate: **0.8–1.1 engineer-weeks**. Depends on WP1.
+
+- Convert all retained bundled product manifests to strict v2.
+- Fold timeline, shots, references, and runaway contributions into their ordinary `pack.yaml`.
+- Preserve migration SQL bytes and all feature semantics.
+- Make `references` the combined database/repository/SDK/CLI/documentation exemplar without altering its three-table model.
+- Delete the empty `builtin` pack and all deprecated `builtin.*` alias declarations.
+- Add structured skills for `blender`, `timeline`, `shots`, `references`, and `runaway`.
+- Repair `media` skill frontmatter.
+- Declare every migration, skill, document, requirements file, service file, and runtime asset through the owning manifest.
+- Require documentation for all 22 retained product packs; introduce no speculative opt-outs.
+
+Exit: every retained bundled product extension is represented by exactly one v2 manifest and structured documentation; no bundled customization depends on `builtin`.
+
+### WP3 — database projection and migration cutover
+
+Estimate: **1.0–1.5 engineer-weeks**. Depends on WP2.
+
+- Relocate reusable database registry and migration algorithms out of the obsolete schema-pack subsystem without compatibility re-exports.
+- Build the frozen database projection from core plus trusted bundled catalog entries.
+- Remove both fixed-three standard builders.
+- Add owner-relative resource handles and provenance to registered migrations.
+- Enforce dependency minimum versions as well as existence and acyclic ordering.
+- Preserve table/vocabulary/repository/mount collision behavior and deterministic freeze order.
+- Keep `schema_migrations` as the sole applied-state record.
+- Validate:
+  - fresh composition yields core plus four pack migrations;
+  - migration order is deterministic;
+  - three-pack writable databases gain runaway;
+  - three-pack read-only probes remain unchanged and report pending runaway;
+  - existing four-pack databases reopen normally;
+  - checksum, name, unknown-pack, too-new, and dependency-version failures remain fail-closed.
+
+Exit: database composition has one manifest-derived authority and retains all established migration safety guarantees.
+
+### WP4 — operational, inspection, doctor, and agent convergence
+
+Estimate: **1.1–1.6 engineer-weeks**. Depends on WP3.
+
+- Inject the same database projection through application composition, bridge construction, SDK invocation, kernel reads, timeline helpers, rendering helpers, backup, and restore.
+- Require project-opening raw read paths to pass the common read-only compatibility probe or receive an already-probed connection.
+- Keep backup payload and restore semantics stable while deriving compatibility expectations from the canonical projection.
+- Drive CLI ownership and mount validation from canonical declarations while retaining static parser and command factories.
+- Replace raw parsing in install-local, install-Git, inspect, agent index, trust summaries, validators, and folder consumers with canonical objects or narrow projections.
+- Produce stable inspect text and JSON for:
+  - identity and schema version;
+  - source/provenance/revision;
+  - capability categories;
+  - database ownership, dependencies, migrations, and head;
+  - documentation routes;
+  - declared resource closure.
+- Extend doctor with a read-only catalog census and expected/applied/pending/head migration status.
+- Generate the `_core` pack census from the catalog and add deterministic drift checks.
+
+Exit: operational consumers, inspection, doctor, skills, and `_core` agree on the same catalog; doctor and inspection do not mutate project databases.
+
+### WP5 — hard deletion, authority gates, and clean-wheel closure
+
+Estimate: **0.8–1.2 engineer-weeks**. Depends on WP4.
+
+- Delete:
+  - all four `schema-pack.yaml` files;
+  - the schema-pack manifest parser and identity types;
+  - both standard builders and fixed tuples;
+  - the v1 pack schema;
+  - alternate filename probes;
+  - the flat parser;
+  - independent raw manifest readers;
+  - compatibility re-exports and legacy alias tests.
+- Extend authority lint and CI to reject active schema-pack imports, legacy filenames, fixed standard lists, schema-less parsing, raw identity reconstruction, and independent first-party lists.
+- Update setuptools data rules to include declared skills, Markdown, requirements files, SQL, Blender’s service unit, and existing recursive assets.
+- Keep tests, caches, authoring-only fixtures, and undeclared pack files out of the wheel.
+- Make package validation enumerate the installed canonical catalog and open every declared resource.
+- Run the clean-wheel audit in an isolated process that cannot import from the source tree.
+- Compare source and wheel catalog identities, provenance classifications, documentation routes, migrations, and resource closure.
+- Enable zero-unclassified, zero-multi-owner, zero-stale-ledger, and zero-legacy gates.
+
+Exit: obsolete authorities are physically absent, every declared bundled resource loads from the wheel, and no active customization bypasses canonical ownership.
+
+### WP6 — authoritative validation and evidence closure
+
+Estimate: **0.8–1.3 engineer-weeks**. Depends on WP5.
+
+Run focused validation first:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+python3 -m astrid doctor
+python3 -m build
+```
+
+Also run and record:
+
+- capability-only, database-only, and combined golden validation;
+- all external-source capability-success/database-failure cases;
+- fresh, three-pack-upgrade, four-pack-reopen, and read-only database scenarios;
+- checksum/name/version/dependency/collision/drift rejection;
+- complete references and runaway repository round trips;
+- backup/restore against pre-runaway and current composition;
+- inspect text/JSON stability and doctor non-mutation;
+- generated census drift check;
+- authority lint and coverage-ledger gates;
+- clean-wheel catalog/resource/doc/migration load;
+- the full authoritative `python3 -m pytest` suite exactly once.
+
+For unrelated failures, reproduce the failing command against the pinned custody source and record before/after evidence rather than rerunning the entire expensive suite.
+
+Complete the evidence matrix for all 15 frozen done criteria, obtain final Sol oracle PASS, review and commit only intended paths, push only:
+
+```bash
+git push origin HEAD:refs/heads/megado/canonical-pack-beta
+```
+
+Open the completed worktree. Do not merge, rebase, deploy, promote, or publish.
+
+Exit: every criterion has a command, artifact, result, and independent reviewer disposition.
+
+## Cumulative review boundaries
+
+1. **A — canonical contract:** after WP1–WP2.
+2. **B — persistence and consumer convergence:** after WP3–WP4.
+3. **C — hard-cut product closure:** after WP5.
+4. **Final — evidence closure:** after WP6.
+
+Dependent work does not advance past a cumulative boundary until the integrated state passes review.
+
+## Explicit anti-pattern rejections
+
+1. **No concealed schema-pack subsystem.** Its manifests, parser, identities, fixed lists, imports, and tests are deleted; only relocated generic migration mechanics survive.
+2. **No universal service locator.** The catalog supplies immutable ownership data and narrow projections; existing typed registries and static factories remain.
+3. **No duplicated SQLite authority.** YAML declares ownership and migration resources only; SQL owns DDL and `schema_migrations` owns applied state. Skills and census prose contain neither DDL nor mutable status.
+4. **No composition lifecycle machinery.** No project pack locks, enable/disable/purge state machines, dynamic database plugins, down migrations, or unused migration ceremony.
+5. **No external SQL.** Every non-bundled database declaration fails before resource resolution, registry registration, or database access.
+6. **No unloadable kernel fiction.** Core migrations and primitives remain code-owned; `_core` remains a permanent kernel documentation/router surface.
+7. **No compatibility layer.** No dual reads, aliases, schema-less manifests, legacy filenames, fallback parsers, re-exports, or v1-to-v2 shims.
+8. **No partial-success declaration.** Final gates cover all bundled custom surfaces, documentation, operational consumers, generated census data, and wheel resources; any bypass or unclassified surface fails the run.
+
+## Scope cuts and simplicity controls
+
+- Delete `builtin` rather than inventing a purpose for an empty pack.
+- Delete deprecated aliases rather than carrying beta compatibility residue.
+- Do not build a marketplace, dependency solver, activation framework, signing system, database plugin interface, or general service factory.
+- Do not redesign existing repositories, `DatabaseWriter`, `UnitOfWork`, SDK behavior, or migration transactions.
+- Do not make the coverage ledger a runtime registry.
+- Do not introduce a custom packaging backend when ordinary package-data rules plus installed-wheel closure tests suffice.
+- Do not treat unrelated training manifests as pack manifests.
+- Do not duplicate pack census logic across `_core`, skills, inspect, and doctor.
+- Do not widen the goal to global models, LoRAs, taxonomies, or kernel primitives unless the zero-unclassified audit proves an existing pack-owned customization requires classification.
+tokens used
+31,039
+# Phase 3 revised plan — canonical pack beta hard cut
+
+Status: **ready for execution against pinned source `7ac50c12e8e4d90988fee603ffdb9896e5628792`**.
+
+## Determination
+
+- Estimated effort: **5.9–8.7 engineer-weeks**.
+- Huge run: **yes**.
+- Difficulty: **5/5**.
+- Proposed `[XHARD]` implementation tasks: **none**. The work is broad but the mechanisms and cutover seams are now understood.
+- Simplest dependency order: **baseline → canonical contract → pack conversion → database cutover → consumer convergence → deletion/package closure → final validation**.
+- New exploration areas: **none**. E1–E10 resolve the plan-shaping questions. The missing runaway demo fixture is an implementation-test issue; replace its external fixture dependency with a deterministic temporary project unless custody evidence proves it is an intentionally packaged artifact.
+
+The estimate rises slightly because agent-documentation and wheel closure are materially broader than the original plan assumed. This is partly offset by deleting the empty `builtin` compatibility pack and its aliases instead of preserving or converting them.
+
+## Resolved evidence
+
+1. There are two active manifest species, three accepted pack filenames, schema-less parsing, two `PackDefinition` construction paths, and several raw-mapping consumers. The cutover must replace them together.
+2. Existing typed capability registries are suitable projections. Their ordering, conflict, alias, override, fork, and graph-validation mechanics remain; they are not replaced by a generic registry.
+3. The schema registry’s collision, freeze, migration checksum, drift, probe, and transaction machinery is reusable. Dependency minimum versions and owner-root provenance are the missing pieces.
+4. `open_database(path, registry)` and `DatabaseWriter` are the correct SQLite boundaries. Other project-opening read paths need a common read-only compatibility probe rather than independent composition.
+5. The baseline contains 19 capability pack directories, four schema-pack directories, and `_core`. `builtin` contains no live customization and exists only as deprecated compatibility residue.
+6. After deleting `builtin`, the target catalog contains **22 ordinary bundled product packs** plus the irreducible `_core` kernel documentation shell.
+7. Baseline capability reconciliation starts from 64 executors, 12 orchestrators, 10 elements, eight rendering protocol extensions, four database packs, and the recorded repository/vocabulary/CLI/SDK/bridge surfaces. These are audit baselines, not permanent hard-coded counts.
+8. All retained product packs should have structured documentation. Add docs for `blender`, `timeline`, `shots`, `references`, and `runaway`; repair `media` frontmatter. No retained bundled product pack currently qualifies for a documentation opt-out.
+9. Wheel configuration currently excludes skills, Markdown, requirements files, and Blender’s service file. Wheel policy and tests must be reversed to include every declared runtime/documentation resource.
+10. External provenance is known at the common discovery boundary and is then lost. The canonical catalog must retain it. Trust can never come from manifest-declared `origin` or `install_tier`.
+11. Runaway’s standard inclusion adds one migration and one table. Writable opens of three-pack databases apply it; read-only opens report it pending without mutation; existing four-pack databases become standard and reopen unchanged.
+12. The 49 `builtin.*` aliases and the empty `builtin` pack are compatibility shims. Delete them and rewrite compatibility assertions as hard-cut assertions.
+13. Historical paths such as `.oracle/**`, `findings/**`, `planning/**`, `inputs/astrid-first/**`, and explicitly historical documents are excluded from active-authority scans. Unrelated training run manifests are not pack manifests.
+
+## Final architecture
+
+### Canonical definition and catalog
+
+- Evolve `PackDefinition` in place into the single complete, deeply immutable v2 object.
+- Load only `pack.yaml` with required `schema_version: 2`.
+- Reject `pack.yml`, `pack.json`, schema-less YAML, unknown legacy shapes, and `schema-pack.yaml`.
+- Parse and validate once. Static validation, installation, inspection, agent indexing, registries, and packaging consume the same normalized definition.
+- Include normalized identity, resources, capabilities, database contribution, vocabularies, repositories, conformance declarations, static CLI/bridge ownership, and agent-documentation routes.
+- Attach source kind, pack root, installed revision, and bundled trust as loader/catalog provenance. They are not self-declared manifest authority.
+- Keep install metadata only as transport/revision state; it must not reconstruct canonical pack identity.
+- Preserve automatic local-pack creation, but emit strict capability-only v2 and hard-fail existing legacy local manifests.
+
+### Typed projections
+
+- The catalog exposes narrow projections for executor, orchestrator, element, rendering, generation, database, CLI ownership, skills, inspection, and resource closure.
+- Existing typed registries retain their specialized behavior and validation.
+- Discovery order and provenance are preserved through projections; no API strips catalog entries to identity-only objects before admission checks.
+- Static application, repository, service, CLI, and bridge factories remain where already useful. The catalog does not instantiate arbitrary services.
+
+### Database contribution
+
+- Core migrations remain explicit irreducible kernel behavior.
+- A bundled pack may declare an optional database contribution containing ownership and typed migration/resource metadata. SQL remains authoritative for columns, constraints, indexes, and transformations.
+- Standard composition is core plus all trusted bundled database contributions from the catalog: `references`, `runaway`, `shots`, and `timeline` in deterministic dependency order.
+- Reuse the existing collision registry and migration runner after relocating them out of schema-pack identity code.
+- `RegisteredMigration` gains its owner-relative resolved resource handle and provenance/revision information.
+- Enforce dependency existence, cycles, and declared minimum versions before registration.
+- Preserve exact SQL bytes, migration identity, checksums, drift detection, probe behavior, and per-migration `BEGIN IMMEDIATE` transactions.
+- External packs with `database` fail at catalog admission across local, extra-root, environment, Git-installed, and active installed-revision paths, before SQL resolution or registration.
+
+### Documentation and census
+
+- Every retained bundled product pack declares a structured `skill/SKILL.md`.
+- Add direct pack guidance for the five documented gaps and repair `media` frontmatter.
+- `_core` remains kernel-owned and non-unloadable. It links a generated, packaged canonical census containing stable pack identity, capability categories, database ownership, and routes to owning documentation.
+- The census contains no duplicated DDL or mutable database status.
+- Use one deterministic generator with check mode; remove independent skill and agent-index manifest parsing.
+
+### Coverage ledger
+
+Create a reviewed, non-runtime coverage ledger with:
+
+- `surface_id`
+- `kind`
+- `owner` as `pack:<id>` or `kernel:<subsystem>`
+- `evidence_paths`
+- `projection_consumers`
+
+Kinds cover capability components, rendering protocols, database migrations/table ownership, vocabularies, repositories, conformance, CLI/SDK/bridge surfaces, resources, documentation, and operational consumers.
+
+The checker must reject missing, stale, duplicate, or conflicting ownership. Consumers are recorded as consumers, never treated as owners. `builtin` and its aliases are recorded as deleted compatibility residue, not converted into artificial ownership.
+
+## Work packages
+
+### WP0 — baseline reconciliation and executable gates
+
+Estimate: **0.4–0.6 engineer-week**. Depends on nothing.
+
+- Establish the coverage ledger from the verified inventory.
+- Classify core migrations, kernel event/command primitives, and `_core` as irreducible kernel behavior.
+- Record the retirement of empty `builtin` and all 49 `builtin.*` aliases.
+- Add characterization tests for:
+  - fresh standard database composition;
+  - existing three-pack writable upgrade;
+  - read-only pending runaway without mutation;
+  - existing four-pack reopen;
+  - external capability success and database rejection;
+  - current repository, event, command, CLI, SDK, and bridge behavior.
+- Replace the missing runaway demo-project dependency with a self-contained temporary fixture unless the pinned custody tree proves the asset should be packaged.
+- Define active-authority scan exclusions so historical artifacts and unrelated training manifests do not cause false positives.
+- Start the final criterion/evidence matrix and populate it throughout execution.
+
+Exit: every baseline surface is owned, deliberately deleted, or explicitly kernel-classified; characterization failures are understood before architectural edits.
+
+### WP1 — strict v2 loader and deterministic catalog
+
+Estimate: **1.0–1.4 engineer-weeks**. Depends on WP0.
+
+- Define the strict v2 schema and complete deeply immutable `PackDefinition`.
+- Replace loader/static-validator duplication with one parse-normalize-validate path.
+- Accept only `pack.yaml`; remove arbitrary-path and flat-YAML behavior.
+- Resolve all declared resources relative to the owner root with realpath/symlink confinement.
+- Retain source kind, root, revision, and trust through catalog entries and typed projections.
+- Reject external database contributions at the shared admission boundary.
+- Rewire source, local, extra, environment, installed, and Git-install validation to the same loader.
+- Remove manifest authority from self-declared origin/install-tier fields.
+- Update scaffold and automatic local creation to emit capability-only v2.
+- Add strict capability-only, database-only, and combined golden fixtures.
+
+Exit: one filename, schema, parser, immutable definition, provenance-bearing catalog, and resource resolver; malformed or legacy forms fail closed.
+
+### WP2 — convert the bundled catalog and documentation
+
+Estimate: **0.8–1.1 engineer-weeks**. Depends on WP1.
+
+- Convert all retained bundled product manifests to strict v2.
+- Fold timeline, shots, references, and runaway contributions into their ordinary `pack.yaml`.
+- Preserve migration SQL bytes and all feature semantics.
+- Make `references` the combined database/repository/SDK/CLI/documentation exemplar without altering its three-table model.
+- Delete the empty `builtin` pack and all deprecated `builtin.*` alias declarations.
+- Add structured skills for `blender`, `timeline`, `shots`, `references`, and `runaway`.
+- Repair `media` skill frontmatter.
+- Declare every migration, skill, document, requirements file, service file, and runtime asset through the owning manifest.
+- Require documentation for all 22 retained product packs; introduce no speculative opt-outs.
+
+Exit: every retained bundled product extension is represented by exactly one v2 manifest and structured documentation; no bundled customization depends on `builtin`.
+
+### WP3 — database projection and migration cutover
+
+Estimate: **1.0–1.5 engineer-weeks**. Depends on WP2.
+
+- Relocate reusable database registry and migration algorithms out of the obsolete schema-pack subsystem without compatibility re-exports.
+- Build the frozen database projection from core plus trusted bundled catalog entries.
+- Remove both fixed-three standard builders.
+- Add owner-relative resource handles and provenance to registered migrations.
+- Enforce dependency minimum versions as well as existence and acyclic ordering.
+- Preserve table/vocabulary/repository/mount collision behavior and deterministic freeze order.
+- Keep `schema_migrations` as the sole applied-state record.
+- Validate:
+  - fresh composition yields core plus four pack migrations;
+  - migration order is deterministic;
+  - three-pack writable databases gain runaway;
+  - three-pack read-only probes remain unchanged and report pending runaway;
+  - existing four-pack databases reopen normally;
+  - checksum, name, unknown-pack, too-new, and dependency-version failures remain fail-closed.
+
+Exit: database composition has one manifest-derived authority and retains all established migration safety guarantees.
+
+### WP4 — operational, inspection, doctor, and agent convergence
+
+Estimate: **1.1–1.6 engineer-weeks**. Depends on WP3.
+
+- Inject the same database projection through application composition, bridge construction, SDK invocation, kernel reads, timeline helpers, rendering helpers, backup, and restore.
+- Require project-opening raw read paths to pass the common read-only compatibility probe or receive an already-probed connection.
+- Keep backup payload and restore semantics stable while deriving compatibility expectations from the canonical projection.
+- Drive CLI ownership and mount validation from canonical declarations while retaining static parser and command factories.
+- Replace raw parsing in install-local, install-Git, inspect, agent index, trust summaries, validators, and folder consumers with canonical objects or narrow projections.
+- Produce stable inspect text and JSON for:
+  - identity and schema version;
+  - source/provenance/revision;
+  - capability categories;
+  - database ownership, dependencies, migrations, and head;
+  - documentation routes;
+  - declared resource closure.
+- Extend doctor with a read-only catalog census and expected/applied/pending/head migration status.
+- Generate the `_core` pack census from the catalog and add deterministic drift checks.
+
+Exit: operational consumers, inspection, doctor, skills, and `_core` agree on the same catalog; doctor and inspection do not mutate project databases.
+
+### WP5 — hard deletion, authority gates, and clean-wheel closure
+
+Estimate: **0.8–1.2 engineer-weeks**. Depends on WP4.
+
+- Delete:
+  - all four `schema-pack.yaml` files;
+  - the schema-pack manifest parser and identity types;
+  - both standard builders and fixed tuples;
+  - the v1 pack schema;
+  - alternate filename probes;
+  - the flat parser;
+  - independent raw manifest readers;
+  - compatibility re-exports and legacy alias tests.
+- Extend authority lint and CI to reject active schema-pack imports, legacy filenames, fixed standard lists, schema-less parsing, raw identity reconstruction, and independent first-party lists.
+- Update setuptools data rules to include declared skills, Markdown, requirements files, SQL, Blender’s service unit, and existing recursive assets.
+- Keep tests, caches, authoring-only fixtures, and undeclared pack files out of the wheel.
+- Make package validation enumerate the installed canonical catalog and open every declared resource.
+- Run the clean-wheel audit in an isolated process that cannot import from the source tree.
+- Compare source and wheel catalog identities, provenance classifications, documentation routes, migrations, and resource closure.
+- Enable zero-unclassified, zero-multi-owner, zero-stale-ledger, and zero-legacy gates.
+
+Exit: obsolete authorities are physically absent, every declared bundled resource loads from the wheel, and no active customization bypasses canonical ownership.
+
+### WP6 — authoritative validation and evidence closure
+
+Estimate: **0.8–1.3 engineer-weeks**. Depends on WP5.
+
+Run focused validation first:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+python3 -m astrid doctor
+python3 -m build
+```
+
+Also run and record:
+
+- capability-only, database-only, and combined golden validation;
+- all external-source capability-success/database-failure cases;
+- fresh, three-pack-upgrade, four-pack-reopen, and read-only database scenarios;
+- checksum/name/version/dependency/collision/drift rejection;
+- complete references and runaway repository round trips;
+- backup/restore against pre-runaway and current composition;
+- inspect text/JSON stability and doctor non-mutation;
+- generated census drift check;
+- authority lint and coverage-ledger gates;
+- clean-wheel catalog/resource/doc/migration load;
+- the full authoritative `python3 -m pytest` suite exactly once.
+
+For unrelated failures, reproduce the failing command against the pinned custody source and record before/after evidence rather than rerunning the entire expensive suite.
+
+Complete the evidence matrix for all 15 frozen done criteria, obtain final Sol oracle PASS, review and commit only intended paths, push only:
+
+```bash
+git push origin HEAD:refs/heads/megado/canonical-pack-beta
+```
+
+Open the completed worktree. Do not merge, rebase, deploy, promote, or publish.
+
+Exit: every criterion has a command, artifact, result, and independent reviewer disposition.
+
+## Cumulative review boundaries
+
+1. **A — canonical contract:** after WP1–WP2.
+2. **B — persistence and consumer convergence:** after WP3–WP4.
+3. **C — hard-cut product closure:** after WP5.
+4. **Final — evidence closure:** after WP6.
+
+Dependent work does not advance past a cumulative boundary until the integrated state passes review.
+
+## Explicit anti-pattern rejections
+
+1. **No concealed schema-pack subsystem.** Its manifests, parser, identities, fixed lists, imports, and tests are deleted; only relocated generic migration mechanics survive.
+2. **No universal service locator.** The catalog supplies immutable ownership data and narrow projections; existing typed registries and static factories remain.
+3. **No duplicated SQLite authority.** YAML declares ownership and migration resources only; SQL owns DDL and `schema_migrations` owns applied state. Skills and census prose contain neither DDL nor mutable status.
+4. **No composition lifecycle machinery.** No project pack locks, enable/disable/purge state machines, dynamic database plugins, down migrations, or unused migration ceremony.
+5. **No external SQL.** Every non-bundled database declaration fails before resource resolution, registry registration, or database access.
+6. **No unloadable kernel fiction.** Core migrations and primitives remain code-owned; `_core` remains a permanent kernel documentation/router surface.
+7. **No compatibility layer.** No dual reads, aliases, schema-less manifests, legacy filenames, fallback parsers, re-exports, or v1-to-v2 shims.
+8. **No partial-success declaration.** Final gates cover all bundled custom surfaces, documentation, operational consumers, generated census data, and wheel resources; any bypass or unclassified surface fails the run.
+
+## Scope cuts and simplicity controls
+
+- Delete `builtin` rather than inventing a purpose for an empty pack.
+- Delete deprecated aliases rather than carrying beta compatibility residue.
+- Do not build a marketplace, dependency solver, activation framework, signing system, database plugin interface, or general service factory.
+- Do not redesign existing repositories, `DatabaseWriter`, `UnitOfWork`, SDK behavior, or migration transactions.
+- Do not make the coverage ledger a runtime registry.
+- Do not introduce a custom packaging backend when ordinary package-data rules plus installed-wheel closure tests suffice.
+- Do not treat unrelated training manifests as pack manifests.
+- Do not duplicate pack census logic across `_core`, skills, inspect, and doctor.
+- Do not widen the goal to global models, LoRAs, taxonomies, or kernel primitives unless the zero-unclassified audit proves an existing pack-owned customization requires classification.

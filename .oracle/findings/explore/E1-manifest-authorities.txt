@@ -1,0 +1,24 @@
+**Ranked verified findings**
+
+1. **Two pack grammars and three filename authorities.**  
+   `astrid/core/pack/_common.py:16-25` accepts `pack.yaml`, `pack.yml`, `pack.json`; component manifests likewise accept YAML/YML/JSON. `loader.py:184-216` probes those names in order, parses JSON directly, YAML via `safe_load`, then falls back to a schema-less flat `key: value` parser (`:219-240`). Direct `load_pack_manifest()` also accepts arbitrary non-JSON paths. Generic parsing separately lives at `manifest.py:19-65`. Layout validation repeats the filename list at `validate_layout.py:84-93,146-150`. This directly conflicts with frozen `pack.yaml`-only v2.
+
+2. **`PackDefinition` is reconstructed twice.**  
+   Runtime loading constructs it at `loader.py:110-152`; static validation reparses raw data and reconstructs a divergent object at `validate.py:518-539` for component discovery. The validator hardcodes `pack.yaml` in `manifest_path`, while the loader preserves the selected path. `PackDefinition` is frozen only shallowly: its dict fields remain mutable (`definition.py:31-53`).
+
+3. **Raw pack mapping consumers bypass normalization.**  
+   `validate.py:1035-1043` (`extract_trust_summary`), `cli_inspect.py:57-85`, `install_local.py:121-145,711-734`, `install_git.py:470-483`, `scaffold.py:110-140`, and `agent_index.py:393-399` independently parse/read fields. Agent index also directly parses component YAML/JSON (`:102-120`). Folder extractors parse emitted JSON separately (`execution/*/folder.py:93-105`).
+
+4. **Discovery fan-out.**  
+   `discovery.py:88-111,127-257` scans source, auto-local, extra, env, and installed roots; registries consume it through executor/orchestrator, element, rendering, generation, timeline, SDK, skills, CLI list/inspect (`execution/*/registry.py:292-303`; `element/registry.py:206-212`; `sdk/discovery.py:139-146`).
+
+5. **Database authority remains separate.**  
+   `schema_packs/manifest.py:34-46,407-421`, `schema_packs/standard.py:27-45`, and `packs/__init__.py:68-110` maintain schema-pack identity plus duplicate fixed tuples. Consumers include application, doctor, backup, kernel reads, SDK invocation, timeline helpers, rendering assets, and runaway migration (`doctor.py:636-642`; `backup/operations.py:1287-1292`; `scripts/migrations/runaway_v1_migrate.py:108-117`).
+
+6. **Automatic local-pack creation.**  
+   `loader.py:35-72` creates `astrid/packs/local/pack.yaml`; called by executor/orchestrator forks, discovery when local elements exist, and `html_canvas_effect/run.py:109-124`.
+
+**Tests affected:** `tests/packs/test_pack_yaml_schema.py:1647-1677`; `tests/v10/test_registry.py:162-216`; `tests/v10/test_pack_factoring.py:82-95`; `tests/v10/test_m8_packaging.py:46-53,207-220`; discovery/local tests around `tests/packs/test_pack_discovery_metadata.py:98-102`.
+
+**Simplest seam:** make one strict loader return the immutable canonical definition plus resolved resources/database/docs; make discovery produce that catalog, then pass projections to validation, registries, install/inspect, CLI, skills, and database composition. Delete `schema_packs`, duplicate builders, legacy filename probes, and raw mapping consumers. This confirms `.oracle/plan.md` WP1/WP4/WP7; current code violates the frozen goal.
+0

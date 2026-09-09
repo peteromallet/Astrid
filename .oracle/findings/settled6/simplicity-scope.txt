@@ -1,0 +1,18 @@
+**Rank 1 — P1 defect: the resource-closure audit classifies `pack.yaml` as undeclared.**
+
+Evidence:
+
+- §III.1 requires every retained product pack to contain `pack.yaml`.
+- §IV.1 says every remaining regular non-Python file under a bundled pack root must have exactly one of three classifications: typed runtime, supplemental, or authoring-only.
+- The only exclusions are `.DS_Store` and immediate `__pycache__` bytecode.
+- §III.2’s `declared_paths` includes content, rendering, migration, documentation, context, supplemental, and authoring-only paths—but not the manifest itself.
+- No resource type declares the manifest as an implicit resource, and no manifest exclusion is specified.
+
+Therefore each valid pack either fails `undeclared_file`, or must self-declare its own `pack.yaml` as a supplemental resource. The latter makes the manifest a runtime resource and creates unnecessary self-referential resource/provenance semantics. This blocks criteria **1, 3, and 10**, WP2 Boundary A, and the “zero undeclared non-Python files” gate. The plan needs one explicit rule: canonical and rejected manifest basenames are audited separately and excluded from pack-resource classification, or receive a dedicated implicit-manifest classification.
+
+**Accepted-disposition check:** Wave 1’s catalog/schema/resource/ledger decisions, Wave 2’s executable contract/snapshot/DB/one-build decisions, Wave 3’s exclusions/provenance/lifetime decisions, Wave 4’s Runaway fixture, and Wave 5’s capture-time admission, strict records, direct-child closure, documentation, Python ownership, and concrete receipts are all represented. No superseded objection is repeated.
+
+**Criteria disposition:** Criteria 2 and 4–9, 11–15 have explicit implementation and proof paths; criterion 12’s external-DB boundary is explicit. The single omission above remains unresolved.
+
+**North Star:** All listed anti-patterns are explicitly rejected; this is a closure omission, not a reintroduced alternate authority. No new exploration or `[XHARD]` work is needed after clarifying the manifest audit rule.
+0

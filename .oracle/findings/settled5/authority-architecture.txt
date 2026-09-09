@@ -1,0 +1,19 @@
+**NOT CLEAN**
+
+1. **P0 — Installed admission remains TOCTOU-unsafe.**  
+   §III.5 performs a state read, then invokes pack code, while explicitly forbidding an admission-state lock. No invariant states that execution and revision mutation are serialized by the same existing mechanism. Current `astrid/core/pack/store.py:372-410` changes the active revision through multiple filesystem operations; the rollback caller locks only its own scope at `astrid/core/pack/install_local.py:972-975`. Interleaving is therefore possible:
+
+   1. pre-use check observes revision A and passes;
+   2. rollback/invalidation switches to B;
+   3. execution invokes A.
+
+   The required mutation tests appear to cover mutation before verification, not mutation between verification and invocation. This leaves criterion 12 and the “stale installed execution authority” anti-pattern unresolved. Investigate whether the existing per-pack install lock can safely cover the check-to-invocation interval; otherwise provide a proof of single-threaded mutation/use serialization. No new service is required, but the synchronization contract must be explicit.
+
+2. **P1 — A bundled product can silently disappear.**  
+   §III.1 step 4 classifies a direct child lacking `pack.yaml` and legacy basenames as a non-pack and skips it. The plan claims an “exact-path gate” compensates, but §V never defines that gate’s input, artifact, or failure rule. WP0’s captured directory count is not an executable invariant. Since coverage inventory begins from the canonical snapshot, an omitted manifest means the directory is absent from inventory too. A removed manifest or newly added product directory could pass the 22-pack gate while violating criteria 1 and 3. Require a pinned direct-child/product-root comparison with explicit `_core` handling.
+
+3. **P1 — Documentation opt-out enforcement has contradictory authorities.**  
+   §II says bundled admission rejects `documentation.kind: none` unless the coverage ledger classifies the pack as internal; §V says the ledger is audit-only and runtime never imports it. Thus the specified loader cannot enforce the stated exception without either a second hard-coded authority or weakening admission enforcement. Current 22-pack scope limits immediate impact, but the frozen grammar remains unresolved.
+
+The Wave 1–4 accepted corrections, including the stability-receipt/header distinction and generated Runaway fixture, are not repeated objections. North Star alignment remains unproven until these boundaries are closed.
+0

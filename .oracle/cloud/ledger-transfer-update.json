@@ -1,0 +1,11 @@
+{
+  "phase": "cloud_bootstrap",
+  "batch": "E0.4",
+  "checkpoint": "exact-base-and-oracle-overlay-verified",
+  "next_action": "install isolated tooling and dependencies; smoke-test Luna, Sol, Git, Python, and focused baseline",
+  "validation_state": "custody-pass-tooling-pending",
+  "last_receipt": ".oracle/evidence/cloud-custody.md",
+  "last_evidence": "base=7ac50c12; bundle_sha256=ab229d03; oracle_sha256=4783ee3e; oracle_files=755; product_diff=zero",
+  "head_sha": "7ac50c12e8e4d90988fee603ffdb9896e5628792",
+  "supervisor_state": "not-launched"
+}

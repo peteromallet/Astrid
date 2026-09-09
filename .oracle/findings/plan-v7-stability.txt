@@ -1,0 +1,3842 @@
+Reading additional input from stdin...
+2026-08-30T22:34:33.211128Z ERROR codex_core::session::session: failed to load skill /Users/peteromalley/Documents/Arnold/arnold_pipelines/megaplan/pipelines/epic-blitz/SKILL.md: missing YAML frontmatter delimited by ---
+2026-08-30T22:34:33.211222Z ERROR codex_core::session::session: failed to load skill /Users/peteromalley/Documents/Arnold/arnold_pipelines/megaplan/planning/skills/planning/SKILL.md: missing YAML frontmatter delimited by ---
+2026-08-30T22:34:33.211231Z ERROR codex_core::session::session: failed to load skill /Users/peteromalley/Documents/Arnold/arnold_pipelines/megaplan/planning/skills/planning/SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.149.0
+--------
+workdir: /Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 01a054cf-6396-7711-b09a-e7d14656bdc9
+--------
+user
+You are the Phase 3 stability reviser for the Astrid Megado run. Work read-only. Do not edit files, run mutating commands, create branches, or dispatch models.
+
+Review the COMPLETE Wave-2-revised plan against the COMPLETE frozen goal, complete North Star, and accepted Wave 2 synthesis. Verify exact v2 fields, snapshot invariants, resource audit, coverage generator, migration semantics, single-build flow, all criteria, and anti-patterns. Bias KISS/YAGNI. If no material change or exploration is required, answer exactly STABLE and nothing else. Otherwise return a complete replacement plan.
+
+COMPLETE NORTH STAR:
+
+# North Star — one canonical Astrid pack
+
+Astrid has one understandable pack concept. Every bundled product extension is
+owned by one strict `pack.yaml`; a pack may contribute capabilities, SQLite
+schema, agent documentation, or any combination. `timeline`, `shots`,
+`references`, and `runaway` are ordinary bundled packs rather than a second
+schema-pack species.
+
+Opening a pack directory should reveal one authoritative declaration of its
+identity, resources, custom capabilities, database ownership, migrations,
+events, commands, CLI surface, and agent guidance. Runtime systems consume
+typed projections of that declaration instead of independently rediscovering
+or reinterpreting the pack. Every existing bundled customization is either
+owned by a canonical pack or explicitly classified as irreducible kernel
+behavior; nothing remains unclassified.
+
+## Enduring principles
+
+- One pack identity, manifest grammar, parser/validator, normalized definition,
+  and bundled catalog.
+- SQLite remains the per-project authority. Migration SQL owns columns,
+  constraints, indexes, and transformations; YAML does not duplicate DDL.
+- Reuse the strong machinery already present: typed registries, migration
+  ordering/checksums/drift/transactions, `DatabaseWriter`, `UnitOfWork`,
+  repositories, SDK behavior, and conformance tests.
+- Bundled trusted packs may contribute database schema; external packs remain
+  capability-only during beta.
+- Every pack-relative resource is confined, discoverable, and present in the
+  built wheel.
+- Every user/agent-facing bundled pack ships structured agent documentation;
+  the `_core` skill exposes a generated canonical pack census and routes agents
+  to the owning pack documentation.
+- With no users to migrate, cut directly to the final form and delete alternate
+  authorities instead of maintaining shims.
+- Keep beta scope proportionate: unify today's bundled system without
+  prebuilding a marketplace or variable project-composition lifecycle.
+
+## Anti-patterns
+
+- Hiding the old schema-pack subsystem inside `pack.yaml` while retaining its
+  parser, identity, discovery, or hard-coded standard list.
+- Replacing useful typed registries with a giant universal service locator.
+- Duplicating SQLite DDL or mutable runtime facts in YAML or skill prose.
+- Per-project pack locks, enable/disable/purge state machines, dynamic database
+  plugins, or migration ceremony without an observed beta need.
+- Allowing external packs to execute SQL.
+- Making the irreducible kernel dynamically unloadable for conceptual symmetry.
+- Compatibility shims, dual reads, schema-less manifests, or legacy fallbacks.
+- Declaring success while any bundled customization, documentation surface,
+  operational consumer, or packaged resource bypasses canonical ownership.
+
+COMPLETE FROZEN GOAL:
+
+# Agent goal — canonical pack beta hard cut
+
+Status: **frozen**.
+
+[North Star](./northstar.md)
+
+This run advances the North Star by replacing Astrid's split and partially
+duplicated pack authorities with one complete canonical bundled-pack path,
+covering all existing bundled custom functionality and its packaged agent
+documentation without adding post-beta composition machinery.
+
+## Objective
+
+Implement the direct beta end state in which every bundled Astrid product pack
+uses strict `pack.yaml` v2, every existing bundled customization is mapped to a
+canonical pack or explicitly justified kernel owner, database-bearing packs
+declare an optional `database` contribution, all existing typed systems consume
+projections of one complete canonical definition, and every user/agent-facing
+pack ships validated agent documentation discoverable from the `_core` skill.
+
+Convert the four current schema packs (`timeline`, `shots`, `references`, and
+`runaway`), derive standard database composition from bundled manifests, make
+resources pack-relative and wheel-complete, rewire every relevant operational
+consumer, expose useful inspection/doctor output, and delete obsolete manifest
+forms and alternate authorities. Preserve existing feature semantics.
+
+## Authoritative inputs and immutable source
+
+- [North Star](./northstar.md).
+- This frozen agent goal.
+- Source ref: `7ac50c12e8e4d90988fee603ffdb9896e5628792`.
+- Source branch at custody: `codex/live-ux-pre-phase-b-20260824`.
+- Worktree branch: `megado/canonical-pack-beta`.
+- [Custody baseline](./custody.md).
+- Existing source and tests, except tests intentionally enforcing forms named
+  for deletion below.
+
+## Settled decisions
+
+1. Exactly one canonical manifest filename: `pack.yaml`.
+2. Schema version 2 is a hard cut. No `pack.yml`, `pack.json`, schema-less/flat
+   YAML, or `schema-pack.yaml` compatibility.
+3. A pack may contribute capabilities, SQLite schema, agent documentation, or
+   a combination.
+4. Database contribution is an optional `database` block; detailed DDL remains
+   authoritative in migration SQL.
+5. Migrations/resources resolve relative to the owning pack root/revision.
+6. Parse/normalize/validate once into one complete immutable canonical object.
+7. Existing typed registry/database mechanics remain subordinate projections.
+8. Every existing bundled customization gets a canonical pack owner or an
+   explicit kernel classification recorded in a coverage ledger.
+9. Standard beta composition is derived from bundled manifests, not duplicated
+   fixed tuples.
+10. Existing `schema_migrations` remains the sole applied database-state record.
+    No per-project composition lock in beta.
+11. Standard writable open may continue applying trusted bundled migrations;
+    read-only paths probe compatibility. No enable/disable/purge lifecycle.
+12. External packs remain capability-only; external `database` declarations
+    fail closed.
+13. The irreducible kernel stays code; `_core` is not dynamically unloadable.
+14. Static typed application/service/CLI/bridge wiring may remain where dynamic
+    factories add no beta value, but ownership and documentation cannot bypass
+    the canonical catalog.
+15. Every user/agent-facing bundled pack has structured `AGENTS.md` or
+    `skill/SKILL.md`; intentional opt-outs require a manifest reason and must be
+    limited to non-user-facing internal utility packs.
+16. The `_core` skill contains or links a generated canonical pack census.
+17. `references` becomes the exemplar combined data/SDK/CLI/documentation pack
+    without changing its three-table model or semantics.
+18. Application, doctor, backup, restore, inspect, validation, and packaging
+    consume the same canonical ownership/resource data.
+
+## In scope
+
+- V2 schema, complete canonical model, single loader/validator, deterministic
+  bundled catalog, root confinement, and resource closure.
+- Capability-only, database-only, and combined golden fixtures/scaffolds.
+- Conversion of every bundled pack manifest and the four schema manifests.
+- Database projection into existing collision/migration mechanics.
+- Pack-relative migration/resource loading and enforced dependency semantics.
+- One standard bundled composition path used by application, doctor, backup,
+  restore, SDK/read probes, and package validation.
+- Canonical customization coverage ledger and a zero-unclassified-surface gate.
+- Pack inspection output in text and JSON for identity, source, capabilities,
+  database ownership/head, agent docs, and resource closure.
+- Doctor canonical pack census and migration status.
+- Structured pack agent documentation, `_core` census/routing, and wheel
+  inclusion/validation of declared skills and docs.
+- CI gates for legacy authorities, path escapes, missing/undeclared resources,
+  missing documentation, and clean-wheel closure.
+- Focused documentation and end-to-end examples, with `references` as exemplar.
+- Deletion of obsolete schema-pack and legacy manifest paths after cutover.
+
+## Non-goals
+
+- Per-project pack locks or variable project composition.
+- Enable/disable/purge/database-aware uninstall lifecycle.
+- Third-party database packs or arbitrary external SQL.
+- Marketplace, sandbox, signing, dependency solver, remote activation, or UI.
+- General dynamic repository/service/CLI/bridge factory framework.
+- Moving every global model/LoRA/type/taxonomy or kernel primitive into packs
+  unless source evidence shows it is existing pack-owned customization required
+  by the zero-unclassified gate.
+- Down migrations, data rollback, or compatibility shims.
+- Merge to main, deployment, or promotion.
+
+## Authorization
+
+Authorized:
+
+- create and mutate the dedicated worktree/branch above;
+- run the full Megado plan/explore/revise/execute/oracle/validation process;
+- invoke GPT-5.6 Luna and GPT-5.6 Sol under the declared routing policy;
+- edit code, tests, docs, and run artifacts within goal scope;
+- commit reviewed checkpoints;
+- push the reviewed final branch to `origin` using explicit refspec
+  `HEAD:refs/heads/megado/canonical-pack-beta`;
+- open the completed worktree.
+
+Not authorized:
+
+- modify, clean, stage, or restore the original dirty checkout;
+- merge, rebase onto a moving branch, deploy, promote, publish a release, or
+  mutate any other worktree;
+- switch pinned models without user approval;
+- widen the frozen goal under cover of the North Star or review findings.
+
+## Model policy
+
+- Planner: GPT-5.6 Sol, high reasoning.
+- Normal explorer/executor/sense-check work: **GPT-5.6 Luna**, user-selected.
+- Oracle and exceptional `[XHARD]` work: **GPT-5.6 Sol**, user-selected.
+- Automatic switching: not authorized.
+
+Normal is presumed. Cross-cutting size or importance is not `[XHARD]` evidence.
+Every proposed `[XHARD]` task must satisfy the skill's full exceptional test.
+
+## Exact done criteria
+
+1. Every bundled product pack loads from one v2 `pack.yaml` into the complete
+   canonical object; no shipped `schema-pack.yaml` remains.
+2. No active consumer independently reparses or reconstructs canonical pack
+   identity; typed capability/database projections share the same catalog.
+3. A reviewed coverage ledger maps every existing bundled custom surface to a
+   canonical pack/projection or justified kernel owner, with none unclassified.
+4. Standard database composition derives from bundled manifests with no
+   duplicate `("timeline", "shots", "references")` authority.
+5. `timeline`, `shots`, `references`, and `runaway` preserve migration,
+   repository, event, command, CLI, SDK, and conformance behavior.
+6. Migrations resolve from owner roots and preserve collision/order/checksum/
+   drift/transaction guarantees; dependency declarations are enforced.
+7. Application, SDK/read probes, doctor, backup, restore, inspect, and package
+   validation agree on canonical ownership and expected composition.
+8. Every user/agent-facing bundled pack has valid packaged agent docs; every
+   opt-out is explicit and justified; `_core` exposes the canonical census.
+9. Pack inspection and doctor expose useful canonical pack/database/resource/
+   documentation state in stable text and JSON where applicable.
+10. A clean wheel contains and can load every declared bundled resource,
+    migration, skill, and agent document.
+11. Legacy manifest/schema-pack parsers, standard builders, duplicate authority,
+    and compatibility tests/docs are deleted or clearly historical/non-active.
+12. External capability-only packs still work; external `database` fails closed.
+13. Golden capability-only/database-only/combined examples validate.
+14. Focused suites and full authoritative test suite pass, or any unrelated
+    baseline failure is proven with reproducible before/after evidence.
+15. Final evidence matrix maps every criterion to commands, artifacts, results,
+    and independent reviewer disposition; final oracle review passes.
+
+## Validation contract
+
+The stable plan must discover exact project commands and may refine this list,
+but final validation includes:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+python3 -m astrid doctor
+python3 -m build
+```
+
+Also required: fresh and existing SQLite scenarios; checksum drift rejection;
+complete `references` round trip; external capability success/database failure;
+clean-wheel load/resource audit; agent-doc/census audit; pack inspect text/JSON;
+and zero-legacy/zero-unclassified checks. One authoritative owner runs the full
+suite and each expensive validation once.
+
+## Stop and sync policy
+
+- Stop for user reconciliation if the source ref, model policy, North Star,
+  scope, or authorization must change.
+- Treat implementation blockers as owned work until genuinely exhausted.
+- Commit only paths reviewed at each checkpoint.
+- Push only after the final evidence matrix and oracle gate pass.
+- Never merge, deploy, or promote.
+
+COMPLETE REVISED PLAN:
+# Phase 3 complete replacement plan — canonical pack beta hard cut
+
+Status: **Wave 2 revised replacement; ready for an exact `STABLE` check and then a fresh settled-plan wave**.
+
+This plan supersedes the current plan in full. It incorporates every accepted Wave 1 and Wave 2 synthesis item while preserving the complete North Star, frozen goal, authorization boundaries, done criteria, validation contract, and anti-pattern rejections.
+
+## Determination
+
+- Estimated implementation effort: **6.2–8.6 engineer-weeks**, including cumulative reviews and expected rework.
+- Huge run: **yes**.
+- Difficulty: **5/5**.
+- Proposed `[XHARD]` tasks: **none**. The implementation remains decomposable normal Luna work; the Phase 4 oracle makes the final classification.
+- New research or exploration lanes: **none**.
+- Open planning questions: **none**.
+- Execution order: immutable baseline → executable v2 contract/catalog → bundled conversion and resource closure → database hard cut → operational convergence → deletion/audit/packaging → one-build validation and evidence closure.
+- The estimate increases from 5.7–8.0 weeks because Wave 2 makes three previously implicit systems concrete: operation-scoped snapshots, the bounded resource classifier, and the reproducible coverage generator. No product scope is added.
+- The missing runaway demo input remains a deterministic temporary-project fixture repair unless custody evidence proves it is an intentional packaged asset.
+
+## Mandate and boundaries
+
+Implement one strict canonical pack system:
+
+- Every retained bundled product pack is declared by exactly one `pack.yaml` with integer `schema_version: 2`.
+- The empty `builtin` product pack is deleted, leaving **22 retained product packs**, plus irreducible `_core` guidance.
+- `timeline`, `shots`, `references`, and `runaway` become ordinary packs with `database` contributions.
+- Existing typed registries, migration safety, repositories, `DatabaseWriter`, `UnitOfWork`, static application/service/CLI/bridge factories, SDK behavior, and conformance semantics remain.
+- Bundled trust comes exclusively from loader provenance.
+- External packs remain capability-only. An external manifest containing `database` is rejected as a whole before resolving its declared resources or reading SQL.
+- Every bundled customization is owned by a pack or explicitly classified as irreducible kernel behavior.
+- Every user/agent-facing bundled pack has packaged structured documentation.
+- No per-project composition state, dependency solver, dynamic database plugin system, marketplace, lifecycle machinery, or generalized service container is added.
+
+The North Star guides implementation but cannot widen the frozen goal.
+
+---
+
+# I. Exact v2 manifest contract
+
+WP1 must land this contract as JSON Schema, normalized immutable Python types, golden fixtures, and invalid fixtures before bundled conversion begins.
+
+## 1. Lexical types
+
+| Type | Exact rule |
+|---|---|
+| `PackId` | `^[a-z][a-z0-9_]*$` |
+| `ReleaseVersion` | `^(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$`; no prerelease/build suffix |
+| `LowerIdent` | `^[a-z][a-z0-9_]*$` |
+| `QualifiedId` | `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$` |
+| `DottedVocabulary` | `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` |
+| `RepositoryId` | `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `MigrationName` | `^[a-z0-9][a-z0-9_-]*$` |
+| `Keyword` | `^[a-z0-9][a-z0-9_-]*$` |
+| `RelativePath` | POSIX path; non-empty; not absolute; no backslash, NUL, empty segment, `.` or `..`; each segment matches `[A-Za-z0-9._-]+` |
+| `RelativeFile` | `RelativePath` resolving to one regular non-symlink file |
+| `RelativeDir` | `RelativePath` resolving to one non-symlink directory |
+| `NonBlankText` | String whose outer-trimmed value is non-empty |
+| `EnvironmentName` | `^[A-Z][A-Z0-9_]*$` |
+
+YAML booleans never satisfy integer fields. Null is never accepted; optional means absent.
+
+## 2. Top-level field table
+
+Every object uses `additionalProperties: false`, except the two explicitly scoped frozen-JSON maps noted below.
+
+| Field | Required | Type/default | Semantics |
+|---|---:|---|---|
+| `schema_version` | yes | integer, exactly `2` | No numeric string or float |
+| `id` | yes | `PackId` | Must exactly equal the owner directory name |
+| `name` | yes | `NonBlankText` | Display name |
+| `version` | yes | `ReleaseVersion` | Pack release only; never a migration version |
+| `description` | no | text, default `""` | Descriptive only |
+| `status` | no | `active\|experimental\|deprecated`, default `active` | `stub` is deleted |
+| `visibility` | no | `visible\|hidden`, default `visible` | Discovery display behavior |
+| `domain` | no | `general\|development\|editorial\|generation\|infrastructure\|integration\|media\|system`, default `general` | Descriptive taxonomy |
+| `stability` | no | `stable\|experimental\|deprecated`, default `stable` | Descriptive taxonomy |
+| `support` | no | `project\|core\|community`, default `project` | Descriptive taxonomy |
+| `keywords` | no | unique `Keyword[]`, default `[]` | Search terms |
+| `capabilities` | no | unique `LowerIdent[]`, default `[]` | Search/explanation tags only; never registry authority |
+| `permissions` | no | `Permission[]`, default `[]` | Existing disclosure/eligibility mechanism |
+| `content` | no | `ContentRoots`, default `{}` | Typed component/content roots |
+| `extensions` | no | `Extensions`, default `{}` | Existing typed extension declarations |
+| `aliases` | no | `Alias[]`, default `[]` | Live typed aliases only |
+| `agent` | no | `AgentRouting`, default empty values | Routing prose; not capability authority |
+| `documentation` | no | tagged `Documentation` object | Required by bundled admission unless explicit internal opt-out |
+| `secrets` | no | `Secret[]`, default `[]` | Existing install/trust disclosure |
+| `dependencies` | no | `RuntimeDependencies`, default empty lists | Python/npm/system runtime disclosure; unrelated to database dependencies |
+| `astrid_version` | no | `ReleaseVersion` | Minimum compatible Astrid release metadata; not trust |
+| `database` | no | `DatabaseContribution` | Bundled-only SQLite contribution |
+| `resources` | no | `SupplementalResource[]`, default `[]` | Runtime/doc assets not reached by another typed declaration |
+| `authoring_only` | no | `AuthoringExclusion[]`, default `[]` | Explicit non-wheel classification |
+
+At least one of `content`, `extensions`, `documentation`, `database`, or `resources` must contribute a non-empty value.
+
+The following v1 fields are prohibited: `origin`, `install_tier`, `pack_type`, `metadata`, and `docs`. Provenance replaces the first three; `documentation` replaces `docs`; arbitrary top-level metadata is not retained.
+
+## 3. Nested shapes
+
+### `content`
+
+All keys are optional `RelativeDir` values:
+
+```yaml
+content:
+  executors: executors
+  orchestrators: orchestrators
+  elements: elements
+  schemas: schemas
+  examples: examples
+  docs: docs
+```
+
+There is no fallback tree scan when a v2 content root is absent. Executor, orchestrator, and element roots use the existing typed component loaders. Schema/example/docs directories expand recursively as declared resources.
+
+### `permissions`
+
+```yaml
+permissions:
+  - id: subprocess
+    reason: Runs ffmpeg.
+    access: optional nonblank text
+    services: [optional-service-name]
+```
+
+- `id` enum: `project_files`, `network`, `subprocess`, `environment`, `accelerator`, `external_services`.
+- Exact keys: `id`, `reason`, optional `access`, optional `services`.
+- Duplicate permission IDs reject.
+- `reason` is required.
+- Service names are trimmed, duplicate-rejected, and canonically sorted.
+
+### `aliases`
+
+```yaml
+aliases:
+  - kind: executor
+    alias: rendering.render_video
+    canonical_id: rendering.render
+```
+
+- Exact keys: `kind`, `alias`, `canonical_id`.
+- `kind` enum: `executor`, `orchestrator`, `renderer`, `planner`, `finalizer`.
+- Both IDs are `QualifiedId`, distinct, and owned by the declaring pack.
+- Duplicate `(kind, alias)` rejects.
+- `deprecated` and `deprecation_message` are prohibited.
+- Every current deprecated alias is deleted, including the 49 `builtin.*` aliases and any remaining `external.*`/legacy aliases. V2 aliases cannot be compatibility shims.
+
+### `agent`
+
+```yaml
+agent:
+  purpose: optional prose
+  do_not_use_for: optional prose
+  normal_entrypoints: [optional trimmed routing strings]
+  required_context: [optional/owner-relative.md]
+```
+
+Only these four keys exist. `required_context` entries are `RelativeFile` resources and enter the resource closure. Routing strings are descriptive; the typed registries remain authoritative.
+
+### `documentation`
+
+Exactly one tagged shape:
+
+```yaml
+documentation:
+  kind: skill
+  path: skill/SKILL.md
+```
+
+```yaml
+documentation:
+  kind: agents
+  path: AGENTS.md
+```
+
+```yaml
+documentation:
+  kind: none
+  reason: Non-user-facing internal utility pack.
+```
+
+Rules:
+
+- `skill` requires the exact path `skill/SKILL.md`.
+- `agents` requires the exact path `AGENTS.md`.
+- `none` permits only `kind` and a nonblank `reason`.
+- Bundled admission rejects `none` unless the coverage ledger classifies the pack as non-user-facing internal utility.
+- For this run, all 22 retained product packs are user/agent-facing and therefore use `skill` or `agents`; there are no product-pack opt-outs.
+
+### `secrets`
+
+```yaml
+secrets:
+  - name: FAL_KEY
+    required: true
+    description: optional prose
+```
+
+Exact keys are `name`, optional `required` defaulting to `false`, and optional `description`. Names are unique `EnvironmentName` values.
+
+### `dependencies`
+
+```yaml
+dependencies:
+  python: ["package>=1"]
+  npm: ["package@1"]
+  system: ["ffmpeg"]
+```
+
+Only `python`, `npm`, and `system` exist. Each is a duplicate-free list of trimmed nonblank strings. These remain install/trust disclosures and do not participate in pack or migration solving.
+
+### `resources`
+
+```yaml
+resources:
+  - path: server/blender-render-api.service
+    kind: service
+```
+
+Exact keys are `path` and `kind`. `kind` enum:
+
+- `runtime`
+- `schema`
+- `template`
+- `documentation`
+- `service`
+- `data`
+
+A path may name a file or directory. Directories expand recursively. A physical file may be reached by only one typed or supplemental declaration.
+
+### `authoring_only`
+
+```yaml
+authoring_only:
+  - path: executors/generate_image/golden
+    kind: golden
+    reason: Provider demonstration inputs; not required at runtime.
+```
+
+Exact keys are `path`, `kind`, and `reason`. `kind` enum:
+
+- `test`
+- `golden`
+- `development_fixture`
+- `authoring_document`
+- `build_output`
+- `placeholder`
+
+These paths must exist in source, cannot overlap declared resources, and must not occur in the wheel.
+
+### `extensions`
+
+The v1 extension families remain, but string/object dual forms are removed and all nested objects are strict:
+
+```yaml
+extensions:
+  generation:
+    backends:
+      - id: backend_id
+        label: optional
+        module: python.module
+        class: ClassName
+        init_kwargs: {}        # scoped arbitrary frozen JSON
+    features:
+      - id: feature_id
+        label: optional
+        description: optional
+    modes:
+      - id: mode_id
+        label: optional
+        description: optional
+
+  elements:
+    kinds:
+      - id: effects
+        singular: optional
+        plural: optional
+        label: optional
+        description: optional
+
+  timeline:
+    kinds:
+      - catalog: transition  # transition|clip|track
+        id: cross_fade
+        aliases: []
+        default: false
+
+  rendering:
+    renderers: [backends/remotion/renderer.yaml]
+    planners: [planners/layer_stack/planner.yaml]
+    finalizers: [finalizers/ffmpeg/finalizer.yaml]
+
+  schemas: {}                # explicitly scoped arbitrary frozen JSON
+
+  artifact_types:
+    types:
+      - id: artifact_id
+        aliases: []
+        description: optional
+```
+
+All IDs and paths are duplicate-free. Rendering manifest paths are `RelativeFile` resources and are traversed through the existing typed renderer/planner/finalizer validators.
+
+### `database`
+
+```yaml
+database:
+  depends_on:
+    - pack: core
+      min_migration: 1
+  migrations:
+    - version: 1
+      name: initial
+      path: migrations/0001_initial.sql
+      tables: [timelines]
+  stream_types: [timeline.timeline]
+  event_kinds: [timeline.created]
+  command_kinds: [timeline.create]
+  repositories: [TimelineRepository]
+  conformance: [replay]
+  cli_mounts:
+    timelines: timelines
+  bridge_mounts: [timelines]
+```
+
+All nine fields are required, even when empty:
+
+| Field | Exact type |
+|---|---|
+| `depends_on` | Unique `{pack: PackId, min_migration: positive integer}[]` |
+| `migrations` | Non-empty `Migration[]` |
+| `stream_types` | Unique `DottedVocabulary[]` |
+| `event_kinds` | Unique `DottedVocabulary[]` |
+| `command_kinds` | Unique `DottedVocabulary[]` |
+| `repositories` | Unique `RepositoryId[]` |
+| `conformance` | Unique `LowerIdent[]` |
+| `cli_mounts` | Map `LowerIdent →` one-or-more single-space-separated `LowerIdent` tokens |
+| `bridge_mounts` | Unique `LowerIdent[]` |
+
+Each migration contains exactly:
+
+- `version`: positive integer; unique within the pack.
+- `name`: `MigrationName`; unique within the pack.
+- `path`: `RelativeFile` ending in `.sql`; unique within the pack.
+- `tables`: non-empty, unique `LowerIdent[]`; a table may appear in only one migration in the pack and only one database contribution globally.
+
+Migration descriptors must already appear in strictly increasing version order. YAML never contains columns, indexes, constraints, SQL transformations, applied state, checksums, or a mutable head.
+
+## 4. Normalization and immutable model
+
+One load produces a manifest-derived `PackDefinition` containing no root, source, trust, install state, or manifest path.
+
+Normalization is exact:
+
+- Outer whitespace is stripped from prose and disclosure strings.
+- Identifiers must already have canonical case; the loader never lowercases them.
+- Paths are converted to canonical POSIX relative strings and then to confined resource handles.
+- Ordered operational lists preserve declared order only for `agent.normal_entrypoints`.
+- Migrations must be declared in increasing version order and retain that order.
+- Set-like lists—keywords, capability tags, permissions, services, aliases, dependencies, vocabulary, repositories, conformance, resources, and exclusions—reject duplicates and normalize to deterministic lexical order.
+- Mappings normalize by sorted key.
+- Arbitrary JSON is permitted only in `extensions.generation.backends[].init_kwargs` and `extensions.schemas`; it is recursively frozen into immutable mappings/tuples.
+- No raw manifest mapping survives in the public canonical object.
+- `PackDefinition`, all nested declarations, `CatalogEntry`, provenance, resource handles, database projections, and snapshots are frozen/slot-based immutable values.
+- Serialization emits canonical keys and lists from normalized values; it never emits loader roots or trust as manifest data.
+
+The catalog envelope owns:
+
+```text
+CatalogEntry
+├── definition: PackDefinition
+├── provenance: CatalogProvenance
+├── manifest: ResourceHandle
+└── resources: tuple[ResourceHandle, ...]
+```
+
+This directly removes the current `PackDefinition.root`, `manifest_path`, self-asserted `origin`, `install_tier`, and `pack_type` mixture.
+
+## 5. Golden and invalid fixtures
+
+Required golden fixtures:
+
+1. Capability-only: executor content, permission, documentation, no database.
+2. Database-only: complete database block and documentation, no capability roots.
+3. Combined: references-style content/database/SDK/CLI/documentation declaration.
+
+Required invalid fixtures include:
+
+- Missing, string, float, boolean, or non-2 `schema_version`.
+- `pack.yml`, `pack.json`, schema-less YAML, flat parser input, arbitrary manifest path, and `schema-pack.yaml`.
+- Folder/ID mismatch and bad release version.
+- Every unknown top-level and nested field class.
+- Every prohibited v1 field.
+- Null optional values.
+- Duplicate set-like entries.
+- Alias ownership violations or deprecated alias fields.
+- Malformed permissions and documentation unions.
+- Absolute, backslash, empty, traversal, symlink, missing, wrong-kind, or duplicate resource paths.
+- Resource/authoring overlap.
+- External `database`.
+- Missing dependency, dependency on capability-only pack, bad minimum head, self-dependency, cycle, and duplicate dependency.
+- Unordered/duplicate migrations, duplicate tables, non-SQL path.
+- Provenance spoofing attempts.
+- Undeclared bundled non-Python files and wheel-only/source-only resources.
+
+---
+
+# II. Catalog construction, precedence, trust, and lifetime
+
+## 1. Bundled catalog
+
+`BundledCatalog` is built from the installed/source `astrid/packs` package root:
+
+1. Enumerate direct child directories in lexical order.
+2. Ignore `_core`, cache directories, and directories without `pack.yaml`.
+3. Require exactly one `pack.yaml`; alternate pack filenames are errors.
+4. Load, normalize, validate, resolve, classify, and digest each retained bundled pack.
+5. Reject duplicate bundled IDs fatally.
+6. Cache the resulting immutable catalog once per process.
+
+The empty `builtin` directory is removed, not ignored or represented by a tombstone at runtime.
+
+The bundled catalog cache contains declarations and resources only. It never contains a database connection, service, repository, CLI parser, bridge, executor instance, or application object.
+
+## 2. Dynamic candidate capture
+
+Each top-level operation captures local/external candidates once from the current layers:
+
+1. `local`
+2. explicit extra roots, in caller-given root order
+3. `ASTRID_PACKS_PATH`, in environment path order
+4. installed active revisions, sorted by pack ID
+
+Within a root, candidates are sorted by pack ID and canonical manifest path. Repeated references to the same resolved root and manifest digest are deduplicated.
+
+Read-only discovery never creates `astrid/packs/local`; explicit create/fork operations own that mutation.
+
+## 3. `CatalogSnapshot`
+
+Every top-level operation constructs exactly one immutable snapshot:
+
+```text
+CatalogSnapshot
+├── bundled_catalog
+├── entries_by_id
+├── ordered_entries
+├── rejected_candidates
+├── snapshot_fingerprint
+└── construction_context
+```
+
+Construction combines the cached bundled catalog with that operation’s dynamic capture using precedence:
+
+```text
+bundled > local > explicit-extra > environment > installed
+```
+
+Duplicate policy:
+
+- Bundled IDs are reserved and always win.
+- An identical resolved root/digest encountered twice is deduplicated.
+- Any other later candidate with an already-winning ID is excluded and recorded in `rejected_candidates` as `duplicate_id`, including winner and loser provenance.
+- External discovery may continue after an invalid candidate, preserving current fault isolation.
+- Direct validation/install of the rejected candidate returns a hard error.
+- Lower-precedence candidates never partially contribute aliases, capabilities, documentation, or resources after losing pack identity.
+
+Trust/admission policy:
+
+| Source | Inspect | Capability execution | Database |
+|---|---:|---:|---:|
+| bundled | yes | yes | yes |
+| local | yes | yes | no |
+| explicit extra | yes | yes | no |
+| environment | yes | no | no |
+| installed | yes | only active validated revision with accepted permissions | no |
+
+A manifest’s descriptive fields cannot change this table.
+
+When any non-bundled candidate contains `database`, the entire candidate is rejected as `external_database_forbidden` immediately after structural normalization and provenance assignment—before resource resolution, migration SQL reads, alias registration, or typed-registry projection.
+
+## 4. Operation/lifetime invariant
+
+A single snapshot is threaded through every projection used by one operation:
+
+- One CLI invocation.
+- One `sdk.discover`, `get_capability`, or `invoke` call.
+- One `AstridClient.open()` lifetime.
+- One standard application composition/lifetime.
+- One serve composition/lifetime.
+- One doctor run.
+- One inspect command.
+- One backup create or restore validation.
+- One install validation/admission.
+- One package/source audit.
+
+Consumers may not rescan or reconstruct a snapshot internally. Convenience entry points may create a snapshot only when they are themselves the top-level boundary.
+
+An `AstridClient` or standard application holds its snapshot until `close()`. Filesystem/install changes become visible only to the next operation/application.
+
+Every resource handle records its owner-relative path, resolved root, file kind, size, and SHA-256 at snapshot construction. Reads verify the recorded digest. If an external revision changes during the operation, the handle raises `CatalogSnapshotStaleError`; the consumer never reparses or silently adopts changed bytes.
+
+Existing registries accept `CatalogSnapshot` or the narrow projection derived from it. No registry, SDK service, renderer loader, skill index, doctor, backup, or inspect path calls discovery independently.
+
+---
+
+# III. Bounded bundled-resource classification and audit
+
+The resource gate is deliberately closed-world and does not attempt perfect static analysis.
+
+## 1. Inventory boundary
+
+For each bundled pack root:
+
+1. Walk deterministically without following symlinks.
+2. Reject every symlink encountered.
+3. Inventory every regular file except `.py` source files and cache/build metadata already prohibited by layout validation.
+4. Treat `pack.yaml` as the implicit canonical-manifest resource.
+5. Require every other inventoried file to have exactly one classification:
+
+   - reached through a typed declaration;
+   - reached through one supplemental `resources` entry; or
+   - covered by one `authoring_only` entry.
+
+Zero classifications is `undeclared_file`. More than one is `duplicate_classification`.
+
+## 2. Typed reachability
+
+Typed seeds and edges are exact:
+
+- `content.executors`, `orchestrators`, and `elements` locate component roots through existing typed component validators; they do not declare every file below those roots wholesale.
+- Component manifests, their schema-declared path fields, their documented `STAGE.md` convention, declared assets, and declared schema/doc routes become resource edges.
+- `content.schemas`, `content.examples`, and `content.docs` recursively classify their directories.
+- Rendering extension lists classify their renderer/planner/finalizer manifests; existing typed validators enumerate their path-valued fields.
+- `database.migrations[].path` classifies SQL.
+- `documentation.path` and `agent.required_context` classify documentation.
+- `resources[].path` classifies a supplemental file or recursively expands a directory.
+- Nested component `skill/SKILL.md`, requirements files, templates, service units, and other opaque assets must be reached by a typed component declaration or listed explicitly under `resources`.
+
+Directories expand in lexical relative-path order. Empty declared directories reject.
+
+## 3. Targeted runtime-use AST check
+
+Scan only runtime `.py` files under bundled pack roots, excluding paths classified as test, golden, development fixture, or build output.
+
+The checker recognizes:
+
+- `open(...)`
+- `Path.open`, `read_text`, `read_bytes`
+- `importlib.resources.files`, `open_text`, `open_binary`
+- `pkgutil.get_data`
+- simple `Path(__file__)`/`__file__`-derived constants and `/`, `joinpath`, `with_name`, or `parent` literal path composition
+- the existing executor-folder convention that probes `requirements*.txt`
+- the Blender deployment service-unit lookup
+- existing typed component/rendering manifest resource APIs
+
+It performs only intra-module constant propagation for simple literal assignments. Arbitrary user-supplied paths, generated outputs, network inputs, and dynamic project paths are not classified as pack resources.
+
+Any statically resolvable pack-relative read must resolve to the declared closure. A statically resolvable read outside the pack root must either:
+
+- move the asset into its owning pack; or
+- resolve through an explicitly kernel-owned resource recorded in the coverage ledger.
+
+It cannot be papered over with an authoring exclusion.
+
+Known runtime filenames—migration SQL, component manifests, `STAGE.md`, `SKILL.md`, `requirements*.txt`, referenced schemas/templates, and `.service` files—cannot use an authoring-only classification.
+
+## 4. Source/wheel equality
+
+The source audit emits the declared closure as sorted records:
+
+```json
+{
+  "pack_id": "blender",
+  "path": "server/blender-render-api.service",
+  "kind": "service",
+  "size": 1234,
+  "sha256": "..."
+}
+```
+
+The clean-wheel audit reconstructs the bundled catalog in a source-isolated process and emits the same records.
+
+Required equality:
+
+- Same pack IDs.
+- Same normalized manifest definitions.
+- Same relative resource paths.
+- Same resource kinds, sizes, and SHA-256 values.
+- Same database declarations and derived heads.
+- Same documentation routes.
+- Same bundled provenance class.
+
+Absolute roots are intentionally different and are not compared.
+
+The reverse audit also fails if the wheel contains an undeclared bundled non-Python file or any `authoring_only` file.
+
+Use ordinary setuptools package-data configuration; do not add a packaging backend.
+
+---
+
+# IV. Concrete audit-only coverage ledger
+
+## 1. Files and commands
+
+Committed reviewed ledger:
+
+```text
+docs/contracts/canonical-pack-coverage.json
+```
+
+Implementation:
+
+```text
+scripts/canonical_pack_coverage.py
+```
+
+Boundary commands:
+
+```bash
+python3 scripts/canonical_pack_coverage.py inventory \
+  --root . \
+  --output .oracle/evidence/canonical-pack/<boundary>/inventory.json
+
+python3 scripts/canonical_pack_coverage.py check \
+  --inventory .oracle/evidence/canonical-pack/<boundary>/inventory.json \
+  --ledger docs/contracts/canonical-pack-coverage.json \
+  --output .oracle/evidence/canonical-pack/<boundary>/check.json
+
+python3 scripts/canonical_pack_coverage.py diff \
+  --before .oracle/evidence/canonical-pack/<previous>/inventory.json \
+  --after .oracle/evidence/canonical-pack/<boundary>/inventory.json \
+  --output .oracle/evidence/canonical-pack/<boundary>/diff.json
+```
+
+`check` exits nonzero for any issue. Runtime code never imports the script, ledger, inventory, or diff.
+
+## 2. Canonical inventory inputs
+
+The inventory command reads only:
+
+- The canonical bundled `CatalogSnapshot`.
+- Typed executor, orchestrator, element, renderer, planner, and finalizer projections.
+- The canonical database projection.
+- The resource-closure result.
+- Structured documentation routes.
+- Code-declared kernel migration/vocabulary/repository constants.
+- Exact AST symbol inspection of the existing application composition, SDK service fields, product/operational CLI declarations, bridge mounts, doctor, backup, restore, inspect, package audit, and agent-census generator.
+
+It does not use the reviewed ledger to discover surfaces and does not broadly grep arbitrary text.
+
+## 3. Inventory surface IDs
+
+Exact forms:
+
+```text
+pack:<pack_id>
+executor:<qualified_id>
+orchestrator:<qualified_id>
+element:<kind>/<id>
+renderer:<qualified_id>
+planner:<qualified_id>
+finalizer:<qualified_id>
+alias:<kind>:<qualified_id>
+migration:<pack_id>/<integer>
+table:<table>
+stream_type:<dotted_name>
+event_kind:<dotted_name>
+command_kind:<dotted_name>
+repository:<RepositoryId>
+conformance:<pack_id>/<dimension>
+cli_mount:<space-separated path>
+sdk_surface:<stable service or method id>
+bridge_mount:<token>
+runtime_resource:<pack_id>/<relative path>
+agent_document:<pack_id>/<relative path>
+operational_consumer:<application|doctor|backup|restore|inspect|package|agent_census>
+```
+
+Rows are sorted by `(kind, surface_id)`. Evidence paths and consumers are unique and sorted.
+
+## 4. Ledger schema
+
+```json
+{
+  "schema": "astrid.canonical_pack_coverage.v1",
+  "surfaces": [
+    {
+      "surface_id": "table:timelines",
+      "kind": "table",
+      "disposition": "active",
+      "owner": "pack:timeline",
+      "evidence_paths": [
+        "astrid/packs/timeline/pack.yaml",
+        "astrid/packs/timeline/migrations/0001_initial.sql"
+      ],
+      "projection_consumers": [
+        "operational_consumer:application",
+        "operational_consumer:doctor"
+      ]
+    },
+    {
+      "surface_id": "alias:executor:builtin.render",
+      "kind": "alias",
+      "disposition": "deleted",
+      "owner": null,
+      "justification": "Deprecated compatibility alias removed by the beta hard cut.",
+      "evidence_paths": [
+        "baseline:7ac50c12e8e4d90988fee603ffdb9896e5628792:astrid/packs/rendering/pack.yaml"
+      ],
+      "projection_consumers": []
+    }
+  ]
+}
+```
+
+Rules:
+
+- `disposition` is `active` or `deleted`.
+- Active owner is exactly `pack:<PackId>` or `kernel:<LowerIdent>`.
+- Deleted rows have `owner: null`, a nonblank justification, immutable baseline evidence, and no consumers.
+- Pack-owned rows must agree with the owner derived from their canonical catalog/database/resource projection. A manual override is impossible.
+- Kernel rows require a nonblank justification, at least one implementation evidence path, at least one test/contract evidence path, and must not be representable by an existing pack declaration.
+- Every active row has at least one resolvable evidence path and one valid consumer unless its kind is itself `operational_consumer`.
+- Every consumer reference must resolve to another active inventory row.
+- `builtin` and every deprecated alias are deletion records, never synthetic pack or kernel ownership.
+- The 49 known `builtin.*` aliases are an exact baseline assertion; WP0 additionally records and deletes every other deprecated alias discovered at the pinned source.
+
+## 5. Exact comparisons
+
+`check` emits and fails on:
+
+- `missing`: inventory surface has no ledger row.
+- `stale`: active ledger row is absent from inventory or has missing evidence.
+- `duplicate`: repeated surface ID or repeated classification.
+- `conflict`: ledger owner differs from the mechanically derived owner, or inventory derives multiple owners.
+- `deleted_still_active`: a deleted ledger ID is present in inventory.
+- `invalid_kernel_justification`: missing implementation/test evidence or pack-representable ownership.
+- `invalid_consumer`: missing, deleted, or cyclic self-only consumer reference.
+- `unclassified`: inventory row has no valid active owner.
+- `undeclared_resource`: resource audit failure.
+- `unexpected_owner`: pack referenced by owner is absent from the bundled catalog.
+
+Boundary diff records exact added, removed, changed-owner, changed-evidence, changed-consumer, and changed-resource-digest sets. Reviewer approval is required for every non-empty category.
+
+WP0’s immutable baseline inventory is evidence only. It is never imported by final code or treated as current truth.
+
+---
+
+# V. Deterministic database composition and migration semantics
+
+## 1. Projection nodes
+
+The database graph contains:
+
+- One synthetic code-declared `core` node, head `1`, using existing core SQL and vocabulary.
+- Every `CatalogSnapshot` entry whose provenance is bundled and whose definition contains `database`.
+
+No pack ID allowlist or standard tuple participates.
+
+Every selected node contains:
+
+- ID.
+- Immutable database declaration.
+- Owner resource handles.
+- Derived migration head.
+- Provenance.
+- Existing collision projection.
+
+A synthetic trusted bundled database pack added to a test snapshot must enter composition without changing composition code.
+
+## 2. Migration head and dependency meaning
+
+For node `P`:
+
+```text
+head(P) = max(P.migrations[].version)
+```
+
+`depends_on: {pack: Q, min_migration: N}` means:
+
+- `Q` must be a selected database node or `core`.
+- `head(Q) >= N`.
+- All migrations of `Q` precede every migration of `P`.
+- It does not compare pack release versions.
+- It does not solve ranges.
+- It does not inspect project-applied state during graph construction.
+
+Validation before opening a database:
+
+- Every database pack has a direct or transitive dependency path to `core`.
+- No dependency targets the declaring pack.
+- No duplicate target.
+- No target with no database migrations.
+- Every minimum is a positive integer no greater than the target head.
+- The graph is acyclic.
+- All current table, migration identity/name, vocabulary, repository, CLI, and bridge collision classes remain rejected before database open.
+
+## 3. Exact standard graph
+
+After conversion:
+
+```text
+core@1
+├── references@1  requires core >= 1
+├── runaway@1     requires core >= 1
+├── shots@1       requires core >= 1
+└── timeline@1    requires core >= 1
+```
+
+The pack release versions remain strings such as `1.0.0`; they do not enter this graph.
+
+## 4. Ordering and tie-break
+
+Use deterministic Kahn topological sorting:
+
+1. Create an edge `dependency → dependent`.
+2. Seed a min-heap with every zero-indegree node.
+3. Heap key is `(0 if id == "core" else 1, pack_id)`.
+4. Pop the lowest key, append it, decrement dependents, and push newly ready nodes using the same key.
+5. If fewer nodes are emitted than selected, return the lexical cycle path as an error.
+6. Within a node, emit migrations by increasing integer version.
+
+The current graph therefore orders:
+
+```text
+core/1
+references/1
+runaway/1
+shots/1
+timeline/1
+```
+
+Before runaway is present, the retained order is:
+
+```text
+core/1
+references/1
+shots/1
+timeline/1
+```
+
+On a current three-pack database, those existing keys are skipped and only `runaway/1` is applied. Existing `schema_migrations` rows are not rewritten or resequenced.
+
+## 5. Preserved migration identity and safety
+
+For all current migrations preserve exactly:
+
+- `pack`.
+- Integer `version`.
+- `name` (`initial`).
+- SQL bytes.
+- Owned tables.
+- SHA-256 computation.
+- Name/checksum drift checks.
+- Too-new and unknown-pack refusal.
+- Per-migration `BEGIN IMMEDIATE`.
+- DDL/DML and migration-row atomicity.
+- Read-only compatibility probing.
+- `schema_migrations` as the sole applied-state record.
+
+Replace `pack_resource_root(pack_id)` with the registered owner `ResourceHandle`; the runner never reconstructs `astrid/packs/<id>`.
+
+Core remains explicit code-owned kernel behavior.
+
+---
+
+# VI. Documentation, census, and per-pack preservation
+
+- All 22 retained product packs declare direct structured docs.
+- Add direct skills for blender, timeline, shots, references, and runaway.
+- Repair media’s frontmatter.
+- Package all declared pack and nested component skills.
+- `_core` remains a skill-only kernel shell with no `pack.yaml`.
+- Extend the existing generator so one snapshot produces both the capability index and canonical pack census.
+- Generated census fields: ID, name, contribution categories, capability counts, database tables/head, documentation route, and ownership link.
+- The census includes neither DDL nor applied database state.
+- Check mode fails on drift.
+- Delete independent pack-skill inventory and raw directory reparsing; skills consume snapshot documentation/component projections.
+
+Maintain the four-pack preservation matrix for timeline, shots, references, and runaway across:
+
+- migration;
+- repository;
+- events;
+- commands;
+- CLI;
+- SDK;
+- bridge;
+- conformance.
+
+Every cell has baseline and final evidence or an evidence-backed `N/A`. Broad suite success cannot replace the matrix.
+
+---
+
+# VII. Work packages
+
+## WP0 — immutable baseline and ownership reconciliation
+
+Estimate: **0.45–0.65 week**. No dependencies.
+
+- Verify custody source `7ac50c12e8e4d90988fee603ffdb9896e5628792`.
+- Capture immutable counts and inventories: 19 capability manifests, four schema manifests, `_core`, 64 executors, 12 orchestrators, 10 elements, eight rendering extensions, four database packs, and 18 existing skills.
+- Record the 23 current product directories, deletion of `builtin`, and final 22-pack expectation.
+- Capture every active customization surface and initial owner classification.
+- Record the 49 `builtin.*` aliases and all other deprecated aliases as intended deletions.
+- Capture current database ordering, migration identities/checksums, application/open behavior, repositories, vocabulary, CLI/SDK/bridge behavior, doctor, backup, restore, and installed-wheel behavior.
+- Establish the four-pack behavior matrix and 15-row completion matrix.
+- Record exact exclusions for `.oracle`, planning artifacts, tests, golden authoring inputs, build outputs, caches, unrelated training manifests, and non-pack component formats.
+- Do not build a wheel or run the full suite.
+- Treat the runaway demo input as a temporary deterministic fixture.
+
+Exit: every baseline surface is classified as pack, kernel, or intended deletion; no research question remains.
+
+## WP1 — executable v2 contract, immutable model, resolver, snapshot, and audit tooling
+
+Estimate: **1.3–1.75 weeks**. Depends on WP0.
+
+Contract-freeze subgate first:
+
+- Land the exact v2 JSON Schema and nested schemas above.
+- Land immutable normalized types.
+- Land the three golden fixtures and all invalid fixture classes.
+- Land explicit provenance/resource types.
+- Pass schema and normalization tests.
+- Obtain cumulative review before any bundled manifest conversion.
+
+Then:
+
+- Evolve `PackDefinition` rather than add a parallel product model.
+- Implement the only v2 `pack.yaml` loader.
+- Delete fallback parsing from the new path.
+- Implement confined resource handles and digest-verifying reads.
+- Implement process-cached `BundledCatalog`.
+- Implement dynamic candidate capture and `CatalogSnapshot`.
+- Implement exact precedence, duplicate diagnostics, trust, and external-database rejection.
+- Change local pack creation to emit strict capability-only v2.
+- Implement the bounded resource classifier and targeted AST audit.
+- Implement `scripts/canonical_pack_coverage.py` and its schemas.
+- Adapt typed registry constructors to accept snapshot projections without changing service construction ownership.
+
+Exit: schema, loader, normalized definition, provenance, resource resolver, snapshot semantics, resource audit, and coverage tooling are executable and fixture-proven.
+
+## WP2 — bundled conversion, resources, ownership, and documentation
+
+Estimate: **1.0–1.35 weeks**. Depends on WP1.
+
+- Convert all 22 retained product packs.
+- Fold the four schema manifests into `database`.
+- Preserve all migration bytes and behavior declarations.
+- Make references the combined database/repository/SDK/CLI/documentation exemplar without changing its three tables.
+- Delete `builtin` and every deprecated alias.
+- Add the five missing direct skills and repair media.
+- Classify every bundled non-Python file using typed reachability, supplemental resource, or reasoned authoring exclusion.
+- Explicitly declare requirements files, Blender’s service unit, templates, schemas, nested skills, fonts, SQL, and runtime assets.
+- Move any pack-owned cross-root asset into its owner; classify genuinely shared kernel assets in the ledger.
+- Switch bundled discovery to the v2 catalog.
+- Regenerate capability/census output in checkable form.
+- Run focused package-local ledger/resource/matrix checks without retaining extra immutable artifacts.
+
+### Boundary A — canonical declaration foundation
+
+After WP2:
+
+- Generate immutable inventory/check/diff artifacts.
+- Prove exactly 22 retained bundled product packs load.
+- Prove no bundled `schema-pack.yaml` remains.
+- Prove every bundled file is classified.
+- Review v2 semantics, snapshot precedence, documentation, resource closure, and converted ownership cumulatively.
+- Resolve findings and obtain a fresh pass before WP3.
+
+## WP3 — database projection and migration hard cut
+
+Estimate: **1.0–1.4 weeks**. Depends on Boundary A.
+
+- Move reusable registry/migration algorithms out of the schema-pack subsystem.
+- Delete schema-pack identity from the moved types and diagnostics.
+- Add the synthetic core node and catalog-derived bundled database nodes.
+- Implement the exact dependency/head/graph/tie-break contract.
+- Enforce core reachability and every collision class before database open.
+- Carry resource handles/provenance into migrations.
+- Delete both fixed-three standard builders and every duplicated tuple/selection branch.
+- Rewire writable open and read-only probes to database projections from the operation snapshot.
+- Add the synthetic trusted bundled database-pack selection test.
+- Validate fresh four-pack, three-pack upgrade, read-only pending, existing four-pack no-op, collision, dependency, cycle, minimum-head, name/checksum drift, transaction rollback, and all external provenance classes.
+
+### Boundary B — ownership and persistence cutover
+
+- Generate immutable inventory/check/diff artifacts.
+- Regenerate the four-pack preservation matrix.
+- Review manifest ownership and persistence as one cumulative state.
+- Require a fresh pass before operational rewiring.
+
+## WP4 — operational, SDK, inspection, doctor, and agent convergence
+
+Estimate: **1.1–1.5 weeks**. Depends on Boundary B.
+
+Thread one snapshot or projection through:
+
+- standard application startup;
+- `AstridClient`;
+- SDK discovery/invocation and typed services;
+- rendering registries;
+- bridge composition;
+- timeline/rendering helpers;
+- kernel read probes;
+- doctor;
+- backup create;
+- restore validation;
+- pack install/validation;
+- pack inspect;
+- agent documentation/census generation.
+
+Preserve:
+
+- `open_database(path, registry)` as a SQLite seam;
+- `DatabaseWriter` and the exclusive owner lock;
+- static repository/service/CLI/bridge factories;
+- backup/restore payload semantics;
+- the eight-family public gateway and two nested mounts.
+
+Raw database reads must use the shared non-mutating probe or an already-probed connection.
+
+`python3 -m astrid.core.pack.cli inspect <id> [--json]` exposes:
+
+- normalized identity;
+- loader-derived provenance;
+- contribution/capability categories;
+- database dependencies, migrations, owned tables, and derived head;
+- documentation;
+- complete resource closure;
+- rejected duplicate/stale candidate diagnostics where relevant.
+
+Stable JSON uses a versioned envelope and sorted arrays. Text renders from that DTO.
+
+Doctor adds:
+
+- canonical bundled pack census;
+- catalog/resource/documentation health;
+- expected/applied/pending migration status by database owner;
+- no mutations.
+
+Generate/check `_core` census from the same snapshot.
+
+Exit: every operational consumer agrees on one snapshot and composition; no consumer reparses a pack or rescans during its operation.
+
+## WP5 — hard deletion, final audit gates, and packaging preparation
+
+Estimate: **0.85–1.2 weeks**. Depends on WP4.
+
+Delete:
+
+- All `schema-pack.yaml` files.
+- Schema-pack parser, model, discovery, builders, standard lists, and compatibility exports.
+- V1 pack schema/parser and flat/schema-less loader.
+- Alternate manifest filename probes.
+- Self-asserted provenance/taxonomy trust handling.
+- Raw manifest identity readers.
+- Independent pack/skill inventories.
+- Deprecated aliases and compatibility tests/docs.
+- Any fixed database tuple or name-based selection.
+- Intermediate audit support that interprets legacy formats.
+
+Keep exact gates:
+
+- Prohibited active path checks for `schema-pack.yaml`, `pack.yml`, and `pack.json`.
+- Exact import/AST checks for retired schema-pack modules, fixed builders/tuples, raw identity reconstruction, and independent rescans.
+- Strict loader/catalog tests.
+- Coverage and four-pack matrix checks.
+- Resource classification and targeted AST checks.
+- Generated census drift.
+- Source/wheel semantic closure.
+
+Packaging:
+
+- Extend existing package-data patterns for every declared resource kind.
+- Include all 22 `pack.yaml` files, SQL, structured skills/docs, requirements, service unit, schemas, templates, fonts, and current runtime assets.
+- Exclude every `authoring_only` path.
+- Add no packaging backend.
+- Convert every wheel-building test/gate to either:
+
+  - a source contract/inventory test;
+  - a mocked builder-unit test; or
+  - a consumer of `ASTRID_PREBUILT_WHEEL`.
+
+- Add a prebuilt-wheel harness entry point, e.g. `InstalledArtifactHarness.from_wheel(path, ...)`.
+- Update every current `build_once` test call site and final gate to consume the prebuilt wheel during authoritative validation.
+- Retain `build_once` only as a non-authoritative developer convenience if still useful; no final or full-suite path may invoke it when `ASTRID_PREBUILT_WHEEL` is set.
+
+### Boundary C — operational hard cut and packaged source
+
+- Generate immutable inventory/check/diff artifacts.
+- Run source package-data inventory checks, not a wheel build.
+- Regenerate the final behavior matrix candidate.
+- Review operational convergence, deletions, docs, resource classification, package configuration, and build-call graph.
+- Prove statically that authoritative validation has exactly one build invocation.
+- Resolve findings and obtain a fresh pass.
+
+## WP6 — one-build authoritative validation and evidence closure
+
+Estimate: **0.5–0.75 week**. Depends on Boundary C.
+
+One authoritative owner performs one build:
+
+```bash
+python3 -m build --outdir .oracle/evidence/final-build
+```
+
+Require exactly one wheel in that directory, calculate its SHA-256, and set:
+
+```bash
+ASTRID_PREBUILT_WHEEL=<absolute path to that wheel>
+```
+
+No subsequent command may invoke `python -m build`, `build_once`, `pip wheel`, or another source build.
+
+Using that artifact, run the required focused suite:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+```
+
+Run doctor:
+
+```bash
+python3 -m astrid doctor
+```
+
+Run the source-isolated installed-wheel lanes through the prebuilt artifact:
+
+- installed bundled catalog load;
+- source/wheel definition comparison;
+- bidirectional resource audit;
+- documentation and `_core` census audit;
+- fresh, upgraded, read-only-pending, and existing SQLite scenarios;
+- external capability success/database rejection;
+- references and runaway round trips;
+- backup/restore;
+- inspect text/JSON;
+- doctor/inspect non-mutation;
+- exact legacy gates;
+- zero-unclassified coverage check.
+
+Then run the full authoritative suite once, still with the same prebuilt wheel:
+
+```bash
+python3 -m pytest
+```
+
+If a suspected unrelated failure appears, reproduce only that failing scenario against the pinned source; do not run a second baseline suite or build.
+
+Final artifacts include:
+
+- One wheel and its SHA-256.
+- Installed-lane records carrying that same hash.
+- Final coverage inventory/check/diff.
+- Final resource closure comparison.
+- Final four-pack matrix.
+- Final 15-row evidence matrix.
+- Full/focused test receipts.
+- Doctor and inspect receipts.
+- Independent reviewer dispositions.
+
+After all evidence passes:
+
+- Obtain final Sol oracle review.
+- Commit only reviewed paths.
+- Push only `HEAD:refs/heads/megado/canonical-pack-beta`.
+- Open the completed worktree.
+- Do not merge, rebase, deploy, promote, or publish.
+
+---
+
+# VIII. Cumulative review cadence
+
+1. **Contract-freeze subgate:** during WP1, before bundled conversion.
+2. **Boundary A:** after WP2—v2 catalog, all bundled declarations, docs, and resource closure.
+3. **Boundary B:** after WP3—catalog-derived database composition and migration hard cut.
+4. **Boundary C:** after WP5—all consumers, deletions, audits, and source packaging configuration.
+5. **Final:** after WP6—single-wheel and complete evidence closure.
+
+At A, B, C, and final:
+
+- Generate one immutable coverage inventory/check/diff artifact set.
+- Regenerate relevant matrices.
+- Converge code, receipts, artifacts, and status on one checkpoint.
+- Run one cumulative independent review pass by default.
+- Resolve accepted findings and obtain a fresh pass before continuing.
+
+Package-local checks may run during implementation, but immutable cumulative artifacts are produced only at A, B, C, and final.
+
+---
+
+# IX. Done-criterion traceability
+
+| Frozen criterion | Primary proof |
+|---|---|
+| 1. Every bundled product pack strict v2 | WP1–WP2, A, WP5–WP6 |
+| 2. No independent identity parsing | Snapshot invariant, WP4–WP6 |
+| 3. Zero-unclassified ledger | WP0–WP2, A/B/C, final |
+| 4. Manifest-derived database composition | WP3 synthetic-pack test, B, final |
+| 5. Four-pack behavior preserved | WP0 matrix, WP2–WP4, B/C/final |
+| 6. Owner-relative migrations and safety | Exact database contract, WP3, final SQLite matrix |
+| 7. Operational agreement | Snapshot threading, WP4, C/final |
+| 8. Structured docs and `_core` census | WP2, WP4–WP6 |
+| 9. Inspect and doctor | WP4, C/final |
+| 10. Clean-wheel closure | Resource algorithm, WP5, single wheel in WP6 |
+| 11. Legacy deletion | WP5 exact paths/imports/AST gates |
+| 12. External capability success/database failure | Snapshot admission tests, WP1/WP3/WP6 |
+| 13. Three golden forms | WP1 contract gate and final |
+| 14. Focused/full validation or baseline proof | WP0 and single authoritative WP6 flow |
+| 15. Evidence matrix and oracle | WP0 seed, WP6 completion |
+
+---
+
+# X. Explicit anti-pattern rejections
+
+- No hidden schema-pack subsystem. Only reusable migration/collision algorithms survive.
+- No fixed composition disguise. Named packs appear only in expected fixtures and preservation evidence.
+- No universal service locator. The catalog contains declarations; typed registries and static factories construct runtime objects.
+- No runtime coverage ledger. It is audit-only.
+- No YAML DDL or applied state.
+- No manifest-supplied trust.
+- No operation-internal rescanning.
+- No lower-precedence partial contribution after duplicate-ID loss.
+- No perfect/general static analysis. Resource proof is a bounded closed-world classification plus targeted known-API AST checks.
+- No arbitrary authoring exclusion for known runtime assets.
+- No dependency solver, release-version solving, project lock, enable/disable/purge, database uninstall, marketplace, signing, sandboxing, or UI.
+- No external SQL.
+- No dynamically unloadable kernel.
+- No v1, alternate filenames, schema-less manifests, dual reads, compatibility exports, deprecated aliases, or fallbacks.
+- No generalized repository/service/CLI/bridge factory framework.
+- No custom packaging backend.
+- No broad repository-wide regex policy scanner.
+- No repeated wheel builds.
+- No repeated immutable ledger/matrix artifacts between cumulative boundaries.
+- No scope expansion into models, LoRAs, taxonomies, or unrelated kernel primitives.
+- No success while an active bypass, unclassified surface, missing document, undeclared resource, source/wheel mismatch, or independent consumer rescan remains.
+
+## Final disposition
+
+This replacement closes every Wave 2 reopening with an executable boundary:
+
+- v2 has an exact field grammar and normalization contract;
+- one immutable `CatalogSnapshot` governs each operation;
+- precedence, duplicates, trust, staleness, and external database rejection are deterministic;
+- bundled resources have a bounded complete classification algorithm;
+- the coverage ledger has concrete commands, schema, inputs, and diff semantics;
+- migration dependencies compare exact integer migration heads with a defined graph and tie-break;
+- installed proof uses one wheel built once;
+- cumulative artifact ceremony is limited to A, B, C, and final.
+
+The next Phase 3 action is an exact Sol `STABLE` check against this complete snapshot. If the response is exactly `STABLE`, run a fresh full settled-plan wave before accepting the plan as settled.
+
+ACCEPTED WAVE 2 SYNTHESIS:
+
+# Settled-plan wave 2 synthesis
+
+Plan SHA-256:
+`c5cfa3128be626c6a263d131b3a2baa3292c74d0fed3d2e12d86a607e5ad92b5`
+
+## Accepted material changes
+
+1. **Exact executable v2 field contract.** Freeze required/optional fields,
+   normalized immutable types, enums, version grammar, typed contribution roots,
+   alias/permission treatment, database dependency semantics, documentation
+   route, supplemental resources, unknown-field rejection, and invalid fixtures
+   in the plan—not merely as future WP1 design work.
+2. **One operation snapshot.** Define one immutable `CatalogSnapshot` per
+   top-level operation/composition. It combines the process-cached bundled
+   catalog with a dynamic external candidate snapshot, applies one deterministic
+   precedence/duplicate/trust policy, and is threaded through all projections;
+   consumers cannot rescan inside the operation.
+3. **Bounded resource-completeness algorithm.** Within every bundled pack root,
+   every non-Python regular file is either reached by a declared typed resource,
+   declared supplemental resource, or a narrowly typed authoring-only exclusion
+   with reason. Directories expand recursively; symlinks/escapes reject. Pack
+   runtime may not require undeclared files outside its root; move such assets to
+   the owner or classify them as kernel-owned. AST/import checks cover known
+   runtime resource APIs. Source/wheel digest equality then proves the declared
+   closed set.
+4. **Concrete coverage generator/diff.** Specify the command/artifact schema,
+   canonical inputs, normalization/order, deleted-surface records, kernel
+   justification rules, and exact missing/stale/duplicate/conflict comparison.
+   Runtime never imports it.
+5. **Deterministic database semantics.** Dependencies use an exact structured
+   minimum migration-head integer, not release-version solving. Define graph
+   nodes, core participation, validation, and tie-break. Preserve current
+   applied migration identity/order where dependencies constrain it.
+6. **One-build packaging proof.** Convert packaging unit tests to contract/
+   inventory checks or make them consume the single prebuilt wheel artifact.
+   WP6 performs one build, then all installed-wheel audits consume it.
+7. **Reduce artifact ceremony.** Package-local ledger/matrix checks may run as
+   focused validation; immutable regeneration/diff artifacts are required only
+   at cumulative boundaries A/B/C and final closure.
+
+## Resolved direction
+
+- No new research lane is required. Sol may inspect v1 schema and existing
+  discovery/registry contracts read-only while producing the replacement.
+- Do not attempt perfect general static analysis of arbitrary Python file opens.
+  The closed-world bundled-pack file classification plus targeted known-API AST
+  checks is the proportional beta invariant.
+- Do not introduce a dependency solver, persistent project lock, runtime ledger,
+  service locator, packaging backend, or broad textual scanner.
+
+## North Star disposition
+
+**Conditionally aligned.** The architecture remains correct, but the plan cannot
+be accepted until these executable boundary contracts replace prose ambiguity.
+Sol must revise, return exact `STABLE`, and another fresh full settled-plan wave
+must inspect the new snapshot.
+codex
+# Phase 3 stability-revised replacement plan — canonical pack beta hard cut
+
+Status: **replacement required**.
+
+The Wave-2-revised plan is architecturally aligned, but its resource contract contains one material contradiction: `authoring_only` paths are required to exist during catalog validation while also being required to be absent from the installed wheel. A source-isolated wheel therefore could not reconstruct the same manifest definition under the stated loader rules.
+
+This replacement resolves that contradiction by separating immutable manifest normalization from environment-specific source and installed-artifact audits. It also makes snapshot fingerprints and freshness checks explicit. No new exploration lane or product scope is required.
+
+## Determination
+
+- Estimated implementation effort: **6.2–8.6 engineer-weeks**, including cumulative reviews and expected rework.
+- Huge run: **yes**.
+- Difficulty: **5/5**.
+- Proposed `[XHARD]` tasks: **none**.
+- New research or exploration lanes: **none**.
+- Open planning questions: **none**.
+- Execution order: immutable baseline → executable v2 contract/catalog → bundled conversion and resource closure → database hard cut → operational convergence → deletion/audit/packaging → one-build validation and evidence closure.
+- The missing runaway demo input remains a deterministic temporary-project fixture repair unless custody evidence proves it is an intentional packaged asset.
+
+## Mandate and boundaries
+
+Implement one strict canonical pack system:
+
+- Every retained bundled product pack is declared by exactly one `pack.yaml` with integer `schema_version: 2`.
+- Delete the empty `builtin` product pack, leaving 22 retained product packs plus irreducible `_core` guidance.
+- Convert `timeline`, `shots`, `references`, and `runaway` into ordinary packs with optional `database` contributions.
+- Preserve typed registries, migration safety, repositories, `DatabaseWriter`, `UnitOfWork`, static application/service/CLI/bridge factories, SDK behavior, and conformance semantics.
+- Derive bundled trust solely from loader provenance.
+- Keep external packs capability-only. Reject an external manifest containing `database` as a whole before resolving its resources or reading SQL.
+- Assign every bundled customization to a canonical pack or explicitly justified kernel owner.
+- Package structured documentation for every user/agent-facing bundled pack.
+- Add no per-project composition state, dependency solver, dynamic database plugin system, marketplace, lifecycle machinery, universal service locator, or custom packaging backend.
+
+The North Star guides implementation but cannot widen the frozen goal.
+
+# I. Exact v2 manifest contract
+
+WP1 lands this contract as JSON Schema, immutable Python types, golden fixtures, and invalid fixtures before bundled conversion.
+
+## 1. Lexical types
+
+| Type | Exact rule |
+|---|---|
+| `PackId` | `^[a-z][a-z0-9_]*$` |
+| `ReleaseVersion` | `^(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$` |
+| `LowerIdent` | `^[a-z][a-z0-9_]*$` |
+| `QualifiedId` | `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$` |
+| `DottedVocabulary` | `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` |
+| `RepositoryId` | `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `MigrationName` | `^[a-z0-9][a-z0-9_-]*$` |
+| `Keyword` | `^[a-z0-9][a-z0-9_-]*$` |
+| `PythonModule` | `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` |
+| `PythonClass` | `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `RelativePath` | Non-empty POSIX path; not absolute; no backslash, NUL, empty segment, `.` or `..`; every segment matches `[A-Za-z0-9._-]+` |
+| `RelativeFile` | `RelativePath` expected to denote one regular non-symlink file in environments where that class is admitted |
+| `RelativeDir` | `RelativePath` expected to denote one non-symlink directory in environments where that class is admitted |
+| `NonBlankText` | String whose outer-trimmed value is non-empty |
+| `EnvironmentName` | `^[A-Z][A-Z0-9_]*$` |
+
+The regex table uses Markdown-escaped pipes; the executable schema uses ordinary regex alternation without literal backslashes before `|`.
+
+YAML booleans never satisfy integer fields. Null is never accepted. Optional means absent.
+
+## 2. Top-level fields
+
+Every object uses `additionalProperties: false`, except the two explicitly scoped frozen-JSON maps.
+
+| Field | Required | Type/default | Semantics |
+|---|---:|---|---|
+| `schema_version` | yes | integer exactly `2` | No numeric string, float, or boolean |
+| `id` | yes | `PackId` | Must equal the logical owner-directory name supplied by discovery |
+| `name` | yes | `NonBlankText` | Display name |
+| `version` | yes | `ReleaseVersion` | Pack release only |
+| `description` | no | string, default `""` | Descriptive only |
+| `status` | no | `active\|experimental\|deprecated`, default `active` | `stub` is deleted |
+| `visibility` | no | `visible\|hidden`, default `visible` | Discovery display behavior |
+| `domain` | no | `general\|development\|editorial\|generation\|infrastructure\|integration\|media\|system`, default `general` | Descriptive taxonomy |
+| `stability` | no | `stable\|experimental\|deprecated`, default `stable` | Descriptive taxonomy |
+| `support` | no | `project\|core\|community`, default `project` | Descriptive taxonomy |
+| `keywords` | no | unique `Keyword[]`, default `[]` | Search terms |
+| `capabilities` | no | unique `LowerIdent[]`, default `[]` | Search/explanation tags only |
+| `permissions` | no | `Permission[]`, default `[]` | Existing disclosure/eligibility mechanism |
+| `content` | no | `ContentRoots`, default `{}` | Typed content roots |
+| `extensions` | no | `Extensions`, default `{}` | Typed extension declarations |
+| `aliases` | no | `Alias[]`, default `[]` | Live aliases only |
+| `agent` | no | `AgentRouting`, default empty values | Descriptive routing |
+| `documentation` | no | tagged `Documentation` | Required for bundled admission unless an internal opt-out is accepted |
+| `secrets` | no | `Secret[]`, default `[]` | Install/trust disclosure |
+| `dependencies` | no | `RuntimeDependencies`, default empty lists | Runtime disclosure, not pack solving |
+| `astrid_version` | no | `ReleaseVersion` | Minimum compatible Astrid release metadata |
+| `database` | no | `DatabaseContribution` | Trusted bundled SQLite contribution |
+| `resources` | no | `SupplementalResource[]`, default `[]` | Assets not reached through another declaration |
+| `authoring_only` | no | `AuthoringExclusion[]`, default `[]` | Source-only, non-wheel classifications |
+
+At least one of `content`, `extensions`, `documentation`, `database`, or `resources` must contribute a non-empty value.
+
+Prohibit the v1 fields `origin`, `install_tier`, `pack_type`, `metadata`, and `docs`.
+
+## 3. Nested shapes
+
+### `content`
+
+Each key is an optional `RelativeDir`:
+
+```yaml
+content:
+  executors: executors
+  orchestrators: orchestrators
+  elements: elements
+  schemas: schemas
+  examples: examples
+  docs: docs
+```
+
+There is no fallback tree scan. Executor, orchestrator, and element roots use existing typed component loaders. Schema, example, and documentation roots recursively classify their contents.
+
+### `permissions`
+
+```yaml
+permissions:
+  - id: subprocess
+    reason: Runs ffmpeg.
+    access: Optional access description.
+    services: [service_name]
+```
+
+- Exact keys: `id`, `reason`, optional `access`, optional `services`.
+- `id` is one of `project_files`, `network`, `subprocess`, `environment`, `accelerator`, or `external_services`.
+- `reason` is required `NonBlankText`.
+- `access`, when present, is `NonBlankText`.
+- Services are `NonBlankText`, trimmed, duplicate-rejected, and lexically normalized.
+- Duplicate permission IDs reject.
+
+### `aliases`
+
+```yaml
+aliases:
+  - kind: executor
+    alias: rendering.render_video
+    canonical_id: rendering.render
+```
+
+- Exact keys: `kind`, `alias`, `canonical_id`.
+- `kind` is `executor`, `orchestrator`, `renderer`, `planner`, or `finalizer`.
+- Both IDs are distinct `QualifiedId` values whose pack prefix equals the declaring pack ID.
+- Duplicate `(kind, alias)` rejects.
+- `deprecated` and `deprecation_message` are prohibited.
+- Delete all deprecated aliases, including the 49 `builtin.*` aliases and every remaining `external.*` or legacy alias. V2 aliases cannot be compatibility shims.
+
+### `agent`
+
+```yaml
+agent:
+  purpose: Optional prose.
+  do_not_use_for: Optional prose.
+  normal_entrypoints: [trimmed routing string]
+  required_context: [owner-relative.md]
+```
+
+Only these keys exist. Optional prose and routing entries are `NonBlankText`. `required_context` values are `RelativeFile` resources. Only `normal_entrypoints` preserves declared order.
+
+### `documentation`
+
+Exactly one tagged shape:
+
+```yaml
+documentation:
+  kind: skill
+  path: skill/SKILL.md
+```
+
+```yaml
+documentation:
+  kind: agents
+  path: AGENTS.md
+```
+
+```yaml
+documentation:
+  kind: none
+  reason: Non-user-facing internal utility pack.
+```
+
+Rules:
+
+- `skill` requires exactly `skill/SKILL.md`.
+- `agents` requires exactly `AGENTS.md`.
+- `none` permits only `kind` and a nonblank `reason`.
+- Bundled admission rejects `none` unless the coverage ledger classifies the pack as a non-user-facing internal utility.
+- All 22 retained product packs use `skill` or `agents`; there are no product-pack opt-outs.
+
+### `secrets`
+
+```yaml
+secrets:
+  - name: FAL_KEY
+    required: true
+    description: Optional prose.
+```
+
+Exact keys are `name`, optional boolean `required` defaulting to `false`, and optional `description`. Names are unique `EnvironmentName` values.
+
+### `dependencies`
+
+```yaml
+dependencies:
+  python: ["package>=1"]
+  npm: ["package@1"]
+  system: ["ffmpeg"]
+```
+
+Only `python`, `npm`, and `system` exist. Each is a duplicate-free list of trimmed `NonBlankText`. These are disclosures and do not participate in dependency solving.
+
+### `resources`
+
+```yaml
+resources:
+  - path: server/blender-render-api.service
+    kind: service
+```
+
+Exact keys are `path` and `kind`. `kind` is:
+
+- `runtime`
+- `schema`
+- `template`
+- `documentation`
+- `service`
+- `data`
+
+A path may name a file or directory. Directory expansion is recursive and lexical. A physical file may be reached by only one typed or supplemental declaration.
+
+### `authoring_only`
+
+```yaml
+authoring_only:
+  - path: executors/generate_image/golden
+    kind: golden
+    reason: Provider demonstration inputs; not required at runtime.
+```
+
+Exact keys are `path`, `kind`, and `reason`. `kind` is:
+
+- `test`
+- `golden`
+- `development_fixture`
+- `authoring_document`
+- `build_output`
+- `placeholder`
+
+Normalization records these as immutable owner-relative declarations without requiring their presence.
+
+Validation is environment-specific:
+
+- A source-tree audit requires every `authoring_only` path to exist, remain confined, contain no symlink, avoid all declared-resource overlap, and have a valid nonblank reason.
+- A built-wheel audit requires every `authoring_only` path to be absent.
+- Normal installed-wheel catalog loading does not attempt to resolve absent authoring-only paths.
+- Authoring-only entries are excluded from `CatalogEntry.resources` and from source/wheel runtime-resource equality.
+- The normalized manifest definition, including the declarations themselves, must remain identical between source and wheel.
+- Known runtime assets cannot be classified as authoring-only.
+
+This source/artifact distinction is an audit mode, not a second parser or manifest grammar.
+
+### `extensions`
+
+All extension objects are strict. Optional lists and maps default empty. Optional labels and descriptions are `NonBlankText` when present.
+
+```yaml
+extensions:
+  generation:
+    backends:
+      - id: backend_id
+        label: Optional label
+        module: python.module
+        class: ClassName
+        init_kwargs: {}
+    features:
+      - id: feature_id
+        label: Optional label
+        description: Optional description
+    modes:
+      - id: mode_id
+        label: Optional label
+        description: Optional description
+
+  elements:
+    kinds:
+      - id: effects
+        singular: Optional singular
+        plural: Optional plural
+        label: Optional label
+        description: Optional description
+
+  timeline:
+    kinds:
+      - catalog: transition
+        id: cross_fade
+        aliases: []
+        default: false
+
+  rendering:
+    renderers: [backends/remotion/renderer.yaml]
+    planners: [planners/layer_stack/planner.yaml]
+    finalizers: [finalizers/ffmpeg/finalizer.yaml]
+
+  schemas: {}
+
+  artifact_types:
+    types:
+      - id: artifact_id
+        aliases: []
+        description: Optional description
+```
+
+Rules:
+
+- Backend `id` is `LowerIdent`, `module` is `PythonModule`, `class` is `PythonClass`, and `init_kwargs` is frozen JSON.
+- Feature, mode, element-kind, timeline-kind, and artifact IDs are `LowerIdent`.
+- Timeline `catalog` is `transition`, `clip`, or `track`; aliases are unique `LowerIdent`; `default` is boolean.
+- Rendering entries are unique `RelativeFile` resources and pass existing typed renderer/planner/finalizer validation.
+- `extensions.schemas` is the second and final arbitrary frozen-JSON location.
+- Artifact aliases are unique `LowerIdent`.
+- Duplicate IDs within a family reject.
+- Existing registry collision checks remain authoritative across packs.
+
+### `database`
+
+```yaml
+database:
+  depends_on:
+    - pack: core
+      min_migration: 1
+  migrations:
+    - version: 1
+      name: initial
+      path: migrations/0001_initial.sql
+      tables: [timelines]
+  stream_types: [timeline.timeline]
+  event_kinds: [timeline.created]
+  command_kinds: [timeline.create]
+  repositories: [TimelineRepository]
+  conformance: [replay]
+  cli_mounts:
+    timelines: timelines
+  bridge_mounts: [timelines]
+```
+
+All nine fields are required, even when empty:
+
+| Field | Type |
+|---|---|
+| `depends_on` | Unique `{pack: PackId, min_migration: positive integer}[]` |
+| `migrations` | Non-empty `Migration[]` |
+| `stream_types` | Unique `DottedVocabulary[]` |
+| `event_kinds` | Unique `DottedVocabulary[]` |
+| `command_kinds` | Unique `DottedVocabulary[]` |
+| `repositories` | Unique `RepositoryId[]` |
+| `conformance` | Unique `LowerIdent[]` |
+| `cli_mounts` | Map from `LowerIdent` to one or more single-space-separated `LowerIdent` tokens |
+| `bridge_mounts` | Unique `LowerIdent[]` |
+
+Each migration contains exactly:
+
+- Positive integer `version`, unique within the pack.
+- Unique `MigrationName` `name`.
+- Unique `RelativeFile` `path` ending in `.sql`.
+- Non-empty unique `LowerIdent[]` `tables`.
+
+Migration descriptors must be declared in strictly increasing version order. A table has one owning pack globally. The migration descriptor that first creates an owned table records it; later migrations may alter that pack-owned table without claiming new ownership. The converted beta packs retain their current single initial migrations.
+
+YAML never contains columns, indexes, constraints, transformations, checksums, applied state, or a mutable head.
+
+## 4. Normalization and immutable model
+
+One parse produces a manifest-derived `PackDefinition` containing no root, source, trust, install state, or manifest path.
+
+Normalization:
+
+- Strip outer whitespace from prose and disclosure strings.
+- Require identifiers to arrive in canonical case; never lowercase them.
+- Convert paths to canonical POSIX-relative strings.
+- Preserve declared order only for `agent.normal_entrypoints` and migrations.
+- Require migrations to be declared in increasing version order.
+- Reject duplicates and lexically normalize set-like lists.
+- Sort mapping keys.
+- Recursively freeze arbitrary JSON in only `generation.backends[].init_kwargs` and `extensions.schemas`.
+- Retain no raw manifest mapping in the public model.
+- Make definitions, nested declarations, catalog entries, provenance, resource handles, database projections, and snapshots frozen slot-based immutable values.
+- Serialize only normalized manifest data; never serialize roots or trust as manifest fields.
+
+```text
+CatalogEntry
+├── definition: PackDefinition
+├── provenance: CatalogProvenance
+├── manifest: ResourceHandle
+├── resources: tuple[ResourceHandle, ...]
+└── authoring_exclusions: tuple[AuthoringExclusion, ...]
+```
+
+Resource handles record owner-relative path, resolved root, file kind, size, and SHA-256. Authoring exclusions remain path declarations, not resource handles.
+
+## 5. Required fixtures
+
+Golden fixtures:
+
+1. Capability-only with executor content, permission, documentation, and no database.
+2. Database-only with a complete database block and documentation.
+3. Combined references-style content/database/SDK/CLI/documentation declaration.
+
+Invalid fixtures cover:
+
+- Missing, string, float, boolean, or non-2 schema version.
+- Alternate manifest filenames, schema-less YAML, flat parser input, arbitrary manifest path, and `schema-pack.yaml`.
+- Owner-directory/ID mismatch and invalid release versions.
+- Every unknown top-level and nested field class.
+- Every prohibited v1 field.
+- Null optional values.
+- Duplicate set-like values.
+- Alias ownership violations and deprecated alias fields.
+- Malformed permissions and documentation unions.
+- Absolute, backslash, empty, traversal, symlink, missing, wrong-kind, or duplicate runtime-resource paths.
+- Supplemental/typed duplication.
+- Source authoring-resource overlap or missing authoring path.
+- Authoring-only path present in a wheel.
+- External `database`.
+- Missing dependency, dependency on capability-only pack, bad minimum head, self-dependency, cycle, and duplicate dependency.
+- Unordered or duplicate migrations, duplicate ownership, and non-SQL migration paths.
+- Provenance spoofing.
+- Undeclared bundled non-Python files and wheel-only/source-only runtime resources.
+
+# II. Catalog construction, trust, snapshots, and lifetime
+
+## 1. Bundled catalog
+
+Build `BundledCatalog` from the installed or source `astrid/packs` package root:
+
+1. Enumerate direct child directories lexically.
+2. Ignore `_core`, cache directories, and directories without `pack.yaml`.
+3. Require exactly one `pack.yaml`; alternate pack filenames are errors.
+4. Parse and normalize definitions.
+5. Resolve runtime resources appropriate to the current environment.
+6. Apply source-only or wheel-only authoring checks only when the corresponding audit mode is requested.
+7. Classify and digest runtime resources.
+8. Reject duplicate bundled IDs.
+9. Cache the immutable bundled catalog once per process and package root.
+
+The cache contains declarations and resources only. It contains no database connection, repository, CLI parser, bridge, executor instance, service, or application object.
+
+Delete the empty `builtin` directory.
+
+## 2. Dynamic candidate capture
+
+Each top-level operation captures candidates once from:
+
+1. Local packs.
+2. Explicit extra roots in caller order.
+3. `ASTRID_PACKS_PATH` roots in environment order.
+4. Installed active revisions sorted by pack ID.
+
+Within a root, sort candidates by pack ID and canonical manifest path. Deduplicate repeated references to the same resolved root and manifest digest.
+
+Read-only discovery never creates `astrid/packs/local`; explicit create or fork operations own that mutation.
+
+## 3. Snapshot construction
+
+```text
+CatalogSnapshot
+├── bundled_catalog
+├── entries_by_id
+├── ordered_entries
+├── rejected_candidates
+├── snapshot_fingerprint
+└── construction_context
+```
+
+Precedence:
+
+```text
+bundled > local > explicit-extra > environment > installed
+```
+
+Duplicate policy:
+
+- Bundled IDs are reserved and always win.
+- Identical resolved root and manifest digest pairs deduplicate.
+- Any other later candidate with an already-winning ID is excluded and recorded as `duplicate_id`, including winner and loser provenance.
+- Invalid external discovery may be recorded and discovery may continue, preserving current fault isolation.
+- Direct validation or installation of a rejected candidate returns a hard error.
+- A losing candidate contributes nothing.
+
+Trust policy:
+
+| Source | Inspect | Capability execution | Database |
+|---|---:|---:|---:|
+| bundled | yes | yes | yes |
+| local | yes | yes | no |
+| explicit extra | yes | yes | no |
+| environment | yes | no | no |
+| installed | yes | only active validated revision with accepted permissions | no |
+
+Manifest fields cannot alter this table.
+
+After structural normalization and provenance assignment, any non-bundled candidate containing `database` is rejected as `external_database_forbidden` before resolving resources, reading SQL, or projecting aliases and capabilities.
+
+## 4. Fingerprint and freshness
+
+Compute `snapshot_fingerprint` as SHA-256 over canonical JSON containing:
+
+- Winning entries in deterministic precedence/ID order.
+- Each normalized definition.
+- Manifest digest.
+- Sorted runtime-resource paths, kinds, sizes, and digests.
+- Provenance class and stable provenance identity.
+- Deterministically normalized rejected-candidate diagnostics.
+- Dynamic layer/root ordering relevant to selection.
+
+Exclude absolute bundled installation roots from semantic equality, but retain necessary local construction details outside the portable fingerprint for diagnostics.
+
+Snapshot construction reads each admitted manifest and runtime resource into one stable digest observation. If metadata changes during construction, retry the candidate once and then reject it as unstable.
+
+Resource reads verify the recorded digest. Before external capability execution, installation admission, or external resource-dependent validation, verify the entry’s manifest and consumed resource handles. A mismatch raises `CatalogSnapshotStaleError`. This verification is not rediscovery and cannot introduce new candidates.
+
+## 5. Lifetime invariant
+
+Exactly one snapshot governs:
+
+- One CLI invocation.
+- One standalone `sdk.discover`, `get_capability`, or `invoke` call.
+- One `AstridClient.open()` lifetime; client methods reuse that snapshot until `close()`.
+- One standard application lifetime.
+- One serve lifetime.
+- One doctor run.
+- One inspect command.
+- One backup create or restore validation.
+- One install validation/admission.
+- One source or package audit.
+
+Consumers cannot rescan or reconstruct a snapshot internally. Convenience APIs may create one only when they are the top-level boundary. Filesystem changes become visible only in a later operation or lifetime.
+
+Registries accept the snapshot or a narrow typed projection from it. No SDK service, renderer loader, skill index, doctor, backup, restore, inspect path, or registry independently invokes discovery.
+
+# III. Bounded bundled-resource classification
+
+## 1. Source inventory
+
+For each bundled source pack:
+
+1. Walk deterministically without following symlinks.
+2. Reject every symlink.
+3. Inventory every regular non-Python file, excluding prohibited cache/build metadata.
+4. Treat `pack.yaml` as the implicit manifest resource.
+5. Require every other file to have exactly one classification:
+
+   - Typed runtime reachability.
+   - One supplemental runtime-resource declaration.
+   - One source-only `authoring_only` declaration.
+
+Zero classifications is `undeclared_file`; multiple classifications are `duplicate_classification`.
+
+Python files are outside package-data closure but remain subject to the targeted runtime-use audit.
+
+## 2. Typed reachability
+
+- Executor, orchestrator, and element roots use existing typed component validators rather than blindly declaring the entire directory.
+- Component manifests, schema-declared path fields, `STAGE.md`, declared assets, and declared schema/documentation routes create resource edges.
+- Schema, example, and documentation content roots recursively classify directories.
+- Renderer, planner, and finalizer declarations classify their manifests and typed path fields.
+- Migration paths classify SQL.
+- Documentation paths and `agent.required_context` classify documentation.
+- Supplemental directories recursively expand.
+- Nested skills, requirements, templates, services, and other opaque assets must be reached by typed declarations or supplemental resources.
+- Empty runtime-resource directories reject.
+
+## 3. Targeted runtime-use check
+
+Scan runtime Python files below bundled pack roots, excluding source paths classified as tests, golden inputs, development fixtures, or build outputs.
+
+Recognize:
+
+- `open`.
+- `Path.open`, `read_text`, and `read_bytes`.
+- `importlib.resources.files`, `open_text`, and `open_binary`.
+- `pkgutil.get_data`.
+- Simple literal `Path(__file__)` and `__file__` composition using `/`, `joinpath`, `with_name`, and `parent`.
+- Existing executor requirements-file probing.
+- Blender’s service-unit lookup.
+- Existing typed component and rendering resource APIs.
+
+Use only intra-module propagation of simple literal assignments. Do not attempt general static analysis of generated paths, project paths, user input, or network resources.
+
+Every statically resolvable pack-relative runtime read must enter the declared runtime closure. A statically resolvable read outside the pack must move into the owning pack or resolve through a justified kernel-owned resource in the coverage ledger.
+
+Migration SQL, component manifests, `STAGE.md`, `SKILL.md`, `requirements*.txt`, referenced schemas/templates, and service files cannot be authoring-only.
+
+## 4. Source/wheel equality
+
+The source audit emits sorted runtime-resource records:
+
+```json
+{
+  "pack_id": "blender",
+  "path": "server/blender-render-api.service",
+  "kind": "service",
+  "size": 1234,
+  "sha256": "..."
+}
+```
+
+The source-isolated wheel audit reconstructs the catalog and emits the same runtime records.
+
+Require:
+
+- Equal pack IDs.
+- Equal normalized manifest definitions, including `authoring_only` declarations.
+- Equal runtime-resource paths, kinds, sizes, and hashes.
+- Equal database declarations and derived heads.
+- Equal documentation routes.
+- Equal bundled provenance class.
+- Every source authoring-only path exists.
+- No authoring-only path exists in the wheel.
+- No undeclared non-Python bundled file exists in either environment.
+
+Absolute roots are not compared. Use existing setuptools package-data support.
+
+# IV. Audit-only coverage ledger
+
+Commit:
+
+```text
+docs/contracts/canonical-pack-coverage.json
+scripts/canonical_pack_coverage.py
+```
+
+Commands:
+
+```bash
+python3 scripts/canonical_pack_coverage.py inventory \
+  --root . \
+  --output .oracle/evidence/canonical-pack/<boundary>/inventory.json
+
+python3 scripts/canonical_pack_coverage.py check \
+  --inventory .oracle/evidence/canonical-pack/<boundary>/inventory.json \
+  --ledger docs/contracts/canonical-pack-coverage.json \
+  --output .oracle/evidence/canonical-pack/<boundary>/check.json
+
+python3 scripts/canonical_pack_coverage.py diff \
+  --before .oracle/evidence/canonical-pack/<previous>/inventory.json \
+  --after .oracle/evidence/canonical-pack/<boundary>/inventory.json \
+  --output .oracle/evidence/canonical-pack/<boundary>/diff.json
+```
+
+Runtime code never imports these artifacts.
+
+Inventory inputs:
+
+- Canonical bundled snapshot.
+- Typed executor, orchestrator, element, renderer, planner, and finalizer projections.
+- Canonical database projection.
+- Runtime-resource closure.
+- Structured documentation routes.
+- Code-declared kernel migration, vocabulary, and repository constants.
+- Exact AST inspection of application composition, SDK surfaces, product/operational CLI declarations, bridge mounts, doctor, backup, restore, inspect, package audit, and census generation.
+
+Do not use the ledger to discover inventory and do not broadly grep arbitrary text.
+
+Surface IDs:
+
+```text
+pack:<pack_id>
+executor:<qualified_id>
+orchestrator:<qualified_id>
+element:<kind>/<id>
+renderer:<qualified_id>
+planner:<qualified_id>
+finalizer:<qualified_id>
+alias:<kind>:<qualified_id>
+migration:<pack_id>/<integer>
+table:<table>
+stream_type:<dotted_name>
+event_kind:<dotted_name>
+command_kind:<dotted_name>
+repository:<RepositoryId>
+conformance:<pack_id>/<dimension>
+cli_mount:<space-separated path>
+sdk_surface:<stable service or method id>
+bridge_mount:<token>
+runtime_resource:<pack_id>/<relative path>
+agent_document:<pack_id>/<relative path>
+operational_consumer:<application|doctor|backup|restore|inspect|package|agent_census>
+```
+
+Sort rows by `(kind, surface_id)` and sort unique evidence and consumer fields.
+
+Ledger rules:
+
+- Schema is `astrid.canonical_pack_coverage.v1`.
+- Disposition is `active` or `deleted`.
+- An active owner is exactly `pack:<PackId>` or `kernel:<LowerIdent>`.
+- Deleted rows have null owner, nonblank justification, immutable baseline evidence, and no consumers.
+- Mechanically derived pack ownership cannot be overridden manually.
+- Kernel ownership requires implementation evidence, test/contract evidence, justification, and proof that the surface is not representable by an existing pack declaration.
+- Active rows require resolvable evidence and a consumer unless the row is itself an operational consumer.
+- Consumer references resolve to active rows.
+- `builtin` and deprecated aliases are deletion records.
+- The 49 known `builtin.*` aliases are an exact baseline assertion; WP0 also captures all other deprecated aliases at the pinned source.
+
+`check` fails on:
+
+- `missing`
+- `stale`
+- `duplicate`
+- `conflict`
+- `deleted_still_active`
+- `invalid_kernel_justification`
+- `invalid_consumer`
+- `unclassified`
+- `undeclared_resource`
+- `unexpected_owner`
+
+Boundary diffs record added, removed, changed-owner, changed-evidence, changed-consumer, and changed-resource-digest sets. Every non-empty category requires review.
+
+The immutable baseline inventory is evidence only.
+
+# V. Database composition and migrations
+
+## 1. Projection
+
+Select:
+
+- A synthetic code-owned `core` node at migration head 1.
+- Every snapshot entry with bundled provenance and a `database` contribution.
+
+No pack allowlist or standard tuple participates.
+
+Each node contains ID, immutable declaration, owner resource handles, derived head, provenance, and existing collision projections.
+
+A synthetic trusted bundled database pack introduced in a test snapshot must enter composition without composition-code changes.
+
+## 2. Dependency semantics
+
+For node `P`:
+
+```text
+head(P) = max(P.migrations[].version)
+```
+
+`depends_on: {pack: Q, min_migration: N}` means:
+
+- `Q` is a selected database node or `core`.
+- `head(Q) >= N`.
+- All migrations of `Q` precede all migrations of `P`.
+- It does not compare release versions or inspect applied project state.
+
+Before opening a database, require:
+
+- Every database pack has a direct or transitive path to `core`.
+- No self-dependency.
+- No duplicate dependency target.
+- Every target has migrations.
+- Each minimum is positive and at most the target head.
+- The graph is acyclic.
+- Existing table, migration identity/name, vocabulary, repository, CLI, bridge, and other collision checks pass.
+
+## 3. Standard graph and ordering
+
+```text
+core@1
+├── references@1  requires core >= 1
+├── runaway@1     requires core >= 1
+├── shots@1       requires core >= 1
+└── timeline@1    requires core >= 1
+```
+
+Use deterministic Kahn sorting:
+
+1. Edge `dependency → dependent`.
+2. Seed a min-heap with zero-indegree nodes.
+3. Heap key `(0 if id == "core" else 1, pack_id)`.
+4. Pop, append, decrement dependents, and enqueue newly ready nodes.
+5. On incomplete emission, return a deterministic lexical cycle.
+6. Emit each node’s migrations by increasing integer version.
+
+Fresh order:
+
+```text
+core/1
+references/1
+runaway/1
+shots/1
+timeline/1
+```
+
+For a database created under the former three-pack composition, preserve existing `schema_migrations` rows and apply only missing `runaway/1`. Never rewrite or resequence applied rows.
+
+## 4. Preserved guarantees
+
+Preserve:
+
+- Pack, integer version, and migration name.
+- Existing SQL bytes.
+- Owned tables.
+- SHA-256 behavior.
+- Name/checksum drift rejection.
+- Too-new and unknown-pack refusal.
+- Per-migration `BEGIN IMMEDIATE`.
+- Atomic DDL/DML and migration-row recording.
+- Read-only compatibility probing.
+- `schema_migrations` as the sole applied-state record.
+
+Replace `pack_resource_root(pack_id)` with registered owner resource handles. The migration runner cannot reconstruct `astrid/packs/<id>` paths.
+
+Core remains explicit kernel behavior.
+
+# VI. Documentation and preservation
+
+- All 22 product packs declare direct structured documentation.
+- Add direct skills for blender, timeline, shots, references, and runaway.
+- Repair media frontmatter.
+- Package declared pack and nested component skills.
+- Keep `_core` as a skill-only kernel shell without `pack.yaml`.
+- Extend one generator so one snapshot produces the capability index and canonical pack census.
+- Census fields: ID, name, contribution categories, capability counts, database tables/head, documentation route, and ownership link.
+- Exclude DDL and applied database state.
+- Check mode fails on drift.
+- Delete independent skill inventory and raw-directory reparsing.
+
+Maintain a four-pack matrix for timeline, shots, references, and runaway covering migration, repository, events, commands, CLI, SDK, bridge, and conformance. Every cell receives baseline/final evidence or justified `N/A`.
+
+# VII. Work packages
+
+## WP0 — immutable baseline and ownership reconciliation
+
+Estimate: **0.45–0.65 week**.
+
+- Verify source `7ac50c12e8e4d90988fee603ffdb9896e5628792`.
+- Capture 19 capability manifests, four schema manifests, `_core`, 64 executors, 12 orchestrators, 10 elements, eight rendering extensions, four database packs, and 18 existing skills.
+- Record 23 current product directories, `builtin` deletion, and the final 22-pack expectation.
+- Inventory every customization and initial ownership.
+- Record all deprecated aliases as intended deletions.
+- Capture database ordering, migration identities/checksums, open behavior, repositories, vocabulary, CLI/SDK/bridge behavior, doctor, backup, restore, and wheel behavior.
+- Seed the four-pack preservation matrix and 15-criterion evidence matrix.
+- Record exact audit exclusions.
+- Treat runaway’s missing demo input as a deterministic temporary fixture.
+- Do not build a wheel or run the full suite.
+
+Exit: every baseline surface is pack-owned, kernel-owned, or intended deletion.
+
+## WP1 — contract, immutable model, resolver, snapshots, and audit tools
+
+Estimate: **1.3–1.75 weeks**. Depends on WP0.
+
+Contract-freeze subgate:
+
+- Land exact v2 schemas and immutable normalized types.
+- Land golden and invalid fixtures.
+- Land provenance, runtime-resource, and authoring-exclusion types.
+- Prove source versus installed-artifact authoring semantics.
+- Pass schema and normalization tests.
+- Obtain cumulative review before conversion.
+
+Then:
+
+- Evolve `PackDefinition`; do not create a parallel product model.
+- Implement the sole v2 loader.
+- Delete fallback parsing from the new path.
+- Implement confined digest-verifying runtime-resource handles.
+- Implement cached `BundledCatalog`.
+- Implement candidate capture and `CatalogSnapshot`.
+- Implement deterministic fingerprinting, precedence, duplicates, trust, freshness, and external-database rejection.
+- Make local pack creation emit strict capability-only v2.
+- Implement the bounded source/wheel resource classifier and targeted AST audit.
+- Implement coverage tooling.
+- Adapt registries to accept snapshot projections.
+
+Exit: the executable contract, catalog, resolver, snapshot, resource audit, and coverage tooling are fixture-proven.
+
+## WP2 — bundled conversion, ownership, resources, and documentation
+
+Estimate: **1.0–1.35 weeks**. Depends on WP1.
+
+- Convert all 22 retained packs.
+- Fold four schema manifests into `database`.
+- Preserve migration bytes and behavior declarations.
+- Make references the combined exemplar without changing its three-table semantics.
+- Delete `builtin` and deprecated aliases.
+- Add missing direct skills and repair media.
+- Classify every bundled non-Python source file.
+- Explicitly declare requirements, Blender’s service unit, templates, schemas, nested skills, fonts, SQL, and runtime assets.
+- Move pack-owned cross-root assets to their owner; justify true kernel assets.
+- Switch bundled discovery to v2.
+- Regenerate capability/census output.
+
+Boundary A:
+
+- Generate inventory/check/diff.
+- Prove exactly 22 product packs load.
+- Prove no `schema-pack.yaml` remains.
+- Prove source resource classification and authoring exclusions.
+- Review the contract, snapshots, documentation, resources, and ownership cumulatively.
+- Resolve findings before WP3.
+
+## WP3 — database hard cut
+
+Estimate: **1.0–1.4 weeks**. Depends on Boundary A.
+
+- Extract reusable collision/migration algorithms from the schema-pack subsystem.
+- Remove schema-pack identity from surviving types and diagnostics.
+- Add synthetic core and catalog-derived database nodes.
+- Implement the exact dependency, head, graph, and ordering contract.
+- Enforce core reachability and collisions before open.
+- Carry resource handles and provenance into migration execution.
+- Delete fixed standard builders, tuples, and name-selection branches.
+- Rewire writable and read-only paths to the operation snapshot.
+- Test synthetic bundled database selection.
+- Validate fresh four-pack, legacy three-pack upgrade, read-only pending, existing four-pack no-op, collisions, dependency failures, cycles, minimum heads, checksum/name drift, rollback, and every external provenance class.
+
+Boundary B:
+
+- Generate inventory/check/diff.
+- Regenerate the four-pack matrix.
+- Review ownership and persistence cumulatively.
+- Resolve findings before WP4.
+
+## WP4 — operational convergence
+
+Estimate: **1.1–1.5 weeks**. Depends on Boundary B.
+
+Thread one snapshot through application startup, `AstridClient`, SDK calls, rendering registries, bridge composition, helpers, read probes, doctor, backup, restore, install validation, inspect, and census generation.
+
+Preserve:
+
+- `open_database(path, registry)` as the SQLite seam.
+- `DatabaseWriter` and its exclusive owner lock.
+- Static repository/service/CLI/bridge factories.
+- Backup/restore payload semantics.
+- The eight-family gateway and two nested mounts.
+
+Raw database reads use the shared probe or an already-probed connection.
+
+`python3 -m astrid.core.pack.cli inspect <id> [--json]` exposes normalized identity, provenance, contribution categories, database dependencies/migrations/tables/head, documentation, runtime-resource closure, and relevant rejected/stale diagnostics.
+
+JSON uses a versioned envelope and sorted arrays; text renders from the same DTO.
+
+Doctor reports canonical census, catalog/resource/documentation health, and expected/applied/pending migrations by owner without mutation.
+
+Exit: operational consumers agree on one snapshot and none independently reparse or rescan.
+
+## WP5 — deletion, final gates, and packaging preparation
+
+Estimate: **0.85–1.2 weeks**. Depends on WP4.
+
+Delete:
+
+- All `schema-pack.yaml`.
+- Schema-pack parser, model, discovery, builders, standard lists, and compatibility exports.
+- V1 pack parsing and flat/schema-less loading.
+- Alternate filename probes.
+- Manifest-supplied trust handling.
+- Raw identity readers.
+- Independent pack/skill inventories.
+- Deprecated aliases and compatibility tests/docs.
+- Fixed database tuples and name-based selection.
+- Legacy-format audit support.
+
+Retain exact gates for prohibited paths, retired imports/symbols, fixed tuples, raw identity reconstruction, independent rescans, coverage, behavior matrix, targeted resource checks, census drift, and source/wheel closure.
+
+Packaging:
+
+- Extend ordinary package-data patterns for every runtime-resource kind.
+- Include all manifests, SQL, skills/docs, requirements, services, schemas, templates, fonts, and runtime assets.
+- Exclude all authoring-only paths.
+- Add no backend.
+- Convert wheel-building tests into source contracts, mocked builder units, or consumers of `ASTRID_PREBUILT_WHEEL`.
+- Add `InstalledArtifactHarness.from_wheel(path, ...)`.
+- Ensure all current `build_once` call sites consume the prebuilt wheel when set.
+- Keep `build_once` only as optional developer convenience; authoritative validation cannot invoke it.
+
+Boundary C:
+
+- Generate inventory/check/diff.
+- Run source package-data and authoring-exclusion checks without building.
+- Regenerate the final matrix candidate.
+- Review convergence, deletion, documentation, resource classification, packaging, and build-call graph.
+- Prove authoritative validation has exactly one build invocation.
+- Resolve findings before WP6.
+
+## WP6 — one-build validation and evidence closure
+
+Estimate: **0.5–0.75 week**. Depends on Boundary C.
+
+One authoritative owner runs:
+
+```bash
+python3 -m build --outdir .oracle/evidence/final-build
+```
+
+Require exactly one wheel in that directory, record its SHA-256, and set:
+
+```bash
+ASTRID_PREBUILT_WHEEL=<absolute-wheel-path>
+```
+
+No later command may invoke `python -m build`, `build_once`, `pip wheel`, or another source build.
+
+Run the required focused suite:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+```
+
+Run:
+
+```bash
+python3 -m astrid doctor
+```
+
+Using the same wheel, run:
+
+- Installed bundled-catalog load.
+- Source/wheel normalized-definition comparison.
+- Bidirectional runtime-resource audit.
+- Source authoring-path presence and wheel authoring-path absence.
+- Documentation and `_core` census audit.
+- Fresh, upgraded, read-only-pending, and existing SQLite scenarios.
+- External capability success and database rejection.
+- References and runaway round trips.
+- Backup/restore.
+- Inspect text/JSON.
+- Doctor/inspect non-mutation.
+- Exact legacy gates.
+- Zero-unclassified coverage.
+
+Then run once:
+
+```bash
+python3 -m pytest
+```
+
+If an apparently unrelated failure occurs, reproduce only that failing scenario against the pinned source. Do not build again or run a second baseline suite.
+
+Final artifacts:
+
+- One wheel and hash.
+- Installed-lane records containing that hash.
+- Coverage inventory/check/diff.
+- Runtime-resource closure comparison.
+- Authoring-only source/wheel audit.
+- Four-pack preservation matrix.
+- Fifteen-row evidence matrix.
+- Focused/full test receipts.
+- Doctor and inspect receipts.
+- Independent reviewer dispositions.
+
+After all evidence passes:
+
+- Obtain final Sol oracle review.
+- Commit only reviewed paths.
+- Push only `HEAD:refs/heads/megado/canonical-pack-beta`.
+- Open the completed worktree.
+- Do not merge, rebase, deploy, promote, or publish.
+
+# VIII. Review cadence
+
+1. Contract-freeze subgate during WP1.
+2. Boundary A after WP2.
+3. Boundary B after WP3.
+4. Boundary C after WP5.
+5. Final review after WP6.
+
+At A, B, C, and final:
+
+- Generate one immutable coverage artifact set.
+- Regenerate relevant matrices.
+- Converge code, evidence, and status at one checkpoint.
+- Run one cumulative independent review by default.
+- Resolve accepted findings and obtain a fresh pass before continuing.
+
+Focused local checks may run during implementation. Immutable cumulative artifacts are generated only at these boundaries.
+
+# IX. Criterion traceability
+
+| Criterion | Primary proof |
+|---|---|
+| 1. Strict v2 bundled packs | WP1–WP2, A, WP5–WP6 |
+| 2. No independent identity parsing | Snapshot invariant, WP4–WP6 |
+| 3. Zero-unclassified ledger | WP0–WP2, all boundaries |
+| 4. Manifest-derived database composition | WP3 synthetic-pack test |
+| 5. Four-pack semantics preserved | Preservation matrix |
+| 6. Owner-relative migrations and safety | WP3 SQLite matrix |
+| 7. Operational agreement | WP4, C, final |
+| 8. Structured docs and `_core` census | WP2, WP4–WP6 |
+| 9. Inspect and doctor | WP4, C, final |
+| 10. Clean-wheel closure | Source/wheel and authoring audits |
+| 11. Legacy deletion | WP5 exact path/import/AST gates |
+| 12. External capability/database policy | WP1, WP3, WP6 |
+| 13. Golden forms | WP1 and final |
+| 14. Focused/full validation | WP6 single-build flow |
+| 15. Evidence matrix and oracle | WP6 final closure |
+
+# X. Anti-pattern rejections
+
+- No hidden schema-pack subsystem.
+- No fixed-composition disguise.
+- No universal service locator.
+- No runtime coverage ledger.
+- No YAML DDL or applied state.
+- No manifest-supplied trust.
+- No operation-internal discovery.
+- No contribution from losing duplicate candidates.
+- No perfect/general static analysis.
+- No runtime asset hidden as authoring-only.
+- No source-only path required to exist in an installed wheel.
+- No second parser or relaxed installed manifest grammar.
+- No dependency solver, project lock, lifecycle machinery, marketplace, signing, sandboxing, or UI.
+- No external SQL.
+- No unloadable kernel.
+- No v1, alternate filename, schema-less, dual-read, compatibility-export, deprecated-alias, or fallback path.
+- No generalized dynamic factory framework.
+- No custom packaging backend.
+- No broad repository-wide regex scanner.
+- No repeated wheel builds.
+- No repeated immutable boundary artifacts.
+- No scope expansion into unrelated models, LoRAs, taxonomies, or kernel primitives.
+- No success with an active bypass, unclassified surface, missing documentation, undeclared runtime resource, invalid authoring exclusion, source/wheel mismatch, or independent rescan.
+tokens used
+36,938
+# Phase 3 stability-revised replacement plan — canonical pack beta hard cut
+
+Status: **replacement required**.
+
+The Wave-2-revised plan is architecturally aligned, but its resource contract contains one material contradiction: `authoring_only` paths are required to exist during catalog validation while also being required to be absent from the installed wheel. A source-isolated wheel therefore could not reconstruct the same manifest definition under the stated loader rules.
+
+This replacement resolves that contradiction by separating immutable manifest normalization from environment-specific source and installed-artifact audits. It also makes snapshot fingerprints and freshness checks explicit. No new exploration lane or product scope is required.
+
+## Determination
+
+- Estimated implementation effort: **6.2–8.6 engineer-weeks**, including cumulative reviews and expected rework.
+- Huge run: **yes**.
+- Difficulty: **5/5**.
+- Proposed `[XHARD]` tasks: **none**.
+- New research or exploration lanes: **none**.
+- Open planning questions: **none**.
+- Execution order: immutable baseline → executable v2 contract/catalog → bundled conversion and resource closure → database hard cut → operational convergence → deletion/audit/packaging → one-build validation and evidence closure.
+- The missing runaway demo input remains a deterministic temporary-project fixture repair unless custody evidence proves it is an intentional packaged asset.
+
+## Mandate and boundaries
+
+Implement one strict canonical pack system:
+
+- Every retained bundled product pack is declared by exactly one `pack.yaml` with integer `schema_version: 2`.
+- Delete the empty `builtin` product pack, leaving 22 retained product packs plus irreducible `_core` guidance.
+- Convert `timeline`, `shots`, `references`, and `runaway` into ordinary packs with optional `database` contributions.
+- Preserve typed registries, migration safety, repositories, `DatabaseWriter`, `UnitOfWork`, static application/service/CLI/bridge factories, SDK behavior, and conformance semantics.
+- Derive bundled trust solely from loader provenance.
+- Keep external packs capability-only. Reject an external manifest containing `database` as a whole before resolving its resources or reading SQL.
+- Assign every bundled customization to a canonical pack or explicitly justified kernel owner.
+- Package structured documentation for every user/agent-facing bundled pack.
+- Add no per-project composition state, dependency solver, dynamic database plugin system, marketplace, lifecycle machinery, universal service locator, or custom packaging backend.
+
+The North Star guides implementation but cannot widen the frozen goal.
+
+# I. Exact v2 manifest contract
+
+WP1 lands this contract as JSON Schema, immutable Python types, golden fixtures, and invalid fixtures before bundled conversion.
+
+## 1. Lexical types
+
+| Type | Exact rule |
+|---|---|
+| `PackId` | `^[a-z][a-z0-9_]*$` |
+| `ReleaseVersion` | `^(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)\.(0\|[1-9][0-9]*)$` |
+| `LowerIdent` | `^[a-z][a-z0-9_]*$` |
+| `QualifiedId` | `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$` |
+| `DottedVocabulary` | `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$` |
+| `RepositoryId` | `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `MigrationName` | `^[a-z0-9][a-z0-9_-]*$` |
+| `Keyword` | `^[a-z0-9][a-z0-9_-]*$` |
+| `PythonModule` | `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` |
+| `PythonClass` | `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `RelativePath` | Non-empty POSIX path; not absolute; no backslash, NUL, empty segment, `.` or `..`; every segment matches `[A-Za-z0-9._-]+` |
+| `RelativeFile` | `RelativePath` expected to denote one regular non-symlink file in environments where that class is admitted |
+| `RelativeDir` | `RelativePath` expected to denote one non-symlink directory in environments where that class is admitted |
+| `NonBlankText` | String whose outer-trimmed value is non-empty |
+| `EnvironmentName` | `^[A-Z][A-Z0-9_]*$` |
+
+The regex table uses Markdown-escaped pipes; the executable schema uses ordinary regex alternation without literal backslashes before `|`.
+
+YAML booleans never satisfy integer fields. Null is never accepted. Optional means absent.
+
+## 2. Top-level fields
+
+Every object uses `additionalProperties: false`, except the two explicitly scoped frozen-JSON maps.
+
+| Field | Required | Type/default | Semantics |
+|---|---:|---|---|
+| `schema_version` | yes | integer exactly `2` | No numeric string, float, or boolean |
+| `id` | yes | `PackId` | Must equal the logical owner-directory name supplied by discovery |
+| `name` | yes | `NonBlankText` | Display name |
+| `version` | yes | `ReleaseVersion` | Pack release only |
+| `description` | no | string, default `""` | Descriptive only |
+| `status` | no | `active\|experimental\|deprecated`, default `active` | `stub` is deleted |
+| `visibility` | no | `visible\|hidden`, default `visible` | Discovery display behavior |
+| `domain` | no | `general\|development\|editorial\|generation\|infrastructure\|integration\|media\|system`, default `general` | Descriptive taxonomy |
+| `stability` | no | `stable\|experimental\|deprecated`, default `stable` | Descriptive taxonomy |
+| `support` | no | `project\|core\|community`, default `project` | Descriptive taxonomy |
+| `keywords` | no | unique `Keyword[]`, default `[]` | Search terms |
+| `capabilities` | no | unique `LowerIdent[]`, default `[]` | Search/explanation tags only |
+| `permissions` | no | `Permission[]`, default `[]` | Existing disclosure/eligibility mechanism |
+| `content` | no | `ContentRoots`, default `{}` | Typed content roots |
+| `extensions` | no | `Extensions`, default `{}` | Typed extension declarations |
+| `aliases` | no | `Alias[]`, default `[]` | Live aliases only |
+| `agent` | no | `AgentRouting`, default empty values | Descriptive routing |
+| `documentation` | no | tagged `Documentation` | Required for bundled admission unless an internal opt-out is accepted |
+| `secrets` | no | `Secret[]`, default `[]` | Install/trust disclosure |
+| `dependencies` | no | `RuntimeDependencies`, default empty lists | Runtime disclosure, not pack solving |
+| `astrid_version` | no | `ReleaseVersion` | Minimum compatible Astrid release metadata |
+| `database` | no | `DatabaseContribution` | Trusted bundled SQLite contribution |
+| `resources` | no | `SupplementalResource[]`, default `[]` | Assets not reached through another declaration |
+| `authoring_only` | no | `AuthoringExclusion[]`, default `[]` | Source-only, non-wheel classifications |
+
+At least one of `content`, `extensions`, `documentation`, `database`, or `resources` must contribute a non-empty value.
+
+Prohibit the v1 fields `origin`, `install_tier`, `pack_type`, `metadata`, and `docs`.
+
+## 3. Nested shapes
+
+### `content`
+
+Each key is an optional `RelativeDir`:
+
+```yaml
+content:
+  executors: executors
+  orchestrators: orchestrators
+  elements: elements
+  schemas: schemas
+  examples: examples
+  docs: docs
+```
+
+There is no fallback tree scan. Executor, orchestrator, and element roots use existing typed component loaders. Schema, example, and documentation roots recursively classify their contents.
+
+### `permissions`
+
+```yaml
+permissions:
+  - id: subprocess
+    reason: Runs ffmpeg.
+    access: Optional access description.
+    services: [service_name]
+```
+
+- Exact keys: `id`, `reason`, optional `access`, optional `services`.
+- `id` is one of `project_files`, `network`, `subprocess`, `environment`, `accelerator`, or `external_services`.
+- `reason` is required `NonBlankText`.
+- `access`, when present, is `NonBlankText`.
+- Services are `NonBlankText`, trimmed, duplicate-rejected, and lexically normalized.
+- Duplicate permission IDs reject.
+
+### `aliases`
+
+```yaml
+aliases:
+  - kind: executor
+    alias: rendering.render_video
+    canonical_id: rendering.render
+```
+
+- Exact keys: `kind`, `alias`, `canonical_id`.
+- `kind` is `executor`, `orchestrator`, `renderer`, `planner`, or `finalizer`.
+- Both IDs are distinct `QualifiedId` values whose pack prefix equals the declaring pack ID.
+- Duplicate `(kind, alias)` rejects.
+- `deprecated` and `deprecation_message` are prohibited.
+- Delete all deprecated aliases, including the 49 `builtin.*` aliases and every remaining `external.*` or legacy alias. V2 aliases cannot be compatibility shims.
+
+### `agent`
+
+```yaml
+agent:
+  purpose: Optional prose.
+  do_not_use_for: Optional prose.
+  normal_entrypoints: [trimmed routing string]
+  required_context: [owner-relative.md]
+```
+
+Only these keys exist. Optional prose and routing entries are `NonBlankText`. `required_context` values are `RelativeFile` resources. Only `normal_entrypoints` preserves declared order.
+
+### `documentation`
+
+Exactly one tagged shape:
+
+```yaml
+documentation:
+  kind: skill
+  path: skill/SKILL.md
+```
+
+```yaml
+documentation:
+  kind: agents
+  path: AGENTS.md
+```
+
+```yaml
+documentation:
+  kind: none
+  reason: Non-user-facing internal utility pack.
+```
+
+Rules:
+
+- `skill` requires exactly `skill/SKILL.md`.
+- `agents` requires exactly `AGENTS.md`.
+- `none` permits only `kind` and a nonblank `reason`.
+- Bundled admission rejects `none` unless the coverage ledger classifies the pack as a non-user-facing internal utility.
+- All 22 retained product packs use `skill` or `agents`; there are no product-pack opt-outs.
+
+### `secrets`
+
+```yaml
+secrets:
+  - name: FAL_KEY
+    required: true
+    description: Optional prose.
+```
+
+Exact keys are `name`, optional boolean `required` defaulting to `false`, and optional `description`. Names are unique `EnvironmentName` values.
+
+### `dependencies`
+
+```yaml
+dependencies:
+  python: ["package>=1"]
+  npm: ["package@1"]
+  system: ["ffmpeg"]
+```
+
+Only `python`, `npm`, and `system` exist. Each is a duplicate-free list of trimmed `NonBlankText`. These are disclosures and do not participate in dependency solving.
+
+### `resources`
+
+```yaml
+resources:
+  - path: server/blender-render-api.service
+    kind: service
+```
+
+Exact keys are `path` and `kind`. `kind` is:
+
+- `runtime`
+- `schema`
+- `template`
+- `documentation`
+- `service`
+- `data`
+
+A path may name a file or directory. Directory expansion is recursive and lexical. A physical file may be reached by only one typed or supplemental declaration.
+
+### `authoring_only`
+
+```yaml
+authoring_only:
+  - path: executors/generate_image/golden
+    kind: golden
+    reason: Provider demonstration inputs; not required at runtime.
+```
+
+Exact keys are `path`, `kind`, and `reason`. `kind` is:
+
+- `test`
+- `golden`
+- `development_fixture`
+- `authoring_document`
+- `build_output`
+- `placeholder`
+
+Normalization records these as immutable owner-relative declarations without requiring their presence.
+
+Validation is environment-specific:
+
+- A source-tree audit requires every `authoring_only` path to exist, remain confined, contain no symlink, avoid all declared-resource overlap, and have a valid nonblank reason.
+- A built-wheel audit requires every `authoring_only` path to be absent.
+- Normal installed-wheel catalog loading does not attempt to resolve absent authoring-only paths.
+- Authoring-only entries are excluded from `CatalogEntry.resources` and from source/wheel runtime-resource equality.
+- The normalized manifest definition, including the declarations themselves, must remain identical between source and wheel.
+- Known runtime assets cannot be classified as authoring-only.
+
+This source/artifact distinction is an audit mode, not a second parser or manifest grammar.
+
+### `extensions`
+
+All extension objects are strict. Optional lists and maps default empty. Optional labels and descriptions are `NonBlankText` when present.
+
+```yaml
+extensions:
+  generation:
+    backends:
+      - id: backend_id
+        label: Optional label
+        module: python.module
+        class: ClassName
+        init_kwargs: {}
+    features:
+      - id: feature_id
+        label: Optional label
+        description: Optional description
+    modes:
+      - id: mode_id
+        label: Optional label
+        description: Optional description
+
+  elements:
+    kinds:
+      - id: effects
+        singular: Optional singular
+        plural: Optional plural
+        label: Optional label
+        description: Optional description
+
+  timeline:
+    kinds:
+      - catalog: transition
+        id: cross_fade
+        aliases: []
+        default: false
+
+  rendering:
+    renderers: [backends/remotion/renderer.yaml]
+    planners: [planners/layer_stack/planner.yaml]
+    finalizers: [finalizers/ffmpeg/finalizer.yaml]
+
+  schemas: {}
+
+  artifact_types:
+    types:
+      - id: artifact_id
+        aliases: []
+        description: Optional description
+```
+
+Rules:
+
+- Backend `id` is `LowerIdent`, `module` is `PythonModule`, `class` is `PythonClass`, and `init_kwargs` is frozen JSON.
+- Feature, mode, element-kind, timeline-kind, and artifact IDs are `LowerIdent`.
+- Timeline `catalog` is `transition`, `clip`, or `track`; aliases are unique `LowerIdent`; `default` is boolean.
+- Rendering entries are unique `RelativeFile` resources and pass existing typed renderer/planner/finalizer validation.
+- `extensions.schemas` is the second and final arbitrary frozen-JSON location.
+- Artifact aliases are unique `LowerIdent`.
+- Duplicate IDs within a family reject.
+- Existing registry collision checks remain authoritative across packs.
+
+### `database`
+
+```yaml
+database:
+  depends_on:
+    - pack: core
+      min_migration: 1
+  migrations:
+    - version: 1
+      name: initial
+      path: migrations/0001_initial.sql
+      tables: [timelines]
+  stream_types: [timeline.timeline]
+  event_kinds: [timeline.created]
+  command_kinds: [timeline.create]
+  repositories: [TimelineRepository]
+  conformance: [replay]
+  cli_mounts:
+    timelines: timelines
+  bridge_mounts: [timelines]
+```
+
+All nine fields are required, even when empty:
+
+| Field | Type |
+|---|---|
+| `depends_on` | Unique `{pack: PackId, min_migration: positive integer}[]` |
+| `migrations` | Non-empty `Migration[]` |
+| `stream_types` | Unique `DottedVocabulary[]` |
+| `event_kinds` | Unique `DottedVocabulary[]` |
+| `command_kinds` | Unique `DottedVocabulary[]` |
+| `repositories` | Unique `RepositoryId[]` |
+| `conformance` | Unique `LowerIdent[]` |
+| `cli_mounts` | Map from `LowerIdent` to one or more single-space-separated `LowerIdent` tokens |
+| `bridge_mounts` | Unique `LowerIdent[]` |
+
+Each migration contains exactly:
+
+- Positive integer `version`, unique within the pack.
+- Unique `MigrationName` `name`.
+- Unique `RelativeFile` `path` ending in `.sql`.
+- Non-empty unique `LowerIdent[]` `tables`.
+
+Migration descriptors must be declared in strictly increasing version order. A table has one owning pack globally. The migration descriptor that first creates an owned table records it; later migrations may alter that pack-owned table without claiming new ownership. The converted beta packs retain their current single initial migrations.
+
+YAML never contains columns, indexes, constraints, transformations, checksums, applied state, or a mutable head.
+
+## 4. Normalization and immutable model
+
+One parse produces a manifest-derived `PackDefinition` containing no root, source, trust, install state, or manifest path.
+
+Normalization:
+
+- Strip outer whitespace from prose and disclosure strings.
+- Require identifiers to arrive in canonical case; never lowercase them.
+- Convert paths to canonical POSIX-relative strings.
+- Preserve declared order only for `agent.normal_entrypoints` and migrations.
+- Require migrations to be declared in increasing version order.
+- Reject duplicates and lexically normalize set-like lists.
+- Sort mapping keys.
+- Recursively freeze arbitrary JSON in only `generation.backends[].init_kwargs` and `extensions.schemas`.
+- Retain no raw manifest mapping in the public model.
+- Make definitions, nested declarations, catalog entries, provenance, resource handles, database projections, and snapshots frozen slot-based immutable values.
+- Serialize only normalized manifest data; never serialize roots or trust as manifest fields.
+
+```text
+CatalogEntry
+├── definition: PackDefinition
+├── provenance: CatalogProvenance
+├── manifest: ResourceHandle
+├── resources: tuple[ResourceHandle, ...]
+└── authoring_exclusions: tuple[AuthoringExclusion, ...]
+```
+
+Resource handles record owner-relative path, resolved root, file kind, size, and SHA-256. Authoring exclusions remain path declarations, not resource handles.
+
+## 5. Required fixtures
+
+Golden fixtures:
+
+1. Capability-only with executor content, permission, documentation, and no database.
+2. Database-only with a complete database block and documentation.
+3. Combined references-style content/database/SDK/CLI/documentation declaration.
+
+Invalid fixtures cover:
+
+- Missing, string, float, boolean, or non-2 schema version.
+- Alternate manifest filenames, schema-less YAML, flat parser input, arbitrary manifest path, and `schema-pack.yaml`.
+- Owner-directory/ID mismatch and invalid release versions.
+- Every unknown top-level and nested field class.
+- Every prohibited v1 field.
+- Null optional values.
+- Duplicate set-like values.
+- Alias ownership violations and deprecated alias fields.
+- Malformed permissions and documentation unions.
+- Absolute, backslash, empty, traversal, symlink, missing, wrong-kind, or duplicate runtime-resource paths.
+- Supplemental/typed duplication.
+- Source authoring-resource overlap or missing authoring path.
+- Authoring-only path present in a wheel.
+- External `database`.
+- Missing dependency, dependency on capability-only pack, bad minimum head, self-dependency, cycle, and duplicate dependency.
+- Unordered or duplicate migrations, duplicate ownership, and non-SQL migration paths.
+- Provenance spoofing.
+- Undeclared bundled non-Python files and wheel-only/source-only runtime resources.
+
+# II. Catalog construction, trust, snapshots, and lifetime
+
+## 1. Bundled catalog
+
+Build `BundledCatalog` from the installed or source `astrid/packs` package root:
+
+1. Enumerate direct child directories lexically.
+2. Ignore `_core`, cache directories, and directories without `pack.yaml`.
+3. Require exactly one `pack.yaml`; alternate pack filenames are errors.
+4. Parse and normalize definitions.
+5. Resolve runtime resources appropriate to the current environment.
+6. Apply source-only or wheel-only authoring checks only when the corresponding audit mode is requested.
+7. Classify and digest runtime resources.
+8. Reject duplicate bundled IDs.
+9. Cache the immutable bundled catalog once per process and package root.
+
+The cache contains declarations and resources only. It contains no database connection, repository, CLI parser, bridge, executor instance, service, or application object.
+
+Delete the empty `builtin` directory.
+
+## 2. Dynamic candidate capture
+
+Each top-level operation captures candidates once from:
+
+1. Local packs.
+2. Explicit extra roots in caller order.
+3. `ASTRID_PACKS_PATH` roots in environment order.
+4. Installed active revisions sorted by pack ID.
+
+Within a root, sort candidates by pack ID and canonical manifest path. Deduplicate repeated references to the same resolved root and manifest digest.
+
+Read-only discovery never creates `astrid/packs/local`; explicit create or fork operations own that mutation.
+
+## 3. Snapshot construction
+
+```text
+CatalogSnapshot
+├── bundled_catalog
+├── entries_by_id
+├── ordered_entries
+├── rejected_candidates
+├── snapshot_fingerprint
+└── construction_context
+```
+
+Precedence:
+
+```text
+bundled > local > explicit-extra > environment > installed
+```
+
+Duplicate policy:
+
+- Bundled IDs are reserved and always win.
+- Identical resolved root and manifest digest pairs deduplicate.
+- Any other later candidate with an already-winning ID is excluded and recorded as `duplicate_id`, including winner and loser provenance.
+- Invalid external discovery may be recorded and discovery may continue, preserving current fault isolation.
+- Direct validation or installation of a rejected candidate returns a hard error.
+- A losing candidate contributes nothing.
+
+Trust policy:
+
+| Source | Inspect | Capability execution | Database |
+|---|---:|---:|---:|
+| bundled | yes | yes | yes |
+| local | yes | yes | no |
+| explicit extra | yes | yes | no |
+| environment | yes | no | no |
+| installed | yes | only active validated revision with accepted permissions | no |
+
+Manifest fields cannot alter this table.
+
+After structural normalization and provenance assignment, any non-bundled candidate containing `database` is rejected as `external_database_forbidden` before resolving resources, reading SQL, or projecting aliases and capabilities.
+
+## 4. Fingerprint and freshness
+
+Compute `snapshot_fingerprint` as SHA-256 over canonical JSON containing:
+
+- Winning entries in deterministic precedence/ID order.
+- Each normalized definition.
+- Manifest digest.
+- Sorted runtime-resource paths, kinds, sizes, and digests.
+- Provenance class and stable provenance identity.
+- Deterministically normalized rejected-candidate diagnostics.
+- Dynamic layer/root ordering relevant to selection.
+
+Exclude absolute bundled installation roots from semantic equality, but retain necessary local construction details outside the portable fingerprint for diagnostics.
+
+Snapshot construction reads each admitted manifest and runtime resource into one stable digest observation. If metadata changes during construction, retry the candidate once and then reject it as unstable.
+
+Resource reads verify the recorded digest. Before external capability execution, installation admission, or external resource-dependent validation, verify the entry’s manifest and consumed resource handles. A mismatch raises `CatalogSnapshotStaleError`. This verification is not rediscovery and cannot introduce new candidates.
+
+## 5. Lifetime invariant
+
+Exactly one snapshot governs:
+
+- One CLI invocation.
+- One standalone `sdk.discover`, `get_capability`, or `invoke` call.
+- One `AstridClient.open()` lifetime; client methods reuse that snapshot until `close()`.
+- One standard application lifetime.
+- One serve lifetime.
+- One doctor run.
+- One inspect command.
+- One backup create or restore validation.
+- One install validation/admission.
+- One source or package audit.
+
+Consumers cannot rescan or reconstruct a snapshot internally. Convenience APIs may create one only when they are the top-level boundary. Filesystem changes become visible only in a later operation or lifetime.
+
+Registries accept the snapshot or a narrow typed projection from it. No SDK service, renderer loader, skill index, doctor, backup, restore, inspect path, or registry independently invokes discovery.
+
+# III. Bounded bundled-resource classification
+
+## 1. Source inventory
+
+For each bundled source pack:
+
+1. Walk deterministically without following symlinks.
+2. Reject every symlink.
+3. Inventory every regular non-Python file, excluding prohibited cache/build metadata.
+4. Treat `pack.yaml` as the implicit manifest resource.
+5. Require every other file to have exactly one classification:
+
+   - Typed runtime reachability.
+   - One supplemental runtime-resource declaration.
+   - One source-only `authoring_only` declaration.
+
+Zero classifications is `undeclared_file`; multiple classifications are `duplicate_classification`.
+
+Python files are outside package-data closure but remain subject to the targeted runtime-use audit.
+
+## 2. Typed reachability
+
+- Executor, orchestrator, and element roots use existing typed component validators rather than blindly declaring the entire directory.
+- Component manifests, schema-declared path fields, `STAGE.md`, declared assets, and declared schema/documentation routes create resource edges.
+- Schema, example, and documentation content roots recursively classify directories.
+- Renderer, planner, and finalizer declarations classify their manifests and typed path fields.
+- Migration paths classify SQL.
+- Documentation paths and `agent.required_context` classify documentation.
+- Supplemental directories recursively expand.
+- Nested skills, requirements, templates, services, and other opaque assets must be reached by typed declarations or supplemental resources.
+- Empty runtime-resource directories reject.
+
+## 3. Targeted runtime-use check
+
+Scan runtime Python files below bundled pack roots, excluding source paths classified as tests, golden inputs, development fixtures, or build outputs.
+
+Recognize:
+
+- `open`.
+- `Path.open`, `read_text`, and `read_bytes`.
+- `importlib.resources.files`, `open_text`, and `open_binary`.
+- `pkgutil.get_data`.
+- Simple literal `Path(__file__)` and `__file__` composition using `/`, `joinpath`, `with_name`, and `parent`.
+- Existing executor requirements-file probing.
+- Blender’s service-unit lookup.
+- Existing typed component and rendering resource APIs.
+
+Use only intra-module propagation of simple literal assignments. Do not attempt general static analysis of generated paths, project paths, user input, or network resources.
+
+Every statically resolvable pack-relative runtime read must enter the declared runtime closure. A statically resolvable read outside the pack must move into the owning pack or resolve through a justified kernel-owned resource in the coverage ledger.
+
+Migration SQL, component manifests, `STAGE.md`, `SKILL.md`, `requirements*.txt`, referenced schemas/templates, and service files cannot be authoring-only.
+
+## 4. Source/wheel equality
+
+The source audit emits sorted runtime-resource records:
+
+```json
+{
+  "pack_id": "blender",
+  "path": "server/blender-render-api.service",
+  "kind": "service",
+  "size": 1234,
+  "sha256": "..."
+}
+```
+
+The source-isolated wheel audit reconstructs the catalog and emits the same runtime records.
+
+Require:
+
+- Equal pack IDs.
+- Equal normalized manifest definitions, including `authoring_only` declarations.
+- Equal runtime-resource paths, kinds, sizes, and hashes.
+- Equal database declarations and derived heads.
+- Equal documentation routes.
+- Equal bundled provenance class.
+- Every source authoring-only path exists.
+- No authoring-only path exists in the wheel.
+- No undeclared non-Python bundled file exists in either environment.
+
+Absolute roots are not compared. Use existing setuptools package-data support.
+
+# IV. Audit-only coverage ledger
+
+Commit:
+
+```text
+docs/contracts/canonical-pack-coverage.json
+scripts/canonical_pack_coverage.py
+```
+
+Commands:
+
+```bash
+python3 scripts/canonical_pack_coverage.py inventory \
+  --root . \
+  --output .oracle/evidence/canonical-pack/<boundary>/inventory.json
+
+python3 scripts/canonical_pack_coverage.py check \
+  --inventory .oracle/evidence/canonical-pack/<boundary>/inventory.json \
+  --ledger docs/contracts/canonical-pack-coverage.json \
+  --output .oracle/evidence/canonical-pack/<boundary>/check.json
+
+python3 scripts/canonical_pack_coverage.py diff \
+  --before .oracle/evidence/canonical-pack/<previous>/inventory.json \
+  --after .oracle/evidence/canonical-pack/<boundary>/inventory.json \
+  --output .oracle/evidence/canonical-pack/<boundary>/diff.json
+```
+
+Runtime code never imports these artifacts.
+
+Inventory inputs:
+
+- Canonical bundled snapshot.
+- Typed executor, orchestrator, element, renderer, planner, and finalizer projections.
+- Canonical database projection.
+- Runtime-resource closure.
+- Structured documentation routes.
+- Code-declared kernel migration, vocabulary, and repository constants.
+- Exact AST inspection of application composition, SDK surfaces, product/operational CLI declarations, bridge mounts, doctor, backup, restore, inspect, package audit, and census generation.
+
+Do not use the ledger to discover inventory and do not broadly grep arbitrary text.
+
+Surface IDs:
+
+```text
+pack:<pack_id>
+executor:<qualified_id>
+orchestrator:<qualified_id>
+element:<kind>/<id>
+renderer:<qualified_id>
+planner:<qualified_id>
+finalizer:<qualified_id>
+alias:<kind>:<qualified_id>
+migration:<pack_id>/<integer>
+table:<table>
+stream_type:<dotted_name>
+event_kind:<dotted_name>
+command_kind:<dotted_name>
+repository:<RepositoryId>
+conformance:<pack_id>/<dimension>
+cli_mount:<space-separated path>
+sdk_surface:<stable service or method id>
+bridge_mount:<token>
+runtime_resource:<pack_id>/<relative path>
+agent_document:<pack_id>/<relative path>
+operational_consumer:<application|doctor|backup|restore|inspect|package|agent_census>
+```
+
+Sort rows by `(kind, surface_id)` and sort unique evidence and consumer fields.
+
+Ledger rules:
+
+- Schema is `astrid.canonical_pack_coverage.v1`.
+- Disposition is `active` or `deleted`.
+- An active owner is exactly `pack:<PackId>` or `kernel:<LowerIdent>`.
+- Deleted rows have null owner, nonblank justification, immutable baseline evidence, and no consumers.
+- Mechanically derived pack ownership cannot be overridden manually.
+- Kernel ownership requires implementation evidence, test/contract evidence, justification, and proof that the surface is not representable by an existing pack declaration.
+- Active rows require resolvable evidence and a consumer unless the row is itself an operational consumer.
+- Consumer references resolve to active rows.
+- `builtin` and deprecated aliases are deletion records.
+- The 49 known `builtin.*` aliases are an exact baseline assertion; WP0 also captures all other deprecated aliases at the pinned source.
+
+`check` fails on:
+
+- `missing`
+- `stale`
+- `duplicate`
+- `conflict`
+- `deleted_still_active`
+- `invalid_kernel_justification`
+- `invalid_consumer`
+- `unclassified`
+- `undeclared_resource`
+- `unexpected_owner`
+
+Boundary diffs record added, removed, changed-owner, changed-evidence, changed-consumer, and changed-resource-digest sets. Every non-empty category requires review.
+
+The immutable baseline inventory is evidence only.
+
+# V. Database composition and migrations
+
+## 1. Projection
+
+Select:
+
+- A synthetic code-owned `core` node at migration head 1.
+- Every snapshot entry with bundled provenance and a `database` contribution.
+
+No pack allowlist or standard tuple participates.
+
+Each node contains ID, immutable declaration, owner resource handles, derived head, provenance, and existing collision projections.
+
+A synthetic trusted bundled database pack introduced in a test snapshot must enter composition without composition-code changes.
+
+## 2. Dependency semantics
+
+For node `P`:
+
+```text
+head(P) = max(P.migrations[].version)
+```
+
+`depends_on: {pack: Q, min_migration: N}` means:
+
+- `Q` is a selected database node or `core`.
+- `head(Q) >= N`.
+- All migrations of `Q` precede all migrations of `P`.
+- It does not compare release versions or inspect applied project state.
+
+Before opening a database, require:
+
+- Every database pack has a direct or transitive path to `core`.
+- No self-dependency.
+- No duplicate dependency target.
+- Every target has migrations.
+- Each minimum is positive and at most the target head.
+- The graph is acyclic.
+- Existing table, migration identity/name, vocabulary, repository, CLI, bridge, and other collision checks pass.
+
+## 3. Standard graph and ordering
+
+```text
+core@1
+├── references@1  requires core >= 1
+├── runaway@1     requires core >= 1
+├── shots@1       requires core >= 1
+└── timeline@1    requires core >= 1
+```
+
+Use deterministic Kahn sorting:
+
+1. Edge `dependency → dependent`.
+2. Seed a min-heap with zero-indegree nodes.
+3. Heap key `(0 if id == "core" else 1, pack_id)`.
+4. Pop, append, decrement dependents, and enqueue newly ready nodes.
+5. On incomplete emission, return a deterministic lexical cycle.
+6. Emit each node’s migrations by increasing integer version.
+
+Fresh order:
+
+```text
+core/1
+references/1
+runaway/1
+shots/1
+timeline/1
+```
+
+For a database created under the former three-pack composition, preserve existing `schema_migrations` rows and apply only missing `runaway/1`. Never rewrite or resequence applied rows.
+
+## 4. Preserved guarantees
+
+Preserve:
+
+- Pack, integer version, and migration name.
+- Existing SQL bytes.
+- Owned tables.
+- SHA-256 behavior.
+- Name/checksum drift rejection.
+- Too-new and unknown-pack refusal.
+- Per-migration `BEGIN IMMEDIATE`.
+- Atomic DDL/DML and migration-row recording.
+- Read-only compatibility probing.
+- `schema_migrations` as the sole applied-state record.
+
+Replace `pack_resource_root(pack_id)` with registered owner resource handles. The migration runner cannot reconstruct `astrid/packs/<id>` paths.
+
+Core remains explicit kernel behavior.
+
+# VI. Documentation and preservation
+
+- All 22 product packs declare direct structured documentation.
+- Add direct skills for blender, timeline, shots, references, and runaway.
+- Repair media frontmatter.
+- Package declared pack and nested component skills.
+- Keep `_core` as a skill-only kernel shell without `pack.yaml`.
+- Extend one generator so one snapshot produces the capability index and canonical pack census.
+- Census fields: ID, name, contribution categories, capability counts, database tables/head, documentation route, and ownership link.
+- Exclude DDL and applied database state.
+- Check mode fails on drift.
+- Delete independent skill inventory and raw-directory reparsing.
+
+Maintain a four-pack matrix for timeline, shots, references, and runaway covering migration, repository, events, commands, CLI, SDK, bridge, and conformance. Every cell receives baseline/final evidence or justified `N/A`.
+
+# VII. Work packages
+
+## WP0 — immutable baseline and ownership reconciliation
+
+Estimate: **0.45–0.65 week**.
+
+- Verify source `7ac50c12e8e4d90988fee603ffdb9896e5628792`.
+- Capture 19 capability manifests, four schema manifests, `_core`, 64 executors, 12 orchestrators, 10 elements, eight rendering extensions, four database packs, and 18 existing skills.
+- Record 23 current product directories, `builtin` deletion, and the final 22-pack expectation.
+- Inventory every customization and initial ownership.
+- Record all deprecated aliases as intended deletions.
+- Capture database ordering, migration identities/checksums, open behavior, repositories, vocabulary, CLI/SDK/bridge behavior, doctor, backup, restore, and wheel behavior.
+- Seed the four-pack preservation matrix and 15-criterion evidence matrix.
+- Record exact audit exclusions.
+- Treat runaway’s missing demo input as a deterministic temporary fixture.
+- Do not build a wheel or run the full suite.
+
+Exit: every baseline surface is pack-owned, kernel-owned, or intended deletion.
+
+## WP1 — contract, immutable model, resolver, snapshots, and audit tools
+
+Estimate: **1.3–1.75 weeks**. Depends on WP0.
+
+Contract-freeze subgate:
+
+- Land exact v2 schemas and immutable normalized types.
+- Land golden and invalid fixtures.
+- Land provenance, runtime-resource, and authoring-exclusion types.
+- Prove source versus installed-artifact authoring semantics.
+- Pass schema and normalization tests.
+- Obtain cumulative review before conversion.
+
+Then:
+
+- Evolve `PackDefinition`; do not create a parallel product model.
+- Implement the sole v2 loader.
+- Delete fallback parsing from the new path.
+- Implement confined digest-verifying runtime-resource handles.
+- Implement cached `BundledCatalog`.
+- Implement candidate capture and `CatalogSnapshot`.
+- Implement deterministic fingerprinting, precedence, duplicates, trust, freshness, and external-database rejection.
+- Make local pack creation emit strict capability-only v2.
+- Implement the bounded source/wheel resource classifier and targeted AST audit.
+- Implement coverage tooling.
+- Adapt registries to accept snapshot projections.
+
+Exit: the executable contract, catalog, resolver, snapshot, resource audit, and coverage tooling are fixture-proven.
+
+## WP2 — bundled conversion, ownership, resources, and documentation
+
+Estimate: **1.0–1.35 weeks**. Depends on WP1.
+
+- Convert all 22 retained packs.
+- Fold four schema manifests into `database`.
+- Preserve migration bytes and behavior declarations.
+- Make references the combined exemplar without changing its three-table semantics.
+- Delete `builtin` and deprecated aliases.
+- Add missing direct skills and repair media.
+- Classify every bundled non-Python source file.
+- Explicitly declare requirements, Blender’s service unit, templates, schemas, nested skills, fonts, SQL, and runtime assets.
+- Move pack-owned cross-root assets to their owner; justify true kernel assets.
+- Switch bundled discovery to v2.
+- Regenerate capability/census output.
+
+Boundary A:
+
+- Generate inventory/check/diff.
+- Prove exactly 22 product packs load.
+- Prove no `schema-pack.yaml` remains.
+- Prove source resource classification and authoring exclusions.
+- Review the contract, snapshots, documentation, resources, and ownership cumulatively.
+- Resolve findings before WP3.
+
+## WP3 — database hard cut
+
+Estimate: **1.0–1.4 weeks**. Depends on Boundary A.
+
+- Extract reusable collision/migration algorithms from the schema-pack subsystem.
+- Remove schema-pack identity from surviving types and diagnostics.
+- Add synthetic core and catalog-derived database nodes.
+- Implement the exact dependency, head, graph, and ordering contract.
+- Enforce core reachability and collisions before open.
+- Carry resource handles and provenance into migration execution.
+- Delete fixed standard builders, tuples, and name-selection branches.
+- Rewire writable and read-only paths to the operation snapshot.
+- Test synthetic bundled database selection.
+- Validate fresh four-pack, legacy three-pack upgrade, read-only pending, existing four-pack no-op, collisions, dependency failures, cycles, minimum heads, checksum/name drift, rollback, and every external provenance class.
+
+Boundary B:
+
+- Generate inventory/check/diff.
+- Regenerate the four-pack matrix.
+- Review ownership and persistence cumulatively.
+- Resolve findings before WP4.
+
+## WP4 — operational convergence
+
+Estimate: **1.1–1.5 weeks**. Depends on Boundary B.
+
+Thread one snapshot through application startup, `AstridClient`, SDK calls, rendering registries, bridge composition, helpers, read probes, doctor, backup, restore, install validation, inspect, and census generation.
+
+Preserve:
+
+- `open_database(path, registry)` as the SQLite seam.
+- `DatabaseWriter` and its exclusive owner lock.
+- Static repository/service/CLI/bridge factories.
+- Backup/restore payload semantics.
+- The eight-family gateway and two nested mounts.
+
+Raw database reads use the shared probe or an already-probed connection.
+
+`python3 -m astrid.core.pack.cli inspect <id> [--json]` exposes normalized identity, provenance, contribution categories, database dependencies/migrations/tables/head, documentation, runtime-resource closure, and relevant rejected/stale diagnostics.
+
+JSON uses a versioned envelope and sorted arrays; text renders from the same DTO.
+
+Doctor reports canonical census, catalog/resource/documentation health, and expected/applied/pending migrations by owner without mutation.
+
+Exit: operational consumers agree on one snapshot and none independently reparse or rescan.
+
+## WP5 — deletion, final gates, and packaging preparation
+
+Estimate: **0.85–1.2 weeks**. Depends on WP4.
+
+Delete:
+
+- All `schema-pack.yaml`.
+- Schema-pack parser, model, discovery, builders, standard lists, and compatibility exports.
+- V1 pack parsing and flat/schema-less loading.
+- Alternate filename probes.
+- Manifest-supplied trust handling.
+- Raw identity readers.
+- Independent pack/skill inventories.
+- Deprecated aliases and compatibility tests/docs.
+- Fixed database tuples and name-based selection.
+- Legacy-format audit support.
+
+Retain exact gates for prohibited paths, retired imports/symbols, fixed tuples, raw identity reconstruction, independent rescans, coverage, behavior matrix, targeted resource checks, census drift, and source/wheel closure.
+
+Packaging:
+
+- Extend ordinary package-data patterns for every runtime-resource kind.
+- Include all manifests, SQL, skills/docs, requirements, services, schemas, templates, fonts, and runtime assets.
+- Exclude all authoring-only paths.
+- Add no backend.
+- Convert wheel-building tests into source contracts, mocked builder units, or consumers of `ASTRID_PREBUILT_WHEEL`.
+- Add `InstalledArtifactHarness.from_wheel(path, ...)`.
+- Ensure all current `build_once` call sites consume the prebuilt wheel when set.
+- Keep `build_once` only as optional developer convenience; authoritative validation cannot invoke it.
+
+Boundary C:
+
+- Generate inventory/check/diff.
+- Run source package-data and authoring-exclusion checks without building.
+- Regenerate the final matrix candidate.
+- Review convergence, deletion, documentation, resource classification, packaging, and build-call graph.
+- Prove authoritative validation has exactly one build invocation.
+- Resolve findings before WP6.
+
+## WP6 — one-build validation and evidence closure
+
+Estimate: **0.5–0.75 week**. Depends on Boundary C.
+
+One authoritative owner runs:
+
+```bash
+python3 -m build --outdir .oracle/evidence/final-build
+```
+
+Require exactly one wheel in that directory, record its SHA-256, and set:
+
+```bash
+ASTRID_PREBUILT_WHEEL=<absolute-wheel-path>
+```
+
+No later command may invoke `python -m build`, `build_once`, `pip wheel`, or another source build.
+
+Run the required focused suite:
+
+```bash
+python3 -m pytest tests/packs tests/v10/test_catalog_migrations.py \
+  tests/v10/test_m8_packaging.py tests/v10/test_pack_factoring.py \
+  tests/v10/test_reference_repository.py tests/sdk/test_references.py \
+  tests/sdk/test_extended_composition.py
+```
+
+Run:
+
+```bash
+python3 -m astrid doctor
+```
+
+Using the same wheel, run:
+
+- Installed bundled-catalog load.
+- Source/wheel normalized-definition comparison.
+- Bidirectional runtime-resource audit.
+- Source authoring-path presence and wheel authoring-path absence.
+- Documentation and `_core` census audit.
+- Fresh, upgraded, read-only-pending, and existing SQLite scenarios.
+- External capability success and database rejection.
+- References and runaway round trips.
+- Backup/restore.
+- Inspect text/JSON.
+- Doctor/inspect non-mutation.
+- Exact legacy gates.
+- Zero-unclassified coverage.
+
+Then run once:
+
+```bash
+python3 -m pytest
+```
+
+If an apparently unrelated failure occurs, reproduce only that failing scenario against the pinned source. Do not build again or run a second baseline suite.
+
+Final artifacts:
+
+- One wheel and hash.
+- Installed-lane records containing that hash.
+- Coverage inventory/check/diff.
+- Runtime-resource closure comparison.
+- Authoring-only source/wheel audit.
+- Four-pack preservation matrix.
+- Fifteen-row evidence matrix.
+- Focused/full test receipts.
+- Doctor and inspect receipts.
+- Independent reviewer dispositions.
+
+After all evidence passes:
+
+- Obtain final Sol oracle review.
+- Commit only reviewed paths.
+- Push only `HEAD:refs/heads/megado/canonical-pack-beta`.
+- Open the completed worktree.
+- Do not merge, rebase, deploy, promote, or publish.
+
+# VIII. Review cadence
+
+1. Contract-freeze subgate during WP1.
+2. Boundary A after WP2.
+3. Boundary B after WP3.
+4. Boundary C after WP5.
+5. Final review after WP6.
+
+At A, B, C, and final:
+
+- Generate one immutable coverage artifact set.
+- Regenerate relevant matrices.
+- Converge code, evidence, and status at one checkpoint.
+- Run one cumulative independent review by default.
+- Resolve accepted findings and obtain a fresh pass before continuing.
+
+Focused local checks may run during implementation. Immutable cumulative artifacts are generated only at these boundaries.
+
+# IX. Criterion traceability
+
+| Criterion | Primary proof |
+|---|---|
+| 1. Strict v2 bundled packs | WP1–WP2, A, WP5–WP6 |
+| 2. No independent identity parsing | Snapshot invariant, WP4–WP6 |
+| 3. Zero-unclassified ledger | WP0–WP2, all boundaries |
+| 4. Manifest-derived database composition | WP3 synthetic-pack test |
+| 5. Four-pack semantics preserved | Preservation matrix |
+| 6. Owner-relative migrations and safety | WP3 SQLite matrix |
+| 7. Operational agreement | WP4, C, final |
+| 8. Structured docs and `_core` census | WP2, WP4–WP6 |
+| 9. Inspect and doctor | WP4, C, final |
+| 10. Clean-wheel closure | Source/wheel and authoring audits |
+| 11. Legacy deletion | WP5 exact path/import/AST gates |
+| 12. External capability/database policy | WP1, WP3, WP6 |
+| 13. Golden forms | WP1 and final |
+| 14. Focused/full validation | WP6 single-build flow |
+| 15. Evidence matrix and oracle | WP6 final closure |
+
+# X. Anti-pattern rejections
+
+- No hidden schema-pack subsystem.
+- No fixed-composition disguise.
+- No universal service locator.
+- No runtime coverage ledger.
+- No YAML DDL or applied state.
+- No manifest-supplied trust.
+- No operation-internal discovery.
+- No contribution from losing duplicate candidates.
+- No perfect/general static analysis.
+- No runtime asset hidden as authoring-only.
+- No source-only path required to exist in an installed wheel.
+- No second parser or relaxed installed manifest grammar.
+- No dependency solver, project lock, lifecycle machinery, marketplace, signing, sandboxing, or UI.
+- No external SQL.
+- No unloadable kernel.
+- No v1, alternate filename, schema-less, dual-read, compatibility-export, deprecated-alias, or fallback path.
+- No generalized dynamic factory framework.
+- No custom packaging backend.
+- No broad repository-wide regex scanner.
+- No repeated wheel builds.
+- No repeated immutable boundary artifacts.
+- No scope expansion into unrelated models, LoRAs, taxonomies, or kernel primitives.
+- No success with an active bypass, unclassified surface, missing documentation, undeclared runtime resource, invalid authoring exclusion, source/wheel mismatch, or independent rescan.

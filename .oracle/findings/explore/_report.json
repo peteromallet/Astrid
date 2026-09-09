@@ -1,0 +1,233 @@
+{
+  "briefs_dir": ".oracle/briefs/explore",
+  "default_model": "codex:gpt-5.6-luna",
+  "failed_count": 0,
+  "isolation": "threads",
+  "max_tokens": 65536,
+  "max_workers": 10,
+  "model_map": [],
+  "output_dir": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore",
+  "project_dir": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta",
+  "stopped_by_signal": false,
+  "succeeded_count": 10,
+  "sum_agent_seconds": 3231.17,
+  "task_timeout_s": 1800,
+  "tasks": [
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E1-manifest-authorities.md",
+      "elapsed_s": 320.196,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:54:17Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E1-manifest-authorities.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48357,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 3268,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E1-manifest-authorities.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E1-manifest-authorities",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E10-runaway-builtin.md",
+      "elapsed_s": 332.971,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:54:30Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E10-runaway-builtin.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48356,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2958,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E10-runaway-builtin.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E10-runaway-builtin",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E2-capability-projections.md",
+      "elapsed_s": 334.738,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:54:32Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E2-capability-projections.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48354,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2947,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E2-capability-projections.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E2-capability-projections",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E3-database-projection.md",
+      "elapsed_s": 150.459,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:51:27Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E3-database-projection.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48355,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2988,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E3-database-projection.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E3-database-projection",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E4-operational-consumers.md",
+      "elapsed_s": 386.158,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:55:23Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E4-operational-consumers.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48361,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2792,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E4-operational-consumers.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E4-operational-consumers",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E5-coverage-ledger.md",
+      "elapsed_s": 303.142,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:54:00Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E5-coverage-ledger.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48359,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2793,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E5-coverage-ledger.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E5-coverage-ledger",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E6-agent-documentation.md",
+      "elapsed_s": 404.847,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:55:42Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E6-agent-documentation.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48358,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 3229,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E6-agent-documentation.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E6-agent-documentation",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E7-packaging-closure.md",
+      "elapsed_s": 479.208,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:56:56Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E7-packaging-closure.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48360,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 25,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E7-packaging-closure.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E7-packaging-closure",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E8-external-security.md",
+      "elapsed_s": 188.534,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:52:05Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E8-external-security.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48362,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2559,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E8-external-security.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E8-external-security",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    },
+    {
+      "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E9-legacy-ci.md",
+      "elapsed_s": 330.917,
+      "error": null,
+      "error_class": null,
+      "finish_reason": null,
+      "finished_at": "2026-08-30T21:54:28Z",
+      "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E9-legacy-ci.meta.json",
+      "model": "codex:gpt-5.6-luna",
+      "pid": 48363,
+      "raw_result_keys": [
+        "stdout"
+      ],
+      "response_chars": 2517,
+      "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E9-legacy-ci.txt",
+      "started_at": "2026-08-30T21:48:57Z",
+      "status": "ok",
+      "stem": "E9-legacy-ci",
+      "task_timeout_s": 1800,
+      "tool_calls": 0
+    }
+  ],
+  "toolsets": [
+    "('file'",
+    "'web')"
+  ],
+  "total_count": 10,
+  "wall_clock_s": 479.225
+}

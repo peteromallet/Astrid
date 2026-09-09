@@ -1,0 +1,21 @@
+{
+  "brief": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/briefs/explore/E5-coverage-ledger.md",
+  "elapsed_s": 303.142,
+  "error": null,
+  "error_class": null,
+  "finish_reason": null,
+  "finished_at": "2026-08-30T21:54:00Z",
+  "meta_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E5-coverage-ledger.meta.json",
+  "model": "codex:gpt-5.6-luna",
+  "pid": 48359,
+  "raw_result_keys": [
+    "stdout"
+  ],
+  "response_chars": 2793,
+  "response_file": "/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta/.oracle/findings/explore/E5-coverage-ledger.txt",
+  "started_at": "2026-08-30T21:48:57Z",
+  "status": "ok",
+  "stem": "E5-coverage-ledger",
+  "task_timeout_s": 1800,
+  "tool_calls": 0
+}

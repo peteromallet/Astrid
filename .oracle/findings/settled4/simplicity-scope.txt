@@ -1,0 +1,15 @@
+CLEAN
+
+No new material simplification, defect, or unresolved investigation remains.
+
+- **Criteria 1–4, 11–13:** strict v2 `pack.yaml`, one catalog/parser, zero-unclassified ledger, manifest-derived database composition, legacy deletion, golden fixtures, and external-database fail-closed behavior are explicit.
+- **Criteria 5–7:** the four-pack preservation matrix, owner-relative migration handles, dependency ordering, shared snapshots, and operational-consumer convergence cover behavior and authority preservation.
+- **Criteria 8–10:** direct structured documentation, generated `_core` census, isolated prebuilt-wheel execution, source/wheel closure, and authoring-only audits are executable requirements.
+- **Criteria 14–15:** focused/full validation, one-build discipline, baseline-independence receipts, evidence matrix, and final oracle review are specified.
+- **Wave 1 dispositions:** schema freeze, catalog boundary, recursive resource closure, ledger lifecycle, behavior matrix, and proportionate legacy gates are retained.
+- **Wave 2 dispositions:** exact field grammar, operation snapshots, deterministic database semantics, reduced artifact cadence, and one-build packaging proof are retained.
+- **Wave 3 dispositions:** fixed inventory allowlist, root-independent provenance identity, simplified lifetime/freshness model, legacy-only rejection, single admission projection, clean-wheel isolation, and baseline receipts are all explicit.
+- **North Star anti-patterns:** each named anti-pattern has an explicit rejection or gate. No new service locator, lifecycle machinery, external SQL, fixed-composition disguise, compatibility path, broad scanner, cache invalidator, or redundant parser is introduced.
+
+The runaway fixture note is bounded implementation work with a required final round-trip gate, not an open planning lane.
+0

@@ -1,0 +1,15 @@
+[launch_hermes_agent] model=codex:gpt-5.6-luna → resolved=openai-codex/gpt-5.6-luna toolsets=['file', 'web'] max_tokens=65536 context_budget_tokens=(auto)
+[launch_hermes_agent] NOTE: omp gives the full toolset (Bash, Read, Edit, web, …); the file/web/terminal subset is a superset here.
+[launch_hermes_agent] cwd=/Users/peteromalley/Documents/reigh-workspace/Astrid-canonical-pack-beta
+Working...
+1. **Critical split authority — conflicts with frozen goal and plan WP1/WP2/WP7.** `timeline`, `shots`, `references`, and `runaway` still use separate `schema-pack.yaml` manifests (`astrid/packs/timeline/schema-pack.yaml:1-19`; `runaway/schema-pack.yaml:1-24`). Two independent standard builders hard-code only `timeline, shots, references` (`astrid/core/schema_packs/standard.py:27-45`; `astrid/packs/__init__.py:88-110`), while CLI mounts repeat the same fixed paths (`astrid/core/cli/domain_product.py:154-174`). Legacy filename/parser fallback still accepts `pack.yml`, `pack.json`, and flat YAML (`astrid/core/pack/_common.py:16-19`; `loader.py:184-216`).
+
+2. **Wheel policy directly violates clean-wheel documentation/resource closure.** `include-package-data=false`; package data excludes every `skill/` tree and includes no Markdown, TXT, or `.service` patterns (`pyproject.toml:66-133`). The wheel test explicitly forbids `/skill/`, `STAGE.md`, and `requirements.txt` (`tests/v10/test_m8_packaging.py:63-74`). This conflicts with goal criteria 8/10 and plan WP6.
+
+3. **Current recursive inclusion is extension-based, not manifest/resource-based.** YAML/JSON/HTML/CSS/JS/TS/TSX/TTF are recursively included (`pyproject.toml:103-133`), covering training schemas/UI (`dataset_build/config.py:20-22`; `phases.py:37-38`) and the visualization font (`render_png.py:72-89`). Opaque runtime files are omitted: Blender reads `server/blender-render-api.service` (`blender/deploy.py:46-59,282-293`); executor discovery/installation can consume `requirements.txt` (`execution/executor/folder.py:155-175`; `install.py:182-201`).
+
+4. **Path/symlink risk remains uneven.** Declared content roots resolve without confinement (`pack/walkers.py:84-115`); docs and entrypoint checks join paths and follow symlinks (`pack/validate.py:501-510,736-743`). Rendering extension paths and migration paths do enforce containment (`pack/registry.py:293-301`; `schema_packs/manifest.py:322-334`). Confirms plan’s realpath-risk control.
+
+5. **Simplest seam:** extend `tests/v10/test_m8_packaging.py`’s `build_once` harness (`:303-370`) with an installed-process, manifest-driven closure audit: load the canonical catalog, enumerate every declared pack resource/migration/skill/document, assert existence/readability, and reject source-tree imports. Replace hard-coded `EXPECTED_RESOURCES`; broaden `test_package_data.py:57-86` and the nine-pack skill floor (`test_pack_layout_contract.py:367-390`). Actual wheel membership remains unobserved because this was read-only exploration.
+[launch_hermes_agent] done in 297.5s (exit=0)
+0

@@ -1,0 +1,31 @@
+## Ranked findings
+
+1. **REJECT-AS-UNSAFE — composition authority remains ambiguous.**  
+   The final architecture says standard composition is “core plus references, runaway, shots, and timeline” and WP3 repeats that named set. Criterion 4 and the anti-patterns prohibit any duplicate fixed tuple/list authority. The plan must make the named packs an expected-result assertion only; the actual algorithm must select trusted bundled manifests with `database` contributions and resolve dependencies from the catalog. Otherwise the proposed replacement can preserve the same hard-coded authority under new terminology.
+
+2. **INVESTIGATE — coverage ledger has no explicit regeneration/update seam.**  
+   WP0 establishes the ledger, while WP5 enables zero-unclassified/multi-owner gates, but no step explicitly regenerates it after manifest conversion, resource declaration, consumer rewiring, and deletion. New v2 resources, docs, projections, or operational consumers could escape the initial audit. Require final ledger generation from the cutover tree, or integrated ledger gates at boundaries A/B/C.
+
+3. **INVESTIGATE — criterion 5 lacks a per-pack preservation evidence matrix.**  
+   WP0 characterizes broad repository/event/command/CLI/SDK/bridge behavior; WP6 names references/runaway round trips and repository/conformance suites. The frozen criterion requires migration, repository, event, command, CLI, SDK, and conformance preservation for **each** of timeline, shots, references, and runaway. Existing coverage may suffice, but the plan does not require evidence mapping each pack × behavior, especially shots/timeline CLI and SDK paths.
+
+## Frozen criterion check
+
+- **C1:** Covered by WP1–2, WP5.
+- **C2:** Covered by WP1, WP4–5; dependent on raw-reader gate.
+- **C3:** Partial; ledger lifecycle gap.
+- **C4:** Investigate; fixed-composition wording ambiguity.
+- **C5:** Partial; preservation matrix absent.
+- **C6:** Covered by WP3.
+- **C7:** Covered by WP4–6.
+- **C8:** Covered by WP2, WP4–5.
+- **C9:** Covered by WP4.
+- **C10:** Covered by WP5–6.
+- **C11:** Covered by WP5.
+- **C12:** Covered by WP1/WP3/WP6.
+- **C13:** Covered by WP1 and WP6.
+- **C14:** Covered by WP6.
+- **C15:** Covered by WP6.
+
+**North Star disposition: ALIGNED, conditionally.** The plan materially advances one canonical authority, typed projections, SQL-owned schema, documentation, and closure. The three findings are gates against accidentally retaining fixed composition, stale ownership accounting, or incomplete behavioral proof.
+0

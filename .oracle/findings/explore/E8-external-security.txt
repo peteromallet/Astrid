@@ -1,0 +1,16 @@
+1. **Earliest common seam: `discover_pack_metadata._add`.** All layered discovery converges there with provenance already known: `source`, `local`, `extra`, `env`, `installed` are ordered at `astrid/core/pack/discovery.py:39-41`; `_add(pack, source_kind)` creates the shared metadata at `:116-123`. Reject external `database` declarations there—before any typed registry projection or schema registry registration. This confirms `.oracle/plan.md` §6-7 and WP1.
+
+2. **Admission paths traced.**
+   - Bundled source packs: `discover_packs()` at `astrid/core/pack/loader.py:84-107`.
+   - Project-local packs: materialized/discovered at `astrid/core/pack/loader.py:53-72` and `astrid/core/pack/discovery.py:216-219`; `local` is external to the bundled catalog.
+   - Explicit extra roots and `ASTRID_PACKS_PATH`: `discovery.py:127-209`, `:227-234`.
+   - Installed packs: active revisions from `InstalledPackStore` at `store.py:195-216`, consumed at `discovery.py:235-257`.
+   - Git installs: clone/pin/detect, then re-enter local install at `install_git.py:300-355`; publication is active revision plus `install.json` at `install_local.py:375-434`.
+   - Trust inspection is separate: `extract_trust_summary()` parses manifest-derived data at `validate.py:1028-1130`; installed trust audit runs later in rendering at `rendering/registry.py:717-780`.
+
+3. **Critical provenance loss.** `discover_packs_ordered()` strips `DiscoveredPack` to bare `PackDefinition` at `discovery.py:262-282`; executor/orchestrator registries consume that at `execution/executor/registry.py:292-329`. This conflicts with the plan’s “derive trust from discovery provenance” control. All capability consumers must retain canonical provenance.
+
+4. **Current database boundary is independently fixed.** `core/schema_packs/standard.py:31-45` loads only hard-coded bundled schema manifests; `SchemaPackRegistry.register_pack()` never opens SQL at `schema_packs/registry.py:142-144`; SQLite admission begins at `migrations/runner.py:301-322`. The future catalog must replace the fixed builder, not add a second guard downstream.
+
+5. **Affected tests/risks.** Existing provenance coverage: `tests/core/rendering/test_registry_matrix.py:242-273`, `:609-650`, `:653-686`; Git/revision coverage: `tests/packs/test_git_pack_install.py:1-5`. Add capability-only success plus external database fail-closed cases across local, extra, env, Git-installed, and active-revision discovery. `pack.yaml` currently accepts self-declared `origin`/`install_tier` (`loader.py:161-172`) and cannot authorize trust.
+0

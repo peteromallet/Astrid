@@ -1,0 +1,8 @@
+1. **Unresolved doctor ownership contract — WP4, §§III.9, IV.5, V.**  
+   WP4 requires doctor to report “Python ownership health,” but Python ownership is defined only by the audit inventory/ledger (§IV.5), which runtime must not import (§V). `CatalogSnapshot`/`CatalogEntry` contain no Python ownership projection (§III.9, §IV.5). Doctor therefore must either read forbidden audit artifacts or independently rescan Python, violating the single-snapshot/no-rescan contract and the North Star’s no-independent-authority rule. This affects criteria 2, 3, and 9. The simplest safe disposition is to make Python ownership an offline coverage-audit result, not doctor runtime state; otherwise the missing projection interface must be explicitly specified.
+
+2. **Duplicated migration-effect baseline — WP0 vs §VI.4.**  
+   WP0 requires capturing “actual fresh-schema table effects.” WP3 then executes the complete real migration graph in disposable SQLite and introspects the same effects, producing the authoritative table-ownership proof. No later criterion, boundary, or receipt consumes the WP0 table-effect artifact; WP0’s stated exit only requires SQL executability. Remove that baseline capture while retaining migration identities, checksums, SQL bytes, and existing behavior evidence. This preserves criterion 6 and the accepted Wave 6 real-runner validator while eliminating duplicate execution/introspection and review ceremony.
+
+Checked criteria 1–15, all accepted Wave 1–6 dispositions, and every North Star anti-pattern. No superseded admission, legacy-form, fixed-composition, SQL-parser, wheel-isolation, or Runaway objections are repeated. The plan is otherwise North Star-aligned; these two points prevent a clean stability disposition.
+0

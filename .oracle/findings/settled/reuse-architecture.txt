@@ -1,0 +1,13 @@
+1. **INVESTIGATE — catalog boundary could become a universal service locator.**  
+   WP1–WP4 repeatedly say “one catalog” and “inject one projection,” but do not define catalog lifetime, construction ownership, or the permitted projection API. Existing duplication is specifically in SDK, rendering, generation, and agent-index discovery (E2: `sdk/discovery.py`, rendering/generation registries, `agent_index.py`; E4: `application.py`, bridge, SDK invocation). A broad catalog object passed everywhere could replace today’s typed registries with an implicit locator, despite the anti-pattern rejection. Acceptance should prove that the catalog exposes declarations/projections only, while existing typed registries and static factories retain construction ownership.
+
+2. **ACCEPT-CANDIDATE — separate baseline characterization from final validation more sharply.**  
+   WP0 requires fresh/upgrade/read-only/external characterization, then WP3 and WP6 require substantially the same scenarios again. Some duplication is justified for before/after evidence, but the plan should distinguish immutable baseline artifacts from final contract tests so expensive SQLite, wheel, and full-suite checks are not redundantly performed. This matters because the validation contract explicitly says one authoritative owner runs each expensive validation once.
+
+3. **INVESTIGATE — “resource closure” needs an explicit declaration completeness invariant.**  
+   WP1/WP2/WP5 require declared resources and wheel closure, but the snapshot does not state whether every runtime-discovered file must be declared or only files reachable from declared resource groups. E7 shows current runtime consumers read opaque files such as `requirements.txt` and Blender’s `.service` unit, while package rules omit them. Without a precise closure rule, packaging can pass while runtime assets remain undeclared.
+
+**Frozen decisions 1–13 and 15–18:** aligned; no material conflict found. **Decision 14:** aligned conditionally on finding 1—static wiring is acceptable only when ownership/mount validation comes from canonical projections.
+
+**North Star disposition:** **ALIGNED, pending the two investigations above.** The plan deletes the schema-pack species, fixed composition authorities, legacy parsers, duplicated DDL/status prose, and compatibility paths; preserves typed registries, SQL-owned schema, `schema_migrations`, and irreducible kernel ownership.
+0

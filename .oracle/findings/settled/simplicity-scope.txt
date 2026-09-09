@@ -1,0 +1,28 @@
+## Ranked simplifications and defects
+
+1. **ACCEPT-CANDIDATE — Remove duplicated validation work.**  
+   WP0 characterization and WP6 final validation overlap on repository, composition, external-pack, and database scenarios. Keep WP0 as a pinned baseline capture; rerun only changed-contract scenarios in WP6. This preserves criterion 14’s before/after evidence while reducing repeated expensive runs.
+
+2. **REJECT-AS-UNSAFE — Resolve “standard composition” wording.**  
+   “Core plus references, runaway, shots, and timeline” in **Final architecture** reads like another fixed tuple, conflicting with settled decision 9 and done criterion 4. The implementation invariant must be explicit: select all trusted bundled database contributions from the canonical catalog; the four named packs are expected fixtures, not an authority.
+
+3. **INVESTIGATE — Freeze the v2 field contract before WP1 implementation.**  
+   “Complete canonical object” lists concepts but not required/optional fields, normalized forms, resource declaration grammar, documentation routing shape, provenance semantics, or database contribution constraints (**Final architecture**, **WP1**). Without a field-level contract, parallel implementation can produce incompatible loaders/projections. This is contract clarification, not a new research lane.
+
+4. **ACCEPT-CANDIDATE — Prefer one catalog conformance gate over many textual legacy scans.**  
+   WP5 proposes several regex/static checks for schema imports, fixed lists, raw parsing, and identity reconstruction. Retain only checks that catch non-importable legacy files; make catalog-loading, coverage, and clean-wheel audits authoritative. This avoids brittle false positives while still enforcing the hard cut.
+
+## Frozen-criterion check
+
+- **Settled decisions 1–18:** all are represented; decisions 9 and 14 need the wording clarification above.
+- **Done criteria 1–4:** covered by WP1–3, subject to the composition correction.
+- **5–7:** covered by WP3–4 and existing mechanics preservation.
+- **8–10:** covered by WP2, WP4–6, and wheel closure.
+- **11–13:** covered by WP1, WP2, WP5, and golden fixtures.
+- **14:** explicitly covered by WP6’s focused/full suites and baseline reproduction.
+- **15:** evidence matrix, reviewer disposition, commit/push/open-worktree controls are explicit in WP6.
+
+## North Star disposition
+
+**ALIGNED, contingent on resolving the fixed-composition ambiguity and freezing the v2 contract.** The plan otherwise removes the second pack species, preserves typed projections and SQLite authority, avoids post-beta machinery, and closes ownership/documentation/resource gaps.
+0

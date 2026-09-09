@@ -957,6 +957,30 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert not list(tmp_path.glob("astrid-attempt-*"))
 
 
+def test_explicit_task_storage_envelope_rejects_output_overrun_and_cleans_up(tmp_path):
+    _write_manifest(tmp_path / "echo")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-storage-overrun",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-storage-overrun",
+            "fence": 1,
+            "storage_estimate": {"scratch_bytes": 1024, "output_bytes": 1},
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-storage-overrun"] = task
+    with pytest.raises(HostError, match="output bytes 2 exceed task output limit 1"):
+        host.run_task(task, lease_token="lease-storage-overrun")
+    assert runtime.settlements == []
+    assert runtime.failures and "output bytes 2" in runtime.failures[0][2]
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
 def test_completed_process_evidence_reads_settlement_payload_when_result_omits_identity():
     evidence = _completed_process_evidence(
         capability_id="wan2gp.generate_video",

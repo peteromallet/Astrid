@@ -26,6 +26,10 @@ from astrid.core._shared.result_manifest import complete_output_metadata
 from astrid.core.cli_choices import add_choice_arg
 from astrid.core.foundation.atomic_io import write_json_atomic
 from astrid.core.generation import GENERATION_RESULT_KEY
+from astrid.core.generation.storage_policy import (
+    CLOUD_I2I_STORAGE_POLICY,
+    ImageStoragePolicyError,
+)
 from astrid.core.generation.backends import (
     BackendAdapter,
     GenerationBackendRegistry,
@@ -480,6 +484,7 @@ def generate_core(
     source_urls: list[str] | None = None
     all_applied_features: list[str] = []
     result_error = None
+    bounded_policy = None
 
     for i in range(count):
         # Determine the prompt entry for this iteration
@@ -568,6 +573,23 @@ def generate_core(
             if args.background:
                 params["background"] = args.background
 
+        if entry.id == "z-image" and mode_name == "i2i" and args.execution == "cloud":
+            bounded_policy = CLOUD_I2I_STORAGE_POLICY
+            try:
+                bounded_policy.validate_request(
+                    model=entry.id,
+                    mode=mode_name,
+                    execution=args.execution,
+                    params=params,
+                )
+            except ImageStoragePolicyError as exc:
+                raise AstridError(
+                    str(exc),
+                    recovery_command="use one bounded z-image cloud i2i output with explicit dimensions",
+                ) from exc
+        else:
+            bounded_policy = None
+
         # --- dispatch to adapter (SD-004) ------------------------------------
         try:
             result: GenerationResult = adapter.generate(
@@ -594,6 +616,15 @@ def generate_core(
                 if params.get("loras"):
                     _embed_fields["loras"] = str(params["loras"])
                 embed_png_text(img_path, _embed_fields)
+
+                if bounded_policy is not None:
+                    try:
+                        bounded_policy.validate_final_output(
+                            img_path,
+                            index=len(generated_paths) - 1,
+                        )
+                    except ImageStoragePolicyError as exc:
+                        raise AstridError(str(exc), recovery_command="retry with a smaller bounded image") from exc
 
                 # Embedding metadata mutates the PNG, so settle the final bytes.
                 content_hash = (
@@ -690,6 +721,11 @@ def generate_core(
         manifest["outputs"], root_dir=out,
     )
     write_json_atomic(manifest_path, manifest)
+    if bounded_policy is not None:
+        try:
+            bounded_policy.validate_manifest(manifest_path)
+        except ImageStoragePolicyError as exc:
+            raise AstridError(str(exc), recovery_command="retry with a smaller bounded image") from exc
 
     generation_result = GenerationResult(
         image_paths=generated_paths,

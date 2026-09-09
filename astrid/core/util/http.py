@@ -35,13 +35,56 @@ Transport = Callable[[Request], tuple[int, bytes]]
 # Default (real-http) transport
 # ---------------------------------------------------------------------------
 
+def _read_response_body(response: Any, *, max_bytes: int | None = None) -> bytes:
+    """Read a response with an optional hard byte ceiling."""
+    if max_bytes is None:
+        return response.read()
+    limit = int(max_bytes)
+    if limit < 0:
+        raise ValueError("max_bytes must be non-negative")
+    content_length = response.headers.get("Content-Length")
+    if content_length is not None:
+        try:
+            if int(content_length) > limit:
+                raise AstridError(
+                    f"HTTP response exceeds bounded body limit of {limit} bytes"
+                )
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(min(64 * 1024, limit - total + 1))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise AstridError(
+                f"HTTP response exceeds bounded body limit of {limit} bytes"
+            )
+    return b"".join(chunks)
+
+
+def _bounded_body(body: bytes, *, max_bytes: int | None = None) -> bytes:
+    """Apply the same ceiling to injected/mock transports."""
+    if max_bytes is not None and len(body) > int(max_bytes):
+        raise AstridError(
+            f"HTTP response exceeds bounded body limit of {int(max_bytes)} bytes"
+        )
+    return body
+
+
 def _real_transport(request: Request) -> tuple[int, bytes]:
     """Execute *request* against the real network.
 
     Returns ``(status, body)``.  Raises ``URLError`` on connection failure.
     """
     with urlopen(request, timeout=_extract_timeout(request)) as response:
-        return response.status, response.read()
+        return response.status, _read_response_body(
+            response,
+            max_bytes=getattr(request, "max_response_bytes", None),
+        )
 
 
 def _extract_timeout(request: Request) -> int:
@@ -94,6 +137,7 @@ class HttpClient:
         *,
         headers: dict[str, str] | None = None,
         timeout: int | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         """POST *payload* as JSON, return parsed JSON response."""
         body = json.dumps(payload).encode("utf-8")
@@ -101,7 +145,11 @@ class HttpClient:
         request.add_header("content-type", "application/json")
         for key, value in (headers or {}).items():
             request.add_header(key, value)
-        return self._send(request, timeout=timeout)
+        return self._send(
+            request,
+            timeout=timeout,
+            max_response_bytes=max_response_bytes,
+        )
 
     def get_json(
         self,
@@ -109,23 +157,32 @@ class HttpClient:
         *,
         headers: dict[str, str] | None = None,
         timeout: int | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         """GET *url*, return parsed JSON response."""
         request = Request(url, method="GET")
         for key, value in (headers or {}).items():
             request.add_header(key, value)
-        return self._send(request, timeout=timeout)
+        return self._send(
+            request,
+            timeout=timeout,
+            max_response_bytes=max_response_bytes,
+        )
 
     def get_bytes(
         self,
         url: str,
         *,
         timeout: int | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
         """GET *url*, return raw bytes."""
         request = Request(url, method="GET")
         try:
+            request.timeout = timeout or self._default_timeout
+            request.max_response_bytes = max_bytes
             _status, body = self._transport(request)
+            body = _bounded_body(body, max_bytes=max_bytes)
         except HTTPError as exc:
             detail = self.scrub_secret(
                 exc.read().decode("utf-8", errors="replace") if exc.fp else ""
@@ -153,6 +210,7 @@ class HttpClient:
         delay_initial: float = 2.0,
         delay_factor: float = 1.4,
         delay_max: float = 8.0,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         """Poll *status_url* until COMPLETED/OK, then GET *response_url*.
 
@@ -161,10 +219,18 @@ class HttpClient:
         deadline = time.monotonic() + max_wait_sec
         delay = delay_initial
         while time.monotonic() < deadline:
-            status = self.get_json(status_url, headers=headers)
+            status = self.get_json(
+                status_url,
+                headers=headers,
+                max_response_bytes=max_response_bytes,
+            )
             state = str(status.get("status") or "").upper()
             if state in {"COMPLETED", "OK"}:
-                return self.get_json(response_url, headers=headers)
+                return self.get_json(
+                    response_url,
+                    headers=headers,
+                    max_response_bytes=max_response_bytes,
+                )
             if state in {"FAILED", "ERROR", "CANCELLED"}:
                 raise AstridError(
                     self.scrub_secret(f"fal job {state}: {json.dumps(status)}"),
@@ -187,13 +253,16 @@ class HttpClient:
         request: Request,
         *,
         timeout: int | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         """Execute *request*, return parsed JSON body."""
         effective = timeout or self._default_timeout
         if effective:
             request.timeout = effective
+        request.max_response_bytes = max_response_bytes
         try:
             _status, body = self._transport(request)
+            body = _bounded_body(body, max_bytes=max_response_bytes)
         except HTTPError as exc:
             detail = (
                 exc.read().decode("utf-8", errors="replace") if exc.fp else ""
@@ -359,6 +428,7 @@ def fal_submit_and_poll(
     api_key: str,
     *,
     max_wait_sec: int = 300,
+    max_response_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Submit a job to ``fal-ai/<model_id>``, poll until completion.
 
@@ -366,7 +436,12 @@ def fal_submit_and_poll(
     """
     submit_url = f"{FAL_QUEUE_URL}/{model_id}"
     headers = {"authorization": f"Key {api_key}"}
-    submission = client.post_json(submit_url, payload, headers=headers)
+    submission = client.post_json(
+        submit_url,
+        payload,
+        headers=headers,
+        max_response_bytes=max_response_bytes,
+    )
 
     status_url = submission.get("status_url")
     response_url = submission.get("response_url")
@@ -383,6 +458,7 @@ def fal_submit_and_poll(
         response_url,
         headers=headers,
         max_wait_sec=max_wait_sec,
+        max_response_bytes=max_response_bytes,
     )
     # Merge the request_id so callers can record it.
     if "request_id" not in result and "request_id" in submission:

@@ -380,6 +380,7 @@ def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
                     "prompt": "cpu i2i proof",
                     "count": 1,
                     "seed": 11,
+                    "size": "1024x1024",
                     "image_ref": {
                         "digest": source_id,
                         "filename": "source.png",

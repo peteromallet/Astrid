@@ -803,6 +803,66 @@ def _source_digest(root: Path) -> str:
     return _canonical_digest(entries)
 
 
+def _attempt_tree_bytes(root: Path) -> int:
+    """Count owned attempt bytes without following symlink escapes."""
+    total = 0
+    for path in root.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        total += int(path.stat().st_size)
+    return total
+
+
+def _task_storage_envelope(
+    task_data: Mapping[str, Any],
+    root: Path,
+    staged_outputs: list[Mapping[str, Any]],
+) -> dict[str, int] | None:
+    """Enforce an explicit whole-task storage ceiling before CAS upload."""
+    raw = task_data.get("storage_estimate")
+    spec = task_data.get("spec")
+    if raw is None and isinstance(spec, Mapping):
+        raw = spec.get("storage_estimate")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or set(raw) != {"scratch_bytes", "output_bytes"}:
+        raise HostError("task storage_estimate must contain scratch_bytes and output_bytes")
+    try:
+        scratch_limit = int(raw["scratch_bytes"])
+        output_limit = int(raw["output_bytes"])
+    except (TypeError, ValueError) as exc:
+        raise HostError("task storage_estimate values must be integers") from exc
+    if scratch_limit < 0 or output_limit < 0:
+        raise HostError("task storage_estimate values must be non-negative")
+    output_bytes = 0
+    for descriptor in staged_outputs:
+        raw_path = descriptor.get("path")
+        if not raw_path:
+            raise HostError("staged output is missing its path for storage accounting")
+        path = Path(str(raw_path))
+        if path.is_symlink() or not path.is_file():
+            raise HostError("staged output path is not a regular file")
+        output_bytes += int(path.stat().st_size)
+    total_bytes = _attempt_tree_bytes(root)
+    scratch_bytes = max(0, total_bytes - output_bytes)
+    if output_bytes > output_limit:
+        raise HostError(
+            f"staged output bytes {output_bytes} exceed task output limit {output_limit}"
+        )
+    if scratch_bytes > scratch_limit:
+        raise HostError(
+            f"attempt scratch bytes {scratch_bytes} exceed task scratch limit {scratch_limit}"
+        )
+    return {
+        "scratch_bytes": scratch_bytes,
+        "scratch_limit_bytes": scratch_limit,
+        "output_bytes": output_bytes,
+        "output_limit_bytes": output_limit,
+        "total_bytes": total_bytes,
+        "total_limit_bytes": scratch_limit + output_limit,
+    }
+
+
 def source_checkout_digest(checkout: str | Path) -> str:
     """Return the source identity used by the generic-host boundary.
 
@@ -2786,6 +2846,7 @@ class GenericPackHost:
         evidence_cap_exceeded = False
         scratch_floor_breached = False
         deadline_failed = False
+        storage_receipt: dict[str, int] | None = None
         # Every network attempt gets a fresh host-issued nonce.  It is part of
         # the immutable admission presented to an observable broker, so a
         # handshake captured from another task cannot be replayed.
@@ -3186,6 +3247,7 @@ class GenericPackHost:
                 raise HostError(
                     f"capability {record.id!r} produced no typed settled outputs"
                 )
+            storage_receipt = _task_storage_envelope(task_data, root, typed_outputs)
             project_id = task_data.get("project_id")
             if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
                 raise HostError("runtime task project_id must be a non-empty string or None")
@@ -3246,6 +3308,7 @@ class GenericPackHost:
                 "cleanup_path": str(root),
                 "retained_owner": retained_owner,
                 "retained_bytes": 0,
+                "storage_envelope": storage_receipt,
             }
             payload["process_evidence"] = _completed_process_evidence(
                 capability_id=capability_id,

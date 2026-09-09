@@ -20,6 +20,10 @@ from astrid.core.generation.backends.base import (
     parse_dimension_pair,
     split_feature_support,
 )
+from astrid.core.generation.storage_policy import (
+    CLOUD_I2I_STORAGE_POLICY,
+    ImageStoragePolicyError,
+)
 from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
 from astrid.core.util.credentials_scope import CredentialsScope
 from astrid.core.util.http import (
@@ -220,6 +224,20 @@ class FalBackend(BackendAdapter):
 
         api_key = self._resolve_api_key()
 
+        bounded_i2i = (
+            entry.id == "z-image" and mode == "i2i" and params.get("execution") == "cloud"
+        )
+        if bounded_i2i:
+            try:
+                CLOUD_I2I_STORAGE_POLICY.validate_request(
+                    model=entry.id,
+                    mode=mode,
+                    execution="cloud",
+                    params=params,
+                )
+            except ImageStoragePolicyError as exc:
+                raise ValueError(str(exc)) from exc
+
         # --- compute applied / dropped feature lists -------------------------
         applied_features, dropped_features = split_feature_support(params, mode_spec.supports)
 
@@ -325,7 +343,15 @@ class FalBackend(BackendAdapter):
             # Special handling for image_ref / image_end_ref — upload if local path
             if canon in ("image_ref", "image_end_ref"):
                 uploaded_ref = _upload_ref_if_local(
-                    str(value), remote_param, self._client, api_key
+                    str(value),
+                    remote_param,
+                    self._client,
+                    api_key,
+                    max_bytes=(
+                        CLOUD_I2I_STORAGE_POLICY.source_max_bytes
+                        if bounded_i2i and canon == "image_ref"
+                        else None
+                    ),
                 )
                 # Multi-reference edit endpoints such as Seedream expose a
                 # plural ``image_urls`` input even when Astrid's basic image
@@ -387,11 +413,17 @@ class FalBackend(BackendAdapter):
 
         # --- submit + poll ---------------------------------------------------
         t0 = time.monotonic()
+        submit_kwargs = (
+            {"max_response_bytes": CLOUD_I2I_STORAGE_POLICY.control_max_bytes}
+            if bounded_i2i
+            else {}
+        )
         result = fal_submit_and_poll(
             self._client,
             endpoint,
             payload,
             api_key,
+            **submit_kwargs,
         )
         duration_ms = int((time.monotonic() - t0) * 1000)
 
@@ -414,6 +446,12 @@ class FalBackend(BackendAdapter):
         # or {"image": {"url": ...}} or {"video": {"url": ...}} etc.
         asset_urls = _extract_asset_urls(result)
         source_urls = list(asset_urls)
+        if bounded_i2i and len(asset_urls) != CLOUD_I2I_STORAGE_POLICY.max_count:
+            raise ValueError(
+                f"bounded cloud i2i expected exactly "
+                f"{CLOUD_I2I_STORAGE_POLICY.max_count} provider output, "
+                f"got {len(asset_urls)}"
+            )
 
         # --- cost fallback to typed registry price ----------------------------
         # If the API did not report a cost (missing or non-numeric), fall back
@@ -427,7 +465,20 @@ class FalBackend(BackendAdapter):
 
         for idx, url in enumerate(asset_urls):
             try:
-                data = self._client.get_bytes(url, timeout=120)
+                download_kwargs = (
+                    {"max_bytes": CLOUD_I2I_STORAGE_POLICY.output_max_bytes}
+                    if bounded_i2i
+                    else {}
+                )
+                data = self._client.get_bytes(
+                    url,
+                    timeout=120,
+                    **download_kwargs,
+                )
+                if bounded_i2i:
+                    CLOUD_I2I_STORAGE_POLICY.validate_download(data, index=idx)
+            except ImageStoragePolicyError as exc:
+                raise ValueError(str(exc)) from exc
             except Exception as exc:
                 raise ValueError(
                     f"Failed to download fal result output {idx}: {exc}"
@@ -466,6 +517,7 @@ def _upload_ref_if_local(
     feature_name: str,
     client: HttpClient,
     api_key: str,
+    max_bytes: int | None = None,
 ) -> str:
     """Upload one host-materialized local input to fal.
 
@@ -480,6 +532,10 @@ def _upload_ref_if_local(
             f"{feature_name} must be a host-materialized local file, got {ref_str!r}"
         )
     size = ref_path.stat().st_size
+    if max_bytes is not None and size > max_bytes:
+        raise ValueError(
+            f"{feature_name} exceeds bounded input limit of {max_bytes} bytes"
+        )
     if size > 512_000:
         logger.info("Uploading %s to fal CDN: %s (%d bytes)", feature_name, ref_path, size)
         return fal_storage_upload(client, ref_path, api_key)

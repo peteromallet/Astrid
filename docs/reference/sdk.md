@@ -133,8 +133,10 @@ discovers 59 executable in-tree executor manifests. Historical external rows
 local capabilities. The host re-runs preflight before each runtime claim, so
 the capability IDs offered for admission are exactly the capabilities that
 are currently ready. The projection also retains 19 retired pre-cutover Reigh
-IDs and records the unresolved seven-declared/eight-installed Hivemind census
-without guessing the eighth ID.
+IDs. Hivemind's v2 executor and contributor-operation coverage is maintained
+in the Astrid-side [external-pack contract](hivemind-pack-contract.md). The
+delivery configuration carries a full immutable source pin; setup does not
+count the pack as installed unless that exact object is locally available.
 
 ### Schema Inspection
 

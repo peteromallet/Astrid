@@ -11,11 +11,14 @@ from astrid.core.pack.discovery import discover_canonical_pack_metadata, discove
 from astrid.core.pack.source_setup import (
     DEFAULT_HIVEMIND_REPOSITORY,
     DEFAULT_HIVEMIND_REVISION,
+    HIVEMIND_REPOSITORY_ENV,
+    HIVEMIND_REVISION_ENV,
     SourceDeclaration,
     SourceSetupError,
     active_source_inventory,
     declarations_from_json,
     default_source_declarations,
+    hivemind_pin_report,
     provision,
 )
 from astrid.sdk.discovery import _discover_pack_inventory
@@ -57,17 +60,36 @@ def _fixture_repo(root: Path, *, schema_version: int = 2) -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
-def test_default_source_policy_pins_the_canonical_external_hivemind_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_source_policy_uses_full_delivery_hivemind_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("ASTRID_SOURCE_DECLARATIONS", raising=False)
+    monkeypatch.delenv(HIVEMIND_REVISION_ENV, raising=False)
+    monkeypatch.delenv(HIVEMIND_REPOSITORY_ENV, raising=False)
+    declarations = default_source_declarations()
+    assert declarations[0].revision == DEFAULT_HIVEMIND_REVISION
+    assert declarations[0].repository == DEFAULT_HIVEMIND_REPOSITORY
+    assert hivemind_pin_report(declarations)["status"] == "configured"
+
+
+def test_default_source_policy_accepts_only_a_configured_full_immutable_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "a" * 40
+    monkeypatch.setenv(HIVEMIND_REVISION_ENV, revision)
     declarations = default_source_declarations()
     assert declarations == (
         SourceDeclaration(
             pack_id="hivemind",
             repository=DEFAULT_HIVEMIND_REPOSITORY,
-            revision=DEFAULT_HIVEMIND_REVISION,
+            revision=revision,
         ),
     )
-    assert declarations_from_json() == declarations
+    assert hivemind_pin_report(declarations)["status"] == "configured"
+
+    monkeypatch.setenv(HIVEMIND_REVISION_ENV, "deadbeef")
+    with pytest.raises(SourceSetupError, match="full immutable Hivemind Git object id"):
+        default_source_declarations()
 
 
 def test_local_git_v2_source_is_staged_once_and_shared(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -122,6 +144,20 @@ def test_local_git_v2_source_is_staged_once_and_shared(monkeypatch: pytest.Monke
     )
     assert restored["ok"] is True
     assert active_source_inventory(state_path=state_path).sources[0].revision == revision
+
+
+def test_managed_source_requires_strict_v2_manifest(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    revision = _fixture_repo(repository, schema_version=1)
+    state_path = tmp_path / "state" / "pack-sources.json"
+    data_root = tmp_path / "data"
+    declaration = SourceDeclaration.from_mapping(
+        {"pack_id": "demo", "repository": str(repository), "revision": revision}
+    )
+
+    with pytest.raises(SourceSetupError, match="strict v2 admission"):
+        provision((declaration,), state_path=state_path, data_root=data_root)
+    assert not state_path.exists()
 
 
 def test_invalid_update_keeps_prior_active_state(tmp_path: Path) -> None:

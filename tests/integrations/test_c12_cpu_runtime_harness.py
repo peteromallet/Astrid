@@ -42,6 +42,20 @@ from astrid.sdk.workspace_client import WorkspaceClient  # noqa: E402
 
 
 FIXTURE_PACK = Path(__file__).parents[1] / "fixtures" / "c12_cpu_pack"
+PINNED_RUNTIME_COMMIT = "976ca6f4d9f5aa21714cc1f3351c682676ca0604"
+PINNED_WORKER_COMMIT = "6d6f231a0ca138e257d56c923b6115d25a03e672"
+
+
+def _assert_pinned_dependency_heads() -> None:
+    for checkout, expected in (
+        (RUNTIME_ROOT, PINNED_RUNTIME_COMMIT),
+        (WORKER_ROOT, PINNED_WORKER_COMMIT),
+    ):
+        observed = subprocess.check_output(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+            text=True,
+        ).strip()
+        assert observed == expected, f"dependency checkout drifted: {checkout} {observed} != {expected}"
 
 
 def _worker_entry(config: supervisor.HostLaunchConfig, environ: Mapping[str, str]) -> None:
@@ -300,6 +314,7 @@ def test_c12_cpu_runtime_worker_host_harness(tmp_path: Path) -> None:
     worker: multiprocessing.Process | None = None
     try:
         owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        _assert_pinned_dependency_heads()
         inventory_sources = _inventory_sources()
         runtime_cases = {
             "cold_success",

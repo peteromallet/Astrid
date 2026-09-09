@@ -71,6 +71,7 @@ def _load_inventory() -> list[str]:
     payload = json.loads(INVENTORY.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
     assert payload["gpu_claim"] is False
+    assert payload["warm_reuse_expected"] is False
     cases = payload["cases"]
     assert isinstance(cases, list)
     assert all(isinstance(case, str) and case for case in cases)

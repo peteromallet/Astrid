@@ -2,6 +2,7 @@
   "schema_version": 1,
   "name": "astrid-c12-cpu-session-aware",
   "gpu_claim": false,
+  "warm_reuse_expected": false,
   "cases": [
     "cold_success",
     "cancel_confirmed",

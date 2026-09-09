@@ -81,6 +81,7 @@ class SessionBinding:
     endpoint: str
     source_digest: str
     config_digest: str
+    execution_identity: str = ""
 
     def __post_init__(self) -> None:
         for name in (
@@ -95,7 +96,7 @@ class SessionBinding:
                 raise ValueError(f"managed session {name} must be non-empty")
 
     @property
-    def identity_key(self) -> tuple[str, str, str, str, str, str]:
+    def identity_key(self) -> tuple[str, str, str, str, str, str, str]:
         return (
             self.session_id,
             self.runtime_instance_id,
@@ -103,6 +104,7 @@ class SessionBinding:
             self.endpoint,
             self.source_digest,
             self.config_digest,
+            self.execution_identity,
         )
 
     def to_dict(self) -> dict[str, str]:
@@ -113,6 +115,7 @@ class SessionBinding:
             "endpoint": self.endpoint,
             "source_digest": self.source_digest,
             "config_digest": self.config_digest,
+            "execution_identity": self.execution_identity,
         }
 
 

@@ -2718,6 +2718,12 @@ class GenericPackHost:
             session_endpoint = str(vibe_session.get("server_url") or "")
             session_source = str(vibe_session.get("source_revision") or "")
             session_config = str(vibe_session.get("config_digest") or "")
+            verified_facts = readiness_profile.get("verified_facts")
+            exact_facts = (
+                verified_facts.get("exact")
+                if isinstance(verified_facts, Mapping)
+                else {}
+            )
             managed_binding = SessionBinding(
                 session_id=session_id,
                 runtime_instance_id=str(
@@ -2729,6 +2735,15 @@ class GenericPackHost:
                 endpoint=session_endpoint,
                 source_digest=session_source,
                 config_digest=session_config,
+                execution_identity=_canonical_digest(
+                    {
+                        "model_id": model_id,
+                        "template_id": template_id,
+                        "model_digest": exact_facts.get("model_digest")
+                        if isinstance(exact_facts, Mapping)
+                        else None,
+                    }
+                ),
             )
             managed_capability = CapabilityDescriptor(
                 capability_id=capability_id,

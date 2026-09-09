@@ -92,6 +92,36 @@ def test_incompatible_binding_fences_and_releases_before_replacement() -> None:
         )
 
 
+def test_execution_identity_change_replaces_same_process_session() -> None:
+    manager = ManagedToolSession()
+    first = _binding("a")
+    second = SessionBinding(
+        session_id=first.session_id,
+        runtime_instance_id=first.runtime_instance_id,
+        process_birth_id=first.process_birth_id,
+        endpoint=first.endpoint,
+        source_digest=first.source_digest,
+        config_digest=first.config_digest,
+        execution_identity="model-b-template-b",
+    )
+    old_adapter = _Adapter()
+    manager.open(
+        capability=CapabilityDescriptor("vibecomfy.run"),
+        binding=first,
+        adapter=old_adapter,
+    )
+    replacement = manager.open(
+        capability=CapabilityDescriptor("vibecomfy.run"),
+        binding=second,
+        adapter=_Adapter(),
+    )
+    assert replacement.binding.execution_identity == "model-b-template-b"
+    assert old_adapter.events == [
+        ("fence", "capacity_replacement"),
+        ("release", "capacity_replacement"),
+    ]
+
+
 def test_uncertain_cancellation_fences_the_session() -> None:
     manager = ManagedToolSession()
     adapter = _Adapter()

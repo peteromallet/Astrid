@@ -122,14 +122,9 @@ def _load_workflow(workflow: Mapping[str, Any], references: Mapping[str, str], s
                     raise
         return resolved
 
-    from vibecomfy.cli_loader import load_workflow_any
-
-    raw_path = scratch / "compiled-workflow.json"
-    raw_path.write_text(
-        json.dumps(_replace_references(dict(workflow), references), sort_keys=True),
-        encoding="utf-8",
+    raise ProductionEngineError(
+        "production engine accepts only canonical ready-template workflows"
     )
-    return load_workflow_any(str(raw_path))
 
 
 def _profile_id(value: Any) -> str:

@@ -47,8 +47,10 @@ import base64, hashlib, json, sys
 from pathlib import Path
 envelope = json.loads(sys.argv[1])
 params = envelope['spec']['params']
+bound = {{'model': sys.argv[3], 'mode': sys.argv[4], 'execution': sys.argv[5], 'prompt': sys.argv[6], 'count': int(sys.argv[7]), 'seed': int(sys.argv[8]), 'size': sys.argv[9]}}
 assert envelope['capability_id'] == 'generation.generate_image'
 assert params == {{'execution': 'cloud', 'mode': 't2i', 'model': 'z-image', 'prompt': 'cpu proof', 'count': 2, 'seed': 77, 'size': '1536x1024'}}
+assert bound == params
 out = Path(sys.argv[2])
 (out / 'images').mkdir(parents=True, exist_ok=True)
 image_bytes = base64.b64decode('{_PNG}')
@@ -77,7 +79,14 @@ image_group = {{'name': 'generated_images', 'artifact_type': 'image/png', 'path'
                         "name": "task_spec_json",
                         "required": True,
                         "type": "string",
-                    }
+                    },
+                    {"name": "model", "required": True, "type": "string"},
+                    {"name": "mode", "required": True, "type": "string"},
+                    {"name": "execution", "required": True, "type": "string"},
+                    {"name": "prompt", "required": True, "type": "string"},
+                    {"name": "count", "default": "1", "required": False, "type": "integer"},
+                    {"name": "seed", "default": "", "required": False, "type": "integer"},
+                    {"name": "size", "default": "", "required": False, "type": "string"},
                 ],
                 "command": {
                     "argv": [
@@ -86,6 +95,13 @@ image_group = {{'name': 'generated_images', 'artifact_type': 'image/png', 'path'
                         script,
                         "{task_spec_json}",
                         "{out}",
+                        "{model}",
+                        "{mode}",
+                        "{execution}",
+                        "{prompt}",
+                        "{count}",
+                        "{seed}",
+                        "{size}",
                     ]
                 },
                 "outputs": [

@@ -146,6 +146,60 @@ _ALIASES = {
 }
 
 
+# These are the public inputs exposed by the current VibeComfy ready-template
+# checkout. Fields accepted by the portable leaf compiler but absent here are
+# rejected by the adapter rather than silently discarded.
+_CANONICAL_BINDINGS: dict[str, tuple[str, dict[str, str]]] = {
+    "z_image_turbo": (
+        "image/z_image",
+        {"prompt": "prompt", "seed": "seed", "steps": "steps"},
+    ),
+    "z_image_turbo_i2i": (
+        "image/z_image_img2img",
+        {
+            "prompt": "prompt",
+            "seed": "seed",
+            "steps": "steps",
+            "width": "width",
+            "height": "height",
+            "image_ref": "image",
+        },
+    ),
+    "qwen_image": (
+        "image/qwen_image_2512",
+        {"prompt": "prompt", "seed": "seed", "width": "width", "height": "height"},
+    ),
+    "qwen_image_2512": (
+        "image/qwen_image_2512",
+        {"prompt": "prompt", "seed": "seed", "width": "width", "height": "height"},
+    ),
+    "qwen_image_edit": (
+        "edit/qwen_image_edit",
+        {"prompt": "prompt", "seed": "seed", "image_ref": "image"},
+    ),
+    "qwen_image_style": (
+        "edit/qwen_image_edit",
+        {"prompt": "prompt", "seed": "seed", "image_ref": "image"},
+    ),
+    "image_inpaint": (
+        "edit/qwen_image_edit",
+        {"prompt": "prompt", "seed": "seed", "image_ref": "image"},
+    ),
+    "annotated_image_edit": (
+        "edit/qwen_image_edit",
+        {"prompt": "prompt", "seed": "seed", "image_ref": "image"},
+    ),
+    "flux_klein_edit": (
+        "edit/flux2_klein_4b_image_edit_distilled",
+        {"prompt": "prompt", "seed": "seed", "image_ref": "image"},
+    ),
+    "image_upscale": (
+        "image/basic_image_upscale",
+        {"image_ref": "image"},
+    ),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class ImageRequest:
     capability_id: str
@@ -181,6 +235,27 @@ class CompiledImageRequest:
             "params": self.params,
             "task_identity": self.task_identity,
             "execution_digest": self.execution_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalWorkflowBinding:
+    """Current production-engine ready-template binding envelope."""
+
+    template_id: str
+    capability_id: str
+    model_id: str
+    execution_digest: str
+    bindings: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "astrid.vibecomfy.canonical-workflow.v1",
+            "template_id": self.template_id,
+            "capability_id": self.capability_id,
+            "model_id": self.model_id,
+            "execution_digest": self.execution_digest,
+            "bindings": self.bindings,
         }
 
 
@@ -283,6 +358,42 @@ def portable_execution_digest(compiled: CompiledImageRequest | Mapping[str, Any]
     return _digest(value)
 
 
+def canonical_workflow_binding(
+    compiled: CompiledImageRequest,
+) -> CanonicalWorkflowBinding:
+    """Convert one typed request to the reviewed ready-template envelope.
+
+    Input references remain explicit object references until the production
+    engine resolves its host-owned reference map. No local paths, ports, GPU
+    facts, or fallback template selection enter this envelope.
+    """
+
+    if compiled.capability_id not in CANONICAL_CAPABILITIES:
+        raise ImageCompileError("compiled capability is not in the canonical image catalog")
+    template_id, field_map = _CANONICAL_BINDINGS[compiled.capability_id]
+    unsupported = sorted(set(compiled.params) - set(field_map))
+    if unsupported:
+        raise ImageCompileError(
+            f"{compiled.capability_id} cannot represent fields in current ready template: "
+            + ", ".join(unsupported)
+        )
+    bindings: dict[str, Any] = {}
+    for source_name, target_name in field_map.items():
+        if source_name not in compiled.params:
+            continue
+        value = compiled.params[source_name]
+        if source_name.endswith("_ref"):
+            value = {"kind": "media", "object_id": value}
+        bindings[target_name] = value
+    return CanonicalWorkflowBinding(
+        template_id=template_id,
+        capability_id=compiled.capability_id,
+        model_id=compiled.model_id,
+        execution_digest=compiled.execution_digest,
+        bindings=bindings,
+    )
+
+
 def compile_image_request(
     capability_id: str,
     params: Mapping[str, Any],
@@ -326,12 +437,14 @@ def compile_image_request(
 
 __all__ = [
     "CANONICAL_CAPABILITIES",
+    "CanonicalWorkflowBinding",
     "CompiledImageRequest",
     "ImageCompileError",
     "ImageRequest",
     "PROFILE_CONFIGS",
     "ProfileConfig",
     "SCHEMA_VERSION",
+    "canonical_workflow_binding",
     "compile_image_request",
     "normalize_capability_id",
     "portable_execution_digest",

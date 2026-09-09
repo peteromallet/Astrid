@@ -9,6 +9,7 @@ from astrid.packs.vibecomfy.direct_image import (
     DirectImageExecutor,
     ImageCompileError,
     ImageExecutionError,
+    canonical_workflow_binding,
     compile_image_request,
     normalize_capability_id,
     portable_execution_digest,
@@ -106,6 +107,69 @@ def test_compiler_rejects_unknown_fields_and_unsafe_input_refs() -> None:
         )
     with pytest.raises(ImageCompileError, match="unsupported Vibe profile"):
         compile_image_request("z_image_turbo", {"prompt": "x"}, profile="auto")
+
+
+def test_canonical_binding_uses_current_ready_template_and_preserves_cas_reference() -> None:
+    compiled = compile_image_request(
+        "z_image_turbo_i2i",
+        {
+            "prompt": "replace the sky",
+            "image_ref": "cas/source.png",
+            "seed": 7,
+            "width": 832,
+            "height": 480,
+        },
+        profile="pip_embedded",
+    )
+    binding = canonical_workflow_binding(compiled)
+    assert binding.template_id == "image/z_image_img2img"
+    assert binding.bindings["prompt"] == "replace the sky"
+    assert binding.bindings["image"] == {
+        "kind": "media",
+        "object_id": "cas/source.png",
+    }
+    assert binding.model_id == "z-image-turbo"
+    assert binding.to_dict()["schema_version"] == "astrid.vibecomfy.canonical-workflow.v1"
+
+
+def test_canonical_binding_rejects_semantics_missing_from_current_template() -> None:
+    compiled = compile_image_request(
+        "image_inpaint",
+        {
+            "prompt": "repair the sign",
+            "image_ref": "cas/source.png",
+            "mask_ref": "cas/mask.png",
+        },
+        profile="pip_embedded",
+    )
+    with pytest.raises(ImageCompileError, match="mask_ref"):
+        canonical_workflow_binding(compiled)
+
+
+def test_canonical_binding_loads_through_reviewed_production_loader(tmp_path: Path) -> None:
+    pytest.importorskip("vibecomfy")
+    from astrid.packs.vibecomfy import production_engine
+
+    compiled = compile_image_request(
+        "z_image_turbo_i2i",
+        {
+            "prompt": "replace the sky",
+            "image_ref": "cas/source.png",
+            "seed": 7,
+            "width": 832,
+            "height": 480,
+        },
+        profile="pip_embedded",
+    )
+    binding = canonical_workflow_binding(compiled)
+    resolved = production_engine._load_workflow(
+        binding.to_dict(),
+        {"cas/source.png": str(tmp_path / "source.png")},
+        tmp_path,
+    )
+    assert resolved.metadata["ready_template"] == "image/z_image_img2img"
+    assert resolved.inputs["prompt"].value == "replace the sky"
+    assert resolved.inputs["image"].value == str(tmp_path / "source.png")
 
 
 class _FakeEngine:

@@ -139,6 +139,91 @@ image_group = {{'name': 'generated_images', 'artifact_type': 'image/png', 'path'
     return pack
 
 
+def _registered_image_executor_fixture(root: Path) -> Path:
+    """Copy the registered image manifest with a deterministic CPU backend.
+
+    The child still runs the production ``generate_image.run`` command. The
+    fixture wrapper substitutes the provider backend and disables network
+    readiness only for this CPU proof, so no fal request is made.
+    """
+    pack = root / "typed_image_cpu"
+    executor = pack / "executors" / "generate_image"
+    executor.mkdir(parents=True)
+    (pack / "__init__.py").write_text("", encoding="utf-8")
+    (pack / "pack.yaml").write_text(
+        "schema_version: 1\n"
+        "id: typed_image_cpu\n"
+        "name: Typed Image CPU Transport Fixture\n"
+        "version: 1.0\n"
+        "capabilities: [generate_image]\n"
+        "content:\n  executors: executors\n",
+        encoding="utf-8",
+    )
+    definition = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "astrid/packs/generation/executors/generate_image/executor.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    definition["kind"] = "external"
+    definition["command"]["argv"][2] = "typed_image_cpu.runtime"
+    definition["isolation"] = {"mode": "subprocess", "network": False}
+    metadata = dict(definition["metadata"])
+    metadata.pop("env", None)
+    metadata.pop("network_policy", None)
+    metadata["adapter_family"] = "cpu"
+    # These are fixture-only reservations for the bounded CPU proof.  The
+    # production manifest intentionally remains at zero until provider-backed
+    # storage and output limits are evidenced and enforced.
+    metadata["estimated_scratch_bytes"] = 8 * 1024 * 1024
+    metadata["estimated_output_bytes"] = 64 * 1024 * 1024
+    definition["metadata"] = metadata
+    definition.pop("scoped_configs", None)
+    (executor / "executor.yaml").write_text(
+        json.dumps(definition), encoding="utf-8"
+    )
+    (pack / "runtime.py").write_text(
+        f"""
+import hashlib
+import sys
+from pathlib import Path
+
+from astrid.core.generation.backends.base import BackendAdapter, GenerationResult
+from astrid.packs.generation.executors.generate_image import run as image_run
+
+
+class _Transport(BackendAdapter):
+    def generate(self, entry, mode, params, out_dir):
+        source = Path(params[\"image_ref\"])
+        source_bytes = source.read_bytes()
+        output = Path(out_dir) / \"transport.png\"
+        output.write_bytes(source_bytes)
+        source_digest = hashlib.sha256(source_bytes).hexdigest()
+        return GenerationResult(
+            image_paths=[output],
+            seed_used=int(params[\"seed\"]),
+            model_actual=\"cpu-transport:\" + source_digest,
+            applied_features=sorted(params),
+        )
+
+
+class _Registry:
+    def create(self, backend_id, **kwargs):
+        assert backend_id == \"cloud\"
+        return _Transport()
+
+
+image_run.load_default_generation_backend_registry = lambda: _Registry()
+
+
+if __name__ == \"__main__\":
+    raise SystemExit(image_run.main(sys.argv[1:]))
+""",
+        encoding="utf-8",
+    )
+    return pack
+
+
 def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> None:
     pack = _fixture_pack(tmp_path)
     daemon = RuntimeDaemon(
@@ -217,6 +302,112 @@ def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> N
             base64.b64decode(_PNG) + b"\x00",
             base64.b64decode(_PNG) + b"\x01",
         ]
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+
+
+def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
+    tmp_path: Path,
+) -> None:
+    pack = _registered_image_executor_fixture(tmp_path)
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "typed-image-registered-test",
+            "0.1.0",
+            [
+                "projects:read",
+                "projects:write",
+                "objects:read",
+                "objects:write",
+                "worker:execute",
+            ],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        host = GenericPackHost(
+            pack_roots=[pack],
+            client=client,
+            executor_id="typed-image-registered-host",
+        )
+        record = host.discover()[0]
+        assert record.id == "generation.generate_image"
+        host.preflight()
+        assert host.capabilities[record.id].ready
+        registration = host.register()
+        assert registration["registration"].executor_id == "typed-image-registered-host"
+        assert registration["capabilities"][0]["estimated_scratch_bytes"] > 0
+        assert registration["capabilities"][0]["estimated_output_bytes"] > 0
+
+        project = owner.create_project(
+            "Typed registered image",
+            slug="typed-registered-image",
+            idempotency_key="registered-project",
+        )
+        source = tmp_path / "source.png"
+        source.write_bytes(base64.b64decode(_PNG))
+        source_row = owner.ingest_project_object(
+            project.project_id,
+            source.read_bytes(),
+            media_type="image/png",
+            filename="source.png",
+            idempotency_key="registered-source",
+        )
+        source_id = str(
+            getattr(source_row, "object_id", None)
+            or getattr(source_row, "digest")
+        )
+        source_digest = source_id.removeprefix("sha256:")
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[source_id],
+            project_id=project.project_id,
+            idempotency_key="registered-task",
+            spec={
+                "family": "generation.generate_image",
+                "params": {
+                    "execution": "cloud",
+                    "mode": "i2i",
+                    "model": "z-image",
+                    "prompt": "cpu i2i proof",
+                    "count": 1,
+                    "seed": 11,
+                    "image_ref": {
+                        "digest": source_id,
+                        "filename": "source.png",
+                        "media_type": "image/png",
+                    },
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": 8 * 1024 * 1024,
+                "output_bytes": 64 * 1024 * 1024,
+            },
+        )
+        settled = host.run(once=True)
+        assert len(settled) == 1 and settled[0].state == "succeeded"
+        completed = owner.get_task(task.task_id)
+        assert completed.state == "succeeded"
+        outputs = completed.result["outputs"]
+        assert any(output["name"] == "generated_images" for output in outputs)
+        image_output = next(output for output in outputs if output["name"] == "generated_images")
+        image_bytes = owner.get_object(image_output["digest"]).data
+        assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        # ``generate_image.run`` embeds model_actual after the transport
+        # returns; the digest proves the real executor consumed the staged CAS
+        # bytes rather than merely receiving an untrusted path token.
+        assert source_digest.encode("ascii") in image_bytes
+        cleanup_path = completed.result["execution_guards"]["cleanup_path"]
+        assert not Path(cleanup_path).exists()
     finally:
         if host is not None:
             host.shutdown()

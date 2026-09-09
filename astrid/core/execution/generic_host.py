@@ -1801,6 +1801,7 @@ class GenericPackHost:
         *,
         authorized_input_object_ids: list[str] | tuple[str, ...] | None = None,
         task_param_ports: tuple[str, ...] | list[str] | None = None,
+        cas_param_ports: tuple[str, ...] | list[str] | None = None,
     ) -> dict[str, Any]:
         """Materialize digest inputs and managed registry objects in *attempt*.
 
@@ -1863,6 +1864,15 @@ class GenericPackHost:
                 values[key] = spec[key]
             if key in input_spec and not values.get(key):
                 values[key] = input_spec[key]
+        if cas_param_ports is not None:
+            for name in tuple(str(value) for value in cas_param_ports):
+                candidate = values.get(name)
+                if candidate is None:
+                    continue
+                if not isinstance(candidate, Mapping) or not isinstance(candidate.get("digest"), str):
+                    raise HostError(
+                        f"HC-04 CAS parameter {name!r} must be an object containing a digest"
+                    )
         # Timeline visualization tasks carry their canonical registry inside
         # the immutable snapshot rather than as a separate input file. Expose
         # it to the same host-only materialization path used by render tasks.
@@ -1907,6 +1917,11 @@ class GenericPackHost:
         managed_root.mkdir(parents=True, exist_ok=True)
         materialized_objects: dict[str, str] = {}
         fetched_objects: dict[tuple[str, str], Path] = {}
+        cas_names = (
+            {str(value) for value in cas_param_ports}
+            if cas_param_ports is not None
+            else set()
+        )
 
         def fetch_object(reference: str, digest: str, name: str, *, filename: str | None = None) -> Path:
             if self.client is None:
@@ -1959,6 +1974,13 @@ class GenericPackHost:
                     materialized_objects[str(digest).removeprefix("sha256:")] = str(destination)
                     continue
                 input_name = Path("theme.json") if str(name) == "theme" else Path(str(name))
+                if str(name) in cas_names:
+                    filename = value.get("filename") if isinstance(value, Mapping) else None
+                    if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+                        raise HostError(
+                            f"HC-04 CAS parameter {name!r} requires a safe filename"
+                        )
+                    input_name = Path(filename)
                 input_root = (attempt / "inputs").resolve()
                 path = (input_root / input_name).resolve()
                 if not path.is_relative_to(input_root):
@@ -2924,11 +2946,18 @@ class GenericPackHost:
                 if isinstance(raw_task_param_ports, (list, tuple))
                 else None
             )
+            raw_cas_param_ports = record.definition.metadata.get("hc04_cas_param_ports")
+            cas_param_ports = (
+                tuple(str(value) for value in raw_cas_param_ports)
+                if isinstance(raw_cas_param_ports, (list, tuple))
+                else None
+            )
             inputs = self._materialize_inputs(
                 spec,
                 root,
                 authorized_input_object_ids=authorized_input_object_ids,
                 task_param_ports=task_param_ports,
+                cas_param_ports=cas_param_ports,
             )
             immutable_input_baseline = {}
             for input_root in (root / "inputs", root / "managed-objects"):

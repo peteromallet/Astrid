@@ -108,6 +108,8 @@ def test_manifest_loads() -> None:
     assert manifest.kind == "built_in"
     assert manifest.version == "2.0"
     assert manifest.metadata["runtime_entrypoint"] == "run_sdk"
+    assert {"image_ref", "strength"}.issubset(set(manifest.metadata["hc04_param_ports"]))
+    assert manifest.metadata["hc04_cas_param_ports"] == ["image_ref"]
     # v2 executor inputs include backend controls for Codex in addition to
     # core model/mode generation fields.
     assert len(manifest.inputs) == 22

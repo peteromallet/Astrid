@@ -231,6 +231,55 @@ def test_hc04_params_bind_only_definition_declared_ports(tmp_path):
         )
 
 
+def test_hc04_cas_param_materializes_authorized_image_reference(tmp_path):
+    payload = b"source-image"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            assert object_digest == digest
+            return payload
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [f"sha256:{digest}"],
+            "spec": {
+                "family": "generation.generate_image",
+                "params": {
+                    "mode": "i2i",
+                    "image_ref": {
+                        "digest": f"sha256:{digest}",
+                        "filename": "source.jpg",
+                    },
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt",
+        task_param_ports=("mode", "image_ref"),
+        cas_param_ports=("image_ref",),
+    )
+    staged = Path(values["image_ref"])
+    assert staged == tmp_path / "attempt" / "inputs" / "source.jpg"
+    assert staged.read_bytes() == payload
+
+    with pytest.raises(HostError, match="CAS parameter 'image_ref'"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [f"sha256:{digest}"],
+                "spec": {
+                    "family": "generation.generate_image",
+                    "params": {"image_ref": "https://example.test/source.png"},
+                    "output_policy": {},
+                },
+            },
+            tmp_path / "attempt-url",
+            task_param_ports=("image_ref",),
+            cas_param_ports=("image_ref",),
+        )
+
+
 def test_input_materialization_rejects_foreign_nested_digest(tmp_path):
     authorized = hashlib.sha256(b"authorized").hexdigest()
     foreign = hashlib.sha256(b"foreign").hexdigest()

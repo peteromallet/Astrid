@@ -69,6 +69,12 @@ from astrid.core.execution.managed_tool_session import (
     ManagedToolSession,
     SessionBinding,
 )
+from astrid.core.execution.guards import (
+    EvidenceCapError,
+    ExecutionGuardError,
+    ExecutionGuardPolicy,
+    ScratchFloorError,
+)
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -81,6 +87,20 @@ class HostError(RuntimeError):
 
 class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
+
+
+def _cleanup_ephemeral_attempt(root: Path) -> None:
+    """Remove an owned attempt root and verify that no residue remains."""
+    try:
+        shutil.rmtree(root)
+    except FileNotFoundError:
+        if root.exists():
+            raise HostError(f"owned attempt cleanup was not verified: {root}")
+        return
+    except OSError as exc:
+        raise HostError(f"owned attempt cleanup failed: {root}") from exc
+    if root.exists():
+        raise HostError(f"owned attempt cleanup was not verified: {root}")
 
 
 class _ManagedTaskAdapter:
@@ -1242,6 +1262,7 @@ class GenericPackHost:
         source_inventory_identity: str | None = None,
         boot_manifest_path: str | Path | None = None,
         boot_manifest_hash: str | None = None,
+        execution_policy: ExecutionGuardPolicy | None = None,
     ):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
@@ -1278,6 +1299,7 @@ class GenericPackHost:
             else None
         )
         self.boot_manifest_hash = boot_manifest_hash
+        self.execution_policy = execution_policy or ExecutionGuardPolicy()
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
@@ -2641,13 +2663,58 @@ class GenericPackHost:
             record = self.capabilities[capability_id]
         if not record.ready:
             raise HostError(f"capability {capability_id!r} is unavailable: {record.preflight}")
+        try:
+            self.execution_policy.assert_budget_available()
+        except ExecutionGuardError as exc:
+            self.client.fail(
+                task_id,
+                lease_token,
+                str(exc),
+                retryable=False,
+                attempt_id=attempt_id,
+                fence=fence,
+            )
+            raise HostError(str(exc)) from exc
         spec = task_data.get("spec", {})
         authorized_input_object_ids = task_data.get("input_object_ids")
+        ephemeral_attempt_root = self.attempt_root is None
         root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
         root.mkdir(parents=True, exist_ok=True)
+        try:
+            scratch_receipt = self.execution_policy.assert_scratch_floor(root)
+        except ExecutionGuardError as exc:
+            fail_error: Exception | None = None
+            try:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    str(exc),
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+            except Exception as runtime_exc:
+                fail_error = runtime_exc
+            finally:
+                if ephemeral_attempt_root:
+                    _cleanup_ephemeral_attempt(root)
+            if fail_error is not None:
+                raise HostError("scratch-floor failure was not recorded by Runtime") from fail_error
+            raise HostError(str(exc)) from exc
+        execution_deadline = self.execution_policy.deadline_from_now()
+        warm_receipt = self.execution_policy.warm_expectation()
+        evidence_receipt: dict[str, Any] | None = None
+        deadline_exceeded = False
         settled = False
         cancelled_attempt = False
         network_broker: _NetworkBrokerContext | None = None
+        pump_stop: threading.Event | None = None
+        pump_thread: threading.Thread | None = None
+        evidence_root: Path | None = None
+        immutable_input_baseline: dict[str, tuple[int, str]] = {}
+        evidence_cap_exceeded = False
+        scratch_floor_breached = False
+        deadline_failed = False
         # Every network attempt gets a fresh host-issued nonce.  It is part of
         # the immutable admission presented to an observable broker, so a
         # handshake captured from another task cannot be replayed.
@@ -2697,6 +2764,7 @@ class GenericPackHost:
             capability_id=capability_id,
             residency_support="unsupported",
             resources_claimed=tuple(record.resource_keys),
+            warm_reuse_expected=self.execution_policy.warm_reuse_expected,
         )
         readiness_profile = _read_readiness_profile_document()
         vibe_session = (
@@ -2709,6 +2777,7 @@ class GenericPackHost:
                 capability_id=capability_id,
                 residency_support="observable_releasable",
                 resources_claimed=tuple(record.resource_keys),
+                warm_reuse_expected=self.execution_policy.warm_reuse_expected,
             )
             managed_adapter = None
         managed_token = None
@@ -2719,8 +2788,29 @@ class GenericPackHost:
         template_id = "vibecomfy.run"
 
         def cancelled():
+            nonlocal deadline_exceeded, evidence_cap_exceeded, scratch_floor_breached
+            if self.execution_policy.deadline_expired(execution_deadline):
+                deadline_exceeded = True
+                cancel_signal.set()
+                return True
             if self._shutdown.is_set() or cancel_signal.is_set():
                 return True
+            try:
+                self.execution_policy.assert_scratch_floor(root)
+            except ScratchFloorError:
+                scratch_floor_breached = True
+                cancel_signal.set()
+                return True
+            if evidence_root is not None:
+                try:
+                    self.execution_policy.assert_evidence_cap(
+                        evidence_root,
+                        immutable_inputs=immutable_input_baseline,
+                    )
+                except EvidenceCapError:
+                    evidence_cap_exceeded = True
+                    cancel_signal.set()
+                    return True
             try:
                 current = self.client.task(task_id)
             except Exception:
@@ -2730,12 +2820,67 @@ class GenericPackHost:
             current_task = current.get("task", current) if isinstance(current, Mapping) else current
             state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
             return state == "cancelled"
+
+        def terminalize_deadline() -> None:
+            """Fence a deadline expiry at Runtime before returning to the worker."""
+            nonlocal deadline_failed
+            try:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    "execution deadline exceeded",
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+                deadline_failed = True
+            except Exception as exc:
+                try:
+                    current = self.client.task(task_id)
+                    current_task = current.get("task", current) if isinstance(current, Mapping) else current
+                    state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
+                except Exception as status_exc:
+                    raise HostError("deadline cancellation could not be verified") from status_exc
+                if state not in {"cancelled", "failed"}:
+                    raise HostError("deadline terminalization was not accepted by Runtime") from exc
+                deadline_failed = state == "failed"
+
+        def handle_guard_abort() -> None:
+            if scratch_floor_breached:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    "scratch free-space floor breached",
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+                raise HostError("scratch free-space floor breached")
+            if evidence_cap_exceeded:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    "generated evidence cap exceeded",
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+                raise HostError("generated evidence cap exceeded")
+            if deadline_exceeded:
+                terminalize_deadline()
         try:
             inputs = self._materialize_inputs(
                 spec,
                 root,
                 authorized_input_object_ids=authorized_input_object_ids,
             )
+            immutable_input_baseline = {}
+            for input_root in (root / "inputs", root / "managed-objects"):
+                immutable_input_baseline.update(
+                    self.execution_policy.immutable_input_baseline(input_root)
+                )
+            evidence_root = root
+            self.execution_policy.assert_deadline(execution_deadline)
             if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
                 workflow_input = inputs.get("workflow")
                 if not isinstance(workflow_input, (str, Path)):
@@ -2830,6 +2975,7 @@ class GenericPackHost:
             network_broker = self._start_network_broker(record, root, network_admission, inputs)
             output_root = root / "outputs"
             output_root.mkdir(parents=True, exist_ok=True)
+            self.execution_policy.assert_deadline(execution_deadline)
             pump_stop = threading.Event()
             self.client.heartbeat(
                 task_id,
@@ -2901,13 +3047,25 @@ class GenericPackHost:
                         worker_env.clear()
                         worker_secrets.clear()
             finally:
-                pump_stop.set()
+                if pump_stop is not None:
+                    pump_stop.set()
                 if pump_thread is not None:
                     pump_thread.join(timeout=2)
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             harvest_values = {**inputs, "out": str(output_root), "run_root": str(root), "python_exec": sys.executable}
+            try:
+                evidence_receipt = self.execution_policy.assert_evidence_cap(
+                    root,
+                    immutable_inputs=immutable_input_baseline,
+                )
+                self.execution_policy.assert_deadline(execution_deadline)
+            except ExecutionGuardError as exc:
+                raise HostError(str(exc)) from exc
             try:
                 harvested = harvest_staged_outputs(
                     output_root,
@@ -2950,6 +3108,9 @@ class GenericPackHost:
             # Cancellation can arrive while staged outputs are being read or
             # uploaded. Never publish a completed settlement after that point.
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             # Completion provenance is host-owned.  Keep any backend/B6/model
@@ -2978,6 +3139,33 @@ class GenericPackHost:
             provenance = self.boot_manifest_provenance()
             if provenance is not None:
                 payload["provenance"] = provenance
+            if self.attempt_root is not None:
+                scratch_disposition = "caller_owned"
+                retained_owner = "caller"
+            elif keep_attempt:
+                scratch_disposition = "retained"
+                retained_owner = "generic-pack-host"
+            else:
+                scratch_disposition = "deleted"
+                retained_owner = None
+            payload["execution_guards"] = {
+                "scratch": scratch_receipt,
+                "evidence": evidence_receipt,
+                "deadline_seconds": self.execution_policy.deadline_seconds,
+                "warm_expectation": warm_receipt,
+                "evidence_budget": {
+                    "run_observed_bytes": self.execution_policy.evidence_budget.charged_bytes,
+                    "cap_bytes": self.execution_policy.evidence_cap_bytes,
+                },
+                "scratch_disposition": scratch_disposition,
+                "retained_path": str(root) if scratch_disposition != "deleted" else None,
+                "retained_owner": retained_owner,
+                "retained_bytes": (
+                    int((evidence_receipt or {}).get("observed_bytes", 0))
+                    if scratch_disposition != "deleted"
+                    else 0
+                ),
+            }
             payload["process_evidence"] = _completed_process_evidence(
                 capability_id=capability_id,
                 attempt_id=attempt_id,
@@ -2989,6 +3177,9 @@ class GenericPackHost:
             if isinstance(effect, list):
                 effect = effect[0] if effect else None
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             # Re-observe the actual engine session after output custody and
@@ -3017,12 +3208,18 @@ class GenericPackHost:
             settled = True
             return settlement
         except HostCancelled:
+            handle_guard_abort()
+            if deadline_failed:
+                return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
             cancelled_attempt = True
             return {"task_id": task_id, "status": "cancelled", "cancelled": True}
         except Exception as exc:
             # A cancellation/lease-loss race must not be turned into a second
             # runtime failure after child work has been contained.
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             self.client.fail(
@@ -3035,21 +3232,32 @@ class GenericPackHost:
             )
             raise
         finally:
+            cleanup_errors: list[str] = []
             if network_broker is not None:
-                network_broker.stop()
+                try:
+                    network_broker.stop()
+                except Exception as exc:
+                    cleanup_errors.append(f"network broker: {exc}")
             if managed_token is not None and not managed_settled:
-                if cancelled_attempt or cancel_signal.is_set() or self._shutdown.is_set():
+                if deadline_exceeded or cancelled_attempt or cancel_signal.is_set() or self._shutdown.is_set():
                     try:
                         self.managed_tool_session.cancel(
                             managed_token,
                             outcome="confirmed",
                         )
-                    except Exception:
+                    except Exception as exc:
+                        cleanup_errors.append(f"managed cancellation: {exc}")
                         # A missing or stale token is already a fail-closed
                         # condition; release below preserves the poisoned slot.
-                        self.managed_tool_session.fence(reason="cancel_unconfirmed")
+                        try:
+                            self.managed_tool_session.fence(reason="cancel_unconfirmed")
+                        except Exception as fence_exc:
+                            cleanup_errors.append(f"managed fence: {fence_exc}")
                 else:
-                    self.managed_tool_session.fence(reason="task_failed")
+                    try:
+                        self.managed_tool_session.fence(reason="task_failed")
+                    except Exception as exc:
+                        cleanup_errors.append(f"managed fence: {exc}")
             if managed_opened:
                 retain_persistent_session = (
                     isinstance(managed_adapter, _ManagedVibeSessionAdapter)
@@ -3057,17 +3265,28 @@ class GenericPackHost:
                     and settled
                 )
                 if not retain_persistent_session:
-                    self.managed_tool_session.release(
-                        reason=(
-                            "task_settled"
-                            if managed_settled
-                            else "task_cancelled"
-                            if cancelled_attempt
-                            else "task_failed"
+                    try:
+                        self.managed_tool_session.release(
+                            reason=(
+                                "task_settled"
+                                if managed_settled
+                                else "task_cancelled"
+                                if cancelled_attempt
+                                else "task_failed"
+                            )
                         )
-                    )
-            if not keep_attempt and self.attempt_root is None and (settled or cancelled_attempt):
-                shutil.rmtree(root, ignore_errors=True)
+                    except Exception as exc:
+                        cleanup_errors.append(f"managed release: {exc}")
+            if keep_attempt:
+                if not root.exists():
+                    cleanup_errors.append(f"retained attempt disappeared: {root}")
+            elif self.attempt_root is None:
+                try:
+                    _cleanup_ephemeral_attempt(root)
+                except Exception as exc:
+                    cleanup_errors.append(f"attempt root: {exc}")
+            if cleanup_errors:
+                raise HostError("owned cleanup incomplete: " + "; ".join(cleanup_errors))
 
     def cancel_task(
         self,
@@ -3109,6 +3328,10 @@ class GenericPackHost:
         if not self.capabilities:
             self.discover()
         ready_records = self.preflight()
+        try:
+            self.execution_policy.assert_budget_available()
+        except ExecutionGuardError as exc:
+            raise HostError(str(exc)) from exc
         capability_ids = sorted(
             record.id
             for record in ready_records

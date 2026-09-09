@@ -37,6 +37,7 @@ from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
 from source.runtime import supervisor  # noqa: E402
 from source.runtime.worker import preflight  # noqa: E402
 from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
+from astrid.core.execution.guards import ExecutionGuardPolicy  # noqa: E402
 from astrid.core.gateway.dispatch import compose_profile_handoff  # noqa: E402
 from astrid.sdk.workspace_client import WorkspaceClient  # noqa: E402
 
@@ -257,6 +258,63 @@ def test_c12_observation_helpers_fail_closed(monkeypatch: pytest.MonkeyPatch) ->
         occupied.close()
 
 
+@pytest.mark.timeout(60)
+def test_c12_deadline_contains_child_and_terminalizes_runtime(tmp_path: Path) -> None:
+    support_root = (tmp_path / "support").resolve()
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=support_root,
+        production_worker_credentials=True,
+    ).start()
+    host: GenericPackHost | None = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        worker_client = RuntimeProtocolClient(
+            daemon.endpoint,
+            Path(daemon.worker_credential_path).read_text(encoding="utf-8").strip(),
+        )
+        host = GenericPackHost(
+            pack_roots=[FIXTURE_PACK],
+            client=worker_client,
+            execution_policy=ExecutionGuardPolicy(
+                scratch_floor_bytes=1,
+                evidence_cap_bytes=1024,
+                deadline_seconds=0.25,
+            ),
+        )
+        records = {record.id: record for record in host.discover()}
+        host.preflight()
+        host.register()
+        slow_pid_file = tmp_path / "deadline-child.pid"
+        slow_port_file = tmp_path / "deadline-child.port"
+        mutation = owner.admit_task(
+            capability_id="c12_cpu.slow",
+            capability_digest=records["c12_cpu.slow"].capability_digest,
+            input_object_ids=[],
+            idempotency_key="c12-runtime-deadline",
+            spec={
+                "inputs": {
+                    "marker": str(slow_pid_file),
+                    "port_marker": str(slow_port_file),
+                }
+            },
+        )
+        task_id = str(_value(_mutation_data(mutation), "task_id"))
+        outcome = host.claim_once()
+        assert outcome is not None
+        assert _value(outcome, "status") == "failed"
+        failed = _wait_state(owner, task_id, {"failed"})
+        assert _value(failed, "state") == "failed"
+        if slow_pid_file.is_file():
+            _wait_pid_absent(int(slow_pid_file.read_text(encoding="utf-8")))
+        if slow_port_file.is_file():
+            _wait_port_available(int(slow_port_file.read_text(encoding="utf-8")))
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+
+
 def _start_worker(
     *,
     daemon: RuntimeDaemon,
@@ -319,6 +377,7 @@ def test_c12_cpu_runtime_worker_host_harness(tmp_path: Path) -> None:
         runtime_cases = {
             "cold_success",
             "cancel_confirmed",
+            "deadline_contained",
             "restart_replaces_incarnation",
             "stale_fence_rejected",
             "cas_settlement_exactly_once",
@@ -351,6 +410,15 @@ def test_c12_cpu_runtime_worker_host_harness(tmp_path: Path) -> None:
         success_id = str(_value(_mutation_data(success), "task_id"))
         completed = _wait_state(owner, success_id, {"succeeded"})
         result = _value(completed, "result", {})
+        guard_receipt = _value(result, "execution_guards", {})
+        assert guard_receipt["scratch"]["required_bytes"] == 4 * 1024**3
+        assert guard_receipt["evidence"]["cap_bytes"] == 2 * 1024**3
+        assert guard_receipt["deadline_seconds"] == 3600.0
+        assert guard_receipt["warm_expectation"] == {
+            "warm_reuse_expected": False,
+            "listener_port": None,
+            "port_independent": True,
+        }
         outputs = _value(result, "outputs", [])
         assert isinstance(outputs, list) and len(outputs) == 1
         output = outputs[0]

@@ -84,12 +84,22 @@ def _load_inventory() -> list[str]:
     return cases
 
 
+def _manager_cases() -> set[str]:
+    payload = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    return {
+        str(case)
+        for case, sources in payload["evidence_sources"].items()
+        if "manager" in sources
+    }
+
+
 def test_c12_cpu_inventory_is_frozen_and_complete() -> None:
     cases = _load_inventory()
     assert cases == [
         "cold_success",
         "cancel_confirmed",
         "cancel_uncertain_fences",
+        "deadline_contained",
         "changed_identity",
         "restart_replaces_incarnation",
         "stale_fence_rejected",
@@ -240,5 +250,5 @@ def test_c12_cpu_session_aware_lifecycle_harness(tmp_path: Path) -> None:
     }
     assert evidence["cleanup_releases_owned_session"]["release_observed"] is True
 
-    assert set(evidence) == set(cases)
-    assert all(evidence[case] for case in cases)
+    assert set(evidence) == _manager_cases()
+    assert all(evidence[case] for case in _manager_cases())

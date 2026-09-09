@@ -47,6 +47,7 @@ class CapabilityDescriptor:
     cancellation_strength: str = "fenced"
     uncertain_cancellation: str = "reconcile_before_settlement"
     resources_claimed: tuple[str, ...] = ("gpu", "ports", "files")
+    warm_reuse_expected: bool = False
 
     def __post_init__(self) -> None:
         if not self.capability_id.strip():
@@ -57,6 +58,8 @@ class CapabilityDescriptor:
             raise ValueError("managed session termination must remain host-owned")
         if self.admission_capacity not in {"serial", "concurrent", "batched"}:
             raise ValueError("managed session admission_capacity is invalid")
+        if type(self.warm_reuse_expected) is not bool:
+            raise ValueError("managed session warm_reuse_expected must be a boolean")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +71,7 @@ class CapabilityDescriptor:
             "cancellation_strength": self.cancellation_strength,
             "uncertain_cancellation": self.uncertain_cancellation,
             "resources_claimed": list(self.resources_claimed),
+            "warm_reuse_expected": self.warm_reuse_expected,
         }
 
 

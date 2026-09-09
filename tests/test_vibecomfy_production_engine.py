@@ -12,6 +12,41 @@ import pytest
 from astrid.packs.vibecomfy import production_engine
 
 
+def test_execution_identity_digest_is_stable_and_model_bound() -> None:
+    first = production_engine.execution_identity_digest(
+        "model-a", "image/a", model_digest="sha256:" + "a" * 64
+    )
+    second = production_engine.execution_identity_digest(
+        "model-b", "image/a", model_digest="sha256:" + "a" * 64
+    )
+    assert first != second
+    assert first == production_engine.execution_identity_digest(
+        "model-a", "image/a", model_digest="sha256:" + "a" * 64
+    )
+
+
+def test_run_workflow_path_rejects_execution_identity_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = tmp_path / "workflow.json"
+    workflow.write_text('{"template_id":"image/a","bindings":{}}', encoding="utf-8")
+    monkeypatch.setattr(
+        production_engine,
+        "load_workflow_path",
+        lambda *_args, **_kwargs: (SimpleNamespace(metadata={}), "model-a", "image/a"),
+    )
+    with pytest.raises(
+        production_engine.ProductionEngineError,
+        match="execution identity changed",
+    ):
+        production_engine.run_workflow_path(
+            workflow,
+            tmp_path / "out",
+            task_identity="task-1",
+            expected_execution_identity="wrong",
+        )
+
+
 @pytest.fixture
 def _isolated_comfy_imports() -> Iterator[None]:
     original_modules = {

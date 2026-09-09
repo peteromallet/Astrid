@@ -181,6 +181,7 @@ _HOST_OWNED_ENVELOPE_PORTS = (
     "task_spec_json",
     "input_object_paths_json",
     "task_identity",
+    "execution_identity",
     "engine_python",
     "readiness_profile_json",
     "readiness_profile_path",
@@ -368,6 +369,10 @@ def _bind_host_owned_command_values(
     if "task_identity" in declared:
         values["task_identity"] = str(
             (admission or {}).get("task_id") or attempt.name
+        )
+    if "execution_identity" in declared:
+        values["execution_identity"] = str(
+            (admission or {}).get("execution_identity") or "-"
         )
     if "engine_python" in declared:
         values.setdefault("engine_python", sys.executable)
@@ -2700,60 +2705,18 @@ class GenericPackHost:
             else None
         )
         if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
-            from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
-
-            raw_inputs = spec.get("spec", spec) if isinstance(spec, Mapping) else {}
-            if not isinstance(raw_inputs, Mapping):
-                raw_inputs = {}
-            model_id = str(raw_inputs.get("model_id") or "vibecomfy.run")
-            template_id = str(raw_inputs.get("template_id") or "vibecomfy.run")
-            checkout_adapter = CheckoutServerAdapter.from_host_session(
-                hc03_profile=readiness_profile,
-                model_id=model_id,
-                template_id=template_id,
-                invocation_identity=f"{task_id}:{attempt_id}:{fence}",
-            )
-            session_id = str(vibe_session.get("session_dir") or "")
-            session_birth = str(vibe_session.get("process_birth_id") or "")
-            session_endpoint = str(vibe_session.get("server_url") or "")
-            session_source = str(vibe_session.get("source_revision") or "")
-            session_config = str(vibe_session.get("config_digest") or "")
-            verified_facts = readiness_profile.get("verified_facts")
-            exact_facts = (
-                verified_facts.get("exact")
-                if isinstance(verified_facts, Mapping)
-                else {}
-            )
-            managed_binding = SessionBinding(
-                session_id=session_id,
-                runtime_instance_id=str(
-                    (readiness_profile.get("runtime") or {}).get("runtime_instance_id")
-                    if isinstance(readiness_profile.get("runtime"), Mapping)
-                    else runtime_instance_id
-                ),
-                process_birth_id=session_birth,
-                endpoint=session_endpoint,
-                source_digest=session_source,
-                config_digest=session_config,
-                execution_identity=_canonical_digest(
-                    {
-                        "model_id": model_id,
-                        "template_id": template_id,
-                        "model_digest": exact_facts.get("model_digest")
-                        if isinstance(exact_facts, Mapping)
-                        else None,
-                    }
-                ),
-            )
             managed_capability = CapabilityDescriptor(
                 capability_id=capability_id,
                 residency_support="observable_releasable",
                 resources_claimed=tuple(record.resource_keys),
             )
-            managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
+            managed_adapter = None
         managed_token = None
         managed_settled = False
         managed_opened = False
+        execution_identity = ""
+        model_id = "vibecomfy.run"
+        template_id = "vibecomfy.run"
 
         def cancelled():
             if self._shutdown.is_set() or cancel_signal.is_set():
@@ -2768,6 +2731,68 @@ class GenericPackHost:
             state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
             return state == "cancelled"
         try:
+            inputs = self._materialize_inputs(
+                spec,
+                root,
+                authorized_input_object_ids=authorized_input_object_ids,
+            )
+            if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
+                workflow_input = inputs.get("workflow")
+                if not isinstance(workflow_input, (str, Path)):
+                    raise HostError("vibecomfy.run workflow input is missing")
+                from astrid.packs.vibecomfy.production_engine import (
+                    execution_identity_digest,
+                    load_workflow_path,
+                )
+
+                _, model_id, template_id = load_workflow_path(
+                    workflow_input,
+                    root / "workflow-identity",
+                )
+                verified_facts = readiness_profile.get("verified_facts")
+                exact_facts = (
+                    verified_facts.get("exact")
+                    if isinstance(verified_facts, Mapping)
+                    else {}
+                )
+                model_digest = (
+                    exact_facts.get("model_digest")
+                    if isinstance(exact_facts, Mapping)
+                    else None
+                )
+                execution_identity = execution_identity_digest(
+                    model_id,
+                    template_id,
+                    model_digest=model_digest,
+                )
+                network_admission["execution_identity"] = execution_identity
+                from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
+
+                checkout_adapter = CheckoutServerAdapter.from_host_session(
+                    hc03_profile=readiness_profile,
+                    model_id=model_id,
+                    template_id=template_id,
+                    invocation_identity=f"{task_id}:{attempt_id}:{fence}",
+                )
+                session_id = str(vibe_session.get("session_dir") or "")
+                session_birth = str(vibe_session.get("process_birth_id") or "")
+                session_endpoint = str(vibe_session.get("server_url") or "")
+                session_source = str(vibe_session.get("source_revision") or "")
+                session_config = str(vibe_session.get("config_digest") or "")
+                managed_binding = SessionBinding(
+                    session_id=session_id,
+                    runtime_instance_id=str(
+                        (readiness_profile.get("runtime") or {}).get("runtime_instance_id")
+                        if isinstance(readiness_profile.get("runtime"), Mapping)
+                        else runtime_instance_id
+                    ),
+                    process_birth_id=session_birth,
+                    endpoint=session_endpoint,
+                    source_digest=session_source,
+                    config_digest=session_config,
+                    execution_identity=execution_identity,
+                )
+                managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
             self.managed_tool_session.open(
                 capability=managed_capability,
                 binding=managed_binding,
@@ -2778,11 +2803,6 @@ class GenericPackHost:
             managed_token = self.managed_tool_session.admit(
                 capability_id=capability_id,
                 invocation_id=f"{task_id}:{attempt_id}:{fence}",
-            )
-            inputs = self._materialize_inputs(
-                spec,
-                root,
-                authorized_input_object_ids=authorized_input_object_ids,
             )
             if record.adapter.family == "provider" and record.definition.isolation.network:
                 policy = _network_policy(record)

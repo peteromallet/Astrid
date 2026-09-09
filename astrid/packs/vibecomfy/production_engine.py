@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
@@ -125,6 +126,53 @@ def _load_workflow(workflow: Mapping[str, Any], references: Mapping[str, str], s
     raise ProductionEngineError(
         "production engine accepts only canonical ready-template workflows"
     )
+
+
+def load_workflow_path(
+    workflow_path: str | Path,
+    scratch: str | Path,
+    *,
+    model_id: str = "vibecomfy",
+    template_id: str = "vibecomfy.run",
+) -> tuple[Any, str, str]:
+    """Load one canonical workflow and return its effective execution identity."""
+    source = Path(workflow_path).expanduser().resolve(strict=True)
+    try:
+        raw_workflow = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProductionEngineError(f"workflow could not be read: {source}") from exc
+    if not isinstance(raw_workflow, Mapping):
+        raise ProductionEngineError("workflow must be a JSON object")
+    resolved = _load_workflow(raw_workflow, {}, Path(scratch).resolve())
+    metadata = getattr(resolved, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    effective_template_id = str(metadata.get("ready_template") or template_id)
+    effective_model_id = str(metadata.get("model_id") or model_id)
+    if not effective_template_id.strip():
+        raise ProductionEngineError("canonical workflow has no ready-template identity")
+    return resolved, effective_model_id, effective_template_id
+
+
+def execution_identity_digest(
+    model_id: str,
+    template_id: str,
+    *,
+    model_digest: str | None = None,
+) -> str:
+    """Return the shared host/child identity for one canonical execution."""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "model_id": model_id,
+                "template_id": template_id,
+                "model_digest": model_digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
 
 
 def _profile_id(value: Any) -> str:
@@ -340,6 +388,7 @@ def run_workflow_path(
     model_id: str = "vibecomfy",
     template_id: str = "vibecomfy.run",
     hc03_profile: Any = None,
+    expected_execution_identity: str | None = None,
 ) -> tuple[Path, ...]:
     """Run a file workflow through the reviewed production-engine path.
 
@@ -350,21 +399,27 @@ def run_workflow_path(
     """
     if not isinstance(task_identity, str) or not task_identity.strip():
         raise ProductionEngineError("production engine task_identity is required")
-    source = Path(workflow_path).expanduser().resolve(strict=True)
     destination_path = Path(destination).expanduser().resolve()
     destination_path.mkdir(parents=True, exist_ok=True)
-    try:
-        raw_workflow = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ProductionEngineError(f"workflow could not be read: {source}") from exc
-    if not isinstance(raw_workflow, Mapping):
-        raise ProductionEngineError("workflow must be a JSON object")
-    resolved = _load_workflow(raw_workflow, {}, destination_path)
-    metadata = getattr(resolved, "metadata", {})
-    if not isinstance(metadata, Mapping):
-        metadata = {}
-    effective_template_id = str(metadata.get("ready_template") or template_id)
-    effective_model_id = str(metadata.get("model_id") or model_id)
+    resolved, effective_model_id, effective_template_id = load_workflow_path(
+        workflow_path,
+        destination_path,
+        model_id=model_id,
+        template_id=template_id,
+    )
+    if expected_execution_identity is not None:
+        model_digest = None
+        if isinstance(hc03_profile, Mapping):
+            facts = hc03_profile.get("verified_facts")
+            exact = facts.get("exact") if isinstance(facts, Mapping) else None
+            model_digest = exact.get("model_digest") if isinstance(exact, Mapping) else None
+        actual_identity = execution_identity_digest(
+            effective_model_id,
+            effective_template_id,
+            model_digest=model_digest,
+        )
+        if actual_identity != expected_execution_identity:
+            raise ProductionEngineError("workflow execution identity changed before launch")
     return _run_profile(
         resolved,
         profile_id,

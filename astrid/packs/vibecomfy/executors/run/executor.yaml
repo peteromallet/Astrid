@@ -14,6 +14,8 @@
       "{out}",
       "--task-identity",
       "{task_identity}",
+      "--execution-identity",
+      "{execution_identity}",
       "--readiness-profile-path",
       "{readiness_profile_path}",
       "--readiness-profile-hash",
@@ -47,6 +49,12 @@
     {
       "description": "Host-issued task identity for the production engine adapter.",
       "name": "task_identity",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Host-issued canonical workflow execution identity.",
+      "name": "execution_identity",
       "required": false,
       "type": "string"
     },

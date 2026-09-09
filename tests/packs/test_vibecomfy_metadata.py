@@ -54,6 +54,8 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
                 "{out}",
                 "--task-identity",
                 "{task_identity}",
+                "--execution-identity",
+                "{execution_identity}",
                 "--readiness-profile-path",
                 "{readiness_profile_path}",
                 "--readiness-profile-hash",
@@ -120,6 +122,7 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
                 root / "workflow.json",
                 out,
                 task_identity="task-1",
+                expected_execution_identity=None,
                 profile_id="pip_embedded",
                 hc03_profile=None,
             )

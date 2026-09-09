@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Host-issued task identity used by the production engine adapter.",
     )
     parser.add_argument(
+        "--execution-identity",
+        default="-",
+        help="Host-issued canonical workflow execution identity.",
+    )
+    parser.add_argument(
         "--readiness-profile-path",
         default="-",
         help="Worker-issued readiness profile path; '-' selects embedded execution.",
@@ -52,6 +57,7 @@ def _run_and_settle(
     output_root: Path,
     *,
     task_identity: str | None,
+    execution_identity: str = "-",
     readiness_profile_path: str = "-",
     readiness_profile_hash: str = "-",
 ) -> dict[str, Any]:
@@ -84,6 +90,9 @@ def _run_and_settle(
         workflow_path,
         output_root,
         task_identity=task_identity,
+        expected_execution_identity=(
+            None if execution_identity == "-" else execution_identity
+        ),
         profile_id=profile_id,
         hc03_profile=readiness_profile,
     )
@@ -158,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             args.workflow,
             args.out,
             task_identity=args.task_identity,
+            execution_identity=args.execution_identity,
             readiness_profile_path=args.readiness_profile_path,
             readiness_profile_hash=args.readiness_profile_hash,
         )

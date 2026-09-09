@@ -1,0 +1,261 @@
+{
+  "schema_version": "megado.planning-tasklist.v1",
+  "run_id": "megado-unified-v3",
+  "mode": "planning_only",
+  "authority": {
+    "plan_path": "authority/UNIFIED-PLAN-v3.md",
+    "plan_sha256": "0772f5ac5196b7c0e28d19c1d636f18c26a3cc8c550f9f1a09bd9a4e2ddb7dc0",
+    "source_manifest": "./provenance.md",
+    "canonical_ledger": "authority/LEDGER-OBLIGATIONS.md",
+    "ledger_policy": "The historical 45-row ledger remains source evidence; authority/LEDGER-OBLIGATIONS.md is a read-only selected obligation record, not a duplicate ledger.",
+    "adjudicated_state": {
+      "accepted_scoped_closures": 22,
+      "reopened": ["B03-T01 HC-04 correction"],
+      "original_pending_rows": 22,
+      "pending_rows_closed_by_discovered_evidence": 0
+    }
+  },
+  "routing": {
+    "coordinator": "run.yaml:roles.coordinator",
+    "normal": "run.yaml:roles.worker_normal",
+    "xhard": "run.yaml:roles.worker_xhard",
+    "oracle": "run.yaml:roles.oracle",
+    "final_reviewer": "run.yaml:roles.final_reviewer",
+    "route_note": "P0.b, P1, and P2 are explicitly routed to the configured xhard role by the standing source policy; this is not an inference from task size. The configured final reviewer is a separate leaf context and must not review its own implementation.",
+    "grok": "not on default route; requires explicit user reopening"
+  },
+  "global_constraints": [
+    "No GPU/provider fire until P0.d reconciles historical spend and attempts and signs remaining allowance.",
+    "Preserve the USD 6 aggregate cap, maximum two live attempts per engine/profile cluster, maximum three hours per pod, 4 GiB free-space floor, and 2 GiB run-generated evidence/scratch cap.",
+    "No model downloads; use pinned, reviewed source and dependency identities.",
+    "No overlay wholesale restoration; verification bypasses are immediate stop conditions.",
+    "No task is accepted merely because it is assigned a terminal status; unsuccessful outcomes must be honest and never marked EXECUTED."
+  ],
+  "canonical_ledger_ids": {
+    "HC04": ["B03-T01"],
+    "P7.cpu_closure": ["B03-T05a", "B03-T05b", "B03-T05c", "B03-T05d", "B03-T05e", "B03-T05", "B03-T08", "B04-T04", "B04-T05", "B04-T06", "B04-T07", "B05-T01", "B05-T02", "B05-T03", "B05-T04"],
+    "P7.freeze": ["B06-T01", "B06-T02"],
+    "P7.gpu_journey": ["B06-T03", "B06-T04", "B06-T05"],
+    "P7.capture": ["B06-T06"],
+    "P7.final_review": ["B06-T07"]
+  },
+  "tasks": [
+    {
+      "id": "P0.a",
+      "phase": "P0",
+      "title": "Complete offline custody bundles",
+      "outcome": "Bundle the three recovered tips not covered by the existing ffef517a-lineage bundle and verify all four recovered tips are independently restorable offline.",
+      "dependencies": [],
+      "scope": ["snapshot custody bundles", "four recovered Astrid branch tips", "offline object verification"],
+      "route": "normal",
+      "acceptance": "A custody receipt names every tip, bundle/hash, and restoration check; no product source is changed."
+    },
+    {
+      "id": "P0.b",
+      "phase": "P0",
+      "title": "Bounded Fire-19 backend recovery or reconstruction",
+      "outcome": "Attempt bounded recovery of the exact missing backends/vibecomfy.py; if unavailable, reconstruct from_host_session and run_compiled_workflow against the preserved fire7 call shape and c7f5b33d binding semantics, recovering valid repairs individually.",
+      "dependencies": ["P0.a", "P0.f", "P0.g"],
+      "scope": ["Fire-19 archives and durable refs", "production_engine-fire7.py:161", "VibeComfy checkout adapter", "tracked verification/liveness/settlement code"],
+      "route": "xhard",
+      "route_reason": "Standing routing explicitly assigns reconstruction and P1/P2 hard implementation to the configured xhard role; exact recovery is uncertain and consequential.",
+      "acceptance": "Receipt states exact recovery found or unavailable, records reconstructed contracts/tests, and proves no no-op source verification, timestamp-only liveness, digest substitution, readiness injection, or settlement rewriting entered the candidate."
+    },
+    {
+      "id": "P0.c",
+      "phase": "P0",
+      "title": "Prepare composition identity inputs",
+      "outcome": "Prepare complete composition manifest inputs for an M1 preliminary composition; final B06-T01 freezing is a distinct P7 task after CR2.",
+      "dependencies": ["P0.a", "P0.b"],
+      "scope": ["Astrid", "reigh-worker", "Runtime", "reigh-app", "VibeComfy", "Wan2GP", "ComfyUI", "harness/bootstrap/sitecustomize", "profiles/interpreters/nodes/models/config"],
+      "route": "normal",
+      "acceptance": "Inputs are sufficient to record M1 after P1-P3; no current-main observation silently substitutes for a pinned identity. Final B06-T01 pinning is accepted only by P7.freeze after CR2 PASS."
+    },
+    {
+      "id": "P0.d",
+      "phase": "P0",
+      "title": "Reconcile inherited provider budget and attempts",
+      "outcome": "Reconstruct historical spend and 19 historical fires, determine the unproven attempt balance and remaining USD 6 allowance, set per-fire limits/abort conditions, and reserve final-run budget.",
+      "dependencies": [],
+      "scope": ["provider receipts", "pod lifecycle and termination evidence", "spend ledger", "reserved final fire"],
+      "route": "normal",
+      "acceptance": "Signed CPU-side budget receipt with provenance, remaining allowance, attempt balance, limits, and cleanup evidence; until then all GPU work is blocked. Unknown counts are reconciled, not reset."
+    },
+    {
+      "id": "P0.e",
+      "phase": "P0",
+      "title": "Apply adjudicated ledger correction of record",
+      "outcome": "In the future authorized execution, synchronize the canonical tasklist/ledger with 22 accepted scoped closures, reopened B03-T01 HC-04 correction, 22 original pending rows, blocked B03-T05a-e receipts, and corrected blocker state.",
+      "dependencies": ["P0.a"],
+      "scope": ["canonical tasklist.json", "canonical acceptance-ledger.md", "B03-T01 correction receipt state", "B03-T05a-e blocked state"],
+      "route": "normal",
+      "acceptance": "Canonical ledger diff matches the v3 adjudication verbatim and preserves historical evidence; no pending row is closed by discovery alone. This planning artifact does not edit that ledger."
+    },
+    {
+      "id": "P0.f",
+      "phase": "P0",
+      "title": "Verify local capacity and isolated custody prerequisites",
+      "outcome": "Verify at least 4 GiB free, enforce a 2 GiB run evidence/scratch cap, and establish protected dirty-checkout and isolated-worktree rules, including unusable Runtime local custody as a recovery prerequisite.",
+      "dependencies": [],
+      "scope": ["filesystem capacity", "run tmp/evidence", "protected source checkouts", "Runtime Git-link recovery"],
+      "route": "normal",
+      "acceptance": "Fresh preflight receipt records capacity, protected dirty paths, usable isolated custody, and exact interpreter/package identity; capacity failure blocks expensive work."
+    },
+    {
+      "id": "P0.g",
+      "phase": "P0",
+      "title": "Enforce routing and honest-outcome policy",
+      "outcome": "Install the role boundary: the configured coordinator directs, the normal worker handles normal work, the configured xhard role handles P0.b/P1/P2 hard work, and the configured oracle/final reviewer retain their independent responsibilities; no unconfigured route is used unless explicitly reopened.",
+      "dependencies": ["P0.f"],
+      "scope": ["run.yaml", "brief/receipt templates", "review independence", "honest terminal language"],
+      "route": "normal",
+      "acceptance": "Coordinator-readable dispatch rules resolve every future task through run.yaml, preserve counters, prohibit self-review, and forbid EXECUTED for unsuccessful outcomes."
+    },
+    {
+      "id": "P1",
+      "phase": "P1",
+      "title": "Integrate VibeComfy content in clean custody",
+      "outcome": "Merge authored fix/S1 content into the cb130f1b lineage containing c7f5b33d launch-marker ownership, reconcile the expected file set, and produce one branch consumed by both pip_embedded and checkout paths.",
+      "dependencies": ["P0.b", "P0.f", "P0.g", "HC04"],
+      "scope": ["VibeComfy source", "SessionConfig fields", "disable_known_models", "launch-marker ownership", "clean isolated worktree"],
+      "route": "xhard",
+      "route_reason": "Standing source routing assigns the Vibe integration hard lane to the configured xhard role; reviewer remains independent.",
+      "acceptance": "Focused CPU tests and an independent review prove real authored content (not ancestry-only probe merge), launch-marker ownership, modern SessionConfig, and both profile consumers."
+    },
+    {
+      "id": "HC04",
+      "phase": "P0",
+      "title": "Accept corrected HC-04 Runtime handoff",
+      "outcome": "Validate Runtime 70872d03 with app cf9d772be, complete the corrected schema/CAS/catalog handoff, and obtain the required independent acceptance before producer/deletion work.",
+      "dependencies": ["P0.e", "P0.f"],
+      "scope": ["Runtime 70872d03", "reigh-app cf9d772be", "HC-04 handoff", "schema/CAS/catalog focused tests"],
+      "route": "xhard",
+      "route_reason": "The adjudication binding directive makes corrected HC-04 acceptance a consequential xhard-role handoff prerequisite.",
+      "acceptance": "Focused schema/CAS/catalog tests and an independent acceptance receipt prove the corrected handoff; the settled canonical SHA-256 object-ID decision is preserved and the prior authority correction remains unaccepted until this task passes."
+    },
+    {
+      "id": "P2",
+      "phase": "P2",
+      "title": "Build engine-neutral ManagedToolSession core",
+      "outcome": "Implement and CPU-test GenericPackHost custody envelopes, capability descriptors, warm-slot/capacity policy, generation/admission fencing, checkout adapter binding, and evidence-integrity construction.",
+      "dependencies": ["P0.b", "P1"],
+      "scope": ["Astrid GenericPackHost", "ManagedToolSession", "checkout adapter", "Runtime authority boundary", "fault injection", "tracked verification"],
+      "route": "xhard",
+      "route_reason": "Standing source routing assigns manager core and checkout reconstruction hard implementation to the configured xhard role; reviewer is a separate leaf.",
+      "acceptance": "CPU fault-injection proof covers wrapper loss, orphan/PID reuse, restart race, port release, uncertain cancellation, stale admission, and settlement fencing; independent review finds no verification bypass or second durable authority."
+    },
+    {
+      "id": "P3",
+      "phase": "P3",
+      "title": "Convert harness to session-aware evidence",
+      "outcome": "Rewrite lifecycle assertions around manager-issued evidence and independent observation, decouple warm expectation from listener ports, delete start_checkout adoption, and freeze the actual executable case inventory.",
+      "dependencies": ["P2"],
+      "scope": ["C12 harness", "production_runner boundary", "case inventory", "scratch/deadline gates"],
+      "route": "normal",
+      "acceptance": "Focused CPU fixtures prove session identity, cancellation, restart, stale-fence, CAS/settlement, cleanup, and inventory completeness without claiming GPU acceptance."
+    },
+    {
+      "id": "P4",
+      "phase": "P4",
+      "title": "Prove checkout lifecycle on first budgeted fire",
+      "outcome": "After preflight, prove checkout_server cold, warm/nonreuse, cancel, changed_identity, restart, binding, per-case receipts, output hashes, and task-to-output bindings.",
+      "dependencies": ["M1"],
+      "scope": ["one owned pod", "checkout_server", "registry/readiness", "restart/teardown", "receipt shape"],
+      "route": "normal",
+      "acceptance": "Fresh provider/capacity preflight plus receipted lifecycle evidence proves runtime binding and owned-resource cleanup; no inferred zero pods and no overlay-only proof."
+    },
+    {
+      "id": "M1",
+      "phase": "M1",
+      "title": "Composition and code-level blocker checkpoint",
+      "outcome": "Record the preliminary integrated composition after P1-P3, confirm the code-level C12 blocker is cleared, and confirm signed budget/custody preconditions before the first GPU proof.",
+      "dependencies": ["P0.c", "P0.d", "P0.f", "P1", "P2", "P3", "HC04"],
+      "scope": ["preliminary composition", "P1-P3 CPU evidence", "budget receipt", "custody receipt"],
+      "route": "normal",
+      "acceptance": "M1 receipt pins the preliminary composition and CPU evidence, records code-level blocker closure, and references signed P0.d/P0.f evidence. It is not the final B06-T01 freeze and does not close any GPU or final-ledger row."
+    },
+    {
+      "id": "P5",
+      "phase": "P5",
+      "title": "Prove Wan persistent runner and residency feasibility",
+      "outcome": "Prove the CPU retention seam, correct the task-independent resident key, run the explicit GPU feasibility gate, preserve canonical MP4 metadata, and keep warm_reuse_expected false unless evidence passes.",
+      "dependencies": ["P4"],
+      "scope": ["Wan2GP adapter", "shared.api.init", "resident key", "incarnation/residency telemetry", "output spool rebind"],
+      "route": "normal",
+      "acceptance": "Evidence includes observed incarnation, no reconstruction event, resident components/VRAM/load-time delta, canonical output equality, cancellation, restart and A→B→A behavior; an infeasible gate is recorded honestly."
+    },
+    {
+      "id": "P6",
+      "phase": "P6",
+      "title": "Prove embedded retained session",
+      "outcome": "Prove retention across the per-task production_runner boundary, with cancellation semantics and the same evidence class used for Wan before any warm-policy flip.",
+      "dependencies": ["P5"],
+      "scope": ["pip_embedded", "EmbeddedSession", "production_runner seam", "warm flag evidence"],
+      "route": "normal",
+      "acceptance": "CPU seam proof and, if budgeted, GPU evidence establish retained-session lifecycle and safe nonreuse; unsupported warmth remains explicitly unsupported rather than relabeled."
+    },
+    {
+      "id": "P7.cpu_closure",
+      "phase": "P7",
+      "title": "Complete CPU producer/deletion closure chain and CR2",
+      "outcome": "Complete the outstanding source/deletion chain and obtain B05-T04 / CR2 PASS.",
+      "dependencies": ["P6", "HC04"],
+      "scope": ["B03-T05a", "B03-T05b", "B03-T05c", "B03-T05d", "B03-T05e", "B03-T05", "B03-T08", "B04-T04", "B04-T05", "B04-T06", "B04-T07", "B05-T01", "B05-T02", "B05-T03", "B05-T04/CR2"],
+      "route": "normal",
+      "dependency_order": ["B03-T05a-e", "B03-T05", "B04-T04", "B03-T08", "B04-T05", "B04-T06", "B04-T07", "B05-T01", "B05-T02", "B05-T03", "B05-T04/CR2"],
+      "acceptance": "Focused CPU source/tests/docs and accepted reviews close the five B03-T05 children and aggregate, B03-T08, B04-T04 through T07, then B05-T01 through T04; deletion proof includes inpaint_frames and qwen_image_hires negative evidence, Supabase-lifecycle removal, and unrelated Stage1 preservation. CR2 receipt is PASS. No final freeze is allowed before this task."
+    },
+    {
+      "id": "P7.freeze",
+      "phase": "P7",
+      "title": "Freeze final immutable composition",
+      "outcome": "After CR2, pin one complete execution-affecting composition and freeze the actual harness case inventory.",
+      "dependencies": ["P7.cpu_closure", "M1"],
+      "scope": ["B06-T01", "B06-T02", "all repositories/dependencies", "harness inventory", "provider/capacity/spend preflight"],
+      "route": "normal",
+      "acceptance": "B06-T01/B06-T02 receipts pin all sources, dependencies, config, profiles, interpreter/node/model manifests, case inventory, fresh provider state, capacity, spend/attempt allowance, and cleanup authority. CR2 PASS is an explicit prerequisite."
+    },
+    {
+      "id": "P7.gpu_journey",
+      "phase": "P7",
+      "title": "Run final CPU and real-GPU integrated journey",
+      "outcome": "Execute B06-T03 CPU gates and the reserved B06-T04/B06-T05 real-GPU journey on the frozen composition.",
+      "dependencies": ["P7.freeze", "P0.d"],
+      "scope": ["B06-T03", "B06-T04", "B06-T05", "C01-C15", "all three profiles", "CAS/settlement/lifecycle/cleanup"],
+      "route": "normal",
+      "acceptance": "Frozen CPU gates pass; GPU evidence proves task-bound CAS outputs, exactly-once settlement, compatible repetition and honest warm/nonreuse, cancellation per profile, changed-identity fencing, restart/interruption recovery, stale rejection, and owned-resource cleanup."
+    },
+    {
+      "id": "P7.capture",
+      "phase": "P7",
+      "title": "Capture final manifest and honest ledger state",
+      "outcome": "Complete B06-T06 durable post-capture evidence, spend/attempt accounting, provider cleanup observation, and criterion/row disposition.",
+      "dependencies": ["P7.gpu_journey"],
+      "scope": ["B06-T06", "C01-C16 matrix", "45-row canonical ledger", "provider cleanup"],
+      "route": "normal",
+      "acceptance": "Durable manifest binds outputs and source identities, budget accounting is reconciled, provider observation proves or leaves cleanup honestly unverified, and every row is accepted under scope or states blocked/failed/undetermined. Unsuccessful work is never EXECUTED."
+    },
+    {
+      "id": "P7.final_review",
+      "phase": "P7",
+      "title": "Independent final integrated review",
+      "kind": "review",
+      "outcome": "Conduct B06-T07 final holistic completion and strategic review as a separate configured final-reviewer leaf context.",
+      "dependencies": ["P7.capture"],
+      "scope": ["B06-T07", "complete candidate", "C01-C16", "North Star alignment", "canonical ledger disposition"],
+      "route": null,
+      "reviewer_role": "final_reviewer",
+      "acceptance": "Independent final-reviewer leaf checks completion, evidence integrity, simplicity, and strategy against v3; it does not review its own implementation, waive failed evidence, reset budgets, or silently expand scope."
+    },
+    {
+      "id": "P7.finish",
+      "phase": "P7",
+      "title": "Record terminal disposition and archive",
+      "outcome": "After B06-T07, record COMPLETED only for full acceptance or TERMINAL-HONEST with every failed/blocked/undetermined obligation, preserve evidence, verify provider-observed zero pods, and archive the run.",
+      "dependencies": ["P7.final_review"],
+      "scope": ["canonical ledger final state", "run archive", "provider cleanup observation", "deferred receipts", "authorized push state"],
+      "route": "normal",
+      "acceptance": "Final status names 45/45 or an honest terminal, includes B06-T07 disposition and deferred receipts, proves zero pods by provider observation (or says unverified), and records push/archive only when separately authorized. No local process exit is treated as provider cleanup proof."
+    }
+  ]
+}

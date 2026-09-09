@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 
 PROJECTS_ROOT_ENV = "ASTRID_PROJECTS_ROOT"
+ASTRID_MANAGED_DIR_NAME = ".astrid"
+ASTRID_DATABASE_NAME = "astrid.sqlite3"
 
 
 def _default_projects_root() -> Path:
@@ -33,6 +35,11 @@ def resolve_projects_root(root: str | Path | None = None) -> Path:
     raw = root if root is not None else os.environ.get(PROJECTS_ROOT_ENV)
     path = Path(raw) if raw else DEFAULT_PROJECTS_ROOT
     return path.expanduser().resolve()
+
+
+def database_path(root: str | Path) -> Path:
+    """Return the one kernel database path beneath a projects root."""
+    return Path(root) / ASTRID_MANAGED_DIR_NAME / ASTRID_DATABASE_NAME
 
 
 def validate_project_slug(slug: object) -> str:

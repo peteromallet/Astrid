@@ -45,6 +45,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from astrid.core.contracts.repository import ACTOR_KINDS
 from astrid.core.events.registry import (
     aggregate_rule_for,
     validate_event_append,
@@ -72,9 +73,6 @@ DATA_KEY = "data"
 INTEGRITY_KEY = "_integrity"
 PREVIOUS_EVENT_HASH_KEY = "previous_event_hash"
 EVENT_HASH_KEY = "event_hash"
-
-from astrid.core.repositories.errors import ACTOR_KINDS  # noqa: F401  (re-export; canonical home: repositories.errors)
-"""The exact ``events.actor_kind`` vocabulary baked into the v10 DDL CHECK."""
 
 # ---------------------------------------------------------------------------
 # Errors

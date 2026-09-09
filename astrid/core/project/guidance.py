@@ -8,7 +8,7 @@ from typing import Any
 
 from astrid.core._shared.jsonio import read_json
 from astrid.core.env_vars import ASTRID_PROJECT_SLUG
-from astrid.core.foundation.project_paths import resolve_projects_root
+from astrid.core.foundation.project_paths import database_path, resolve_projects_root
 from astrid.core.preferences import resolve_default_project
 
 
@@ -161,9 +161,7 @@ def _kernel_or_fs_run_count(slug: str, projects_root: Path, project_root: Path) 
         ids = kernel_runs_for_project(slug, projects_root=projects_root)
         # kernel_runs_for_project returns [] when DB exists but zero runs (authority)
         # — do not count stale FS leftovers in that case. Fall through only when no DB.
-        from astrid.core.integrations.reigh.bridge_service import derive_database_path
-
-        if derive_database_path(projects_root).is_file():
+        if database_path(projects_root).is_file():
             return len(ids)
         # No DB → FS count
         return _count_children(project_root / "runs", marker="run.json")

@@ -21,4 +21,3 @@ Avoid hollow success: no dual authorities, compatibility shims, hidden
 fallbacks, Worker plugin registry, engine-specific Worker routing, Supabase
 task lifecycle, direct task-table mutation, fake “GPU” proof, or passing tests
 that do not exercise the supported launch path.
-

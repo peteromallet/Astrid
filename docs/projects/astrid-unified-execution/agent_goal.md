@@ -49,4 +49,3 @@ record are portable and internally consistent. It makes no product-test,
 acceptance, 45/45, frozen-composition, or zero-pods claim. The optimistic v3
 estimate is ten working days (roughly two calendar weeks), subject to the
 unresolved custody, budget, backend, capacity, and evidence-integrity risks.
-

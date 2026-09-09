@@ -4,6 +4,10 @@ Continue the **Astrid unified execution** Megado project in planning-only mode.
 The project is hosted in public `https://github.com/peteromallet/Astrid.git`,
 handover branch `handover/astrid-unified-execution-20260909`, based on `main`
 source SHA `8150c3b70887495f0fae4a55c1ac70085a900550`.
+Frozen planning payload SHA:
+`be0d5a2065f50ce053cd4c773e37f0b22ff5679a`.
+The publication branch includes the later message that pins this payload;
+use the payload revision below for reproducible planning inputs.
 The control root is `docs/projects/astrid-unified-execution/`.
 
 Use a fresh parent directory and do not overwrite an existing checkout:
@@ -11,6 +15,7 @@ Use a fresh parent directory and do not overwrite an existing checkout:
 ```sh
 test ! -e astrid-unified-execution &&
 git clone --single-branch --branch handover/astrid-unified-execution-20260909 https://github.com/peteromallet/Astrid.git astrid-unified-execution &&
+git -C astrid-unified-execution checkout --detach be0d5a2065f50ce053cd4c773e37f0b22ff5679a &&
 git -C astrid-unified-execution rev-parse HEAD
 ```
 

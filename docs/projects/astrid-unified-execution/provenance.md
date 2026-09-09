@@ -37,4 +37,3 @@ work preserved. Those working-tree changes are not silently treated as the
 authoritative execution composition. A future delivery coordinator must
 inventory the actual candidate, dependency revisions, interpreter/node/model
 manifests, effective configuration, and dirty custody before dispatch.
-

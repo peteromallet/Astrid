@@ -51,4 +51,3 @@ specified by the authoritative v3 plan.
 - **C16 — Simplicity/alignment:** final reviewers confirm the North Star is
   advanced without a parallel abstraction, shim, hidden fallback, or
   ceremonial machinery.
-

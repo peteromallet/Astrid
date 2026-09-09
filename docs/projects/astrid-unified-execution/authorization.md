@@ -20,4 +20,3 @@ authorization must change the single authoritative `run.yaml` mode while
 preserving the existing role/model settings, budgets, unknown counts, and
 review boundaries. Future review packets must be based on the actual candidate;
 this package contains planning evidence only.
-

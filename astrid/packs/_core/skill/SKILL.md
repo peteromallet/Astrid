@@ -20,7 +20,7 @@ Choose the route by the requested result. Read only that route's guidance:
 | Generate images, video, or audio (including Foley); understand, assemble, compare, or publish work | [Creative work](creative-work/SKILL.md), then the relevant pack |
 | Reuse a character or other saved subject | [References](../../references/skill/SKILL.md) |
 | Build your own reusable tool, workflow, or visual element | [Pack builder](pack-builder/SKILL.md) |
-| Find Banodoco advice, model settings, or workflow precedents | [Hivemind](../../hivemind/skill/SKILL.md) |
+| Find Banodoco advice, model settings, or workflow precedents | [Hivemind](packs/hivemind/SKILL.md) |
 
 Using an existing workflow and building a reusable extension are different
 requests: pack builder handles the latter, including deciding what to reuse.
@@ -144,9 +144,11 @@ runtime/SDK error, and `2` a usage or parse error.
 ## Shared knowledge: Hivemind
 
 For community practice, model behavior, settings, known failures, and workflow
-precedents, read the [Hivemind pack skill](../../hivemind/skill/SKILL.md).
-Hivemind ships with Astrid by default. Use its search capability, then retrieve
-the full source behind useful hits before presenting community advice.
+precedents, read the [Hivemind pack skill](packs/hivemind/SKILL.md) when the
+managed external pack is installed. Use its search capability, then retrieve
+the full source behind useful hits before presenting community advice. The
+Astrid-side v2 compatibility and contributor-write contract is documented in
+[`docs/reference/hivemind-pack-contract.md`](../../docs/reference/hivemind-pack-contract.md).
 
 The skill and executors belong to that pack. If the default pack or its skill is
 missing, follow the pack's documented installation recovery; do not redirect to

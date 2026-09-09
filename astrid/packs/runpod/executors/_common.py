@@ -905,7 +905,27 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
     try:
         # ---- provision -------------------------------------------------
         async def _provision() -> tuple[Any, dict[str, Any]]:
+            nonlocal pod_id, handle
             pod = await launch(config, name=f"{name_prefix}-{int(time.time())}")
+            # Capture custody immediately after the provider returns a pod.
+            # Readiness and SSH discovery can fail after allocation; delaying
+            # pod_id assignment until both succeed leaves the finally block
+            # unable to terminate that orphan.
+            pod_id = str(pod.id)
+            provisional_name = str(getattr(pod, "name", name_prefix) or name_prefix)
+            provisional_terminate_at = datetime.fromtimestamp(
+                datetime.now(timezone.utc).timestamp() + max_runtime,
+                tz=timezone.utc,
+            ).isoformat()
+            handle = {
+                "schema_version": "astrid.runpod.provisional-handle.v1",
+                "pod_id": pod_id,
+                "name": provisional_name,
+                "provisioned_at": provisioned_at,
+                "terminate_at": provisional_terminate_at,
+                "state": "provisioning",
+            }
+            _write_json(handle_path, handle)
             await pod.wait_ready(timeout=900)
             ssh = await pod._ensure_ssh_details()
             return pod, ssh

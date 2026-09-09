@@ -44,3 +44,19 @@ def test_volume_fields_are_rejected_before_porting_unknown_profile_data():
         "volume_mount_path": "/workspace",
     }
     assert validate_profile(profile)["volume_in_gb"] == 32
+
+
+def test_volume_profile_extraction_ignores_untyped_mock_values(tmp_path):
+    from argparse import Namespace
+    from unittest.mock import MagicMock
+
+    from astrid.packs.runpod.executors._common import _resolve_compute_profile
+
+    args = MagicMock(spec=Namespace)
+    args.volume_in_gb = MagicMock()
+    args.volume_mount_path = MagicMock()
+    args.compute_profile = None
+    resolved = _resolve_compute_profile(args, tmp_path)
+
+    assert resolved["volume_in_gb"] == 0
+    assert resolved["volume_mount_path"] == "/workspace"

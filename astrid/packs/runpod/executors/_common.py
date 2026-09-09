@@ -270,6 +270,8 @@ _RUNPOD_COMPUTE_DEFAULTS: dict[str, Any] = {
     "name_prefix": "pod",
     "image": "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
     "container_disk_gb": 200,
+    "volume_in_gb": 0,
+    "volume_mount_path": "/workspace",
     "max_runtime_seconds": 7200,
     "remote_root": "/workspace",
     "timeout": 3600,
@@ -304,6 +306,14 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
     )
     for field in profile_fields:
         value = getattr(args, field, None)
+        # Some callers (and legacy tests) pass lightweight mocked namespaces.
+        # Do not let mock sentinels become profile values and later break the
+        # JSON-safe resolved snapshot. argparse supplies these two fields as
+        # int/string respectively in the real executor path.
+        if field == "volume_in_gb" and (isinstance(value, bool) or not isinstance(value, int)):
+            continue
+        if field == "volume_mount_path" and not isinstance(value, str):
+            continue
         if value is not None and not (field == "require_storage" and value is False):
             explicit[field] = value
     profile_arg = getattr(args, "compute_profile", None)

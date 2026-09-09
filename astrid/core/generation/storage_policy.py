@@ -116,16 +116,18 @@ class CloudI2IStoragePolicy:
 
             with Image.open(BytesIO(data)) as image:
                 width, height = image.size
+                if width > self.max_width or height > self.max_height:
+                    raise ImageStoragePolicyError(
+                        f"provider output {index} dimensions {width}x{height} exceed "
+                        f"{self.max_width}x{self.max_height}"
+                    )
                 image.load()
         except Exception as exc:
+            if isinstance(exc, ImageStoragePolicyError):
+                raise
             raise ImageStoragePolicyError(
                 f"provider output {index} is not a decodable image"
             ) from exc
-        if width > self.max_width or height > self.max_height:
-            raise ImageStoragePolicyError(
-                f"provider output {index} dimensions {width}x{height} exceed "
-                f"{self.max_width}x{self.max_height}"
-            )
         return width, height
 
     def validate_final_output(self, path: str | Path, *, index: int = 0) -> int:

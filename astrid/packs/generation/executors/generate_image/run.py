@@ -475,6 +475,16 @@ def generate_core(
     all_outputs: list[dict[str, Any]] = []
     generated_paths: list[Path] = []
     count = max(1, args.count or 1)
+    if (
+        entry.id == "z-image"
+        and mode_name == "i2i"
+        and args.execution == "cloud"
+        and count != CLOUD_I2I_STORAGE_POLICY.max_count
+    ):
+        raise AstridError(
+            "bounded cloud i2i requires one output for the whole task",
+            recovery_command="use --count 1 for bounded z-image cloud i2i",
+        )
     prompt_text: str | None = None
     final_seed: int = 0
     model_actual: str = ""
@@ -563,6 +573,11 @@ def generate_core(
 
         # --- build canonical params dict for adapter -------------------------
         params["seed"] = seed
+        # Backend adapters must receive the execution identity that was
+        # admitted at the task boundary.  In particular, the bounded cloud
+        # i2i policy must not depend on a CLI-only value that was dropped by
+        # the generic feature compiler.
+        params["execution"] = args.execution
         params["count"] = 1  # N=1 per loop iteration
         if loras_parsed:
             params["loras"] = loras_parsed

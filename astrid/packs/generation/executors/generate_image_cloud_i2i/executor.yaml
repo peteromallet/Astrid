@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "cache": {"mode": "none"},
+  "command": {
+    "argv": [
+      "{python_exec}",
+      "-m",
+      "astrid.packs.generation.executors.generate_image.run",
+      "--model", "{model}",
+      "--mode", "{mode}",
+      "--execution", "{execution}",
+      "--prompt", "{prompt}",
+      "--image-ref", "{image_ref}",
+      "--count", "{count}",
+      "--size", "{size}",
+      "--strength", "{strength}",
+      "--out", "{out}"
+    ]
+  },
+  "conditions": [
+    {"input": "model", "kind": "requires_input"},
+    {"input": "mode", "kind": "requires_input"},
+    {"input": "execution", "kind": "requires_input"},
+    {"input": "prompt", "kind": "requires_input"},
+    {"input": "image_ref", "kind": "requires_input"}
+  ],
+  "description": "Bounded z-image cloud image-to-image execution with an exact whole-task storage envelope.",
+  "graph": {"consumes": ["prompt", "image_ref"], "provides": ["generated_images", "image_manifest"]},
+  "id": "generation.generate_image_cloud_i2i",
+  "name": "Bounded Cloud Image-to-Image",
+  "inputs": [
+    {"name": "model", "required": true, "type": "string"},
+    {"name": "mode", "required": true, "type": "string"},
+    {"name": "execution", "required": true, "type": "string"},
+    {"name": "prompt", "required": true, "type": "string", "artifact_type": "prompt"},
+    {"name": "image_ref", "required": true, "type": "file", "artifact_type": "image"},
+    {"name": "count", "default": 1, "required": false, "type": "integer"},
+    {"name": "size", "required": true, "type": "string"},
+    {"name": "strength", "required": true, "type": "number"},
+    {"name": "seed", "default": null, "required": false, "type": "integer"}
+  ],
+  "isolation": {"mode": "subprocess", "network": true},
+  "kind": "built_in",
+  "metadata": {
+    "output_result_manifest": true,
+    "api_provider": "fal",
+    "env": ["FAL_KEY"],
+    "storage_estimate_required": true,
+    "storage_estimate_exact": true,
+    "storage_policy_version": "astrid.cloud-i2i.z-image.v1",
+    "estimated_scratch_bytes": 136826880,
+    "estimated_output_bytes": 68157440,
+    "hc04_param_ports": ["model", "mode", "execution", "prompt", "image_ref", "count", "size", "strength", "seed"],
+    "hc04_cas_param_ports": ["image_ref"],
+    "network_policy": {
+      "allowed_protocols": ["dns", "tcp"],
+      "allowed_destinations": ["queue.fal.run:443", "fal.run:443", "storage.fal.run:443"],
+      "allow_redirects": false,
+      "broker": {"host_managed": true, "kind": "broker", "enforced": true, "observable": true, "route": "declared-http-routes", "wrapper": "astrid-generic-host"},
+      "descendant_enforcement": {"kind": "broker", "validated": true, "observable": true, "route": "declared-http-routes", "wrapper": "astrid-generic-host"}
+    }
+  },
+  "outputs": [
+    {"name": "generated_images", "type": "file", "artifact_type": "image", "mode": "create_or_replace"},
+    {"name": "image_manifest", "path_template": "{out}/manifest.json", "type": "file", "artifact_type": null, "mode": "create_or_replace"}
+  ],
+  "scoped_configs": ["credentials.fal"],
+  "short_description": "One bounded z-image cloud i2i task with CAS source custody and enforced storage limits.",
+  "version": "1.0"
+}

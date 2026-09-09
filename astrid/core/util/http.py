@@ -75,6 +75,17 @@ def _bounded_body(body: bytes, *, max_bytes: int | None = None) -> bytes:
     return body
 
 
+def _read_http_error_body(exc: HTTPError, *, max_bytes: int | None) -> str:
+    """Read an HTTP error body under the same ceiling as successful bodies."""
+    if not exc.fp:
+        return ""
+    try:
+        body = _read_response_body(exc, max_bytes=max_bytes)
+    except AstridError as bounded:
+        return str(bounded)
+    return body.decode("utf-8", errors="replace")
+
+
 def _real_transport(request: Request) -> tuple[int, bytes]:
     """Execute *request* against the real network.
 
@@ -185,7 +196,7 @@ class HttpClient:
             body = _bounded_body(body, max_bytes=max_bytes)
         except HTTPError as exc:
             detail = self.scrub_secret(
-                exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+                _read_http_error_body(exc, max_bytes=max_bytes)
             )
             raise AstridError(
                 self.scrub_secret(f"HTTP {exc.code} GET {url}: {detail}"),
@@ -264,9 +275,7 @@ class HttpClient:
             _status, body = self._transport(request)
             body = _bounded_body(body, max_bytes=max_response_bytes)
         except HTTPError as exc:
-            detail = (
-                exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            )
+            detail = _read_http_error_body(exc, max_bytes=max_response_bytes)
             raise AstridError(
                 self.scrub_secret(
                     f"HTTP {exc.code} {request.method} {request.full_url}: {detail}"

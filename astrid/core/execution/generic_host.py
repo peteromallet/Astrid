@@ -813,12 +813,20 @@ def _attempt_tree_bytes(root: Path) -> int:
     return total
 
 
-def _task_storage_envelope(
-    task_data: Mapping[str, Any],
-    root: Path,
-    staged_outputs: list[Mapping[str, Any]],
-) -> dict[str, int] | None:
-    """Enforce an explicit whole-task storage ceiling before CAS upload."""
+def _storage_tree_bytes(root: Path) -> int:
+    """Count regular files in a bounded subtree without following symlinks."""
+    if not root.is_dir():
+        return 0
+    total = 0
+    for path in root.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        total += int(path.stat().st_size)
+    return total
+
+
+def _task_storage_estimate(task_data: Mapping[str, Any]) -> dict[str, int] | None:
+    """Parse the canonical whole-task storage estimate, if one was admitted."""
     raw = task_data.get("storage_estimate")
     spec = task_data.get("spec")
     if raw is None and isinstance(spec, Mapping):
@@ -828,12 +836,47 @@ def _task_storage_envelope(
     if not isinstance(raw, Mapping) or set(raw) != {"scratch_bytes", "output_bytes"}:
         raise HostError("task storage_estimate must contain scratch_bytes and output_bytes")
     try:
-        scratch_limit = int(raw["scratch_bytes"])
-        output_limit = int(raw["output_bytes"])
+        scratch_bytes = int(raw["scratch_bytes"])
+        output_bytes = int(raw["output_bytes"])
     except (TypeError, ValueError) as exc:
         raise HostError("task storage_estimate values must be integers") from exc
-    if scratch_limit < 0 or output_limit < 0:
+    if scratch_bytes < 0 or output_bytes < 0:
         raise HostError("task storage_estimate values must be non-negative")
+    return {"scratch_bytes": scratch_bytes, "output_bytes": output_bytes}
+
+
+def _assert_live_storage_envelope(
+    estimate: Mapping[str, int] | None,
+    root: Path,
+    output_root: Path,
+) -> None:
+    """Fail while a child is writing, before an overrun reaches settlement."""
+    if estimate is None:
+        return
+    total_bytes = _attempt_tree_bytes(root)
+    output_bytes = _storage_tree_bytes(output_root)
+    scratch_bytes = max(0, total_bytes - output_bytes)
+    if output_bytes > int(estimate["output_bytes"]):
+        raise HostError(
+            f"live output bytes {output_bytes} exceed task output limit {estimate['output_bytes']}"
+        )
+    if scratch_bytes > int(estimate["scratch_bytes"]):
+        raise HostError(
+            f"live scratch bytes {scratch_bytes} exceed task scratch limit {estimate['scratch_bytes']}"
+        )
+
+
+def _task_storage_envelope(
+    task_data: Mapping[str, Any],
+    root: Path,
+    staged_outputs: list[Mapping[str, Any]],
+) -> dict[str, int] | None:
+    """Enforce an explicit whole-task storage ceiling before CAS upload."""
+    estimate = _task_storage_estimate(task_data)
+    if estimate is None:
+        return None
+    scratch_limit = estimate["scratch_bytes"]
+    output_limit = estimate["output_bytes"]
     output_bytes = 0
     for descriptor in staged_outputs:
         raw_path = descriptor.get("path")
@@ -2466,7 +2509,7 @@ class GenericPackHost:
             })
         return uploaded
 
-    def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None) -> Any:
+    def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None, storage_estimate: Mapping[str, int] | None = None) -> Any:
         """Run a manifest command without importing Astrid's project authority.
 
         Built-in pipeline steps and command capabilities are both runnable from
@@ -2560,6 +2603,7 @@ class GenericPackHost:
         self._track_process(process)
         try:
             while process.poll() is None:
+                _assert_live_storage_envelope(storage_estimate, attempt, output_root)
                 if cancelled is not None and cancelled():
                     _terminate_process_group(process)
                     raise HostCancelled(f"capability {record.id!r} cancelled")
@@ -2595,6 +2639,8 @@ class GenericPackHost:
                 process_id=process_id,
             )
         finally:
+            if process.poll() is None:
+                _terminate_process_group(process)
             self._untrack_process(process)
             _release_owned_group(process)
             env.clear()
@@ -2611,6 +2657,7 @@ class GenericPackHost:
         definition: Mapping[str, Any] | None = None,
         admission: Mapping[str, Any] | None = None,
         child_env: Mapping[str, str] | None = None,
+        storage_estimate: Mapping[str, int] | None = None,
     ) -> Any:
         """Run one pack capability in a dedicated child process.
 
@@ -2699,6 +2746,7 @@ class GenericPackHost:
         self._track_process(process)
         try:
             while process.poll() is None:
+                _assert_live_storage_envelope(storage_estimate, attempt_path, attempt_path / "outputs")
                 if cancelled is not None and cancelled():
                     _terminate_process_group(process)
                     raise HostCancelled(f"capability {capability_id!r} cancelled")
@@ -2749,6 +2797,8 @@ class GenericPackHost:
                 process_id=process_id,
             )
         finally:
+            if process.poll() is None:
+                _terminate_process_group(process)
             self._untrack_process(process)
             _release_owned_group(process)
             env.clear()
@@ -2794,6 +2844,21 @@ class GenericPackHost:
             record = self.capabilities[capability_id]
         if not record.ready:
             raise HostError(f"capability {capability_id!r} is unavailable: {record.preflight}")
+        storage_estimate = _task_storage_estimate(task_data)
+        if record.definition.metadata.get("storage_estimate_required"):
+            if storage_estimate is None:
+                raise HostError(
+                    f"capability {capability_id!r} requires a whole-task storage_estimate"
+                )
+            expected = {
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            }
+            if storage_estimate != expected:
+                raise HostError(
+                    f"capability {capability_id!r} requires storage_estimate={expected}, "
+                    f"got {storage_estimate}"
+                )
         try:
             self.execution_policy.assert_budget_available()
         except ExecutionGuardError as exc:
@@ -3020,6 +3085,7 @@ class GenericPackHost:
                 task_param_ports=task_param_ports,
                 cas_param_ports=cas_param_ports,
             )
+            _assert_live_storage_envelope(storage_estimate, root, root / "outputs")
             immutable_input_baseline = {}
             for input_root in (root / "inputs", root / "managed-objects"):
                 immutable_input_baseline.update(
@@ -3162,6 +3228,7 @@ class GenericPackHost:
                         cancelled=cancelled,
                         admission=network_admission,
                         network_broker=network_broker,
+                        storage_estimate=storage_estimate,
                     )
                 else:
                     # Dispatch through the process boundary.  The immutable
@@ -3188,6 +3255,7 @@ class GenericPackHost:
                             definition=record.definition.to_dict(),
                             admission=worker_admission,
                             child_env=worker_env,
+                            storage_estimate=storage_estimate,
                         )
                     finally:
                         worker_env.clear()

@@ -295,6 +295,20 @@
    "required_packages": []
   },
   {
+   "id": "generation.generate_image_cloud_i2i",
+   "disposition": "required",
+   "evidence_reason": "Narrow z-image cloud i2i capability with an enforced whole-task storage envelope; provider readiness is credential-gated.",
+   "adapter_family": "provider",
+   "resource_keys": [
+    "provider"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
    "id": "generation.generate_image_openai",
    "disposition": "required",
    "evidence_reason": "Required GPT image facade; OpenAI credential readiness is explicit.",

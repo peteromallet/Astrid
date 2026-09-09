@@ -129,6 +129,11 @@ class TestHttpClientConstruction:
         with pytest.raises(AstridError, match="bounded body limit"):
             client.get_json("https://example.com/result", max_response_bytes=10)
 
+    def test_json_error_body_uses_the_same_response_limit(self):
+        client = HttpClient(transport=_error_transport(502, "x" * 32))
+        with pytest.raises(AstridError, match="bounded body limit"):
+            client.get_json("https://example.com/result", max_response_bytes=8)
+
 
 # ---------------------------------------------------------------------------
 # Secret scrubbing

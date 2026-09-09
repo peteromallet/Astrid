@@ -23,11 +23,15 @@ python3 -m astrid --help
 python3 -m astrid projects list --json
 ```
 
-### Default Hivemind pack
+### Optional Hivemind pack
 
-Astrid setup provisions the canonical Hivemind repository at an immutable
-revision, validates its strict v2 pack manifest, and composes its skill view.
-The same managed source inventory is used by discovery and the generic host:
+Astrid pins the Hivemind v2 delivery commit through the explicit
+`ASTRID_HIVEMIND_REVISION` seam. The delivery checkout has a concrete
+immutable pin; the canonical remote must publish that commit before a remote
+installation can use it. Until then, point `ASTRID_HIVEMIND_REPOSITORY` at a
+local Hivemind checkout (or provide a complete local source declaration). Setup
+validates the strict v2 pack manifest and composes its skill view; it fails
+closed if the pinned object cannot be fetched rather than following `HEAD`:
 
 ```bash
 python3 -m astrid.setup
@@ -36,9 +40,15 @@ python3 -m astrid.setup --disable-pack hivemind
 python3 -m astrid.setup --restore-pack hivemind
 ```
 
-Use `ASTRID_SOURCE_DECLARATIONS` or `--declarations` for a local Git mirror
-when developing offline. Skill sync is read-only with respect to source
-acquisition; Hivemind corpus search and retrieval still require network access.
+The delivery pin is already the complete 40-character Git object id. Override
+`ASTRID_HIVEMIND_REVISION` only with another full immutable Hivemind object id,
+and use `ASTRID_HIVEMIND_REPOSITORY` for a local mirror or checkout during
+rehearsal. `ASTRID_SOURCE_DECLARATIONS` or `--declarations` remains available
+for a complete local Git declaration. Skill sync is read-only with respect to
+source acquisition; Hivemind corpus search and retrieval still require
+network access. See the
+[Hivemind external-pack contract](reference/hivemind-pack-contract.md) for
+the v2 metadata, anonymous reads, and contributor-write routes.
 
 Use that environment for later commands too. The render worker checks its
 dependencies in an isolated Python process, so user-site-only installations

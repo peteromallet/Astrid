@@ -94,13 +94,24 @@ def _cleanup_ephemeral_attempt(root: Path) -> None:
     try:
         shutil.rmtree(root)
     except FileNotFoundError:
-        if root.exists():
+        if _strict_root_exists(root):
             raise HostError(f"owned attempt cleanup was not verified: {root}")
         return
     except OSError as exc:
         raise HostError(f"owned attempt cleanup failed: {root}") from exc
-    if root.exists():
+    if _strict_root_exists(root):
         raise HostError(f"owned attempt cleanup was not verified: {root}")
+
+
+def _strict_root_exists(root: Path) -> bool:
+    """Observe an owned root without suppressing filesystem errors."""
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise HostError(f"owned attempt observation failed: {root}") from exc
+    return True
 
 
 class _ManagedTaskAdapter:
@@ -3307,7 +3318,12 @@ class GenericPackHost:
                     except Exception as exc:
                         cleanup_errors.append(f"managed release: {exc}")
             if keep_attempt:
-                if not root.exists():
+                try:
+                    retained_exists = _strict_root_exists(root)
+                except Exception as exc:
+                    cleanup_errors.append(f"retained observation: {exc}")
+                    retained_exists = False
+                if not retained_exists:
                     cleanup_errors.append(f"retained attempt disappeared: {root}")
                 else:
                     try:
@@ -3332,7 +3348,11 @@ class GenericPackHost:
                     cleanup_errors.append(f"attempt root: {exc}")
                     cleanup_receipt.update({"status": "uncertain", "observed_absent": False})
             else:
-                observed_exists = root.exists()
+                try:
+                    observed_exists = _strict_root_exists(root)
+                except Exception as exc:
+                    cleanup_errors.append(f"caller-owned observation: {exc}")
+                    observed_exists = False
                 cleanup_receipt.update(
                     {"status": "caller_owned", "observed_exists": observed_exists}
                 )

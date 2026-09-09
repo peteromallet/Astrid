@@ -196,6 +196,20 @@ def test_cleanup_helper_does_not_claim_absence_after_recursive_delete_error(
         generic_host._cleanup_ephemeral_attempt(root)
 
 
+def test_cleanup_helper_fails_closed_on_root_observation_error(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "attempt"
+    root.mkdir()
+    monkeypatch.setattr(
+        generic_host,
+        "_strict_root_exists",
+        lambda _path: (_ for _ in ()).throw(generic_host.HostError("injected observation failure")),
+    )
+    with pytest.raises(generic_host.HostError, match="injected observation failure"):
+        generic_host._cleanup_ephemeral_attempt(root)
+
+
 def test_cleanup_failure_latches_and_blocks_new_admissions(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

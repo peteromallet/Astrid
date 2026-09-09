@@ -46,8 +46,8 @@ ASTRID_SOURCE = Path(
         text=True,
     ).stdout.strip()
 ).parent
-RUNTIME_CHECKOUT = ASTRID_SOURCE.parent / "banodoco-workspace-runtime"
-RUNTIME_COMMIT = "d12135253046bcb92efa94fd27892071507684dc"
+RUNTIME_CHECKOUT = ASTRID_SOURCE.parent / "banodoco-workspace-runtime-execution-20260909"
+RUNTIME_COMMIT = "afccb430e2a983c968b6a8a96fd630ba3a6262fc"
 
 
 def _archive_runtime(destination: Path) -> Path:

@@ -17,7 +17,7 @@ runtime through the neutral launcher; no separate database service is needed:
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install .
-python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@4050394c5395206f1ec6bf0d905ffbfb7bb0e4de'
+python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@afccb430e2a983c968b6a8a96fd630ba3a6262fc'
 export BANODOCO_LOCAL_SOURCE_MANIFEST=/path/to/astrid-source-profile.json
 python3 -m astrid --help
 python3 -m astrid projects list --json
@@ -35,6 +35,40 @@ python3 -m astrid.setup --check --offline
 python3 -m astrid.setup --disable-pack hivemind
 python3 -m astrid.setup --restore-pack hivemind
 ```
+
+### Optional Hivemind contributor login
+
+Public Hivemind search and ordinary Astrid work do not require login. Login is
+only needed when an agent is asked to contribute or ingest knowledge:
+
+```bash
+astrid login
+astrid status
+```
+
+`astrid login` opens the Banodoco approval page and polls automatically. Approve
+the Discord connection in the browser; do not type the displayed approval code
+into the terminal. After the thank-you page, the terminal saves the contributor
+credential at `~/.hivemind/key` with owner-only permissions. The machine label
+and code shown on the page are for reference only.
+
+Authenticated contributors can submit resources and propose revisions. Accepting
+or rejecting revisions and marking guides canonical are editor-only actions; a
+non-editor receives a clear `403 forbidden` response rather than being asked to
+log in again.
+
+To manage the local credential:
+
+```bash
+astrid logout   # remove only the local credential
+astrid revoke   # revoke the server-side credential
+astrid logout   # remove the revoked local credential
+```
+
+If `astrid status` reports `active` but a contribution returns `401
+unauthorized`, login succeeded but the deployed Hivemind contribution function
+or its database migration is not ready. Treat that as a deployment issue and
+do not publish a real resource until the write path has been verified.
 
 Use `ASTRID_SOURCE_DECLARATIONS` or `--declarations` for a local Git mirror
 when developing offline. Skill sync is read-only with respect to source

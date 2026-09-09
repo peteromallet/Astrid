@@ -166,6 +166,32 @@ output/profile compatible with the authoritative theme canvas. Read
 [references/timeline-cookbook.md](references/timeline-cookbook.md) when
 constructing or checking the JSON shape.
 
+For the constrained transparent PNG layer supported by the FFmpeg backend, use
+one ordinary managed `clipType: "media"` clip with a positive `hold` on a
+visual track placed first, followed by exactly one ordinary visual picture
+track:
+
+```json
+{
+  "tracks": [
+    {"id": "overlay", "kind": "visual"},
+    {"id": "picture", "kind": "visual"}
+  ],
+  "clips": [
+    {"id": "overlay", "at": 0, "track": "overlay", "clipType": "media", "asset": "managed-alpha.png", "hold": 1.0},
+    {"id": "picture", "at": 0, "track": "picture", "clipType": "media", "asset": "managed-video.mp4", "from": 0, "to": 1.0, "volume": 0}
+  ]
+}
+```
+
+The registry entry for `managed-alpha.png` must resolve to a local, probed PNG
+whose decoded dimensions exactly match the visual canvas and whose PNG bytes
+declare transparency. This subset supports one full-duration static layer;
+arbitrary transforms, crop, per-layer blending, and multiple held overlays are
+unsupported. The overlay is looped, bounded to its hold interval, normalized to
+the canvas, and composited after the base visual concat; existing text overlays
+still use their current path. Stream copy is disabled for this overlay path.
+
 ## Render and open
 
 Render through the product command. The positional reference is a runtime slug,
@@ -224,3 +250,19 @@ contract at [docs/contracts/render-backend-v1.md](../../../../docs/contracts/ren
 Renderer packs advertise qualified protocol capabilities; timeline editing and
 the public `rendering.render` facade remain runtime-owned. Do not add a new
 facade, direct module invocation, or backend-specific shape to the timeline.
+
+## Runtime-owned multi-step stitching
+
+For a two-child generation flow that must wait durably and preserve declared
+output order, use the typed handoff in
+`astrid.packs.video_editing.orchestrators.runtime_orchestration` and the stitch
+admission in `astrid.packs.rendering.finalizers.runtime_stitch`. These modules
+describe the graph and publication settings; the Runtime owns lifecycle,
+continuation admission, canonical timeline CAS, and render-task creation. The
+registered `rendering.assemble_timeline` executor consumes the claimed
+`resolved_children` envelope and emits a deterministic authoring proposal. The
+generic pack host sends that proposal through the fenced
+`publish_timeline_render` checkpoint, which creates the ordinary
+`rendering.render` task. Claim that task through the same host to run the
+existing renderer and retrieve its output objects and receipt. Do not add a
+pack-local timeline save, scheduler, polling loop, or second renderer.

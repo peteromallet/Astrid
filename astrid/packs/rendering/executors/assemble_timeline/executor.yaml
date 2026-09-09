@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "id": "rendering.assemble_timeline",
+  "name": "Assemble Canonical Timeline",
+  "kind": "built_in",
+  "version": "1.0",
+  "short_description": "Author a canonical two-child timeline from runtime-resolved visual outputs.",
+  "description": "Validate a fenced two-child runtime continuation and emit a deterministic canonical timeline authoring proposal. Timeline mutation and rendering remain runtime-owned.",
+  "keywords": ["timeline", "assemble", "continuation", "runtime", "canonical", "video"],
+  "inputs": [
+    {
+      "name": "resolved_children",
+      "type": "json",
+      "required": true,
+      "artifact_type": "runtime/resolved-children",
+      "description": "Runtime-resolved continuation graph, terminal child outputs, and ordered CAS aggregation."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "timeline",
+      "type": "file",
+      "mode": "create_or_replace",
+      "path_template": "{out}/timeline.json",
+      "artifact_type": "timeline",
+      "description": "Deterministic canonical TimelineConfig proposal."
+    },
+    {
+      "name": "assets",
+      "type": "file",
+      "mode": "create_or_replace",
+      "path_template": "{out}/assets.json",
+      "artifact_type": "timeline/assets",
+      "description": "Runtime-managed media registry proposal for the timeline clips."
+    },
+    {
+      "name": "authoring_proposal",
+      "type": "file",
+      "mode": "create_or_replace",
+      "path_template": "{out}/authoring-proposal.json",
+      "artifact_type": "timeline/authoring-proposal",
+      "description": "Typed runtime publication handoff containing the timeline and registry."
+    }
+  ],
+  "command": {
+    "argv": [
+      "{python_exec}",
+      "-m",
+      "astrid.packs.rendering.executors.assemble_timeline.run",
+      "--resolved-children",
+      "{resolved_children}",
+      "--out",
+      "{out}"
+    ]
+  },
+  "graph": {
+    "consumes": ["runtime/resolved-children"],
+    "provides": ["timeline", "timeline/assets", "timeline/authoring-proposal"]
+  },
+  "cache": {"mode": "none"},
+  "isolation": {"mode": "subprocess", "network": false},
+  "metadata": {
+    "runtime_entrypoint": "main",
+    "runtime_file": "run.py",
+    "runtime_module": "astrid.packs.rendering.executors.assemble_timeline.run",
+    "output_result_manifest": true,
+    "requires_timeline": false,
+    "mutation_authority": "workspace_runtime",
+    "continuation_shape": "two-child-ordered-cas-v1"
+  }
+}

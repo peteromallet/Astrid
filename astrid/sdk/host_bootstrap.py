@@ -49,14 +49,29 @@ def _host_pid_alive(pid: Any) -> bool:
     except OSError:
         return False
     # A terminated process can remain as a zombie until its original parent
-    # reaps it.  It is not a live host and must not block a fresh launch.
+    # reaps it.  It is not a live host and must not block a fresh launch.  The
+    # Linux /proc probe is not available on macOS, which is the primary local
+    # deployment, so keep a portable ``ps`` fallback as well.  Without this,
+    # a host killed alongside an interrupted CLI remains recorded forever and
+    # every next launch attempts to terminate the zombie until it times out.
     try:
         stat = Path(f"/proc/{value}/stat").read_text(encoding="ascii")
         state = stat.rsplit(")", 1)[-1].lstrip().split(None, 1)[0]
         if state == "Z":
             return False
     except (OSError, UnicodeDecodeError, IndexError):
-        pass
+        try:
+            # ``subprocess.run`` is deliberately avoided here: the bootstrap
+            # tests (and some embedded launchers) replace ``Popen`` while
+            # modelling host startup.  The PID is already parsed as an int,
+            # so this small, read-only ps probe has no shell-input surface.
+            with os.popen(f"/bin/ps -p {value} -o state=", "r") as probe:
+                state_text = probe.read()
+            state = state_text.strip().split(None, 1)[0] if state_text.strip() else ""
+            if state.upper().startswith("Z"):
+                return False
+        except (OSError, ValueError, IndexError):
+            pass
     return True
 
 

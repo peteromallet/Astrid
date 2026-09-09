@@ -158,6 +158,7 @@ def _support_load_failure(reason: str) -> SupportReport:
             "whole_media": False,
             "whole_media_optimization": False,
             "stream_copy": False,
+            "static_image_overlay": False,
             "audio_ownership": AudioOwnership.NONE.value,
         },
         alternatives=list(ALTERNATIVE_BACKENDS),

@@ -115,6 +115,45 @@ def execute_filmstrip(args, *, authority=None):
         for path in sorted(pack_root.rglob('*')):
             if path.is_file():
                 archive.write(path, path.relative_to(pack_root).as_posix())
+    # The generic pack host treats ``{out}/manifest.json`` as the universal
+    # result receipt.  The filmstrip's own manifest intentionally lives inside
+    # ``filmstrip-view/`` because it is part of the self-contained bundle, so
+    # writing only that nested manifest leaves an admitted task queued forever
+    # (the host reports "missing result manifest receipt").  Publish a small
+    # host receipt at the assigned output root and keep the domain manifest
+    # nested and authoritative for offline evidence verification.
+    def _receipt_entry(name: str, path: Path, *, role: str = "auxiliary", primary: bool = False) -> dict:
+        relative = path.relative_to(out_root).as_posix()
+        return {
+            "name": name,
+            "path": relative,
+            "content_hash": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": path.stat().st_size,
+            "role": role,
+            "is_primary": primary,
+        }
+
+    # Keep the host receipt small and self-contained.  The bundle is the
+    # canonical delivery artifact; it contains the complete HTML viewer,
+    # nested manifest, PNG pages, and (when requested) the verified video.
+    # Publishing the same large members individually would expand the inline
+    # settlement beyond the runtime request limit and duplicate the bundle.
+    write_manifest(
+        out_root / "manifest.json",
+        build_manifest(
+            kind="timeline_filmstrip_result",
+            created="1970-01-01T00:00:00Z",
+            inputs={
+                "render_run_id": snapshot["render_run_id"],
+                "timeline_id": snapshot["timeline_id"],
+                "video_digest": digest,
+            },
+            outputs=[
+                _receipt_entry("filmstrip_manifest", pack_root / "manifest.json"),
+                _receipt_entry("filmstrip_bundle", bundle, role="result", primary=True),
+            ],
+        ),
+    )
     return {'returncode': 0, 'run_root': str(out_root),
             'manifest_path': str(manifest_path), 'timeline_ids': [snapshot['timeline_id']],
             'outputs': {'pack_root': str(pack_root), 'manifest_path': str(manifest_path),

@@ -431,8 +431,18 @@
    ],
    "required_packages": []
   },
-  {
-   "id": "rendering.html_canvas_effect",
+    {
+      "id": "rendering.assemble_timeline",
+      "disposition": "required",
+      "evidence_reason": "Built-in canonical timeline assembly proposal path covered by the generic host.",
+      "adapter_family": "render",
+      "resource_keys": ["render"],
+      "required_env": [],
+      "required_binaries": [],
+      "required_packages": []
+    },
+    {
+      "id": "rendering.html_canvas_effect",
    "disposition": "required",
    "evidence_reason": "Current-machine render family capability covered by the generic host.",
    "adapter_family": "render",

@@ -486,6 +486,41 @@ def test_claim_only_admits_capabilities_that_are_currently_ready(tmp_path, monke
     assert host.claim_once() is None
     assert runtime.claim_payload["capability_ids"] == ["fixture.required_env"]
 
+
+def test_hivemind_contributor_key_file_satisfies_provider_readiness(tmp_path, monkeypatch):
+    """Astrid login's standard key file is the host credential source."""
+    monkeypatch.delenv("HIVEMIND_CONTRIBUTOR_KEY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    key_path = tmp_path / ".hivemind" / "key"
+    key_path.parent.mkdir()
+    key_path.write_text("hm_" + "a" * 64, encoding="utf-8")
+
+    root = tmp_path / "hivemind"
+    root.mkdir()
+    (root / "executor.yaml").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "id": "hivemind.contribute",
+            "name": "Hivemind Contribute",
+            "kind": "external",
+            "version": "1.0",
+            "command": {"argv": ["{python_exec}", "-c", "pass"]},
+            "outputs": [],
+            "isolation": {"mode": "subprocess", "network": True},
+            "metadata": {
+                "adapter_family": "provider",
+                "required_env": ["HIVEMIND_CONTRIBUTOR_KEY"],
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    host = GenericPackHost(pack_roots=[tmp_path], capability_matrix=None)
+    host.discover()
+
+    record = host.preflight("hivemind.contribute")[0]
+    assert record.preflight["credentials"] == {"ok": True, "missing": []}
+
 def test_source_and_dependency_digests_invalidate_registration(tmp_path):
     _write_manifest(tmp_path / "base")
     child = tmp_path / "child"

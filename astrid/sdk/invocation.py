@@ -711,6 +711,7 @@ def _validate_timeline_visualize_inputs(
         slug=str(values["timeline_slug"]) if has_ref else None,
         all=select_all,
         default=not has_ref and not select_all,
+        runtime_client=_client,
     )
     if not selected:
         detail = "; ".join(diagnostics) or "no eligible managed timeline was selected"

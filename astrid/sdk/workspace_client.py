@@ -163,7 +163,7 @@ class WorkspaceClient:
                 "create_project", "get_project", "update_project", "list_projects",
                 "select_project", "current_project", "create_timeline",
                 "create_timeline_document", "update_timeline_document", "list_timelines",
-                "get_timeline", "list_timeline_history", "diff_timeline", "archive_timeline",
+                "get_timeline", "list_timeline_history", "replace_timeline_clip", "diff_timeline", "archive_timeline",
                 "recover_timeline", "list_project_shots", "create_project_shot",
                 "get_project_shot", "update_project_shot", "archive_project_shot",
                 "recover_project_shot", "add_shot_item", "remove_shot_item",
@@ -182,7 +182,7 @@ class WorkspaceClient:
                 "list_project_runs", "list_events", "list_run_events", "list_generations",
                 "get_generation", "list_variants", "create_generation", "create_variant",
                 "list_capabilities", "register_capability", "claim_task", "register_executor",
-                "settle_attempt",
+                "settle_attempt", "publish_timeline_render",
             }
             if operation not in operations:
                 raise ValueError(f"unknown generated workspace operation: {operation!r}")
@@ -327,6 +327,26 @@ class WorkspaceClient:
 
     def list_timeline_history(self, timeline_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_timeline_history", timeline_id, cursor=cursor, limit=limit)
+
+    def replace_timeline_clip(
+        self,
+        timeline_id: str,
+        *,
+        clip_id: str,
+        source_object_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        timing: str = "preserve-duration",
+    ) -> Any:
+        return self._call_generated(
+            "replace_timeline_clip",
+            timeline_id,
+            clip_id=clip_id,
+            source_object_id=source_object_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            timing=timing,
+        )
 
     def diff_timeline(self, timeline_id: str, *, from_version: int, to_version: int) -> Any:
         return self._call_generated(
@@ -664,3 +684,67 @@ class WorkspaceClient:
 
     def settle_attempt(self, attempt_id: str, settlement: Mapping[str, Any], *, idempotency_key: str) -> Any:
         return self._call_generated("settle_attempt", attempt_id, settlement, idempotency_key=idempotency_key)
+
+    def publish_timeline_render(
+        self,
+        attempt_id: str,
+        publication: Mapping[str, Any] | None = None,
+        *,
+        lease_id: str | None = None,
+        fence: int | None = None,
+        runtime_epoch: int | None = None,
+        timeline_id: str | None = None,
+        expected_version: int | None = None,
+        config: Mapping[str, Any] | None = None,
+        registry: Mapping[str, Any] | None = None,
+        render: Mapping[str, Any] | None = None,
+        slug: str | None = None,
+        name: str | None = None,
+        idempotency_key: str,
+    ) -> Any:
+        """Publish a timeline revision and its renderer task atomically.
+
+        The generated client intentionally exposes the wire fields as keyword
+        arguments. Keep this adapter as the one place that translates the
+        proposal mapping into that typed call; passing the mapping positionally
+        would fail before reaching the runtime.
+        """
+        if publication is not None:
+            if not isinstance(publication, Mapping):
+                raise ValueError("timeline publication must be an object")
+            # Accept the product-facing mapping form as well as the explicit
+            # keyword form used by RemoteTasks._typed.
+            values = {key: publication.get(key) for key in (
+                "lease_id", "fence", "runtime_epoch", "timeline_id",
+                "expected_version", "config", "registry", "render", "slug", "name",
+            ) if key in publication}
+            lease_id = values.get("lease_id", lease_id)
+            fence = values.get("fence", fence)
+            runtime_epoch = values.get("runtime_epoch", runtime_epoch)
+            timeline_id = values.get("timeline_id", timeline_id)
+            expected_version = values.get("expected_version", expected_version)
+            config = values.get("config", config)
+            registry = values.get("registry", registry)
+            render = values.get("render", render)
+            slug = values.get("slug", slug)
+            name = values.get("name", name)
+        required = (
+            "lease_id", "fence", "runtime_epoch", "timeline_id",
+            "expected_version", "config", "registry", "render",
+        )
+        supplied = {
+            "lease_id": lease_id, "fence": fence, "runtime_epoch": runtime_epoch,
+            "timeline_id": timeline_id, "expected_version": expected_version,
+            "config": config, "registry": registry, "render": render,
+        }
+        missing = [field for field in required if supplied[field] is None]
+        if missing:
+            raise ValueError(f"timeline publication is missing required fields: {', '.join(missing)}")
+        return self._call_generated(
+            "publish_timeline_render", attempt_id,
+            lease_id=lease_id, fence=fence, runtime_epoch=runtime_epoch,
+            timeline_id=timeline_id, expected_version=expected_version,
+            config=config, registry=registry, render=render,
+            idempotency_key=idempotency_key,
+            **{key: value for key, value in (("slug", slug), ("name", name)) if value is not None},
+        )

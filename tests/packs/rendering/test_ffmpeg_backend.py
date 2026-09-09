@@ -170,6 +170,7 @@ def test_manifest_registers_static_raw_command_backend() -> None:
         "fade_envelope": True,
         "stream_copy": True,
         "sequential_audio": True,
+        "static_image_overlay": True,
     }
     assert (manifest_path.parents[2] / manifest.command[1]).is_file()
 

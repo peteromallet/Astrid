@@ -65,6 +65,46 @@ def timeline_canvas(timeline_data: Mapping[str, Any]) -> tuple[int, int, int]:
     )
 
 
+def _media_clip_groups(
+    timeline_data: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    tracks = {track.get("id"): track for track in timeline_data.get("tracks", [])}
+    visual_track_ids = {
+        track["id"] for track in tracks.values() if track.get("kind") == "visual"
+    }
+    audio_track_ids = {
+        track["id"] for track in tracks.values() if track.get("kind") == "audio"
+    }
+    visual = [
+        clip for clip in timeline_data.get("clips", [])
+        if clip.get("track") in visual_track_ids and clip.get("clipType") == "media"
+    ]
+    base = sorted(
+        [clip for clip in visual if "hold" not in clip],
+        key=lambda clip: float(clip.get("at", 0) or 0),
+    )
+    overlays = sorted(
+        [clip for clip in visual if "hold" in clip],
+        key=lambda clip: float(clip.get("at", 0) or 0),
+    )
+    audio = sorted(
+        [clip for clip in timeline_data.get("clips", [])
+         if clip.get("track") in audio_track_ids and clip.get("clipType") == "media"],
+        key=lambda clip: float(clip.get("at", 0) or 0),
+    )
+    return base, overlays, audio
+
+
+def _ordered_asset_keys(timeline_data: Mapping[str, Any]) -> list[str]:
+    base, overlays, audio = _media_clip_groups(timeline_data)
+    keys: list[str] = []
+    for clip in [*base, *overlays, *audio]:
+        key = str(clip.get("asset") or "")
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
 def clip_duration_seconds(clip: Mapping[str, Any]) -> float:
     clip_id = clip.get("id")
 
@@ -75,6 +115,16 @@ def clip_duration_seconds(clip: Mapping[str, Any]) -> float:
         if not math.isfinite(result):
             raise ValueError(f"Clip {clip_id!r} {label} must be a finite number")
         return result
+
+    if "hold" in clip:
+        if "from" in clip or "to" in clip:
+            raise ValueError(
+                f"Clip {clip_id!r} static hold cannot also declare source bounds"
+            )
+        hold = number(clip.get("hold"), "hold")
+        if hold <= 0:
+            raise ValueError(f"Clip {clip_id!r} hold must be positive")
+        return hold
 
     start = number(clip.get("from", 0), "from")
     if "to" not in clip:
@@ -159,43 +209,12 @@ def build_filter_graph(
     tracks = {
         track.get("id"): track for track in timeline_data.get("tracks", [])
     }
-    visual_track_ids = {
-        track["id"]
-        for track in tracks.values()
-        if track.get("kind") == "visual"
-    }
-    audio_track_ids = {
-        track["id"]
-        for track in tracks.values()
-        if track.get("kind") == "audio"
-    }
-    video_clips = sorted(
-        [
-            clip
-            for clip in timeline_data.get("clips", [])
-            if (
-                clip.get("track") in visual_track_ids
-                and clip.get("clipType") == "media"
-            )
-        ],
-        key=lambda clip: float(clip.get("at", 0) or 0),
-    )
-    audio_clips = sorted(
-        [
-            clip
-            for clip in timeline_data.get("clips", [])
-            if (
-                clip.get("track") in audio_track_ids
-                and clip.get("clipType") == "media"
-            )
-        ],
-        key=lambda clip: float(clip.get("at", 0) or 0),
-    )
+    video_clips, overlay_clips, audio_clips = _media_clip_groups(timeline_data)
     if not video_clips:
         raise ValueError("ffmpeg engine needs at least one visual media clip")
 
     asset_keys: list[str] = []
-    for clip in [*video_clips, *audio_clips]:
+    for clip in [*video_clips, *overlay_clips, *audio_clips]:
         asset_key = str(clip.get("asset") or "")
         if not asset_key:
             raise ValueError(f"Clip {clip.get('id')!r} has no asset")
@@ -213,7 +232,7 @@ def build_filter_graph(
     filters: list[str] = []
     video_labels: list[str] = []
     copy_video_input: int | None = None
-    if len(video_clips) == 1:
+    if len(video_clips) == 1 and not overlay_clips:
         clip = video_clips[0]
         asset_key = str(clip["asset"])
         entry = registry["assets"][asset_key]
@@ -274,11 +293,21 @@ def build_filter_graph(
                 f"fps={fps},format=yuv420p[{label}]"
             )
             video_labels.append(f"[{label}]")
-        filters.append(
-            "".join(video_labels)
-            + f"concat=n={len(video_labels)}:v=1:a=0[vout]"
-        )
-        spine = "vout"
+        concat_label = "vbase" if overlay_clips else "vout"
+        filters.append("".join(video_labels) + f"concat=n={len(video_labels)}:v=1:a=0[{concat_label}]")
+        spine = concat_label
+        if overlay_clips:
+            overlay = overlay_clips[0]
+            overlay_input = asset_index[str(overlay["asset"])]
+            overlay_duration = clip_duration_seconds(overlay)
+            filters.append(
+                f"[{overlay_input}:v]loop=loop=-1:size=1:start=0,"
+                f"trim=duration={overlay_duration:.6f},setpts=PTS-STARTPTS,"
+                f"fps={fps},scale={width}:{height}:flags=lanczos,"
+                "format=rgba[voverlay]"
+            )
+            filters.append("[vbase][voverlay]overlay=0:0:format=auto[vout]")
+            spine = "vout"
         for k, overlay in enumerate(inputs.text_overlays):
             # ffmpeg's fade filter treats duration=0 as nb_frames (default
             # 25), so each side is emitted only when its duration is
@@ -373,46 +402,7 @@ def _has_audio_clips(timeline_data: Mapping[str, Any]) -> bool:
 def _asset_input_argv(inputs: RenderCommandInputs) -> list[str]:
     timeline_data = inputs.timeline_data
     registry = inputs.registry
-    tracks = {
-        track.get("id"): track for track in timeline_data.get("tracks", [])
-    }
-    visual_track_ids = {
-        track["id"]
-        for track in tracks.values()
-        if track.get("kind") == "visual"
-    }
-    audio_track_ids = {
-        track["id"]
-        for track in tracks.values()
-        if track.get("kind") == "audio"
-    }
-    video_clips = sorted(
-        [
-            clip
-            for clip in timeline_data.get("clips", [])
-            if (
-                clip.get("track") in visual_track_ids
-                and clip.get("clipType") == "media"
-            )
-        ],
-        key=lambda clip: float(clip.get("at", 0) or 0),
-    )
-    audio_clips = sorted(
-        [
-            clip
-            for clip in timeline_data.get("clips", [])
-            if (
-                clip.get("track") in audio_track_ids
-                and clip.get("clipType") == "media"
-            )
-        ],
-        key=lambda clip: float(clip.get("at", 0) or 0),
-    )
-    asset_keys: list[str] = []
-    for clip in [*video_clips, *audio_clips]:
-        asset_key = str(clip.get("asset") or "")
-        if asset_key and asset_key not in asset_keys:
-            asset_keys.append(asset_key)
+    asset_keys = _ordered_asset_keys(timeline_data)
 
     argv: list[str] = []
     for asset_key in asset_keys:

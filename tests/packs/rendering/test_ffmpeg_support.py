@@ -4,7 +4,9 @@ import copy
 import dataclasses
 import importlib
 import json
+import struct
 import subprocess
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -12,17 +14,15 @@ import pytest
 
 from astrid.core.media import MediaProbe
 from astrid.core.rendering.contracts import (
+    SCHEMA_VERSION,
     AudioOwnership,
     FrameWindow,
     RenderRequest,
     RenderResult,
-    SCHEMA_VERSION,
 )
-from astrid.packs.rendering.backends.ffmpeg import audio_reactive_colour
-from astrid.packs.rendering.backends.ffmpeg import command
+from astrid.packs.rendering.backends.ffmpeg import audio_reactive_colour, command
 from astrid.packs.rendering.backends.ffmpeg import run as ffmpeg
 from astrid.packs.rendering.backends.ffmpeg.support import support as evaluate_support
-
 
 support_module = importlib.import_module(
     "astrid.packs.rendering.backends.ffmpeg.support"
@@ -120,6 +120,28 @@ def _audio_probe(*, duration: float = 4.0, present: bool = True) -> MediaProbe:
     )
 
 
+def _alpha_png(width: int, height: int, *, alpha: int | None = 128) -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (struct.pack(">I", len(payload)) + kind + payload +
+                struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF))
+    colour_type = 6 if alpha is not None else 2
+    pixel = bytes((255, 0, 0, alpha)) if alpha is not None else bytes((255, 0, 0))
+    rows = b"".join(b"\x00" + pixel * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n" +
+            chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, colour_type, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def _png_overlay_timeline(duration: float = 4.0) -> dict:
+    data = _timeline(duration=duration)
+    data["tracks"].insert(0, {"id": "overlay", "kind": "visual", "label": "Overlay"})
+    data["clips"].insert(0, {
+        "id": "overlay", "at": 0, "track": "overlay", "clipType": "media",
+        "asset": "overlay", "hold": duration,
+    })
+    return data
+
+
 def _request(
     tmp_path: Path,
     *,
@@ -146,12 +168,13 @@ def _evaluate(
     missing_files: set[str] | None = None,
     which=None,
     request: RenderRequest | None = None,
+    asset_bytes: dict[str, bytes] | None = None,
 ):
     missing = missing_files or set()
     for entry in assets.get("assets", {}).values():
         file_value = entry.get("file")
         if isinstance(file_value, str) and file_value not in missing:
-            (tmp_path / file_value).write_bytes(b"source")
+            (tmp_path / file_value).write_bytes((asset_bytes or {}).get(file_value, b"source"))
     (tmp_path / "timeline.json").write_text(
         json.dumps(timeline_data),
         encoding="utf-8",
@@ -229,6 +252,69 @@ def test_compiled_still_image_uses_declared_window_when_probe_has_no_duration(
         "2.000000",
         "-i",
     ]
+
+
+def test_support_accepts_canvas_sized_alpha_png_overlay(tmp_path: Path) -> None:
+    timeline_data = _png_overlay_timeline()
+    assets = _assets(tmp_path)
+    assets["assets"]["overlay"] = {
+        "file": "overlay.png", "type": "image/png", "resolution": "640x360"
+    }
+    probes = {
+        "video.mp4": _video_probe(), "audio.wav": _audio_probe(),
+        "overlay.png": MediaProbe(width=640, height=360, video_codec="png",
+                                   pixel_format="rgba", video_stream_present=True,
+                                   audio_stream_present=False),
+    }
+    report = _evaluate(tmp_path, timeline_data, assets, probes=probes,
+                       asset_bytes={"overlay.png": _alpha_png(640, 360)})
+    assert report.supported is True
+    assert report.features["static_image_overlay"] is True
+    assert report.features["stream_copy"] is False
+
+
+@pytest.mark.parametrize("mutation", ["opaque", "wrong_size", "short_hold", "wrong_order"])
+def test_png_overlay_rejects_unsupported_shape(tmp_path: Path, mutation: str) -> None:
+    timeline_data = _png_overlay_timeline()
+    assets = _assets(tmp_path)
+    assets["assets"]["overlay"] = {
+        "file": "overlay.png", "type": "image/png", "resolution": "640x360"
+    }
+    width, height = (320, 360) if mutation == "wrong_size" else (640, 360)
+    if mutation == "short_hold":
+        timeline_data["clips"][0]["hold"] = 3.5
+    elif mutation == "wrong_order":
+        timeline_data["tracks"][0], timeline_data["tracks"][1] = timeline_data["tracks"][1], timeline_data["tracks"][0]
+    probes = {
+        "video.mp4": _video_probe(), "audio.wav": _audio_probe(),
+        "overlay.png": MediaProbe(width=width, height=height, video_codec="png",
+                                   pixel_format="rgba", video_stream_present=True,
+                                   audio_stream_present=False),
+    }
+    report = _evaluate(tmp_path, timeline_data, assets, probes=probes,
+                       asset_bytes={"overlay.png": _alpha_png(width, height, alpha=None if mutation == "opaque" else 128)})
+    assert report.supported is False
+
+
+def test_png_overlay_command_preserves_current_text_audio_input_order(tmp_path: Path) -> None:
+    timeline_data = _png_overlay_timeline()
+    assets = _assets(tmp_path)
+    assets["assets"]["overlay"] = {
+        "file": "overlay.png", "type": "image/png", "resolution": "640x360"
+    }
+    _evaluate(tmp_path, timeline_data, assets,
+              probes={"video.mp4": _video_probe(), "audio.wav": _audio_probe(),
+                      "overlay.png": MediaProbe(width=640, height=360,
+                                                 video_codec="png", pixel_format="rgba",
+                                                 video_stream_present=True,
+                                                 audio_stream_present=False)},
+              asset_bytes={"overlay.png": _alpha_png(640, 360)})
+    argv = command.build_render_command(_request(tmp_path), tmp_path)
+    filters = argv[argv.index("-filter_complex") + 1]
+    assert "concat=n=1:v=1:a=0[vbase]" in filters
+    assert "format=rgba[voverlay]" in filters
+    assert "[vbase][voverlay]overlay=0:0:format=auto[vout]" in filters
+    assert argv[argv.index("-c:v") + 1] == "libx264"
 
 
 @pytest.mark.parametrize(

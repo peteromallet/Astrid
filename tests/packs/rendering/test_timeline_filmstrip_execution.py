@@ -31,6 +31,13 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
     manifest = json.loads(open(result['manifest_path']).read())
     assert manifest['kind'] == 'timeline_filmstrip'
     assert [o['path'] for o in manifest['outputs'] if o['is_primary']] == ['filmstrip.html']
+    host_manifest = json.loads((tmp_path / 'output' / 'manifest.json').read_text())
+    assert host_manifest['kind'] == 'timeline_filmstrip_result'
+    assert {entry['name'] for entry in host_manifest['outputs']} == {
+        'filmstrip_manifest', 'filmstrip_bundle'
+    }
+    assert all('content_hash' in entry and 'bytes' in entry for entry in host_manifest['outputs'])
+    assert next(entry for entry in host_manifest['outputs'] if entry['name'] == 'filmstrip_bundle')['path'] == 'filmstrip-bundle.zip'
     assert called[0]['snapshot'] == snapshot
     video.write_bytes(b'changed')
     with pytest.raises(ValueError, match='digest'):
@@ -78,3 +85,5 @@ def test_execution_delivers_audio_sidecar_optional_media_and_reuses_cache(tmp_pa
         manifest = json.loads(open(result['manifest_path']).read())
         paths = {entry['path'] for entry in manifest['outputs']}
         assert 'audio-analysis.json' in paths and 'media/rendered-video.mp4' in paths
+        host_manifest = json.loads((Path(result['run_root']) / 'manifest.json').read_text())
+        assert any(entry['name'] == 'filmstrip_bundle' for entry in host_manifest['outputs'])

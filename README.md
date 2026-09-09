@@ -39,7 +39,7 @@ runtime. Until its certified wheel is published, install the pinned runtime
 source with:
 
 ```bash
-python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@4050394c5395206f1ec6bf0d905ffbfb7bb0e4de'
+python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@afccb430e2a983c968b6a8a96fd630ba3a6262fc'
 ```
 
 Configure it once with `banodoco-local up --profile astrid`, then use

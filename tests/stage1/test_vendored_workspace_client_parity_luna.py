@@ -31,12 +31,12 @@ GENERATED_PATH = ROOT / "banodoco_workspace_client" / "generated.py"
 # future runtime contract refresh must update the source commit, digest, and
 # this test in one reviewed change; no ambient sibling checkout can silently
 # alter the shipped transport.
-PINNED_SOURCE_COMMIT = "4050394c5395206f1ec6bf0d905ffbfb7bb0e4de"
+PINNED_SOURCE_COMMIT = "afccb430e2a983c968b6a8a96fd630ba3a6262fc"
 PINNED_SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
 PINNED_PROTOCOL = "workspace.v1"
-PINNED_SCHEMA_DIGEST = "sha256:eb9b393bfb489026e221be4adb4af75a5020f5cd7be388d315a9030c9156977d"
-PINNED_GENERATED_CLIENT_SHA256 = "sha256:fac1ea25c8065f090bbaab15a806cfb681abab65ca8d1d843cbb885b6066964a"
-PINNED_SIGNATURE_SHA256 = "sha256:d387d559b17f80e23ed77d918ace95b96655486a306dee15d0c72cd5fd73ead1"
+PINNED_SCHEMA_DIGEST = "sha256:3afdae3b095086ffa7e793a45008940da78d5ea36caf571033d10201f8e6bf2c"
+PINNED_GENERATED_CLIENT_SHA256 = "sha256:de535ff4c501c8f0ad10f0a6a1b9d1a6fa6e2bc14870974eea9a42738e1679da"
+PINNED_SIGNATURE_SHA256 = "sha256:1777df9695172844f6c27e7e09be69ba9a19851dd98a51017c86b699e4933428"
 
 
 def _signature_digest() -> str:

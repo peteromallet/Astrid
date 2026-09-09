@@ -10,6 +10,24 @@ from astrid.core.execution.generic_host import source_checkout_digest
 from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
 
 
+def test_host_pid_alive_rejects_macos_zombie(monkeypatch) -> None:
+    """A defunct host must not make its persisted marker block relaunch."""
+    monkeypatch.setattr(host_bootstrap.os, "kill", lambda _pid, _signal: None)
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return "Z\n"
+
+    monkeypatch.setattr(host_bootstrap.os, "popen", lambda *args, **kwargs: Probe())
+    assert host_bootstrap._host_pid_alive(4242) is False
+
+
 def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "source"
     (source / "astrid" / "packs").mkdir(parents=True)

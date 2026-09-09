@@ -70,6 +70,7 @@ class _RemoteFamily:
             elif operation == "list_timeline_history": value = self._client.list_timeline_history(*args, **kwargs)
             elif operation == "list_timelines": value = self._client.list_timelines(*args, **kwargs)
             elif operation == "list_variants": value = self._client.list_variants(*args, **kwargs)
+            elif operation == "publish_timeline_render": value = self._client.publish_timeline_render(*args, **kwargs)
             elif operation == "promote_project_shot_candidate": value = self._client.promote_project_shot_candidate(*args, **kwargs)
             elif operation == "recover_project_reference": value = self._client.recover_project_reference(*args, **kwargs)
             elif operation == "recover_project_shot": value = self._client.recover_project_shot(*args, **kwargs)
@@ -90,6 +91,7 @@ class _RemoteFamily:
             elif operation == "update_project_reference": value = self._client.update_project_reference(*args, **kwargs)
             elif operation == "update_project_shot": value = self._client.update_project_shot(*args, **kwargs)
             elif operation == "update_timeline_document": value = self._client.update_timeline_document(*args, **kwargs)
+            elif operation == "replace_timeline_clip": value = self._client.replace_timeline_clip(*args, **kwargs)
             else: raise ValueError(f"unsupported generated operation: {operation}")
             receipt = None
             if isinstance(value, dict) and set(value) >= {"data", "receipt"}:
@@ -178,6 +180,43 @@ class RemoteTimelines(_RemoteFamily):
             registry=registry,
             slug=slug,
             name=name,
+            idempotency_key=key,
+        )
+    def replace_clip(
+        self,
+        project,
+        ref,
+        *,
+        clip_id: str,
+        source_object_id: str,
+        expected_version: int,
+        timing: str = "preserve-duration",
+        idempotency_key=None,
+    ):
+        key = idempotency_key or uuid.uuid4().hex
+        if not project:
+            return DomainResult.failure(
+                ErrorObject("validation_error", "timeline clip replacement requires a project", {"field": "project"}),
+                idempotency_key=key,
+            )
+        if timing != "preserve-duration":
+            return DomainResult.failure(
+                ErrorObject("validation_error", "timing must be preserve-duration", {"field": "timing"}),
+                idempotency_key=key,
+            )
+        if not clip_id:
+            return DomainResult.failure(
+                ErrorObject("validation_error", "timeline clip replacement requires a clip id", {"field": "clip_id"}),
+                idempotency_key=key,
+            )
+        return self._typed(
+            "replace_timeline_clip",
+            ref,
+            key=key,
+            clip_id=clip_id,
+            source_object_id=source_object_id,
+            expected_version=int(expected_version),
+            timing=timing,
             idempotency_key=key,
         )
     def history(self, project, ref, *, cursor=None, limit=50):
@@ -309,7 +348,7 @@ class RemoteTasks(_RemoteFamily):
         return self._typed("register_executor", {"executor_id": executor_id, "capabilities": capabilities}, key=idempotency_key, idempotency_key=idempotency_key)
     def register_capability(self, capability_id: str, definition_digest: str, *, idempotency_key=None):
         return self._typed("register_capability", capability_id, definition_digest, key=idempotency_key, idempotency_key=idempotency_key)
-    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None):
+    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, capability_digest: str | None = None):
         key = idempotency_key or uuid.uuid4().hex
         capabilities = paged_rows(self._client.list_capabilities, limit=50)
         if capabilities is None:
@@ -344,6 +383,34 @@ class RemoteTasks(_RemoteFamily):
         if effect is not None:
             settlement["effect"] = effect
         return self._typed("settle_attempt", attempt_id, settlement, key=idempotency_key, idempotency_key=idempotency_key)
+    def publish_timeline_render(self, attempt_id: str, publication: Mapping[str, Any], *, idempotency_key: str):
+        """Use the Runtime publication checkpoint with a typed wire body."""
+        if not isinstance(publication, Mapping):
+            return DomainResult.failure(
+                ErrorObject("validation_error", "timeline publication must be an object", {}),
+                idempotency_key=idempotency_key,
+            )
+        required = (
+            "lease_id", "fence", "runtime_epoch", "timeline_id",
+            "expected_version", "config", "registry", "render",
+        )
+        missing = [field for field in required if field not in publication]
+        if missing:
+            return DomainResult.failure(
+                ErrorObject("validation_error", "timeline publication is missing required fields", {"fields": missing}),
+                idempotency_key=idempotency_key,
+            )
+        return self._typed(
+            "publish_timeline_render", attempt_id, key=idempotency_key,
+            idempotency_key=idempotency_key,
+            lease_id=publication["lease_id"], fence=publication["fence"],
+            runtime_epoch=publication["runtime_epoch"],
+            timeline_id=publication["timeline_id"],
+            expected_version=publication["expected_version"],
+            config=publication["config"], registry=publication["registry"],
+            render=publication["render"],
+            **{key: publication[key] for key in ("slug", "name") if key in publication},
+        )
     def list(self, project_id, *, cursor=None, limit=50):
         return self._typed("list_project_tasks", project_id, cursor=cursor, limit=limit)
     def show(self, task_id): return self._typed("get_task", task_id)

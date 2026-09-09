@@ -9,22 +9,22 @@ from __future__ import annotations
 
 import math
 import shutil
+import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-
-from astrid.core.rendering.profile import _mp4_time_base
 from typing import Any
 
 from astrid.core.media import MediaProbe, ffprobe_metadata_strict
+from astrid.core.rendering.assets import AssetMaterializer
 from astrid.core.rendering.contracts import (
+    SCHEMA_VERSION,
     AudioOwnership,
     RenderRequest,
-    SCHEMA_VERSION,
     SupportReport,
 )
-from astrid.core.rendering.assets import AssetMaterializer
+from astrid.core.rendering.profile import _mp4_time_base
 from astrid.packs.rendering.backends.ffmpeg import audio_reactive_colour
 from astrid.packs.rendering.backends.ffmpeg.text import (
     _finite_number,
@@ -36,9 +36,8 @@ from astrid.packs.rendering.backends.ffmpeg.text import (
     text_wants_bold,
 )
 
-
 BACKEND_ID = "rendering.ffmpeg"
-BACKEND_VERSION = "1.0.0"
+BACKEND_VERSION = "1.1.0"
 ALTERNATIVE_BACKENDS = ("rendering.remotion",)
 
 _TRACK_KINDS = frozenset({"visual", "audio"})
@@ -66,6 +65,17 @@ class _ClipRange:
     @property
     def duration(self) -> float:
         return self.source_to - self.source_from
+
+    @property
+    def end(self) -> float:
+        return self.at + self.duration
+
+
+@dataclass(frozen=True)
+class _TimelineRange:
+    clip: Mapping[str, Any]
+    at: float
+    duration: float
 
     @property
     def end(self) -> float:
@@ -132,6 +142,23 @@ def _clip_range(clip: Mapping[str, Any]) -> _ClipRange:
         source_from=source_from,
         source_to=source_to,
     )
+
+
+def _hold_range(clip: Mapping[str, Any]) -> _TimelineRange:
+    clip_id = clip.get("id")
+    at = _number(clip.get("at", 0), f"Clip {clip_id!r} at")
+    hold = _number(clip.get("hold"), f"Clip {clip_id!r} hold")
+    if at < 0:
+        raise ValueError(f"Clip {clip_id!r} has a negative timeline frame bound")
+    if hold <= 0:
+        raise ValueError(f"Clip {clip_id!r} hold must be positive")
+    if "from" in clip or "to" in clip:
+        raise ValueError(f"Clip {clip_id!r} static hold cannot also declare source bounds")
+    return _TimelineRange(clip=clip, at=at, duration=hold)
+
+
+def _is_static_hold_clip(clip: Mapping[str, Any]) -> bool:
+    return clip.get("clipType") == "media" and "hold" in clip
 
 
 def _is_default(value: Any, default: Any) -> bool:
@@ -248,14 +275,18 @@ def _validate_clip_semantics(
                 )
 
     if clip.get("clipType") == "media":
-        if _nonempty(clip.get("hold")):
-            reasons.append(
-                f"Clip {clip_id!r} uses unsupported media hold semantics"
-            )
-        try:
-            _clip_range(clip)
-        except ValueError as exc:
-            reasons.append(str(exc))
+        if _is_static_hold_clip(clip):
+            try:
+                _hold_range(clip)
+            except ValueError as exc:
+                reasons.append(str(exc))
+            if track.get("kind") != "visual":
+                reasons.append(f"Clip {clip_id!r} uses static hold outside a visual track")
+        else:
+            try:
+                _clip_range(clip)
+            except ValueError as exc:
+                reasons.append(str(exc))
         try:
             effective_gain(track, clip)
         except ValueError as exc:
@@ -336,7 +367,7 @@ def structural_reasons(
         raw_clips = []
 
     tracks: dict[str, Mapping[str, Any]] = {}
-    visual_track_ids: set[str] = set()
+    visual_track_ids: list[str] = []
     for index, raw_track in enumerate(raw_tracks):
         if not isinstance(raw_track, Mapping):
             reasons.append(f"Track at index {index} must be an object")
@@ -353,7 +384,7 @@ def structural_reasons(
         if kind not in _TRACK_KINDS:
             reasons.append(f"Track {track_id!r} has unsupported kind {kind!r}")
         elif kind == "visual":
-            visual_track_ids.add(track_id)
+            visual_track_ids.append(track_id)
         reasons.extend(_validate_track_semantics(raw_track))
 
 
@@ -398,41 +429,78 @@ def structural_reasons(
             )
         return _dedupe(reasons)
 
-    media_visual_track_ids = {
-        str(clip.get("track"))
-        for clip in clips
-        if clip.get("clipType") == "media"
-        and tracks.get(str(clip.get("track")), {}).get("kind") == "visual"
+    visual_clips_by_track: dict[str, list[Mapping[str, Any]]] = {
+        track_id: [] for track_id in visual_track_ids
     }
-    if len(media_visual_track_ids) != 1:
-        reasons.append(
-            "rendering.ffmpeg requires exactly one visual track carrying media clips"
-        )
-    for track_id in sorted(visual_track_ids - media_visual_track_ids):
-        if not any(str(clip.get("track")) == track_id for clip in clips):
-            reasons.append(f"Visual track {track_id!r} has no clips")
-
-    visual_ranges: list[_ClipRange] = []
     audio_ranges: list[_ClipRange] = []
     for clip in clips:
         if clip.get("clipType") != "media":
             continue
         track = tracks.get(str(clip.get("track")), {})
-        try:
-            bounds = _clip_range(clip)
-        except ValueError:
-            continue
         if track.get("kind") == "visual":
-            visual_ranges.append(bounds)
+            visual_clips_by_track.setdefault(str(clip.get("track")), []).append(clip)
         elif track.get("kind") == "audio":
-            audio_ranges.append(bounds)
+            try:
+                audio_ranges.append(_clip_range(clip))
+            except ValueError:
+                continue
 
-    visual_ranges.sort(key=lambda item: item.at)
-    if not visual_ranges:
+    static_holds = [
+        clip for track_clips in visual_clips_by_track.values()
+        for clip in track_clips if _is_static_hold_clip(clip)
+    ]
+    base_ranges: list[_ClipRange] = []
+    overlay_range: _TimelineRange | None = None
+    if static_holds:
+        if len(visual_track_ids) != 2:
+            reasons.append("rendering.ffmpeg static overlay requires exactly two visual tracks")
+        if len(static_holds) != 1:
+            reasons.append("rendering.ffmpeg static overlay requires exactly one held image clip")
+        if len(static_holds) == 1:
+            overlay = static_holds[0]
+            overlay_track_id = str(overlay.get("track"))
+            if list(visual_track_ids)[0] != overlay_track_id:
+                reasons.append("rendering.ffmpeg static overlay track must be the first visual track (top layer)")
+            if len(visual_clips_by_track.get(overlay_track_id, [])) != 1:
+                reasons.append("rendering.ffmpeg static overlay track must contain only the held image clip")
+            try:
+                overlay_range = _hold_range(overlay)
+            except ValueError:
+                pass
+        base_tracks = [track_id for track_id in visual_track_ids if track_id != str(static_holds[0].get("track"))]
+        if len(base_tracks) != 1:
+            reasons.append("rendering.ffmpeg static overlay requires one ordinary picture track")
+        else:
+            for clip in visual_clips_by_track.get(base_tracks[0], []):
+                try:
+                    base_ranges.append(_clip_range(clip))
+                except ValueError:
+                    continue
+    else:
+        media_visual_track_ids = {
+            track_id for track_id, track_clips in visual_clips_by_track.items()
+            if track_clips
+        }
+        if len(media_visual_track_ids) != 1:
+            reasons.append(
+                "rendering.ffmpeg requires exactly one visual track carrying media clips"
+            )
+        for track_id in visual_track_ids:
+            if not any(str(clip.get("track")) == track_id for clip in clips):
+                reasons.append(f"Visual track {track_id!r} has no clips")
+        for track_clips in visual_clips_by_track.values():
+            for clip in track_clips:
+                try:
+                    base_ranges.append(_clip_range(clip))
+                except ValueError:
+                    continue
+
+    base_ranges.sort(key=lambda item: item.at)
+    if not base_ranges:
         reasons.append("rendering.ffmpeg needs at least one visual media clip")
     else:
         cursor = 0.0
-        for bounds in visual_ranges:
+        for bounds in base_ranges:
             clip_id = bounds.clip.get("id")
             if bounds.at > cursor + _TIMELINE_EPSILON_SECONDS:
                 reasons.append(
@@ -443,6 +511,12 @@ def structural_reasons(
                     f"Visual overlap at clip {clip_id!r}: starts at {bounds.at:.6f}, previous visual ends at {cursor:.6f}"
                 )
             cursor = max(cursor, bounds.end)
+
+        if overlay_range is not None:
+            if overlay_range.at != 0:
+                reasons.append("rendering.ffmpeg static overlay must start at timeline zero")
+            if abs(overlay_range.duration - cursor) > _TIMELINE_EPSILON_SECONDS:
+                reasons.append("rendering.ffmpeg static overlay hold must equal the ordinary picture duration")
 
         audio_ranges.sort(key=lambda item: item.at)
         audio_cursor = 0.0
@@ -457,7 +531,7 @@ def structural_reasons(
                     f"Audio clip {clip_id!r} ends outside the visual frame bounds"
                 )
             audio_cursor = max(audio_cursor, bounds.end)
-        media_coverage_end = max(bounds.end for bounds in visual_ranges)
+        media_coverage_end = max(bounds.end for bounds in base_ranges)
         for clip in clips:
             if clip.get("clipType") != "text":
                 continue
@@ -509,6 +583,41 @@ def _asset_path(
     if not path.is_file():
         raise FileNotFoundError(f"Asset {asset_id!r} source is missing: {path}")
     return path
+
+
+def _png_has_transparency(path: Path) -> bool:
+    """Inspect PNG headers for alpha, including palette transparency."""
+    try:
+        with path.open("rb") as stream:
+            if stream.read(8) != b"\x89PNG\r\n\x1a\n":
+                return False
+            colour_type: int | None = None
+            while True:
+                raw_length = stream.read(4)
+                if len(raw_length) != 4:
+                    return False
+                length = struct.unpack(">I", raw_length)[0]
+                chunk_type = stream.read(4)
+                if len(chunk_type) != 4 or length > 16 * 1024 * 1024:
+                    return False
+                payload = stream.read(length)
+                if len(payload) != length or len(stream.read(4)) != 4:
+                    return False
+                if chunk_type == b"IHDR":
+                    if length != 13:
+                        return False
+                    colour_type = payload[9]
+                    if colour_type in {4, 6}:
+                        return True
+                elif chunk_type == b"tRNS":
+                    if colour_type in {0, 2}:
+                        return True
+                    if colour_type == 3 and any(alpha < 255 for alpha in payload):
+                        return True
+                elif chunk_type in {b"IDAT", b"IEND"}:
+                    return False
+    except OSError:
+        return False
 
 
 def _probe_duration(probe: MediaProbe) -> float | None:
@@ -820,6 +929,9 @@ def support(
         for clip in timeline_data.get("clips", [])
         if isinstance(clip, Mapping) and clip.get("clipType") == "text"
     ]
+    static_overlay_clips = [
+        clip for clip in media_clips if _is_static_hold_clip(clip)
+    ]
     if text_clips:
         for bold in sorted({text_wants_bold(clip) for clip in text_clips}):
             if _resolve_font_path(bold=bold) is None:
@@ -880,9 +992,28 @@ def support(
                 reasons.append(
                     f"Visual clip {clip_id!r} requests embedded audio that rendering.ffmpeg would discard"
                 )
+        if kind == "visual" and _is_static_hold_clip(clip):
+            media_type = str(entry.get("type", "")).lower()
+            if media_type not in {"image", "still", "image/png"}:
+                reasons.append(f"Static overlay clip {clip_id!r} requires an image asset")
+            if media_probe.video_codec != "png":
+                reasons.append(f"Static overlay clip {clip_id!r} requires a probed PNG image")
+            try:
+                canvas_width, canvas_height, _fps = _canvas(timeline_data)
+            except ValueError:
+                canvas_width = canvas_height = None
+            if (canvas_width is not None and canvas_height is not None and
+                    (media_probe.width, media_probe.height) != (canvas_width, canvas_height)):
+                reasons.append(
+                    f"Static overlay clip {clip_id!r} must match the {canvas_width}x{canvas_height} canvas"
+                )
+            if not _png_has_transparency(path):
+                reasons.append(f"Static overlay clip {clip_id!r} PNG has no transparency")
         try:
-            bounds = _clip_range(clip)
+            bounds = _hold_range(clip) if _is_static_hold_clip(clip) else _clip_range(clip)
         except ValueError:
+            continue
+        if _is_static_hold_clip(clip):
             continue
         source_duration = _source_duration(entry, media_probe)
         if source_duration is None:
@@ -939,6 +1070,7 @@ def support(
         "whole_media": whole_media,
         "whole_media_optimization": whole_media,
         "stream_copy": whole_media,
+        "static_image_overlay": bool(static_overlay_clips),
         "audio_ownership": ownership.value,
     }
     if specialization:

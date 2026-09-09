@@ -51,7 +51,7 @@ selected pack, normally a project `runs/` tree.
 
 ## Hivemind before creative decisions
 
-Search [Hivemind](../../../hivemind/skill/SKILL.md) before choosing an unfamiliar model, setting, workflow pattern,
+Search [Hivemind](../packs/hivemind/SKILL.md) before choosing an unfamiliar model, setting, workflow pattern,
 or workaround. This is especially useful for ComfyUI/VibeComfy graphs,
 generation settings, rendering failures, and known community solutions. Use
 `hivemind.get_item` for the full evidence behind a useful result. Treat

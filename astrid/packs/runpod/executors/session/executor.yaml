@@ -49,6 +49,16 @@
         "optional": true
       },
       {
+        "input": "volume_in_gb",
+        "flag": "--volume-in-gb",
+        "optional": true
+      },
+      {
+        "input": "volume_mount_path",
+        "flag": "--volume-mount-path",
+        "optional": true
+      },
+      {
         "input": "datacenter_id",
         "flag": "--datacenter-id",
         "optional": true
@@ -143,6 +153,18 @@
       "name": "container_disk_gb",
       "required": false,
       "type": "integer"
+    },
+    {
+      "description": "Local or network volume size in GB.",
+      "name": "volume_in_gb",
+      "required": false,
+      "type": "integer"
+    },
+    {
+      "description": "Mount path for the local or network volume.",
+      "name": "volume_mount_path",
+      "required": false,
+      "type": "string"
     },
     {
       "description": "RunPod datacenter ID.",

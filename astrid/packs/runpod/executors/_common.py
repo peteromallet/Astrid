@@ -299,6 +299,7 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
     profile_fields = (
         "gpu_type", "storage_name", "max_runtime_seconds", "name_prefix", "image",
         "container_disk_gb", "datacenter_id", "ports", "local_root", "remote_root",
+        "volume_in_gb", "volume_mount_path",
         "remote_script", "timeout", "upload_mode", "excludes", "require_storage",
     )
     for field in profile_fields:
@@ -322,6 +323,7 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
         "ports": "RUNPOD_PORTS",
         "remote_root": "RUNPOD_REMOTE_ROOT",
         "remote_script": "RUNPOD_REMOTE_SCRIPT",
+        "volume_mount_path": "RUNPOD_VOLUME_MOUNT_PATH",
         "upload_mode": "RUNPOD_UPLOAD_MODE",
         "excludes": "RUNPOD_EXCLUDES",
     }
@@ -331,6 +333,7 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
     for field, env_name in (
         ("max_runtime_seconds", "RUNPOD_MAX_RUNTIME_SECONDS"),
         ("container_disk_gb", "RUNPOD_CONTAINER_DISK_GB"),
+        ("volume_in_gb", "RUNPOD_VOLUME_IN_GB"),
         ("timeout", "RUNPOD_TIMEOUT"),
     ):
         if env.get(env_name):
@@ -393,6 +396,7 @@ def _build_pod_handle(
     network_volume_id: Any,
     ports: str | None,
     api_key_ref: str = "RUNPOD_API_KEY",
+    volume_mount_path: str = "/workspace",
 ) -> dict[str, Any]:
     return {
         "pod_id": pod.id,
@@ -409,6 +413,7 @@ def _build_pod_handle(
             "image": image,
             "container_disk_in_gb": container_disk_gb,
             "volume_in_gb": volume_in_gb,
+            "volume_mount_path": volume_mount_path,
             "storage_name": storage_name,
             "network_volume_id": network_volume_id,
             "ports": ports or "8888/http,22/tcp",
@@ -492,6 +497,8 @@ def _load_handle_and_config(handle_path: Path) -> tuple[dict[str, Any], Any]:
         api_key=api_key,
         gpu_type=handle.get("gpu_type", "NVIDIA GeForce RTX 4090"),
         container_disk_gb=snap.get("container_disk_in_gb", 200),
+        disk_size_gb=snap.get("volume_in_gb", 0),
+        volume_mount_path=snap.get("volume_mount_path", "/workspace"),
         storage_name=snap.get("storage_name") or snap.get("network_volume_id"),
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
@@ -529,6 +536,8 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
     name_prefix = resolved.get("name_prefix")
     image = resolved.get("image")
     container_disk_gb = int(resolved["container_disk_gb"])
+    volume_in_gb = int(resolved.get("volume_in_gb", 0))
+    volume_mount_path = str(resolved.get("volume_mount_path") or "/workspace")
     datacenter_id = resolved.get("datacenter_id")
     storage_name = resolved.get("storage_name")
     storage_required = bool(resolved.get("require_storage"))
@@ -546,6 +555,8 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
         gpu_type=gpu_type,
         worker_image=image,
         container_disk_gb=container_disk_gb,
+        disk_size_gb=volume_in_gb,
+        volume_mount_path=volume_mount_path,
         storage_name=storage_name,
         name_prefix=name_prefix,
         ports=ports,
@@ -584,11 +595,12 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
         datacenter_id=datacenter_id,
         image=image,
         container_disk_gb=container_disk_gb,
-        volume_in_gb=config.disk_size_gb,
+        volume_in_gb=volume_in_gb,
         storage_name=storage_name,
         network_volume_id=pod._storage_volume,
         ports=ports,
         api_key_ref=api_key_ref or "RUNPOD_API_KEY",
+        volume_mount_path=volume_mount_path,
     )
 
     _write_json(produces_dir / "pod_handle.json", handle)
@@ -834,6 +846,8 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
     name_prefix = resolved.get("name_prefix")
     image = resolved.get("image")
     container_disk_gb = int(resolved["container_disk_gb"])
+    volume_in_gb = int(resolved.get("volume_in_gb", 0))
+    volume_mount_path = str(resolved.get("volume_mount_path") or "/workspace")
     datacenter_id = resolved.get("datacenter_id")
     storage_name = resolved.get("storage_name")
     storage_required = bool(resolved.get("require_storage"))
@@ -860,6 +874,8 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
         gpu_type=gpu_type,
         worker_image=image,
         container_disk_gb=container_disk_gb,
+        disk_size_gb=volume_in_gb,
+        volume_mount_path=volume_mount_path,
         storage_name=storage_name,
         name_prefix=name_prefix,
         ports=ports,
@@ -900,11 +916,12 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
             datacenter_id=datacenter_id,
             image=image,
             container_disk_gb=container_disk_gb,
-            volume_in_gb=config.disk_size_gb,
+            volume_in_gb=volume_in_gb,
             storage_name=storage_name,
             network_volume_id=pod._storage_volume,
             ports=ports,
             api_key_ref=api_key_ref or "RUNPOD_API_KEY",
+            volume_mount_path=volume_mount_path,
         )
 
         # *** Write pod_handle.json IMMEDIATELY (sweeper breadcrumb) ***
@@ -1018,6 +1035,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_prov.add_argument("--name-prefix", help="Pod name prefix for grouping.")
     p_prov.add_argument("--image", help="Docker image for the pod.")
     p_prov.add_argument("--container-disk-gb", type=int, help="Container disk size in GB.")
+    p_prov.add_argument("--volume-in-gb", type=int, help="Local or network volume size in GB.")
+    p_prov.add_argument("--volume-mount-path", help="Mount path for the local or network volume.")
     p_prov.add_argument("--datacenter-id", help="RunPod datacenter ID.")
     p_prov.add_argument("--ports", help="Comma-separated port spec for the pod (default: '8888/http,22/tcp').")
     p_prov.add_argument("--require-storage", action="store_true", help="Require --storage-name to resolve before launch.")
@@ -1056,6 +1075,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_sess.add_argument("--name-prefix", help="Pod name prefix for grouping.")
     p_sess.add_argument("--image", help="Docker image for the pod.")
     p_sess.add_argument("--container-disk-gb", type=int, help="Container disk size in GB.")
+    p_sess.add_argument("--volume-in-gb", type=int, help="Local or network volume size in GB.")
+    p_sess.add_argument("--volume-mount-path", help="Mount path for the local or network volume.")
     p_sess.add_argument("--datacenter-id", help="RunPod datacenter ID.")
     p_sess.add_argument("--ports", help="Comma-separated port spec for the pod (default: '8888/http,22/tcp').")
     p_sess.add_argument("--require-storage", action="store_true", help="Require --storage-name to resolve before launch.")

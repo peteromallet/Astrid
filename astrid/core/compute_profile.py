@@ -47,6 +47,8 @@ PROFILE_FIELDS = frozenset(
         "name_prefix",
         "image",
         "container_disk_gb",
+        "volume_in_gb",
+        "volume_mount_path",
         "datacenter_id",
         "ports",
         "local_root",

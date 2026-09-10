@@ -188,12 +188,16 @@ def _configure_open(subparser: argparse.ArgumentParser) -> None:
     )
     subparser.add_argument(
         "--project",
+        "--project-id",
+        dest="project",
         default=None,
         help="Project id or immutable slug (default: selected current project).",
     )
     timeline_group = subparser.add_mutually_exclusive_group()
     timeline_group.add_argument(
         "--timeline",
+        "--timeline-id",
+        dest="timeline",
         default=None,
         help="Canonical timeline slug/id to select.",
     )

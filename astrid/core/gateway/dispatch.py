@@ -72,7 +72,10 @@ def _dispatch_doctor(args: list[str]) -> int:
     from astrid.sdk.workspace_client import WorkspaceClientError
 
     try:
-        with AstridClient.open_from_launcher() as client:
+        # Doctor is a cheap runtime health read. It must not start the
+        # optional pack host or trigger execution-side discovery; deep audit
+        # belongs to an explicit offline/snapshot-capable route.
+        with AstridClient.open_from_launcher(start_pack_host=False) as client:
             report = client.doctor()
     except (ServiceUnavailableError, WorkspaceClientError) as exc:
         details = getattr(exc, "details", {})

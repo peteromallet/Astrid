@@ -436,13 +436,36 @@ class RemoteRuns(_RemoteFamily):
         return self._typed(
             "list_events", cursor=cursor, limit=limit, aggregate_id=run_id
         )
-    def open(self, run_id=None, *, project=None, timeline=None, default_timeline=False, cache_root=None):
+    def open(
+        self,
+        run_id=None,
+        *,
+        project=None,
+        timeline=None,
+        project_id=None,
+        timeline_id=None,
+        default_timeline=False,
+        cache_root=None,
+        opener=None,
+    ):
         from .project_render import open_project_render
+        from .contracts import DomainResult, ErrorObject
+        if project is not None and project_id is not None and project != project_id:
+            return DomainResult.failure(ErrorObject("validation_error", "project and project_id conflict", {"fields": ["project", "project_id"]}))
+        if timeline is not None and timeline_id is not None and timeline != timeline_id:
+            return DomainResult.failure(ErrorObject("validation_error", "timeline and timeline_id conflict", {"fields": ["timeline", "timeline_id"]}))
+        selected_project = project if project is not None else project_id
+        if selected_project is not None and (not isinstance(selected_project, str) or not selected_project.strip()):
+            return DomainResult.failure(ErrorObject("validation_error", "project_id must be a non-empty string", {"field": "project_id"}))
+        selected_timeline = timeline if timeline is not None else timeline_id
+        if selected_timeline is not None and (not isinstance(selected_timeline, str) or not selected_timeline.strip()):
+            return DomainResult.failure(ErrorObject("validation_error", "timeline_id must be a non-empty string", {"field": "timeline_id"}))
         return open_project_render(
-            self._client, project, run_id=run_id,
-            timeline_ref=timeline,
+            self._client, selected_project, run_id=run_id,
+            timeline_ref=selected_timeline,
             default_timeline=default_timeline,
             cache_root=cache_root,
+            opener=opener,
         )
 
 

@@ -46,14 +46,19 @@ ASTRID_SOURCE = Path(
         text=True,
     ).stdout.strip()
 ).parent
-RUNTIME_CHECKOUT = ASTRID_SOURCE.parent / "banodoco-workspace-runtime"
+RUNTIME_CHECKOUT = Path(
+    os.environ.get(
+        "ASTRID_STAGE1_RUNTIME_CHECKOUT",
+        str(ASTRID_SOURCE.parent / "Runtime"),
+    )
+)
 # Keep the historical frozen pin as the default, while allowing a caller to
 # name the exact reviewed Runtime candidate used by the current composition.
 # This makes the identity transition explicit instead of silently substituting
 # current main or weakening the historical check.
 RUNTIME_COMMIT = os.environ.get(
     "ASTRID_STAGE1_RUNTIME_COMMIT",
-    "d12135253046bcb92efa94fd27892071507684dc",
+    "d778b1f9c83237079bd765df2bf87753e495ff16",
 )
 
 

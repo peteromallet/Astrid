@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from io import BytesIO
 import math
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, ClassVar, Mapping
 
 
 class ImageStoragePolicyError(ValueError):
@@ -541,17 +541,238 @@ class CloudEditStoragePolicy(CloudI2IStoragePolicy):
             )
         self._validate_materialized_request(params=params, require_strength=False)
 
+@dataclass(frozen=True, slots=True)
+class CloudUnifiedEditStoragePolicy(CloudI2IStoragePolicy):
+    """One typed edit envelope with explicit source and mask profiles."""
+
+    version: str = "astrid.cloud-edit.unified.v1"
+    mask_max_bytes: int = 512_000
+
+    _SOURCE_PROFILES: ClassVar[frozenset[tuple[str, str, str]]] = frozenset({
+        ("qwen-image-edit-2511", "edit", "cloud"),
+        ("flux2-klein-4b", "edit", "cloud"),
+        ("flux2-klein-9b", "edit", "cloud"),
+    })
+    _MASK_PROFILES: ClassVar[frozenset[tuple[str, str, str]]] = frozenset({
+        ("qwen-image-edit-inpaint", "inpaint", "cloud"),
+    })
+
+    @property
+    def estimated_scratch_bytes(self) -> int:
+        return (
+            self.source_max_bytes
+            + self.mask_max_bytes
+            + 2 * self.output_max_bytes
+            + self.manifest_max_bytes
+            + self.control_max_bytes
+        )
+
+    def _profile(self, *, model: str, mode: str, execution: str) -> str:
+        identity = (model, mode, execution)
+        if identity in self._SOURCE_PROFILES:
+            return "source"
+        if identity in self._MASK_PROFILES:
+            return "mask"
+        raise ImageStoragePolicyError(
+            f"request is outside bounded storage policy {self.version}"
+        )
+
+    def _validate_controls(self, params: Mapping[str, Any]) -> None:
+        count = params.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int) or count != self.max_count:
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit requires count={self.max_count} as an integer"
+            )
+        prompt = params.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ImageStoragePolicyError("bounded cloud edit requires a prompt")
+        if len(prompt) > self.max_prompt_chars:
+            raise ImageStoragePolicyError(
+                f"prompt exceeds bounded limit of {self.max_prompt_chars} characters"
+            )
+        seed = params.get("seed")
+        if seed is not None and (
+            isinstance(seed, bool)
+            or not isinstance(seed, int)
+            or not 0 <= seed <= self._MAX_SEED
+        ):
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit seed must be an integer from 0 through {self._MAX_SEED}"
+            )
+        self._validate_size(params)
+
+    def _validate_descriptor(self, params: Mapping[str, Any], name: str) -> None:
+        descriptor = params.get(name)
+        if not isinstance(descriptor, Mapping):
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit {name} must be a typed CAS descriptor"
+            )
+        digest = descriptor.get("digest")
+        normalized = str(digest).removeprefix("sha256:") if isinstance(digest, str) else ""
+        if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit {name} digest must be a SHA-256 object ID"
+            )
+        filename = descriptor.get("filename")
+        if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit {name} filename must be a safe basename"
+            )
+        media_type = descriptor.get("media_type")
+        if not isinstance(media_type, str) or media_type.lower() not in self._IMAGE_EXTENSIONS:
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit {name} media_type is not a supported image type"
+            )
+        if Path(filename).suffix.lower() not in self._IMAGE_EXTENSIONS[media_type.lower()]:
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit {name} filename and media_type disagree"
+            )
+
+    def validate_admission_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        profile = self._profile(model=model, mode=mode, execution=execution)
+        self._validate_controls(params)
+        self._validate_descriptor(params, "image_ref")
+        mask_ref = params.get("mask_ref")
+        strength = params.get("strength")
+        if profile == "mask":
+            if mask_ref is None:
+                raise ImageStoragePolicyError("bounded cloud inpaint requires mask_ref")
+            self._validate_descriptor(params, "mask_ref")
+            if (
+                isinstance(strength, bool)
+                or not isinstance(strength, (int, float))
+                or not math.isfinite(float(strength))
+                or not 0 <= float(strength) <= 1
+            ):
+                raise ImageStoragePolicyError(
+                    "bounded cloud inpaint strength must be a finite number from 0 through 1"
+                )
+        elif mask_ref is not None or strength is not None:
+            raise ImageStoragePolicyError(
+                "source-only cloud edit does not admit mask_ref or strength"
+            )
+
+    def _validate_materialized_image(
+        self,
+        path: str | Path,
+        *,
+        media_type: str,
+        role: str,
+        max_bytes: int,
+    ) -> tuple[int, int]:
+        source = Path(path)
+        if not source.is_file():
+            raise ImageStoragePolicyError(f"bounded cloud edit {role} is not a file")
+        if source.stat().st_size > max_bytes:
+            raise ImageStoragePolicyError(
+                f"{role} exceeds bounded input limit of {max_bytes} bytes"
+            )
+        try:
+            from PIL import Image
+
+            with Image.open(source) as image:
+                expected_format = self._IMAGE_FORMATS[media_type.lower()]
+                if image.format != expected_format:
+                    raise ImageStoragePolicyError(
+                        f"{role} bytes do not match the admitted media_type"
+                    )
+                width, height = image.size
+                if width > self.max_width or height > self.max_height:
+                    raise ImageStoragePolicyError(
+                        f"{role} dimensions {width}x{height} exceed bounded limits"
+                    )
+                image.load()
+                return width, height
+        except ImageStoragePolicyError:
+            raise
+        except Exception as exc:
+            raise ImageStoragePolicyError(
+                f"bounded cloud edit {role} is not a decodable image"
+            ) from exc
+
+    def validate_materialized_inputs(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+        image_media_type: str,
+        mask_media_type: str | None = None,
+    ) -> None:
+        profile = self._profile(model=model, mode=mode, execution=execution)
+        self._validate_controls(params)
+        if not isinstance(params.get("image_ref"), (str, Path)):
+            raise ImageStoragePolicyError(
+                "bounded cloud edit requires a materialized image_ref"
+            )
+        source_size = self._validate_materialized_image(
+            params.get("image_ref"),
+            media_type=image_media_type,
+            role="image_ref",
+            max_bytes=self.source_max_bytes,
+        )
+        mask_path = params.get("mask_ref")
+        if profile == "mask":
+            if not isinstance(mask_path, (str, Path)) or not mask_media_type:
+                raise ImageStoragePolicyError("bounded cloud inpaint mask materialization is incomplete")
+            mask_size = self._validate_materialized_image(
+                mask_path,
+                media_type=mask_media_type,
+                role="mask_ref",
+                max_bytes=self.mask_max_bytes,
+            )
+            if mask_size != source_size:
+                raise ImageStoragePolicyError(
+                    "bounded cloud inpaint image_ref and mask_ref dimensions must match"
+                )
+        elif mask_path is not None:
+            raise ImageStoragePolicyError(
+                "source-only cloud edit does not admit a materialized mask_ref"
+            )
+
+    def validate_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        """Validate the provider call after CAS descriptors are materialized."""
+        profile = self._profile(model=model, mode=mode, execution=execution)
+        self._validate_controls(params)
+        image_ref = params.get("image_ref")
+        if not isinstance(image_ref, (str, Path)):
+            raise ImageStoragePolicyError("bounded cloud edit requires a materialized image_ref")
+        mask_ref = params.get("mask_ref")
+        if profile == "mask" and not isinstance(mask_ref, (str, Path)):
+            raise ImageStoragePolicyError("bounded cloud inpaint requires a materialized mask_ref")
+        if profile == "source" and mask_ref is not None:
+            raise ImageStoragePolicyError("source-only cloud edit does not admit mask_ref")
+
+
 CLOUD_T2I_STORAGE_POLICY = CloudT2IStoragePolicy()
 CLOUD_I2I_STORAGE_POLICY = CloudI2IStoragePolicy()
 CLOUD_EDIT_STORAGE_POLICY = CloudEditStoragePolicy()
+CLOUD_UNIFIED_EDIT_STORAGE_POLICY = CloudUnifiedEditStoragePolicy()
 
 
 __all__ = [
     "CLOUD_I2I_STORAGE_POLICY",
     "CLOUD_EDIT_STORAGE_POLICY",
+    "CLOUD_UNIFIED_EDIT_STORAGE_POLICY",
     "CLOUD_T2I_STORAGE_POLICY",
     "CloudT2IStoragePolicy",
     "CloudEditStoragePolicy",
+    "CloudUnifiedEditStoragePolicy",
     "CloudI2IStoragePolicy",
     "ImageStoragePolicyError",
 ]

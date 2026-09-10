@@ -30,6 +30,7 @@ from astrid.core.generation.storage_policy import (
     CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
     CLOUD_T2I_STORAGE_POLICY,
+    CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
     ImageStoragePolicyError,
 )
 from astrid.core.generation.backends import (
@@ -79,6 +80,7 @@ _IMAGE_CLI_FEATURES: tuple[str, ...] = (
     "count",
     "size",
     "image_ref",
+    "mask_ref",
     "strength",
     "guidance_scale",
     "steps",
@@ -94,6 +96,7 @@ _IMAGE_ARGV_FLAG_NAMES: tuple[str, ...] = (
     "prompts_file",
     "model",
     "image_ref",
+    "mask_ref",
     "execution",
     "count",
     "seed",
@@ -250,6 +253,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--image-ref",
         dest="image_ref",
         help="Reference image path or URL for i2i/edit modes.",
+    )
+    p.add_argument(
+        "--mask-ref",
+        dest="mask_ref",
+        help="Mask image path or URL for the bounded inpaint edit profile.",
     )
     p.add_argument(
         "--execution",
@@ -423,14 +431,20 @@ def generate_core(
         CLOUD_T2I_STORAGE_POLICY.version: (None, "t2i"),
         CLOUD_I2I_STORAGE_POLICY.version: ("z-image", "i2i"),
         CLOUD_EDIT_STORAGE_POLICY.version: ("qwen-image-edit-2511", "edit"),
+        CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version: (None, None),
     }
     selected_storage_policy = None
     if bounded_profile is not None:
         expected_identity = bounded_profiles.get(bounded_profile)
         identity_matches = (
             expected_identity is not None
-            and expected_identity[1] == mode_name
-            and (expected_identity[0] is None or expected_identity[0] == entry.id)
+            and (
+                expected_identity[1] is None
+                or (
+                    expected_identity[1] == mode_name
+                    and (expected_identity[0] is None or expected_identity[0] == entry.id)
+                )
+            )
         )
         if not identity_matches or args.execution != "cloud":
             raise AstridError(
@@ -441,6 +455,7 @@ def generate_core(
             CLOUD_T2I_STORAGE_POLICY.version: CLOUD_T2I_STORAGE_POLICY,
             CLOUD_I2I_STORAGE_POLICY.version: CLOUD_I2I_STORAGE_POLICY,
             CLOUD_EDIT_STORAGE_POLICY.version: CLOUD_EDIT_STORAGE_POLICY,
+            CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version: CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
         }[bounded_profile]
 
     warnings: list[dict[str, str]] = []
@@ -483,6 +498,19 @@ def generate_core(
                     "use a typed cloud t2i request within the declared count "
                     "and size bounds"
                 ),
+            ) from exc
+    elif selected_storage_policy is CLOUD_UNIFIED_EDIT_STORAGE_POLICY:
+        try:
+            selected_storage_policy.validate_admission_request(
+                model=entry.id,
+                mode=mode_name,
+                execution=args.execution,
+                params=vars(args),
+            )
+        except ImageStoragePolicyError as exc:
+            raise AstridError(
+                str(exc),
+                recovery_command="use one admitted source-only, Klein, or source-plus-mask edit profile",
             ) from exc
 
     # --- setup output directory ----------------------------------------------
@@ -862,6 +890,7 @@ def _build_inputs_request(
         "seed": seed,
         "count": max(1, args.count or 1),
         "size": getattr(args, "size", None),
+        "mask_ref": getattr(args, "mask_ref", None),
         "image_ref_resolved": image_ref_resolved,
     }
     inputs: dict[str, Any] = {
@@ -872,7 +901,7 @@ def _build_inputs_request(
         "seed": seed,
         "count": max(1, args.count or 1),
     }
-    for key in ("negative_prompt", "size", "image_ref", "strength", "guidance_scale", "steps"):
+    for key in ("negative_prompt", "size", "image_ref", "mask_ref", "strength", "guidance_scale", "steps"):
         val = getattr(args, key, None)
         if val is not None:
             inputs[key] = val

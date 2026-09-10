@@ -311,7 +311,7 @@
   {
    "id": "generation.generate_image_edit",
    "disposition": "required",
-   "evidence_reason": "Narrow source-only Qwen cloud edit prerequisite with an enforced whole-task storage envelope; masked and Klein routes remain separate and blocked.",
+   "evidence_reason": "Unified bounded cloud image-edit capability with source-only Qwen, source-only Klein, and source-plus-mask Qwen inpaint profiles under one typed CAS/storage envelope; provider readiness is credential-gated.",
    "adapter_family": "provider",
    "resource_keys": [
     "provider"

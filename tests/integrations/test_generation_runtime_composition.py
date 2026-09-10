@@ -1171,12 +1171,8 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
         assert record.definition.kind == "built_in"
         assert record.definition.isolation.network is True
         assert record.definition.metadata["secrets_required"] == ["FAL_KEY"]
-        assert record.definition.metadata["fixed_inputs"] == {
-            "model": "qwen-image-edit-2511",
-            "mode": "edit",
-            "execution": "cloud",
-        }
-        assert record.definition.metadata["hc04_cas_param_ports"] == ["image_ref"]
+        assert record.definition.metadata["fixed_inputs"] == {"execution": "cloud"}
+        assert record.definition.metadata["hc04_cas_param_ports"] == ["image_ref", "mask_ref"]
         assert "fal.media:443" in record.definition.metadata["network_policy"]["allowed_destinations"]
         assert "v3b.fal.media:443" in record.definition.metadata["network_policy"]["allowed_destinations"]
         host.preflight("generation.generate_image_edit")

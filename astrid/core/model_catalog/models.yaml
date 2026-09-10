@@ -255,6 +255,39 @@ models:
               guidance_scale: guidance_scale
               steps: num_inference_steps
 
+  # Qwen Image Edit inpaint is a separate provider endpoint and profile.
+  - id: qwen-image-edit-inpaint
+    modality: image
+    modes:
+      inpaint:
+        supports:
+          - prompt
+          - seed
+          - count
+          - image_ref
+          - mask_ref
+          - size
+          - strength
+          - guidance_scale
+          - steps
+        requires:
+          - prompt
+          - image_ref
+          - mask_ref
+        backends:
+          cloud:
+            endpoint: fal-ai/qwen-image-edit/inpaint
+            param_map:
+              prompt: prompt
+              seed: seed
+              count: num_images
+              image_ref: image_url
+              mask_ref: mask_url
+              size: image_size
+              strength: strength
+              guidance_scale: guidance_scale
+              steps: num_inference_steps
+
   # =========================================================================
   # seedream-v5-pro — ByteDance Seedream 5.0 Pro image editing (cloud-only)
   #
@@ -440,6 +473,27 @@ models:
               guidance_scale: guidance_scale
               steps: steps
               negative_prompt: negative_prompt
+      edit:
+        supports:
+          - prompt
+          - seed
+          - count
+          - image_ref
+          - size
+          - steps
+        requires:
+          - prompt
+          - image_ref
+        backends:
+          cloud:
+            endpoint: fal-ai/flux-2/klein/9b/edit
+            param_map:
+              prompt: prompt
+              seed: seed
+              count: num_images
+              image_ref: image_urls
+              size: image_size
+              steps: num_inference_steps
 
   # =========================================================================
   # flux2-klein-4b — BFL Flux 2 Klein 4B (smaller, faster Flux 2 variant)
@@ -473,6 +527,27 @@ models:
               guidance_scale: guidance_scale
               steps: steps
               negative_prompt: negative_prompt
+      edit:
+        supports:
+          - prompt
+          - seed
+          - count
+          - image_ref
+          - size
+          - steps
+        requires:
+          - prompt
+          - image_ref
+        backends:
+          cloud:
+            endpoint: fal-ai/flux-2/klein/4b/edit
+            param_map:
+              prompt: prompt
+              seed: seed
+              count: num_images
+              image_ref: image_urls
+              size: image_size
+              steps: num_inference_steps
 
   # =========================================================================
   # ideogram-v4 — Ideogram V4 (text-to-image) CLOUD-ONLY

@@ -786,6 +786,7 @@ class TestShippedRegistry:
         "qwen-image-2512",
         "qwen-image-edit",
         "qwen-image-edit-2511",
+        "qwen-image-edit-inpaint",
         "seedream-v5-pro",
         "flux-dev",
         "flux-schnell",
@@ -830,6 +831,9 @@ class TestShippedRegistry:
 
         qwen_edit = registry.get("qwen-image-edit")
         assert set(qwen_edit.modes.keys()) == {"edit"}
+
+        qwen_inpaint = registry.get("qwen-image-edit-inpaint")
+        assert set(qwen_inpaint.modes.keys()) == {"inpaint"}
 
         flux_dev = registry.get("flux-dev")
         assert set(flux_dev.modes.keys()) == {"t2i", "i2i"}
@@ -924,6 +928,7 @@ class TestListByModalityV2:
             "qwen-image-2512",
             "qwen-image-edit",
             "qwen-image-edit-2511",
+            "qwen-image-edit-inpaint",
             "seedream-v5-pro",
             "flux-dev",
             "flux-schnell",

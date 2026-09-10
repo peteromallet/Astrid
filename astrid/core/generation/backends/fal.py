@@ -24,6 +24,7 @@ from astrid.core.generation.storage_policy import (
     CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
     CLOUD_T2I_STORAGE_POLICY,
+    CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
     ImageStoragePolicyError,
 )
 from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
@@ -115,6 +116,17 @@ class FalBackend(BackendAdapter):
             "image_ref": "image_url",
             "count": "num_images",
             "size": "image_size",
+            "guidance_scale": "guidance_scale",
+            "steps": "num_inference_steps",
+        },
+        "inpaint": {
+            "prompt": "prompt",
+            "seed": "seed",
+            "image_ref": "image_url",
+            "mask_ref": "mask_url",
+            "count": "num_images",
+            "size": "image_size",
+            "strength": "strength",
             "guidance_scale": "guidance_scale",
             "steps": "num_inference_steps",
         },
@@ -247,6 +259,11 @@ class FalBackend(BackendAdapter):
             and params.get("storage_policy_version") == CLOUD_EDIT_STORAGE_POLICY.version
         ):
             bounded_policy = CLOUD_EDIT_STORAGE_POLICY
+        elif (
+            params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_UNIFIED_EDIT_STORAGE_POLICY
         if bounded_policy is not None:
             try:
                 bounded_policy.validate_request(
@@ -347,7 +364,15 @@ class FalBackend(BackendAdapter):
                 # The bounded Qwen edit route is explicitly one-output-per-
                 # request, so keep the provider-side cardinality visible even
                 # though the executor also runs each requested output as N=1.
-                if entry.id == "qwen-image-edit-2511" and remote_param == "num_images":
+                if (
+                    remote_param == "num_images"
+                    and entry.id in {
+                        "qwen-image-edit-2511",
+                        "qwen-image-edit-inpaint",
+                        "flux2-klein-4b",
+                        "flux2-klein-9b",
+                    }
+                ):
                     payload[remote_param] = params.get(canon, 1)
                 continue  # other image profiles manage count in the executor loop
             if canon == "loras":
@@ -365,7 +390,10 @@ class FalBackend(BackendAdapter):
                     if (
                         remote_param == "image_size"
                         and (
-                            entry.id == "qwen-image-edit-2511"
+                            entry.id in {
+                                "qwen-image-edit-2511",
+                                "qwen-image-edit-inpaint",
+                            }
                             or (entry.id == "z-image" and mode == "i2i")
                         )
                     ):
@@ -380,15 +408,19 @@ class FalBackend(BackendAdapter):
                 continue
 
             # Special handling for image_ref / image_end_ref — upload if local path
-            if canon in ("image_ref", "image_end_ref"):
+            if canon in ("image_ref", "mask_ref", "image_end_ref"):
                 uploaded_ref = _upload_ref_if_local(
                     str(value),
                     remote_param,
                     self._client,
                     api_key,
                     max_bytes=(
-                        bounded_policy.source_max_bytes
-                        if bounded_policy is not None and canon == "image_ref"
+                        (
+                            bounded_policy.mask_max_bytes
+                            if canon == "mask_ref"
+                            else bounded_policy.source_max_bytes
+                        )
+                        if bounded_policy is not None and canon in {"image_ref", "mask_ref"}
                         else None
                     ),
                 )

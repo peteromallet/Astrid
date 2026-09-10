@@ -2070,10 +2070,12 @@ class GenericPackHost:
         if storage_policy_version in {
             "astrid.cloud-i2i.z-image.v1",
             "astrid.cloud-edit.qwen-source.v1",
+            "astrid.cloud-edit.unified.v1",
         }:
             from astrid.core.generation.storage_policy import (
                 CLOUD_EDIT_STORAGE_POLICY,
                 CLOUD_I2I_STORAGE_POLICY,
+                CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
                 ImageStoragePolicyError,
             )
 
@@ -2082,7 +2084,11 @@ class GenericPackHost:
             bounded_policy = (
                 CLOUD_I2I_STORAGE_POLICY
                 if storage_policy_version == CLOUD_I2I_STORAGE_POLICY.version
-                else CLOUD_EDIT_STORAGE_POLICY
+                else (
+                    CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+                    if storage_policy_version == CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version
+                    else CLOUD_EDIT_STORAGE_POLICY
+                )
             )
             try:
                 bounded_policy.validate_admission_request(
@@ -2169,10 +2175,19 @@ class GenericPackHost:
                         f"HC-04 input_digests contains undeclared input: {name}"
                     )
                 values.setdefault(name, {"digest": str(item["digest"])})
-        ordered_cas_ports = (
+        declared_cas_ports = (
             tuple(str(value) for value in cas_param_ports)
             if cas_param_ports is not None
             else ()
+        )
+        # The unified edit capability has one optional CAS port: source-only
+        # edits carry image_ref, while inpaint carries image_ref + mask_ref.
+        # Resolve that optionality before enforcing ordered input custody;
+        # every present port still has to match input_object_ids in order.
+        ordered_cas_ports = (
+            tuple(name for name in declared_cas_ports if values.get(name) is not None)
+            if storage_policy_version == "astrid.cloud-edit.unified.v1"
+            else declared_cas_ports
         )
         # Multi-source capabilities use the Runtime input-object sequence as
         # the role/order contract.  Do this before fetching bytes so a caller
@@ -2272,9 +2287,10 @@ class GenericPackHost:
                 value
                 if (
                     storage_policy_version not in {
-                        "astrid.cloud-i2i.z-image.v1",
-                        "astrid.cloud-edit.qwen-source.v1",
-                    }
+                    "astrid.cloud-i2i.z-image.v1",
+                    "astrid.cloud-edit.qwen-source.v1",
+                    "astrid.cloud-edit.unified.v1",
+                }
                     and isinstance(value, str)
                     and len(value) == 64
                 )
@@ -3349,10 +3365,12 @@ class GenericPackHost:
             if record.definition.metadata.get("storage_policy_version") in {
                 "astrid.cloud-i2i.z-image.v1",
                 "astrid.cloud-edit.qwen-source.v1",
+                "astrid.cloud-edit.unified.v1",
             }:
                 from astrid.core.generation.storage_policy import (
                     CLOUD_EDIT_STORAGE_POLICY,
                     CLOUD_I2I_STORAGE_POLICY,
+                    CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
                     ImageStoragePolicyError,
                 )
 
@@ -3367,13 +3385,35 @@ class GenericPackHost:
                     CLOUD_I2I_STORAGE_POLICY
                     if record.definition.metadata.get("storage_policy_version")
                     == CLOUD_I2I_STORAGE_POLICY.version
-                    else CLOUD_EDIT_STORAGE_POLICY
+                    else (
+                        CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+                        if record.definition.metadata.get("storage_policy_version")
+                        == CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version
+                        else CLOUD_EDIT_STORAGE_POLICY
+                    )
                 )
                 try:
-                    storage_policy.validate_materialized_source(
-                        materialized,
-                        media_type=media_type,
-                    )
+                    if storage_policy is CLOUD_UNIFIED_EDIT_STORAGE_POLICY:
+                        mask_descriptor = admitted_params.get("mask_ref") if isinstance(admitted_params, Mapping) else None
+                        materialized_mask = inputs.get("mask_ref")
+                        mask_media_type = mask_descriptor.get("media_type") if isinstance(mask_descriptor, Mapping) else None
+                        storage_policy.validate_materialized_inputs(
+                            model=str(admitted_params.get("model")),
+                            mode=str(admitted_params.get("mode")),
+                            execution=str(admitted_params.get("execution")),
+                            params={
+                                **dict(admitted_params),
+                                "image_ref": materialized,
+                                "mask_ref": materialized_mask,
+                            },
+                            image_media_type=media_type,
+                            mask_media_type=mask_media_type,
+                        )
+                    else:
+                        storage_policy.validate_materialized_source(
+                            materialized,
+                            media_type=media_type,
+                        )
                 except ImageStoragePolicyError as exc:
                     raise HostError(str(exc)) from exc
             _assert_live_storage_envelope(storage_estimate, root, root / "outputs")

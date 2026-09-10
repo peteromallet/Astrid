@@ -43,6 +43,30 @@ def _qwen_params(source: Path) -> dict[str, object]:
     }
 
 
+def _unified_inpaint_params(source: Path, mask: Path) -> dict[str, object]:
+    return {
+        "execution": "cloud",
+        "storage_policy_version": "astrid.cloud-edit.unified.v1",
+        "prompt": "bounded inpaint provider proof",
+        "count": 1,
+        "size": "1024x1024",
+        "strength": 0.93,
+        "image_ref": str(source),
+        "mask_ref": str(mask),
+    }
+
+
+def _unified_klein_params(source: Path) -> dict[str, object]:
+    return {
+        "execution": "cloud",
+        "storage_policy_version": "astrid.cloud-edit.unified.v1",
+        "prompt": "bounded Klein provider proof",
+        "count": 1,
+        "size": "1024x1024",
+        "image_ref": str(source),
+    }
+
+
 def test_bounded_i2i_caps_provider_response_and_download(tmp_path: Path) -> None:
     source = tmp_path / "source.png"
     source.write_bytes(_PNG)
@@ -156,3 +180,66 @@ def test_bounded_qwen_2511_rejects_download_limit_plus_one(tmp_path: Path) -> No
     ):
         with pytest.raises(ValueError, match="exceeds"):
             backend.generate(entry, "edit", _qwen_params(source), tmp_path / "out")
+
+
+def test_bounded_unified_qwen_inpaint_binds_source_mask_and_strength(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    mask = tmp_path / "mask.png"
+    source.write_bytes(_PNG)
+    mask.write_bytes(_PNG)
+    backend = FalBackend(client=HttpClient())
+    entry, _ = ModelRegistry.load_default().get_by_mode("qwen-image-edit-inpaint", "inpaint")
+
+    with (
+        patch.object(FalBackend, "_resolve_api_key", return_value="test-key"),
+        patch(
+            "astrid.core.generation.backends.fal.fal_submit_and_poll",
+            return_value={"images": [{"url": "https://cdn.example/result.png"}]},
+        ) as submit,
+        patch.object(backend._client, "get_bytes", return_value=_PNG),
+    ):
+        result = backend.generate(
+            entry,
+            "inpaint",
+            _unified_inpaint_params(source, mask),
+            tmp_path / "out",
+        )
+
+    assert len(result.image_paths) == 1
+    payload = submit.call_args.args[2]
+    data_uri = f"data:image/png;base64,{base64.b64encode(_PNG).decode()}"
+    assert payload["image_url"] == data_uri
+    assert payload["mask_url"] == data_uri
+    assert payload["num_images"] == 1
+    assert payload["image_size"] == {"width": 1024, "height": 1024}
+    assert payload["strength"] == 0.93
+
+
+def test_bounded_unified_klein_edit_binds_plural_source_and_endpoint(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(_PNG)
+    backend = FalBackend(client=HttpClient())
+    entry, _ = ModelRegistry.load_default().get_by_mode("flux2-klein-4b", "edit")
+
+    with (
+        patch.object(FalBackend, "_resolve_api_key", return_value="test-key"),
+        patch(
+            "astrid.core.generation.backends.fal.fal_submit_and_poll",
+            return_value={"images": [{"url": "https://cdn.example/result.png"}]},
+        ) as submit,
+        patch.object(backend._client, "get_bytes", return_value=_PNG),
+    ):
+        result = backend.generate(
+            entry,
+            "edit",
+            _unified_klein_params(source),
+            tmp_path / "out",
+        )
+
+    assert len(result.image_paths) == 1
+    assert submit.call_args.args[1] == "fal-ai/flux-2/klein/4b/edit"
+    payload = submit.call_args.args[2]
+    assert payload["image_urls"] == [
+        f"data:image/png;base64,{base64.b64encode(_PNG).decode()}"
+    ]
+    assert payload["num_images"] == 1

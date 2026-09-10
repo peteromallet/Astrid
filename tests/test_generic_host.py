@@ -427,6 +427,56 @@ def test_bounded_qwen_admission_rejects_legacy_media_authority(tmp_path):
         )
 
 
+def test_unified_edit_materialization_allows_optional_mask_for_source_profile(tmp_path):
+    payload = b"source-image"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            assert object_digest == digest
+            return payload
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [digest],
+            "spec": {
+                "family": "generation.generate_image_edit",
+                "params": {
+                    "model": "qwen-image-edit-2511",
+                    "mode": "edit",
+                    "execution": "cloud",
+                    "prompt": "source edit",
+                    "count": 1,
+                    "size": "1024x1024",
+                    "image_ref": {
+                        "digest": digest,
+                        "filename": "source.png",
+                        "media_type": "image/png",
+                    },
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-unified-source",
+        authorized_input_object_ids=[digest],
+        task_param_ports=(
+            "model",
+            "mode",
+            "execution",
+            "prompt",
+            "image_ref",
+            "mask_ref",
+            "count",
+            "size",
+        ),
+        cas_param_ports=("image_ref", "mask_ref"),
+        storage_policy_version="astrid.cloud-edit.unified.v1",
+    )
+    assert Path(values["image_ref"]).read_bytes() == payload
+    assert "mask_ref" not in values
+
+
 def test_input_materialization_rejects_foreign_nested_digest(tmp_path):
     authorized = hashlib.sha256(b"authorized").hexdigest()
     foreign = hashlib.sha256(b"foreign").hexdigest()

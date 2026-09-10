@@ -247,6 +247,113 @@ def test_source_only_edit_profile_validates_typed_admission_descriptor() -> None
         )
 
 
+def _cas_descriptor(filename: str = "source.png") -> dict[str, str]:
+    return {
+        "digest": "sha256:" + "c" * 64,
+        "filename": filename,
+        "media_type": "image/png",
+    }
+
+
+def test_unified_edit_policy_has_disjoint_source_and_mask_envelopes() -> None:
+    from astrid.core.generation.storage_policy import CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+
+    policy = CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+    assert policy.estimate == {
+        "scratch_bytes": 512_000 + 512_000 + 2 * (64 * 1024 * 1024) + 2 * 1024 * 1024,
+        "output_bytes": 64 * 1024 * 1024 + 1 * 1024 * 1024,
+    }
+
+    for model in ("qwen-image-edit-2511", "flux2-klein-4b", "flux2-klein-9b"):
+        policy.validate_admission_request(
+            model=model,
+            mode="edit",
+            execution="cloud",
+            params={
+                "prompt": "source edit",
+                "count": 1,
+                "size": "1024x1024",
+                "image_ref": _cas_descriptor(),
+            },
+        )
+
+
+def test_unified_inpaint_policy_requires_typed_mask_and_matching_materialized_images(
+    tmp_path: Path,
+) -> None:
+    from astrid.core.generation.storage_policy import CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+
+    source = tmp_path / "source.png"
+    mask = tmp_path / "mask.png"
+    source.write_bytes(_PNG)
+    mask.write_bytes(_PNG)
+    params = {
+        "prompt": "masked edit",
+        "count": 1,
+        "size": "1024x1024",
+        "strength": 0.93,
+        "image_ref": _cas_descriptor("source.png"),
+        "mask_ref": _cas_descriptor("mask.png"),
+    }
+    policy = CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+    policy.validate_admission_request(
+        model="qwen-image-edit-inpaint",
+        mode="inpaint",
+        execution="cloud",
+        params=params,
+    )
+    policy.validate_materialized_inputs(
+        model="qwen-image-edit-inpaint",
+        mode="inpaint",
+        execution="cloud",
+        params={**params, "image_ref": source, "mask_ref": mask},
+        image_media_type="image/png",
+        mask_media_type="image/png",
+    )
+    policy.validate_request(
+        model="qwen-image-edit-inpaint",
+        mode="inpaint",
+        execution="cloud",
+        params={**params, "image_ref": source, "mask_ref": mask},
+    )
+
+    with pytest.raises(ImageStoragePolicyError, match="requires mask_ref"):
+        policy.validate_admission_request(
+            model="qwen-image-edit-inpaint",
+            mode="inpaint",
+            execution="cloud",
+            params={key: value for key, value in params.items() if key != "mask_ref"},
+        )
+
+
+def test_unified_inpaint_policy_rejects_mismatched_materialized_dimensions(
+    tmp_path: Path,
+) -> None:
+    from astrid.core.generation.storage_policy import CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+    from PIL import Image
+
+    source = tmp_path / "source.png"
+    mask = tmp_path / "mask.png"
+    source.write_bytes(_PNG)
+    Image.new("RGBA", (2, 1), (255, 255, 255, 255)).save(mask)
+    with pytest.raises(ImageStoragePolicyError, match="dimensions must match"):
+        CLOUD_UNIFIED_EDIT_STORAGE_POLICY.validate_materialized_inputs(
+            model="qwen-image-edit-inpaint",
+            mode="inpaint",
+            execution="cloud",
+            params={
+                "prompt": "masked edit",
+                "count": 1,
+                "size": "1024x1024",
+                "strength": 0.93,
+                "image_ref": source,
+                "mask_ref": mask,
+            },
+            image_media_type="image/png",
+            mask_media_type="image/png",
+        )
+
+
 def test_policy_rejects_download_at_limit_plus_one_and_checks_dimensions() -> None:
     policy = CloudI2IStoragePolicy(
         output_max_bytes=len(_PNG),

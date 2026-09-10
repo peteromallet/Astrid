@@ -106,10 +106,14 @@ def test_manifest_loads() -> None:
     manifest = load_executor_manifest(str(_EXECUTOR_YAML))
     assert manifest.id == "generation.generate_image"
     assert manifest.kind == "built_in"
-    assert manifest.version == "2.0"
+    assert manifest.version == "2.1"
     assert manifest.metadata["runtime_entrypoint"] == "run_sdk"
-    assert {"image_ref", "strength"}.issubset(set(manifest.metadata["hc04_param_ports"]))
-    assert manifest.metadata["hc04_cas_param_ports"] == ["image_ref"]
+    assert {"prompt", "model", "execution", "count", "seed", "steps", "size"}.issubset(
+        set(manifest.metadata["hc04_param_ports"])
+    )
+    assert {"image_ref", "strength"}.isdisjoint(set(manifest.metadata["hc04_param_ports"]))
+    assert manifest.metadata["fixed_inputs"] == {"mode": "t2i", "execution": "cloud"}
+    assert manifest.metadata["hc04_cas_param_ports"] == []
     # v2 executor inputs include backend controls for Codex in addition to
     # core model/mode generation fields.
     assert len(manifest.inputs) == 22

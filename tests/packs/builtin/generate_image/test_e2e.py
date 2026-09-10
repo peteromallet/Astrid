@@ -199,6 +199,82 @@ def test_e2e_cloud_flux_dev_t2i(tmp_path: Path) -> None:
         _restore_default_client()
 
 
+def test_bounded_t2i_count_records_replayable_base_seed(tmp_path: Path) -> None:
+    """A sequential bounded batch records the submitted seed, not the last derived seed."""
+    from astrid.packs.generation.executors.generate_image.run import main
+
+    state = _build_fal_transport("flux-dev")
+    _patch_default_client(state._transport)
+    try:
+        out = tmp_path / "out"
+        code = main(
+            [
+                "--model", "flux-dev",
+                "--mode", "t2i",
+                "--execution", "cloud",
+                "--storage-policy-version", "astrid.cloud-t2i.registry.v1",
+                "--prompt", "bounded replay proof",
+                "--count", "2",
+                "--seed", "19",
+                "--steps", "28",
+                "--size", "1536x1024",
+                "--out", str(out),
+            ]
+        )
+        assert code == 0
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert manifest["seed"] == 19
+        assert manifest["inputs"]["seed"] == 19
+        assert manifest["request"]["seed"] == 19
+        assert manifest["request"]["count"] == 2
+        assert len(manifest["outputs"]) == 2
+    finally:
+        _restore_default_client()
+
+
+def test_bounded_t2i_omitted_seed_uses_one_replayable_base_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An omitted seed is sampled once, then advanced deterministically per output."""
+    import astrid.packs.generation.executors.generate_image.run as image_run
+
+    state = _build_fal_transport("flux-dev")
+    submitted_seeds: list[int] = []
+    transport = state._transport
+
+    def recording_transport(request: Request) -> tuple[int, bytes]:
+        if request.method == "POST" and "queue.fal.run" in request.full_url:
+            submitted_seeds.append(json.loads((request.data or b"{}").decode())["seed"])
+        return transport(request)
+
+    monkeypatch.setattr(image_run.random, "randint", lambda _low, _high: 101)
+    _patch_default_client(recording_transport)
+    try:
+        out = tmp_path / "out"
+        code = image_run.main(
+            [
+                "--model", "flux-dev",
+                "--mode", "t2i",
+                "--execution", "cloud",
+                "--storage-policy-version", "astrid.cloud-t2i.registry.v1",
+                "--prompt", "bounded implicit seed proof",
+                "--count", "2",
+                "--steps", "28",
+                "--size", "1536x1024",
+                "--out", str(out),
+            ]
+        )
+        assert code == 0
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert submitted_seeds == [101, 102]
+        assert manifest["seed"] == 101
+        assert manifest["inputs"]["seed"] == 101
+        assert manifest["request"]["seed"] == 101
+    finally:
+        _restore_default_client()
+
+
 # ---------------------------------------------------------------------------
 # (b) execution=cloud + z-image + t2i + negative_prompt -> v2 manifest
 # ---------------------------------------------------------------------------

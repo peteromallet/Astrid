@@ -29,6 +29,7 @@ from astrid.core.generation import GENERATION_RESULT_KEY
 from astrid.core.generation.storage_policy import (
     CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
+    CLOUD_T2I_STORAGE_POLICY,
     ImageStoragePolicyError,
 )
 from astrid.core.generation.backends import (
@@ -419,16 +420,28 @@ def generate_core(
 
     bounded_profile = getattr(args, "storage_policy_version", None)
     bounded_profiles = {
+        CLOUD_T2I_STORAGE_POLICY.version: (None, "t2i"),
         CLOUD_I2I_STORAGE_POLICY.version: ("z-image", "i2i"),
         CLOUD_EDIT_STORAGE_POLICY.version: ("qwen-image-edit-2511", "edit"),
     }
+    selected_storage_policy = None
     if bounded_profile is not None:
         expected_identity = bounded_profiles.get(bounded_profile)
-        if expected_identity is None or expected_identity != (entry.id, mode_name) or args.execution != "cloud":
+        identity_matches = (
+            expected_identity is not None
+            and expected_identity[1] == mode_name
+            and (expected_identity[0] is None or expected_identity[0] == entry.id)
+        )
+        if not identity_matches or args.execution != "cloud":
             raise AstridError(
                 f"storage policy {bounded_profile!r} does not match the admitted model/mode/backend",
                 recovery_command="use the capability's declared storage policy",
             )
+        selected_storage_policy = {
+            CLOUD_T2I_STORAGE_POLICY.version: CLOUD_T2I_STORAGE_POLICY,
+            CLOUD_I2I_STORAGE_POLICY.version: CLOUD_I2I_STORAGE_POLICY,
+            CLOUD_EDIT_STORAGE_POLICY.version: CLOUD_EDIT_STORAGE_POLICY,
+        }[bounded_profile]
 
     warnings: list[dict[str, str]] = []
     dropped_features: list[str] = []
@@ -454,6 +467,23 @@ def generate_core(
             valid_options=list(_available_backend_ids(mode_spec)),
             recovery_command=f"choose one of the available backends: {available}",
         )
+
+    if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY:
+        try:
+            selected_storage_policy.validate_task_request(
+                model=entry.id,
+                mode=mode_name,
+                execution=args.execution,
+                params=vars(args),
+            )
+        except ImageStoragePolicyError as exc:
+            raise AstridError(
+                str(exc),
+                recovery_command=(
+                    "use a typed cloud t2i request within the declared count "
+                    "and size bounds"
+                ),
+            ) from exc
 
     # --- setup output directory ----------------------------------------------
     out = args.out.expanduser().resolve()
@@ -495,13 +525,24 @@ def generate_core(
     all_outputs: list[dict[str, Any]] = []
     generated_paths: list[Path] = []
     raw_count = args.count
-    if bounded_profile is not None and raw_count != CLOUD_I2I_STORAGE_POLICY.max_count:
+    if (
+        selected_storage_policy is not None
+        and selected_storage_policy is not CLOUD_T2I_STORAGE_POLICY
+        and raw_count != selected_storage_policy.max_count
+    ):
         raise AstridError(
             "bounded cloud image profile requires one output for the whole task",
             recovery_command="use --count 1 for the declared bounded image profile",
         )
     count = max(1, raw_count or 1)
     prompt_text: str | None = None
+    implicit_base_seed = (
+        random.randint(0, 2**31 - 1)
+        if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY
+        and args.seed is None
+        else None
+    )
+    first_seed: int | None = None
     final_seed: int = 0
     model_actual: str = ""
     cost_usd: float | None = None
@@ -572,7 +613,10 @@ def generate_core(
             )
             warnings.extend(extra_warns)
             dropped_features.extend(extra_drops)
-            seed = _resolve_seed(params.get("seed", args.seed), i)
+            requested_seed = params.get("seed", args.seed)
+            if requested_seed is None and implicit_base_seed is not None:
+                requested_seed = implicit_base_seed
+            seed = _resolve_seed(requested_seed, i)
         else:
             prompt_text = args.prompt
             requested_params = _build_requested_params(args, prompt_text=prompt_text)
@@ -585,7 +629,13 @@ def generate_core(
             )
             warnings.extend(extra_warns)
             dropped_features.extend(extra_drops)
-            seed = _resolve_seed(args.seed, i)
+            requested_seed = args.seed
+            if requested_seed is None and implicit_base_seed is not None:
+                requested_seed = implicit_base_seed
+            seed = _resolve_seed(requested_seed, i)
+
+        if first_seed is None:
+            first_seed = seed
 
         # --- build canonical params dict for adapter -------------------------
         params["seed"] = seed
@@ -607,11 +657,7 @@ def generate_core(
                 params["background"] = args.background
 
         if bounded_profile is not None:
-            bounded_policy = (
-                CLOUD_I2I_STORAGE_POLICY
-                if bounded_profile == CLOUD_I2I_STORAGE_POLICY.version
-                else CLOUD_EDIT_STORAGE_POLICY
-            )
+            bounded_policy = selected_storage_policy
             try:
                 bounded_policy.validate_request(
                     model=entry.id,
@@ -691,8 +737,15 @@ def generate_core(
         except BaseException:
             if all_outputs:
                 try:
+                    manifest_seed = (
+                        first_seed
+                        if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY
+                        and count > 1
+                        and first_seed is not None
+                        else final_seed
+                    )
                     inputs, request = _build_inputs_request(
-                        args, entry, mode_name, final_seed, prompt_text, image_ref_resolved,
+                        args, entry, mode_name, manifest_seed, prompt_text, image_ref_resolved,
                     )
                     manifest = build_generation_manifest(
                         kind="generation.generate_image",
@@ -706,7 +759,7 @@ def generate_core(
                         model_actual=model_actual,
                         execution=args.execution,
                         request=request,
-                        seed=final_seed,
+                        seed=manifest_seed,
                         dropped_features=dropped_features if dropped_features else None,
                         applied_features=all_applied_features if all_applied_features else None,
                         cost_usd=cost_usd,
@@ -722,13 +775,25 @@ def generate_core(
                         manifest["outputs"], root_dir=out,
                     )
                     write_json_atomic(manifest_path, manifest)
+                    if bounded_policy is not None:
+                        try:
+                            bounded_policy.validate_manifest(manifest_path)
+                        except ImageStoragePolicyError:
+                            manifest_path.unlink(missing_ok=True)
                 except Exception:
                     pass
             raise
 
     # --- emit manifest -------------------------------------------------------
+    manifest_seed = (
+        first_seed
+        if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY
+        and count > 1
+        and first_seed is not None
+        else final_seed
+    )
     inputs, request = _build_inputs_request(
-        args, entry, mode_name, final_seed, prompt_text, image_ref_resolved,
+        args, entry, mode_name, manifest_seed, prompt_text, image_ref_resolved,
     )
     manifest = build_generation_manifest(
         kind="generation.generate_image",
@@ -742,7 +807,7 @@ def generate_core(
         model_actual=model_actual,
         execution=args.execution,
         request=request,
-        seed=final_seed,
+        seed=manifest_seed,
         dropped_features=dropped_features if dropped_features else None,
         applied_features=all_applied_features if all_applied_features else None,
         cost_usd=cost_usd,

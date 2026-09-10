@@ -11,8 +11,14 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
+import ssl
+import subprocess
 import sys
+import threading
+from http import HTTPStatus
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -26,6 +32,7 @@ from banodoco_workspace_client import WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
 
 from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient  # noqa: E402
+from astrid.core.execution.network_broker import _BrokerHandler  # noqa: E402
 
 
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -146,6 +153,8 @@ def _registered_image_executor_fixture(
     *,
     manifest_name: str = "generate_image",
     oversized_output: bool = False,
+    oversized_output_index: int | None = None,
+    preserve_production_metadata: bool = False,
 ) -> Path:
     """Copy the registered image manifest with a deterministic CPU backend.
 
@@ -179,7 +188,7 @@ def _registered_image_executor_fixture(
     metadata.pop("env", None)
     metadata.pop("network_policy", None)
     metadata["adapter_family"] = "cpu"
-    if manifest_name == "generate_image":
+    if manifest_name == "generate_image" and not preserve_production_metadata:
         # The broad fixture is retained for the legacy composition proof.  The
         # dedicated bounded manifest must keep its production estimates.
         metadata["estimated_scratch_bytes"] = 8 * 1024 * 1024
@@ -201,22 +210,30 @@ from astrid.core.util.http import HttpClient
 from astrid.packs.generation.executors.generate_image import run as image_run
 
 _PNG = base64.b64decode({_PNG!r})
-_OVERSIZED_OUTPUT = {oversized_output!r}
+_OVERSIZED_OUTPUT_INDEX = {0 if oversized_output else oversized_output_index!r}
+_CALL_INDEX = 0
 _RESULT = _PNG
 
 
 def _transport(request):
-    global _RESULT
+    global _CALL_INDEX, _RESULT
     url = request.full_url if hasattr(request, \"full_url\") else str(request)
     method = request.method if hasattr(request, \"method\") else \"GET\"
     if method == \"POST\" and \"queue.fal.run\" in url:
         payload = json.loads((request.data or b\"{{}}\").decode())
         image_urls = payload.get(\"image_urls\")
         refs = image_urls if isinstance(image_urls, list) else [payload.get(\"image_url\", \"\")]
-        assert refs and all(isinstance(ref, str) for ref in refs)
-        assert all(ref.startswith(\"data:image/png;base64,\") for ref in refs)
-        assert all(base64.b64decode(ref.split(\",\", 1)[1]) == _PNG for ref in refs)
-        _RESULT = b"x" * (64 * 1024 * 1024 + 1) if _OVERSIZED_OUTPUT else _PNG
+        if any(ref for ref in refs):
+            assert all(isinstance(ref, str) for ref in refs)
+            assert all(ref.startswith(\"data:image/png;base64,\") for ref in refs)
+            assert all(base64.b64decode(ref.split(\",\", 1)[1]) == _PNG for ref in refs)
+        else:
+            assert payload[\"prompt\"] == \"cpu t2i proof\"
+            assert payload[\"seed\"] in (19, 20)
+            assert payload[\"num_inference_steps\"] == 28
+            assert payload[\"image_size\"] == \"1536x1024\"
+        _RESULT = b"x" * (64 * 1024 * 1024 + 1) if _CALL_INDEX == _OVERSIZED_OUTPUT_INDEX else _PNG
+        _CALL_INDEX += 1
         return 200, json.dumps({{
             \"request_id\": \"cpu-fal-request\",
             \"status_url\": \"https://queue.fal.run/status/cpu-fal-request\",
@@ -333,12 +350,411 @@ def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> N
         daemon.stop()
 
 
+def test_production_t2i_command_runs_through_host_broker_http_substitute(tmp_path: Path) -> None:
+    """Run the shipped command/manifest with only upstream HTTP substituted."""
+    generation_root = Path(__file__).resolve().parents[2] / "astrid/packs/generation"
+    original_forward = _BrokerHandler._forward_http
+    png = base64.b64decode(_PNG)
+
+    def fake_forward(handler, line, headers):
+        method, target, _version = line.split(" ", 2)
+        if "queue.fal.run" in target:
+            assert headers.get("authorization") == "Key cpu-test-key"
+        if method == "POST":
+            body = json.dumps(
+                {
+                    "request_id": "broker-fal-request",
+                    "status_url": "https://queue.fal.run/status/broker-fal-request",
+                    "response_url": "https://queue.fal.run/response/broker-fal-request",
+                }
+            ).encode()
+        elif "/status/broker-fal-request" in target:
+            body = b'{"status":"COMPLETED"}'
+        elif "/response/broker-fal-request" in target:
+            body = b'{"images":[{"url":"https://fal.media/cpu-result.png"}]}'
+        elif "fal.media" in target:
+            body = png
+        else:
+            handler._response(HTTPStatus.NOT_FOUND, b"unknown broker fixture route")
+            return
+        handler._response(HTTPStatus.OK, body)
+
+    class ProductionHost(GenericPackHost):
+        def _child_environment(self, record, attempt, **kwargs):
+            env, secrets = super()._child_environment(record, attempt, **kwargs)
+            hook_root = attempt / ".astrid-network-hook"
+            patch_module = hook_root / "t2i_http_fixture.py"
+            patch_module.write_text(
+                """
+import base64
+import json
+import os
+import socket
+from http.client import HTTPResponse
+from urllib.parse import urlsplit
+
+from astrid.core.generation.backends import fal as fal_module
+from astrid.core.util.http import HttpClient
+
+_PNG = __PNG__
+
+
+def _transport(request):
+    target = request.full_url
+    parsed = urlsplit(target)
+    if request.method == "POST":
+        payload = json.loads((request.data or b"{}").decode())
+        assert parsed.hostname == "queue.fal.run"
+        assert request.get_header("Authorization") == "Key cpu-test-key"
+        assert payload["prompt"] == "broker t2i proof"
+        assert payload["seed"] in (19, 20)
+        assert payload["num_inference_steps"] == 28
+        assert payload["image_size"] == "1536x1024"
+    proxy = urlsplit(os.environ["ASTRID_BROKER_PROXY"])
+    with socket.create_connection((proxy.hostname, proxy.port), timeout=5) as connection:
+        body = request.data or b""
+        request_headers = "".join(
+            f"{name}: {value}\\r\\n"
+            for name, value in request.header_items()
+            if name.lower() not in {"host", "content-length", "connection"}
+        )
+        wire = (
+            f"{request.method} {target} HTTP/1.1\\r\\n"
+            f"Host: {parsed.netloc}\\r\\n"
+            f"Content-Length: {len(body)}\\r\\n"
+            f"{request_headers}"
+            "Connection: close\\r\\n\\r\\n"
+        ).encode() + body
+        connection.sendall(wire)
+        response = HTTPResponse(connection)
+        response.begin()
+        response_body = response.read()
+        if parsed.hostname != "fal.media":
+            assert response_body.startswith(b"{"), (response.status, response_body)
+        return response.status, response_body
+
+
+fal_module.default_client = lambda: HttpClient(transport=_transport)
+""".replace("__PNG__", repr(png)),
+                encoding="utf-8",
+            )
+            (hook_root / "sitecustomize.py").write_text(
+                "from astrid.core.execution.network_policy import install_from_environment\n"
+                "install_from_environment()\n"
+                "import t2i_http_fixture\n",
+                encoding="utf-8",
+            )
+            return env, secrets
+
+    _BrokerHandler._forward_http = fake_forward
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "production-t2i-command-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        host = ProductionHost(
+            pack_roots=[generation_root],
+            client=client,
+            executor_id="production-t2i-command-host",
+            credential_source={"FAL_KEY": "cpu-test-key"},
+        )
+        host.discover()
+        record = host.capabilities["generation.generate_image"]
+        assert record.definition.kind == "built_in"
+        assert record.definition.command.argv[2:5] == (
+            "astrid.packs.generation.executors.generate_image.run",
+            "--model",
+            "{model}",
+        )
+        assert record.definition.isolation.network is True
+        assert record.definition.metadata["fixed_inputs"] == {"mode": "t2i", "execution": "cloud"}
+        host.preflight("generation.generate_image")
+        record = host.capabilities["generation.generate_image"]
+        assert record.ready
+        host.register()
+        project = owner.create_project(
+            "Production t2i command",
+            slug="production-t2i-command",
+            idempotency_key="production-t2i-project",
+        )
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[],
+            project_id=project.project_id,
+            idempotency_key="production-t2i-task",
+            spec={
+                "family": record.id,
+                "params": {
+                    "execution": "cloud",
+                    "mode": "t2i",
+                    "model": "flux-dev",
+                    "prompt": "broker t2i proof",
+                    "count": 2,
+                    "seed": 19,
+                    "steps": 28,
+                    "size": "1536x1024",
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+        )
+        settled = host.run(once=True)
+        assert len(settled) == 1 and settled[0].state == "succeeded"
+        completed = owner.get_task(task.task_id)
+        assert completed.state == "succeeded"
+        images = [output for output in completed.result["outputs"] if output["name"] == "generated_images"]
+        assert len(images) == 2
+        assert all(owner.get_object(output["digest"]).data.startswith(b"\x89PNG") for output in images)
+        evidence = completed.result["network_evidence"]
+        assert any(event["kind"] == "broker_route" and event["allowed"] for event in evidence["events"])
+        assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+        _BrokerHandler._forward_http = original_forward
+
+
+@pytest.mark.parametrize("oversized_output_index", [None, 0, 1])
+def test_production_t2i_command_uses_https_connect_and_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    oversized_output_index: int | None,
+) -> None:
+    """Exercise the shipped command through the broker's real CONNECT path."""
+    import astrid.core.execution.network_broker as broker_module
+
+    generation_root = Path(__file__).resolve().parents[2] / "astrid/packs/generation"
+    png = base64.b64decode(_PNG)
+    cert_dir = tmp_path / "provider-cert"
+    cert_dir.mkdir()
+    cert_path = cert_dir / "provider.pem"
+    key_path = cert_dir / "provider.key"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key_path), "-out", str(cert_path), "-days", "1",
+            "-subj", "/CN=queue.fal.run",
+            "-addext", "subjectAltName=DNS:queue.fal.run,DNS:fal.media",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    tls_listener = socket.socket()
+    tls_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tls_listener.bind(("127.0.0.1", 0))
+    tls_listener.listen(8)
+    tls_listener.settimeout(0.2)
+    tls_port = tls_listener.getsockname()[1]
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    stop = threading.Event()
+    provider_errors: list[BaseException] = []
+    submitted_seeds: list[int] = []
+    image_download_index = 0
+
+    def provider_loop() -> None:
+        nonlocal image_download_index
+        while not stop.is_set():
+            try:
+                raw, _address = tls_listener.accept()
+            except TimeoutError:
+                continue
+            try:
+                with tls_context.wrap_socket(raw, server_side=True) as connection:
+                    wire = b""
+                    while b"\r\n\r\n" not in wire:
+                        wire += connection.recv(65536)
+                    header, body = wire.split(b"\r\n\r\n", 1)
+                    lines = header.decode("iso-8859-1").split("\r\n")
+                    method, target, _version = lines[0].split(" ", 2)
+                    headers = {
+                        name.lower(): value.strip()
+                        for name, value in (
+                            line.split(":", 1) for line in lines[1:] if ":" in line
+                        )
+                    }
+                    content_length = int(headers.get("content-length", "0"))
+                    while len(body) < content_length:
+                        body += connection.recv(65536)
+                    host = headers.get("host", "").split(":", 1)[0]
+                    path = target.split("?", 1)[0]
+                    response_length: int | None = None
+                    if host == "queue.fal.run":
+                        assert headers.get("authorization") == "Key cpu-test-key"
+                        if method == "POST":
+                            payload = json.loads(body[:content_length].decode())
+                            assert payload["prompt"] == "https connect t2i proof"
+                            assert payload["seed"] in (19, 20)
+                            assert payload["num_inference_steps"] == 28
+                            assert payload["image_size"] == "1536x1024"
+                            submitted_seeds.append(payload["seed"])
+                            request_id = f"https-connect-{len(submitted_seeds)}"
+                            response_body = json.dumps(
+                                {
+                                    "request_id": request_id,
+                                    "status_url": f"https://queue.fal.run/status/{request_id}",
+                                    "response_url": f"https://queue.fal.run/response/{request_id}",
+                                }
+                            ).encode()
+                        elif path.startswith("/status/"):
+                            response_body = b'{"status":"COMPLETED"}'
+                        elif path.startswith("/response/"):
+                            response_body = b'{"images":[{"url":"https://fal.media/cpu-result.png"}]}'
+                        else:
+                            response_body = b"{}"
+                    elif host == "fal.media" and method == "GET":
+                        if image_download_index == oversized_output_index:
+                            response_body = b""
+                            response_length = 64 * 1024 * 1024 + 1
+                        else:
+                            response_body = png
+                            response_length = len(response_body)
+                        image_download_index += 1
+                    else:
+                        response_body = b"unknown provider route"
+                        response_length = len(response_body)
+                    if response_length is None:
+                        response_length = len(response_body)
+                    status = HTTPStatus.OK if response_body != b"unknown provider route" else HTTPStatus.NOT_FOUND
+                    connection.sendall(
+                        f"HTTP/1.1 {status.value} {status.phrase}\r\n"
+                        f"Content-Length: {response_length}\r\n"
+                        "Connection: close\r\n\r\n".encode() + response_body
+                    )
+            except BaseException as exc:
+                provider_errors.append(exc)
+
+    provider_thread = threading.Thread(target=provider_loop, daemon=True)
+    provider_thread.start()
+    original_connect = broker_module.socket.create_connection
+
+    def route_provider_connection(address, timeout=None, source_address=None):
+        host, port = address
+        if host in {"queue.fal.run", "fal.media", "fal.run"} and int(port) == 443:
+            return original_connect(("127.0.0.1", tls_port), timeout, source_address)
+        return original_connect(address, timeout, source_address)
+
+    monkeypatch.setattr(broker_module.socket, "create_connection", route_provider_connection)
+
+    class ProductionHost(GenericPackHost):
+        def _child_environment(self, record, attempt, **kwargs):
+            env, secrets = super()._child_environment(record, attempt, **kwargs)
+            child_cert = attempt / "provider-ca.pem"
+            child_cert.write_bytes(cert_path.read_bytes())
+            env["SSL_CERT_FILE"] = str(child_cert)
+            return env, secrets
+
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "production-t2i-https-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        host = ProductionHost(
+            pack_roots=[generation_root],
+            client=client,
+            executor_id="production-t2i-https-host",
+            credential_source={"FAL_KEY": "cpu-test-key"},
+        )
+        host.discover()
+        host.preflight("generation.generate_image")
+        record = host.capabilities["generation.generate_image"]
+        assert record.ready
+        host.register()
+        project = owner.create_project(
+            "Production t2i HTTPS command",
+            slug="production-t2i-https-command",
+            idempotency_key="production-t2i-https-project",
+        )
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[],
+            project_id=project.project_id,
+            idempotency_key="production-t2i-https-task",
+            spec={
+                "family": record.id,
+                "params": {
+                    "execution": "cloud",
+                    "mode": "t2i",
+                    "model": "flux-dev",
+                    "prompt": "https connect t2i proof",
+                    "count": 2,
+                    "seed": 19,
+                    "steps": 28,
+                    "size": "1536x1024",
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+        )
+        completed = owner.get_task(task.task_id)
+        if oversized_output_index is None:
+            settled = host.run(once=True)
+            assert len(settled) == 1 and settled[0].state == "succeeded"
+            completed = owner.get_task(task.task_id)
+            assert completed.state == "succeeded"
+            assert submitted_seeds == [19, 20]
+            evidence = completed.result["network_evidence"]
+            routes = [
+                event["detail"]
+                for event in evidence["events"]
+                if event["kind"] == "broker_route" and event["allowed"]
+            ]
+            assert any("queue.fal.run" in route for route in routes)
+            assert any("fal.media" in route for route in routes)
+        else:
+            with pytest.raises(HostError, match="bounded body limit"):
+                host.run(once=True)
+            completed = owner.get_task(task.task_id)
+            assert completed.state == "failed"
+            assert not completed.result.get("outputs", [])
+            assert submitted_seeds == ([19] if oversized_output_index == 0 else [19, 20])
+        assert not provider_errors
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+        stop.set()
+        tls_listener.close()
+        provider_thread.join(timeout=2)
+
+
 @pytest.mark.parametrize(
-    ("manifest_name", "expected_capability", "model", "mode"),
+    ("manifest_name", "expected_capability", "model", "mode", "oversized_output_index"),
     [
-        ("generate_image", "generation.generate_image", "z-image", "i2i"),
-        ("generate_image_cloud_i2i", "generation.generate_image_cloud_i2i", "z-image", "i2i"),
-        ("generate_image_edit", "generation.generate_image_edit", "qwen-image-edit-2511", "edit"),
+        ("generate_image", "generation.generate_image", "flux-dev", "t2i", None),
+        ("generate_image", "generation.generate_image", "flux-dev", "t2i", 0),
+        ("generate_image", "generation.generate_image", "flux-dev", "t2i", 1),
+        ("generate_image_cloud_i2i", "generation.generate_image_cloud_i2i", "z-image", "i2i", None),
+        ("generate_image_edit", "generation.generate_image_edit", "qwen-image-edit-2511", "edit", None),
     ],
 )
 def test_registered_image_executor_consumes_cas_image_and_cleans_attempt(
@@ -347,8 +763,14 @@ def test_registered_image_executor_consumes_cas_image_and_cleans_attempt(
     expected_capability: str,
     model: str,
     mode: str,
+    oversized_output_index: int | None,
 ) -> None:
-    pack = _registered_image_executor_fixture(tmp_path, manifest_name=manifest_name)
+    pack = _registered_image_executor_fixture(
+        tmp_path,
+        manifest_name=manifest_name,
+        oversized_output_index=oversized_output_index,
+        preserve_production_metadata=mode == "t2i",
+    )
     daemon = RuntimeDaemon(
         tmp_path / "realm",
         support_root=tmp_path / "support",
@@ -373,6 +795,7 @@ def test_registered_image_executor_consumes_cas_image_and_cleans_attempt(
             pack_roots=[pack],
             client=client,
             executor_id="typed-image-registered-host",
+            credential_source={"FAL_KEY": "fixture-key"},
         )
         record = host.discover()[0]
         assert record.id == expected_capability
@@ -388,39 +811,45 @@ def test_registered_image_executor_consumes_cas_image_and_cleans_attempt(
             slug="typed-registered-image",
             idempotency_key="registered-project",
         )
-        source = tmp_path / "source.png"
-        source.write_bytes(base64.b64decode(_PNG))
-        source_row = owner.ingest_project_object(
-            project.project_id,
-            source.read_bytes(),
-            media_type="image/png",
-            filename="source.png",
-            idempotency_key="registered-source",
-        )
-        source_id = str(
-            getattr(source_row, "object_id", None)
-            or getattr(source_row, "digest")
-        )
         params = {
             "execution": "cloud",
             "mode": mode,
             "model": model,
-            "prompt": "cpu i2i proof" if mode == "i2i" else "cpu edit proof",
-            "count": 1,
-            "seed": 11,
-            "size": "1024x1024",
-            "image_ref": {
+            "prompt": "cpu t2i proof" if mode == "t2i" else ("cpu i2i proof" if mode == "i2i" else "cpu edit proof"),
+            "count": 2 if mode == "t2i" else 1,
+            "seed": 19 if mode == "t2i" else 11,
+            "size": "1536x1024" if mode == "t2i" else "1024x1024",
+        }
+        input_object_ids: list[str] = []
+        source_id: str | None = None
+        if mode != "t2i":
+            source = tmp_path / "source.png"
+            source.write_bytes(base64.b64decode(_PNG))
+            source_row = owner.ingest_project_object(
+                project.project_id,
+                source.read_bytes(),
+                media_type="image/png",
+                filename="source.png",
+                idempotency_key="registered-source",
+            )
+            source_id = str(
+                getattr(source_row, "object_id", None)
+                or getattr(source_row, "digest")
+            )
+            params["image_ref"] = {
                 "digest": source_id,
                 "filename": "source.png",
                 "media_type": "image/png",
-            },
-        }
+            }
+            input_object_ids = [source_id]
         if mode == "i2i":
             params["strength"] = 0.5
+        if mode == "t2i":
+            params["steps"] = 28
         task = owner.admit_task(
             capability_id=record.id,
             capability_digest=record.capability_digest,
-            input_object_ids=[source_id],
+            input_object_ids=input_object_ids,
             project_id=project.project_id,
             idempotency_key="registered-task",
             spec={
@@ -433,22 +862,36 @@ def test_registered_image_executor_consumes_cas_image_and_cleans_attempt(
                 "output_bytes": record.estimated_output_bytes,
             },
         )
-        settled = host.run(once=True)
-        assert len(settled) == 1 and settled[0].state == "succeeded"
         completed = owner.get_task(task.task_id)
-        assert completed.state == "succeeded"
-        outputs = completed.result["outputs"]
-        assert any(output["name"] == "generated_images" for output in outputs)
-        image_output = next(output for output in outputs if output["name"] == "generated_images")
-        image_bytes = owner.get_object(image_output["digest"]).data
-        assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-        # ``generate_image.run`` embeds the submitted prompt after the real
-        # Fal backend returns; the transport also checked the staged CAS bytes
-        # in the request's data URI before returning this result.
-        assert b"astrid_prompt" in image_bytes
-        assert (b"cpu i2i proof" if mode == "i2i" else b"cpu edit proof") in image_bytes
-        cleanup_path = completed.result["execution_guards"]["cleanup_path"]
-        assert not Path(cleanup_path).exists()
+        if oversized_output_index is not None:
+            with pytest.raises(HostError):
+                host.run(once=True)
+            completed = owner.get_task(task.task_id)
+            assert completed.state == "failed"
+            assert not completed.result.get("outputs", [])
+        else:
+            settled = host.run(once=True)
+            assert len(settled) == 1 and settled[0].state == "succeeded"
+            completed = owner.get_task(task.task_id)
+            assert completed.state == "succeeded"
+            outputs = completed.result["outputs"]
+            assert any(output["name"] == "generated_images" for output in outputs)
+            image_output = next(output for output in outputs if output["name"] == "generated_images")
+            image_bytes = owner.get_object(image_output["digest"]).data
+            assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            # ``generate_image.run`` embeds the submitted prompt after the real
+            # Fal backend returns; the transport also checked the staged CAS bytes
+            # in the request's data URI before returning this result.
+            assert b"astrid_prompt" in image_bytes
+            assert (b"cpu t2i proof" if mode == "t2i" else (b"cpu i2i proof" if mode == "i2i" else b"cpu edit proof")) in image_bytes
+        if oversized_output_index is not None:
+            cleanup_receipt = host.last_cleanup_receipt
+            assert cleanup_receipt is not None
+            assert cleanup_receipt["status"] == "deleted"
+            assert cleanup_receipt["observed_absent"] is True
+        else:
+            cleanup_path = completed.result["execution_guards"]["cleanup_path"]
+            assert not Path(cleanup_path).exists()
     finally:
         if host is not None:
             host.shutdown()

@@ -23,6 +23,7 @@ from astrid.core.generation.backends.base import (
 from astrid.core.generation.storage_policy import (
     CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
+    CLOUD_T2I_STORAGE_POLICY,
     ImageStoragePolicyError,
 )
 from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
@@ -227,6 +228,12 @@ class FalBackend(BackendAdapter):
 
         bounded_policy = None
         if (
+            mode == "t2i"
+            and params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_T2I_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_T2I_STORAGE_POLICY
+        elif (
             entry.id == "z-image"
             and mode == "i2i"
             and params.get("execution") == "cloud"
@@ -467,10 +474,18 @@ class FalBackend(BackendAdapter):
         # or {"image": {"url": ...}} or {"video": {"url": ...}} etc.
         asset_urls = _extract_asset_urls(result)
         source_urls = list(asset_urls)
-        if bounded_policy is not None and len(asset_urls) != bounded_policy.max_count:
+        expected_provider_outputs = (
+            bounded_policy.provider_outputs_per_call
+            if bounded_policy is not None
+            and hasattr(bounded_policy, "provider_outputs_per_call")
+            else bounded_policy.max_count
+            if bounded_policy is not None
+            else None
+        )
+        if bounded_policy is not None and len(asset_urls) != expected_provider_outputs:
             raise ValueError(
-                f"bounded cloud i2i expected exactly "
-                f"{bounded_policy.max_count} provider output, "
+                f"bounded cloud image call expected exactly "
+                f"{expected_provider_outputs} provider output, "
                 f"got {len(asset_urls)}"
             )
 

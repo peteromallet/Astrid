@@ -14,6 +14,8 @@
       "{mode}",
       "--execution",
       "{execution}",
+      "--storage-policy-version",
+      "astrid.cloud-t2i.registry.v1",
       "--size",
       "{size}",
       "--out",
@@ -34,7 +36,7 @@
       "kind": "requires_input"
     }
   ],
-  "description": "Generate images from text prompts using local (vibecomfy), cloud (fal), or Codex image_generation backends. v2: model\u2192mode\u2192backend taxonomy with required --mode.",
+  "description": "Generate up to four cloud text-to-image outputs through the model registry under an enforced whole-task storage envelope.",
   "graph": {
     "consumes": [
       "prompt_or_prompts_file",
@@ -225,17 +227,25 @@
   "metadata": {
     "output_result_manifest": true,
     "requires_timeline": false,
-    "api_provider": "multi",
+    "api_provider": "fal",
     "env": [
       "FAL_KEY"
     ],
+    "secrets_required": ["FAL_KEY"],
     "runtime_entrypoint": "run_sdk",
     "runtime_entrypoint_note": "run_sdk is the in-process entrypoint returning a JSON-safe payload dict; subprocess / CLI compatibility remains via main() and the __main__ guard at the bottom of run.py.",
-    "hc04_param_ports": ["mode", "prompt", "model", "execution", "count", "seed", "steps", "size", "image_ref", "strength"],
-    "hc04_cas_param_ports": ["image_ref"],
+    "storage_estimate_required": true,
+    "storage_estimate_exact": true,
+    "fixed_inputs": {"mode": "t2i", "execution": "cloud"},
+    "storage_policy_version": "astrid.cloud-t2i.registry.v1",
+    "storage_policy_limits": {"max_count": 4, "max_output_bytes_each": 67108864, "max_manifest_bytes": 1048576, "max_width": 2048, "max_height": 2048},
+    "estimated_scratch_bytes": 69206016,
+    "estimated_output_bytes": 269484032,
+    "hc04_param_ports": ["mode", "prompt", "model", "execution", "count", "seed", "negative_prompt", "guidance_scale", "steps", "size", "loras", "shot_generation_recipe"],
+    "hc04_cas_param_ports": [],
     "runtime_file": "run.py",
     "runtime_module": "astrid.packs.generation.executors.generate_image.run",
-    "network_policy": {"allowed_protocols":["dns","tcp"],"allowed_destinations":["queue.fal.run:443","fal.run:443","storage.fal.run:443"],"allow_redirects":false,"broker":{"host_managed":true,"kind":"broker","enforced":true,"observable":true,"route":"declared-http-routes","wrapper":"astrid-generic-host"},"descendant_enforcement":{"kind":"broker","validated":true,"observable":true,"route":"declared-http-routes","wrapper":"astrid-generic-host"}}},
+    "network_policy": {"allowed_protocols":["dns","tcp"],"allowed_destinations":["queue.fal.run:443","fal.run:443","fal.media:443"],"allow_redirects":false,"broker":{"host_managed":true,"kind":"broker","enforced":true,"observable":true,"route":"declared-http-routes","wrapper":"astrid-generic-host"},"descendant_enforcement":{"kind":"broker","validated":true,"observable":true,"route":"declared-http-routes","wrapper":"astrid-generic-host"}}},
   "name": "Generate Image",
   "outputs": [
     {
@@ -255,6 +265,6 @@
     }
   ],
   "scoped_configs": ["credentials.fal"],
-  "short_description": "Generate images from text prompts via local, cloud, or Codex backends. v2: model→mode→backend.",
-  "version": "2.0"
+  "short_description": "Bounded registry-backed cloud text-to-image generation.",
+  "version": "2.1"
 }

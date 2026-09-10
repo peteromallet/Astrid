@@ -18,6 +18,198 @@ class ImageStoragePolicyError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class CloudT2IStoragePolicy:
+    """Whole-task ceiling for the registry-backed cloud text-image route.
+
+    The executor performs a sequential one-image provider call for each task
+    output. Downloaded bytes are written directly to their final staging
+    paths, so they are charged once to the output bucket. Scratch reserves
+    cover only distinct filesystem objects: one atomic metadata rewrite, one
+    atomic manifest write, and bounded provider/host control evidence.
+
+    Model membership and cloud backend availability remain authoritative in
+    ``ModelRegistry``; this policy deliberately does not copy that list.
+    """
+
+    version: str = "astrid.cloud-t2i.registry.v1"
+    output_max_bytes: int = 64 * 1024 * 1024
+    manifest_max_bytes: int = 1 * 1024 * 1024
+    control_max_bytes: int = 1 * 1024 * 1024
+    max_prompt_chars: int = 4_096
+    max_negative_prompt_chars: int = 4_096
+    max_size_chars: int = 64
+    max_width: int = 2_048
+    max_height: int = 2_048
+    max_count: int = 4
+    provider_outputs_per_call: int = 1
+
+    @property
+    def estimate_components(self) -> dict[str, dict[str, int]]:
+        """Return the disjoint components used to derive the host envelope."""
+        return {
+            "scratch": {
+                "input_materialization_bytes": 0,
+                "download_temp_bytes": 0,
+                "metadata_rewrite_temp_bytes": self.output_max_bytes,
+                "manifest_write_temp_bytes": self.manifest_max_bytes,
+                "control_and_cleanup_evidence_bytes": self.control_max_bytes,
+            },
+            "output": {
+                "generated_image_bytes": self.max_count * self.output_max_bytes,
+                "result_manifest_bytes": self.manifest_max_bytes,
+            },
+        }
+
+    @property
+    def estimated_output_bytes(self) -> int:
+        return sum(self.estimate_components["output"].values())
+
+    @property
+    def estimated_scratch_bytes(self) -> int:
+        return sum(self.estimate_components["scratch"].values())
+
+    @property
+    def estimate(self) -> dict[str, int]:
+        return {
+            "scratch_bytes": self.estimated_scratch_bytes,
+            "output_bytes": self.estimated_output_bytes,
+        }
+
+    def _validate_identity(self, *, model: str, mode: str, execution: str) -> None:
+        if not isinstance(model, str) or not model.strip():
+            raise ImageStoragePolicyError("bounded cloud t2i requires a model id")
+        if (mode, execution) != ("t2i", "cloud"):
+            raise ImageStoragePolicyError(
+                f"request is outside bounded storage policy {self.version}"
+            )
+
+    def _validate_common_params(self, params: Mapping[str, Any]) -> None:
+        prompt = params.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ImageStoragePolicyError("bounded cloud t2i requires a prompt")
+        if len(prompt) > self.max_prompt_chars:
+            raise ImageStoragePolicyError(
+                f"prompt exceeds bounded limit of {self.max_prompt_chars} characters"
+            )
+        negative_prompt = params.get("negative_prompt")
+        if negative_prompt is not None and (
+            not isinstance(negative_prompt, str)
+            or len(negative_prompt) > self.max_negative_prompt_chars
+        ):
+            raise ImageStoragePolicyError(
+                "negative_prompt must be a string no longer than "
+                f"{self.max_negative_prompt_chars} characters"
+            )
+        size = params.get("size")
+        if size in (None, ""):
+            return
+        if not isinstance(size, str) or len(size) > self.max_size_chars:
+            raise ImageStoragePolicyError(
+                f"size must be a string no longer than {self.max_size_chars} characters"
+            )
+        normalized = size.strip().lower()
+        if not normalized:
+            raise ImageStoragePolicyError("size must not be blank")
+        if "x" not in normalized:
+            # Registry-backed providers also advertise named presets. Their
+            # concrete result is still byte- and dimension-checked below.
+            return
+        try:
+            width_text, height_text = normalized.split("x", 1)
+            width, height = int(width_text), int(height_text)
+        except (TypeError, ValueError) as exc:
+            raise ImageStoragePolicyError(
+                "bounded cloud t2i size must be WIDTHxHEIGHT or a preset"
+            ) from exc
+        if not (1 <= width <= self.max_width and 1 <= height <= self.max_height):
+            raise ImageStoragePolicyError(
+                f"bounded cloud t2i dimensions must be at most {self.max_width}x{self.max_height}"
+            )
+
+    def validate_task_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        """Validate one complete task before creating provider output."""
+        self._validate_identity(model=model, mode=mode, execution=execution)
+        if params.get("prompts_file") is not None:
+            raise ImageStoragePolicyError(
+                "bounded cloud t2i requires the typed prompt field, not prompts_file"
+            )
+        count = params.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ImageStoragePolicyError("bounded cloud t2i count must be an integer")
+        if not 1 <= count <= self.max_count:
+            raise ImageStoragePolicyError(
+                f"bounded cloud t2i count must be between 1 and {self.max_count}"
+            )
+        self._validate_common_params(params)
+
+    def validate_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        """Validate one sequential provider call inside an admitted task."""
+        self._validate_identity(model=model, mode=mode, execution=execution)
+        if params.get("count", 1) != self.provider_outputs_per_call:
+            raise ImageStoragePolicyError(
+                "bounded cloud t2i provider calls must request exactly one output"
+            )
+        self._validate_common_params(params)
+
+    def validate_download(self, data: bytes, *, index: int = 0) -> tuple[int, int]:
+        """Validate byte size and decoded dimensions before staging."""
+        if len(data) > self.output_max_bytes:
+            raise ImageStoragePolicyError(
+                f"provider output {index} exceeds {self.output_max_bytes} bytes"
+            )
+        try:
+            from PIL import Image
+
+            with Image.open(BytesIO(data)) as image:
+                width, height = image.size
+                if width > self.max_width or height > self.max_height:
+                    raise ImageStoragePolicyError(
+                        f"provider output {index} dimensions {width}x{height} exceed "
+                        f"{self.max_width}x{self.max_height}"
+                    )
+                image.load()
+        except Exception as exc:
+            if isinstance(exc, ImageStoragePolicyError):
+                raise
+            raise ImageStoragePolicyError(
+                f"provider output {index} is not a decodable image"
+            ) from exc
+        return width, height
+
+    def validate_final_output(self, path: str | Path, *, index: int = 0) -> int:
+        """Check final bytes after the atomic metadata rewrite."""
+        size = Path(path).stat().st_size
+        if size > self.output_max_bytes:
+            raise ImageStoragePolicyError(
+                f"final provider output {index} exceeds {self.output_max_bytes} bytes "
+                "after metadata embedding"
+            )
+        return size
+
+    def validate_manifest(self, path: str | Path) -> int:
+        size = Path(path).stat().st_size
+        if size > self.manifest_max_bytes:
+            raise ImageStoragePolicyError(
+                f"image result manifest exceeds {self.manifest_max_bytes} bytes"
+            )
+        return size
+
+
+@dataclass(frozen=True, slots=True)
 class CloudI2IStoragePolicy:
     """The first bounded cloud image-to-image execution profile."""
 
@@ -186,6 +378,7 @@ class CloudEditStoragePolicy(CloudI2IStoragePolicy):
             params=params,
         )
 
+CLOUD_T2I_STORAGE_POLICY = CloudT2IStoragePolicy()
 CLOUD_I2I_STORAGE_POLICY = CloudI2IStoragePolicy()
 CLOUD_EDIT_STORAGE_POLICY = CloudEditStoragePolicy()
 
@@ -193,6 +386,8 @@ CLOUD_EDIT_STORAGE_POLICY = CloudEditStoragePolicy()
 __all__ = [
     "CLOUD_I2I_STORAGE_POLICY",
     "CLOUD_EDIT_STORAGE_POLICY",
+    "CLOUD_T2I_STORAGE_POLICY",
+    "CloudT2IStoragePolicy",
     "CloudEditStoragePolicy",
     "CloudI2IStoragePolicy",
     "ImageStoragePolicyError",

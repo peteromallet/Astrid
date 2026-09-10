@@ -764,8 +764,8 @@
   },
   {
    "id": "vibecomfy.character_animation",
-   "disposition": "unsupported",
-   "evidence_reason": "Unsupported until the pinned Wan Animate ready graph proves producer mode/resolution semantics and equivalent typed bindings; registration must fail closed before claims.",
+   "disposition": "optional",
+   "evidence_reason": "CPU-admitted bounded Wan Animate profile; mode=animate, two CAS media inputs, and exposed controls bind to the pinned ready graph. GPU execution/output proof remains open.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -792,8 +792,8 @@
   },
   {
    "id": "vibecomfy.video_enhance",
-   "disposition": "unsupported",
-   "evidence_reason": "Unsupported until the pinned video-enhance ready graph implements interpolation, color correction, source-FPS/audio handling, and typed encoder-quality semantics; registration must fail closed before claims.",
+   "disposition": "optional",
+   "evidence_reason": "CPU-admitted bounded video-upscale profile; source audio/FPS and scale controls bind to the pinned ready graph. Interpolation, color correction, non-maximum quality, and GPU output proof remain fail-closed/open.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"

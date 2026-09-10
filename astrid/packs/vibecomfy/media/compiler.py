@@ -23,15 +23,17 @@ class MediaCompileError(ValueError):
     """Raised when a typed direct-media request cannot be admitted."""
 
 
-UNSUPPORTED_MEDIA_CAPABILITIES: dict[str, str] = {
-    "vibecomfy.video_enhance": (
-        "the current ready graph does not implement interpolation, color correction, "
-        "source-FPS preservation, or typed encoder-quality semantics"
-    ),
-    "vibecomfy.character_animation": (
-        "the current ready graph does not expose a proven mode/resolution contract "
-        "for this producer and its bindings are not equivalent to the typed fixture"
-    ),
+UNSUPPORTED_MEDIA_CAPABILITIES: dict[str, str] = {}
+
+_UNSUPPORTED_MEDIA_CONTROLS: dict[str, dict[str, str]] = {
+    "vibecomfy.video_enhance": {
+        "enable_interpolation": "the canonical app-active graph intentionally omits the gated interpolation model",
+        "color_fix": "the canonical app-active graph does not contain a color-correction node",
+        "output_quality": "the canonical app-active graph exposes one fixed maximum-quality encoder profile",
+    },
+    "vibecomfy.character_animation": {
+        "mode": "the canonical Wan Animate graph represents animate mode only; replacement mode is not wired",
+    },
 }
 
 
@@ -124,7 +126,7 @@ class VideoEnhanceRequest:
     enable_interpolation: bool = False
     enable_upscale: bool = True
     interpolation_frames: int = 1
-    color_fix: bool = True
+    color_fix: bool = False
     output_quality: str = "maximum"
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +155,7 @@ class CompiledVibeMedia:
     template_id: str
     template_digest: str
     inputs: Mapping[str, Any]
+    bindings: Mapping[str, Any]
     workflow: Mapping[str, Any]
     request_digest: str
 
@@ -164,6 +167,7 @@ class CompiledVibeMedia:
             "template_id": self.template_id,
             "template_digest": self.template_digest,
             "inputs": copy.deepcopy(dict(self.inputs)),
+            "bindings": copy.deepcopy(dict(self.bindings)),
             "workflow": copy.deepcopy(dict(self.workflow)),
             "request_digest": self.request_digest,
         }
@@ -263,6 +267,7 @@ def _compile(
     template_name: str,
     profile_id: str,
     typed_inputs: Mapping[str, Any],
+    bindings: Mapping[str, Any] | None = None,
 ) -> CompiledVibeMedia:
     profile = profile_semantics(profile_id)
     template_id, template_digest, document = _template(template_name)
@@ -271,6 +276,7 @@ def _compile(
     if document.get("model_identity") != model_identity:
         raise MediaCompileError(f"template {template_name!r} has the wrong model identity")
     inputs = copy.deepcopy(dict(typed_inputs))
+    execution_bindings = copy.deepcopy(dict(bindings if bindings is not None else inputs))
     workflow = _set_workflow_inputs(document["workflow"], inputs, template=document)
     request = {
         "capability_id": capability_id,
@@ -279,6 +285,7 @@ def _compile(
         "template_id": template_id,
         "template_digest": template_digest,
         "inputs": inputs,
+        "bindings": execution_bindings,
         "workflow": workflow,
     }
     return CompiledVibeMedia(
@@ -288,6 +295,7 @@ def _compile(
         template_id=template_id,
         template_digest=template_digest,
         inputs=inputs,
+        bindings=execution_bindings,
         workflow=workflow,
         request_digest=_digest(request),
     )
@@ -351,25 +359,51 @@ def compile_wan_2_2_i2v(request: WanI2VRequest, *, profile: str = "pip_embedded"
 
 
 def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_embedded") -> CompiledVibeMedia:
-    """Compile deterministic video-enhance/upscale semantics."""
+    """Compile the bounded canonical video-upscale profile.
+
+    The ready graph is deliberately narrower than the historical UI request:
+    it performs source-FPS/audio-preserving upscale only. Controls that are
+    not represented by the graph are rejected before readiness or scratch
+    resolution rather than being silently ignored.
+    """
 
     ensure_media_capability_supported("vibecomfy.video_enhance")
 
-    if request.enable_interpolation is not True and request.enable_upscale is not True:
-        raise MediaCompileError("enable_interpolation or enable_upscale must be true")
+    if request.enable_interpolation:
+        raise MediaCompileError(
+            "vibecomfy.video_enhance enable_interpolation is unsupported: "
+            f"{_UNSUPPORTED_MEDIA_CONTROLS['vibecomfy.video_enhance']['enable_interpolation']}"
+        )
+    if request.enable_upscale is not True:
+        raise MediaCompileError("vibecomfy.video_enhance requires enable_upscale=true")
     interpolation_frames = _positive_int(request.interpolation_frames, "interpolation_frames")
+    if interpolation_frames != 1:
+        raise MediaCompileError(
+            "vibecomfy.video_enhance interpolation_frames is unsupported when interpolation is disabled"
+        )
+    if request.color_fix:
+        raise MediaCompileError(
+            "vibecomfy.video_enhance color_fix is unsupported: "
+            f"{_UNSUPPORTED_MEDIA_CONTROLS['vibecomfy.video_enhance']['color_fix']}"
+        )
     output_quality = _required_text(request.output_quality, "output_quality")
-    if output_quality not in {"low", "medium", "high", "maximum"}:
-        raise MediaCompileError("output_quality must be low, medium, high, or maximum")
+    if output_quality != "maximum":
+        raise MediaCompileError(
+            "vibecomfy.video_enhance output_quality is unsupported: "
+            f"{_UNSUPPORTED_MEDIA_CONTROLS['vibecomfy.video_enhance']['output_quality']}"
+        )
+    video_ref = _required_text(request.video_ref, "video_ref")
+    scale = _positive_number(request.scale, "scale")
+    upscale_method = _required_text(request.upscale_method, "upscale_method")
     return _compile(
         capability_id="vibecomfy.video_enhance",
         model_identity="video-enhance.upscale-2x",
         template_name="video_enhance",
         profile_id=profile,
         typed_inputs={
-            "video_ref": _required_text(request.video_ref, "video_ref"),
-            "scale": _positive_number(request.scale, "scale"),
-            "upscale_method": _required_text(request.upscale_method, "upscale_method"),
+            "video_ref": video_ref,
+            "scale": scale,
+            "upscale_method": upscale_method,
             "enable_interpolation": request.enable_interpolation,
             "enable_upscale": request.enable_upscale,
             "interpolation_frames": interpolation_frames,
@@ -377,6 +411,11 @@ def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_e
             "output_quality": output_quality,
             "preserve_audio": True,
             "preserve_source_fps": True,
+        },
+        bindings={
+            "video_ref": video_ref,
+            "scale": scale,
+            "upscale_method": upscale_method,
         },
     )
 
@@ -387,13 +426,23 @@ def compile_character_animation(request: CharacterAnimationRequest, *, profile: 
     ensure_media_capability_supported("vibecomfy.character_animation")
 
     mode = _required_text(request.mode, "mode")
-    if mode not in {"replace", "animate"}:
-        raise MediaCompileError("mode must be replace or animate")
+    if mode != "animate":
+        raise MediaCompileError(
+            "vibecomfy.character_animation mode is unsupported: "
+            f"{_UNSUPPORTED_MEDIA_CONTROLS['vibecomfy.character_animation']['mode']}"
+        )
     resolution = _required_text(request.resolution, "resolution")
     dimensions = {"480p": (832, 480), "720p": (1280, 720)}.get(resolution)
     if dimensions is None:
         raise MediaCompileError("resolution must be 480p or 720p")
     width, height = dimensions
+    prompt = _required_text(request.prompt, "prompt")
+    reference_image_ref = _required_text(request.reference_image_ref, "reference_image_ref")
+    driving_video_ref = _required_text(request.driving_video_ref, "driving_video_ref")
+    seed = _nonnegative_int(request.seed, "seed")
+    frames = _positive_int(request.frames, "frames")
+    fps = _positive_int(request.fps, "fps")
+    steps = _positive_int(request.steps, "steps")
 
     return _compile(
         capability_id="vibecomfy.character_animation",
@@ -401,18 +450,30 @@ def compile_character_animation(request: CharacterAnimationRequest, *, profile: 
         template_name="character_animation",
         profile_id=profile,
         typed_inputs={
-            "reference_image_ref": _required_text(request.reference_image_ref, "reference_image_ref"),
-            "driving_video_ref": _required_text(request.driving_video_ref, "driving_video_ref"),
+            "reference_image_ref": reference_image_ref,
+            "driving_video_ref": driving_video_ref,
             "mode": mode,
             "resolution": resolution,
-            "prompt": request.prompt,
+            "prompt": prompt,
             "negative_prompt": request.negative_prompt,
-            "seed": _nonnegative_int(request.seed, "seed"),
+            "seed": seed,
             "width": width,
             "height": height,
-            "frames": _positive_int(request.frames, "frames"),
-            "fps": _positive_int(request.fps, "fps"),
-            "steps": _positive_int(request.steps, "steps"),
+            "frames": frames,
+            "fps": fps,
+            "steps": steps,
+        },
+        bindings={
+            "input_image": reference_image_ref,
+            "driving_video": driving_video_ref,
+            "prompt": prompt,
+            "negative_prompt": request.negative_prompt,
+            "seed": seed,
+            "width": width,
+            "height": height,
+            "frames": frames,
+            "fps": fps,
+            "steps": steps,
         },
     )
 

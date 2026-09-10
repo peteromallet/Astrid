@@ -15,7 +15,7 @@
     ]
   },
   "conditions": [{"input": "video_ref", "kind": "requires_input"}],
-  "description": "Typed VibeComfy video interpolation/upscale with explicit source custody and output bounds.",
+  "description": "Bounded typed VibeComfy video upscale with source-FPS/audio preservation; interpolation and nonmaximum quality are fail-closed.",
   "graph": {"consumes": ["video_ref"], "provides": ["enhanced_video", "video_manifest"]},
   "id": "vibecomfy.video_enhance",
   "name": "VibeComfy Video Enhance",
@@ -25,7 +25,7 @@
     {"name": "enable_upscale", "required": true, "type": "boolean"},
     {"name": "interpolation_frames", "default": 1, "required": false, "type": "integer"},
     {"name": "upscale_factor", "default": 2, "required": false, "type": "number"},
-    {"name": "color_fix", "default": true, "required": false, "type": "boolean"},
+    {"name": "color_fix", "default": false, "required": false, "type": "boolean"},
     {"name": "output_quality", "default": "maximum", "required": false, "type": "string"},
     {"name": "task_identity", "required": false, "type": "string"},
     {"name": "readiness_profile_path", "required": false, "type": "string"},
@@ -49,6 +49,6 @@
     {"name": "enhanced_video", "path_template": "{out}/output.mp4", "type": "file", "artifact_type": "video", "mode": "create_or_replace"},
     {"name": "video_manifest", "path_template": "{out}/manifest.json", "type": "file", "artifact_type": null, "mode": "create_or_replace"}
   ],
-  "short_description": "Typed VibeComfy video enhancement with bounded storage.",
+  "short_description": "Bounded VibeComfy video upscale with source-FPS/audio preservation.",
   "version": "1.0"
 }

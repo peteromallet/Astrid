@@ -1429,19 +1429,56 @@ def test_unready_capability_is_not_dispatched(tmp_path, monkeypatch):
     assert host.capabilities["test.echo"].ready
 
 
-def test_withdrawn_capability_cannot_run_even_on_direct_task_path():
+def test_optional_capability_still_requires_storage_admission(tmp_path):
+    manifest_path = _write_manifest(
+        tmp_path / "media",
+        capability_id="vibecomfy.video_enhance",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"].update(
+        {
+            "storage_estimate_required": True,
+            "storage_estimate_exact": True,
+            "estimated_scratch_bytes": 7,
+            "estimated_output_bytes": 11,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "capabilities": [
+                    {
+                        "id": "vibecomfy.video_enhance",
+                        "disposition": "optional",
+                        "evidence_reason": "bounded test capability",
+                        "adapter_family": "local_generation",
+                        "resource_keys": ["gpu"],
+                        "required_packages": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     runtime = FakeRuntime()
-    host = GenericPackHost(pack_roots=[Path("astrid/packs")], client=runtime)
+    host = GenericPackHost(
+        pack_roots=[tmp_path],
+        capability_matrix=matrix,
+        client=runtime,
+    )
     host.discover()
 
     task = {
-        "id": "task-withdrawn-media",
+        "id": "task-optional-media",
         "capability": "vibecomfy.video_enhance",
-        "attempt_id": "attempt-withdrawn-media",
+        "attempt_id": "attempt-optional-media",
         "fence": 1,
     }
-    with pytest.raises(HostError, match="is Unsupported until"):
-        host.run_task(task, lease_token="lease-withdrawn-media")
+    with pytest.raises(HostError, match="requires a whole-task storage_estimate"):
+        host.run_task(task, lease_token="lease-optional-media")
 
     assert runtime.settlements == []
     assert runtime.failures

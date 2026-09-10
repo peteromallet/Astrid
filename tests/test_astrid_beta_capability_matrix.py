@@ -74,16 +74,16 @@ def test_beta_reference_family_preflight_is_truthful_on_this_machine():
         assert local.preflight["packages"]["missing"]
 
 
-def test_unproven_typed_media_is_withdrawn_before_claims():
+def test_bounded_typed_media_is_optional_until_gpu_output_proof():
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])
     host.discover()
     host.preflight()
 
     for capability_id in ("vibecomfy.video_enhance", "vibecomfy.character_animation"):
         record = host.capabilities[capability_id]
-        assert record.matrix["disposition"] == "unsupported"
-        assert "Unsupported until" in record.matrix["evidence_reason"]
-        assert record.ready is False
+        assert record.matrix["disposition"] == "optional"
+        assert "GPU" in record.matrix["evidence_reason"]
+        assert record.adapter.family == "local_generation"
 
 
 def test_provider_ledger_rows_are_networked_and_credential_dispositions_match():

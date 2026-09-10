@@ -22,6 +22,8 @@ guard_canonical_entrypoint("vibecomfy.run")
 from .compiler import (  # noqa: E402
     CharacterAnimationRequest,
     VideoEnhanceRequest,
+    compile_character_animation,
+    compile_video_enhance,
     ensure_media_capability_supported,
 )
 from .executor import DirectVibeMediaExecutor  # noqa: E402
@@ -75,10 +77,14 @@ def _run(
     readiness_profile_hash: str,
     out: Path,
 ) -> None:
-    # Keep the unsupported disposition ahead of readiness/profile resolution,
-    # scratch creation, and the runner.  A typed media request must not create
-    # an attempt directory or touch a GPU session for an unproven graph.
+    # Validate the bounded graph profile ahead of readiness/profile resolution,
+    # scratch creation, and the runner. A rejected typed media control must not
+    # create an attempt directory or touch a GPU session.
     ensure_media_capability_supported(capability)
+    if capability == "vibecomfy.video_enhance":
+        compile_video_enhance(request, profile=profile_id)  # type: ignore[arg-type]
+    elif capability == "vibecomfy.character_animation":
+        compile_character_animation(request, profile=profile_id)  # type: ignore[arg-type]
     profile_document, runtime_context = _read_profile(readiness_profile_path, readiness_profile_hash)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -143,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enable-upscale", type=_bool)
     parser.add_argument("--interpolation-frames", type=int, default=1)
     parser.add_argument("--scale", type=float, default=2.0)
-    parser.add_argument("--color-fix", type=_bool, default=True)
+    parser.add_argument("--color-fix", type=_bool, default=False)
     parser.add_argument("--output-quality", default="maximum")
     parser.add_argument("--reference-image-ref")
     parser.add_argument("--driving-video-ref")

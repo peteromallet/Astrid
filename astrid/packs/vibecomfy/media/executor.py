@@ -112,7 +112,7 @@ class DirectVibeMediaExecutor:
         # template.
         execution_workflow = dict(compiled.workflow)
         execution_workflow["template_id"] = compiled.template_id
-        execution_workflow["bindings"] = dict(compiled.inputs)
+        execution_workflow["bindings"] = dict(compiled.bindings)
         try:
             outputs = self._runner(
                 execution_workflow,

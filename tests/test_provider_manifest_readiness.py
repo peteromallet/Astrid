@@ -39,7 +39,7 @@ def test_every_tcp_provider_manifest_declares_an_enforceable_host_broker():
     host = _provider_host(credentials={})
     providers = [record for record in host.capabilities.values() if record.adapter.family == "provider"]
 
-    assert len(providers) == 22
+    assert len(providers) == 25
     for record in providers:
         policy = record.definition.metadata["network_policy"]
         protocols = {str(value).lower() for value in policy["allowed_protocols"]}
@@ -80,10 +80,19 @@ def test_all_supported_provider_routes_are_ready_and_grantable_with_declared_inp
                     "LINUX_SANDBOX: editorial.script_pipeline requires "
                     "darwin sandbox-exec for its host-managed broker"
                 )
+            if not record.ready and record.matrix.get("disposition") == "optional":
+                # Optional provider routes remain truthfully unavailable when
+                # this host lacks a declared local binary; that is a valid
+                # readiness result, not a broker-contract failure.
+                assert record.preflight["binaries"]["ok"] is False
+                continue
             assert record.ready, (record.id, record.preflight)
 
-    assert len(tcp_providers) == 22
+    assert len(tcp_providers) == 25
     for record in tcp_providers:
+        if not record.ready:
+            assert record.matrix.get("disposition") == "optional"
+            continue
         task = {
             "task": {
                 "id": f"manifest-grant-{record.id}",
@@ -102,7 +111,7 @@ def test_required_provider_routes_remain_unavailable_without_credentials():
         for record in host.capabilities.values()
         if record.adapter.family == "provider" and record.matrix.get("disposition") == "required"
     ]
-    assert len(required) == 10
+    assert len(required) == 13
     for record in required:
         assert record.ready is False
         assert record.preflight["credentials"]["missing"]

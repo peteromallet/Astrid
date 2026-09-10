@@ -16,7 +16,7 @@
     {"input": "reference_image_ref", "kind": "requires_input"},
     {"input": "driving_video_ref", "kind": "requires_input"}
   ],
-  "description": "Typed Wan 2.2 Animate execution with ordered image/video CAS custody and bounded storage.",
+  "description": "Bounded typed Wan 2.2 Animate execution with ordered image/video CAS custody; animate mode is admitted and replacement mode is fail-closed.",
   "graph": {"consumes": ["reference_image_ref", "driving_video_ref"], "provides": ["animated_video", "video_manifest"]},
   "id": "vibecomfy.character_animation",
   "name": "VibeComfy Character Animation",
@@ -49,6 +49,6 @@
     {"name": "animated_video", "path_template": "{out}/output.mp4", "type": "file", "artifact_type": "video", "mode": "create_or_replace"},
     {"name": "video_manifest", "path_template": "{out}/manifest.json", "type": "file", "artifact_type": null, "mode": "create_or_replace"}
   ],
-  "short_description": "Typed Wan 2.2 Animate character animation with bounded storage.",
+  "short_description": "Bounded Wan 2.2 Animate character animation with ordered CAS inputs.",
   "version": "1.0"
 }

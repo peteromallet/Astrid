@@ -51,6 +51,22 @@ def test_profile_semantics_are_explicit_and_distinct() -> None:
     assert embedded.output_transport != checkout.output_transport
 
 
+def _runtime_context(profile: str) -> dict[str, str | int]:
+    if profile == "pip_embedded":
+        return {
+            "profile_digest": "sha256:" + "a" * 64,
+            "model_bytes_digest": "sha256:" + "b" * 64,
+        }
+    return {
+        "profile_digest": "sha256:" + "a" * 64,
+        "runtime_instance_id": "runtime-1",
+        "environment_fingerprint": "env-1",
+        "model_bytes_digest": "sha256:" + "b" * 64,
+        "declared_root": "/worker/vibecomfy",
+        "declared_port": 8188,
+    }
+
+
 @pytest.mark.parametrize("profile", ["pip_embedded", "checkout_server"])
 @pytest.mark.parametrize(
     "media_request",
@@ -58,21 +74,26 @@ def test_profile_semantics_are_explicit_and_distinct() -> None:
         VideoEnhanceRequest(
             video_ref="media://source",
             enable_interpolation=True,
+        ),
+        VideoEnhanceRequest(
+            video_ref="media://source",
+            color_fix=True,
+        ),
+        VideoEnhanceRequest(
+            video_ref="media://source",
+            output_quality="high",
+        ),
+        VideoEnhanceRequest(
+            video_ref="media://source",
+            interpolation_frames=2,
+        ),
+        VideoEnhanceRequest(
+            video_ref="media://source",
             enable_upscale=False,
-        ),
-        VideoEnhanceRequest(
-            video_ref="media://source",
-            enable_interpolation=False,
-            enable_upscale=True,
-        ),
-        VideoEnhanceRequest(
-            video_ref="media://source",
-            enable_interpolation=True,
-            enable_upscale=True,
         ),
     ],
 )
-def test_video_enhance_unproven_combinations_fail_before_runner(
+def test_video_enhance_unsupported_controls_fail_before_runner(
     profile: str, media_request: VideoEnhanceRequest
 ) -> None:
     seen: list[object] = []
@@ -82,21 +103,42 @@ def test_video_enhance_unproven_combinations_fail_before_runner(
         return {"artifact": "should-not-exist"}
 
     executor = DirectVibeMediaExecutor(profile, runner)
-    with pytest.raises(MediaExecutionError, match="vibecomfy.video_enhance is unsupported"):
+    with pytest.raises(MediaExecutionError, match="unsupported|requires enable_upscale"):
         executor.execute_video_enhance(
             media_request,
             task_identity="task-video",
-            runtime_context={},
+            runtime_context=_runtime_context(profile),
         )
     assert seen == []
 
 
 @pytest.mark.parametrize("profile", ["pip_embedded", "checkout_server"])
-@pytest.mark.parametrize("mode", ["replace", "animate"])
-@pytest.mark.parametrize("resolution", ["480p", "720p"])
-def test_character_animation_unproven_combinations_fail_before_runner(
-    profile: str, mode: str, resolution: str
-) -> None:
+def test_video_enhance_bounded_profile_binds_only_canonical_inputs(profile: str) -> None:
+    seen: list[object] = []
+
+    def runner(workflow, **kwargs):
+        seen.append((workflow, kwargs))
+        return {"artifact": "media://output"}
+
+    result = DirectVibeMediaExecutor(profile, runner).execute_video_enhance(
+        VideoEnhanceRequest(video_ref="media://source"),
+        task_identity="task-video",
+        runtime_context=_runtime_context(profile),
+    )
+
+    assert result.capability_id == "vibecomfy.video_enhance"
+    assert len(seen) == 1
+    workflow, _kwargs = seen[0]
+    assert workflow["template_id"] == "video/basic_video_enhance"
+    assert workflow["bindings"] == {
+        "video_ref": "media://source",
+        "scale": 2.0,
+        "upscale_method": "lanczos",
+    }
+
+
+@pytest.mark.parametrize("profile", ["pip_embedded", "checkout_server"])
+def test_character_animation_replacement_mode_fails_before_runner(profile: str) -> None:
     seen: list[object] = []
 
     def runner(*args, **kwargs):
@@ -104,28 +146,69 @@ def test_character_animation_unproven_combinations_fail_before_runner(
         return {"artifact": "should-not-exist"}
 
     executor = DirectVibeMediaExecutor(profile, runner)
-    with pytest.raises(MediaExecutionError, match="vibecomfy.character_animation is unsupported"):
+    with pytest.raises(MediaExecutionError, match="mode is unsupported"):
         executor.execute_character_animation(
             CharacterAnimationRequest(
                 reference_image_ref="media://character",
                 driving_video_ref="media://motion",
-                mode=mode,
-                resolution=resolution,
+                mode="replace",
+                resolution="480p",
                 prompt="walk forward",
             ),
             task_identity="task-character",
-            runtime_context={},
+            runtime_context=_runtime_context(profile),
         )
     assert seen == []
 
 
-def test_video_enhance_unsupported_disposition_precedes_request_validation() -> None:
-    with pytest.raises(MediaCompileError, match="vibecomfy.video_enhance is unsupported"):
+@pytest.mark.parametrize("profile", ["pip_embedded", "checkout_server"])
+def test_character_animation_bounded_profile_binds_two_media_inputs(profile: str) -> None:
+    seen: list[object] = []
+
+    def runner(workflow, **kwargs):
+        seen.append((workflow, kwargs))
+        return {"artifact": "media://output"}
+
+    result = DirectVibeMediaExecutor(profile, runner).execute_character_animation(
+        CharacterAnimationRequest(
+            reference_image_ref="media://character",
+            driving_video_ref="media://motion",
+            mode="animate",
+            resolution="720p",
+            prompt="walk forward",
+            negative_prompt="blurry",
+            seed=7,
+            frames=41,
+            fps=24,
+            steps=4,
+        ),
+        task_identity="task-character",
+        runtime_context=_runtime_context(profile),
+    )
+
+    assert result.capability_id == "vibecomfy.character_animation"
+    workflow, _kwargs = seen[0]
+    assert workflow["template_id"] == "video/wan22_animate_native_first_stage"
+    assert workflow["bindings"] == {
+        "input_image": "media://character",
+        "driving_video": "media://motion",
+        "prompt": "walk forward",
+        "negative_prompt": "blurry",
+        "seed": 7,
+        "width": 1280,
+        "height": 720,
+        "frames": 41,
+        "fps": 24,
+        "steps": 4,
+    }
+
+
+def test_video_enhance_control_rejection_precedes_request_validation() -> None:
+    with pytest.raises(MediaCompileError, match="enable_interpolation is unsupported"):
         compile_video_enhance(
             VideoEnhanceRequest(
                 video_ref="",
-                enable_interpolation=False,
-                enable_upscale=False,
+                enable_interpolation=True,
             )
         )
 
@@ -134,10 +217,10 @@ def test_media_command_rejects_before_profile_read_or_scratch_creation(tmp_path)
     from astrid.packs.vibecomfy.media import run
 
     output = tmp_path / "attempt-output"
-    with pytest.raises(MediaCompileError, match="vibecomfy.video_enhance is unsupported"):
+    with pytest.raises(MediaCompileError, match="enable_interpolation is unsupported"):
         run._run(
             capability="vibecomfy.video_enhance",
-            request=VideoEnhanceRequest(video_ref="media://source"),
+            request=VideoEnhanceRequest(video_ref="media://source", enable_interpolation=True),
             task_identity="task-video",
             profile_id="pip_embedded",
             readiness_profile_path=str(tmp_path / "missing-profile.json"),

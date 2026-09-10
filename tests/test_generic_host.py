@@ -370,6 +370,63 @@ def test_hc04_cas_materialization_enforces_declared_size_before_write(tmp_path):
         )
 
 
+def test_bounded_qwen_admission_rejects_legacy_media_authority(tmp_path):
+    digest = "a" * 64
+    host = GenericPackHost(pack_roots=[tmp_path])
+    params = {
+        "model": "qwen-image-edit-2511",
+        "mode": "edit",
+        "execution": "cloud",
+        "prompt": "a" * 64,
+        "count": 1,
+        "size": "1024x1024",
+        "seed": 19,
+        "image_ref": {
+            "digest": digest,
+            "filename": "source.png",
+            "media_type": "image/png",
+        },
+    }
+    base = {
+        "input_object_ids": [digest],
+        "spec": {
+            "family": "generation.generate_image_edit",
+            "params": params,
+            "output_policy": {},
+        },
+    }
+    with pytest.raises(HostError, match="legacy spec.inputs authority"):
+        host._materialize_inputs(
+            {
+                **base,
+                "spec": {
+                    **base["spec"],
+                    "inputs": {"image_ref": {"digest": digest}},
+                },
+            },
+            tmp_path / "attempt-qwen-legacy-input",
+            authorized_input_object_ids=[digest],
+            task_param_ports=("model", "mode", "execution", "prompt", "image_ref", "count", "size", "seed"),
+            cas_param_ports=("image_ref",),
+            storage_policy_version="astrid.cloud-edit.qwen-source.v1",
+        )
+    with pytest.raises(HostError, match="legacy input_digests authority"):
+        host._materialize_inputs(
+            {
+                **base,
+                "spec": {
+                    **base["spec"],
+                    "input_digests": [{"name": "image_ref", "digest": digest}],
+                },
+            },
+            tmp_path / "attempt-qwen-legacy-digests",
+            authorized_input_object_ids=[digest],
+            task_param_ports=("model", "mode", "execution", "prompt", "image_ref", "count", "size", "seed"),
+            cas_param_ports=("image_ref",),
+            storage_policy_version="astrid.cloud-edit.qwen-source.v1",
+        )
+
+
 def test_input_materialization_rejects_foreign_nested_digest(tmp_path):
     authorized = hashlib.sha256(b"authorized").hexdigest()
     foreign = hashlib.sha256(b"foreign").hexdigest()

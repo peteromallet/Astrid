@@ -344,7 +344,12 @@ class FalBackend(BackendAdapter):
 
         for canon, remote_param in param_map.items():
             if canon == "count":
-                continue  # count is managed by the executor loop
+                # The bounded Qwen edit route is explicitly one-output-per-
+                # request, so keep the provider-side cardinality visible even
+                # though the executor also runs each requested output as N=1.
+                if entry.id == "qwen-image-edit-2511" and remote_param == "num_images":
+                    payload[remote_param] = params.get(canon, 1)
+                continue  # other image profiles manage count in the executor loop
             if canon == "loras":
                 continue  # loras handled separately above
             if canon not in params:

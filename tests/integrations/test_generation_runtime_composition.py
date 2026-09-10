@@ -1006,6 +1006,261 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
         provider_thread.join(timeout=2)
 
 
+@pytest.mark.parametrize("oversized_output", [False, True])
+def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    oversized_output: bool,
+) -> None:
+    """Exercise the shipped source-only Qwen edit command end to end on CPU.
+
+    Only the external provider boundary is local: the registered manifest,
+    production command, Runtime CAS custody, host broker, TLS/CONNECT route,
+    Fal adapter, settlement, and cleanup are unchanged production paths.
+    """
+    import astrid.core.execution.network_broker as broker_module
+
+    generation_root = Path(__file__).resolve().parents[2] / "astrid/packs/generation"
+    png = base64.b64decode(_PNG)
+    cert_dir = tmp_path / "provider-cert"
+    cert_dir.mkdir()
+    cert_path = cert_dir / "provider.pem"
+    key_path = cert_dir / "provider.key"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key_path), "-out", str(cert_path), "-days", "1",
+            "-subj", "/CN=queue.fal.run",
+            "-addext", "subjectAltName=DNS:queue.fal.run,DNS:fal.media",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    tls_listener = socket.socket()
+    tls_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tls_listener.bind(("127.0.0.1", 0))
+    tls_listener.listen(8)
+    tls_listener.settimeout(0.2)
+    tls_port = tls_listener.getsockname()[1]
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    stop = threading.Event()
+    provider_errors: list[BaseException] = []
+    submitted_payloads: list[dict[str, object]] = []
+    source_payloads: list[bytes] = []
+
+    def provider_loop() -> None:
+        while not stop.is_set():
+            try:
+                raw, _address = tls_listener.accept()
+            except TimeoutError:
+                continue
+            try:
+                with tls_context.wrap_socket(raw, server_side=True) as connection:
+                    wire = b""
+                    while b"\r\n\r\n" not in wire:
+                        wire += connection.recv(65536)
+                    header, body = wire.split(b"\r\n\r\n", 1)
+                    lines = header.decode("iso-8859-1").split("\r\n")
+                    method, target, _version = lines[0].split(" ", 2)
+                    headers = {
+                        name.lower(): value.strip()
+                        for name, value in (
+                            line.split(":", 1) for line in lines[1:] if ":" in line
+                        )
+                    }
+                    content_length = int(headers.get("content-length", "0"))
+                    while len(body) < content_length:
+                        body += connection.recv(65536)
+                    host = headers.get("host", "").split(":", 1)[0]
+                    path = target.split("?", 1)[0]
+                    response_length: int | None = None
+                    if host == "queue.fal.run":
+                        assert headers.get("authorization") == "Key cpu-test-key"
+                        if method == "POST":
+                            assert path == "/fal-ai/qwen-image-edit-2511"
+                            payload = json.loads(body[:content_length].decode())
+                            assert payload["prompt"] == "a" * 64
+                            assert payload["image_size"] == {"width": 1024, "height": 1024}
+                            assert payload["seed"] == 19
+                            assert payload["num_images"] == 1
+                            image_urls = payload["image_urls"]
+                            assert isinstance(image_urls, list) and len(image_urls) == 1
+                            image_url = image_urls[0]
+                            assert image_url.startswith("data:image/png;base64,")
+                            source_bytes = base64.b64decode(image_url.split(",", 1)[1])
+                            source_payloads.append(source_bytes)
+                            submitted_payloads.append(payload)
+                            response_body = (
+                                b'{"request_id":"https-connect-qwen",'
+                                b'"status_url":"https://queue.fal.run/status/https-connect-qwen",'
+                                b'"response_url":"https://queue.fal.run/response/https-connect-qwen"}'
+                            )
+                        elif path == "/status/https-connect-qwen":
+                            response_body = b'{"status":"COMPLETED"}'
+                        elif path == "/response/https-connect-qwen":
+                            response_body = b'{"images":[{"url":"https://fal.media/cpu-qwen-result.png"}]}'
+                        else:
+                            response_body = b"{}"
+                    elif host == "fal.media" and method == "GET":
+                        if oversized_output:
+                            response_body = b""
+                            response_length = 64 * 1024 * 1024 + 1
+                        else:
+                            response_body = png
+                            response_length = len(response_body)
+                    else:
+                        response_body = b"unknown provider route"
+                        response_length = len(response_body)
+                    if response_length is None:
+                        response_length = len(response_body)
+                    status = HTTPStatus.OK if response_body != b"unknown provider route" else HTTPStatus.NOT_FOUND
+                    connection.sendall(
+                        f"HTTP/1.1 {status.value} {status.phrase}\r\n"
+                        f"Content-Length: {response_length}\r\n"
+                        "Connection: close\r\n\r\n".encode() + response_body
+                    )
+            except BaseException as exc:
+                provider_errors.append(exc)
+
+    provider_thread = threading.Thread(target=provider_loop, daemon=True)
+    provider_thread.start()
+    original_connect = broker_module.socket.create_connection
+
+    def route_provider_connection(address, timeout=None, source_address=None):
+        host, port = address
+        if host in {"queue.fal.run", "fal.media", "fal.run"} and int(port) == 443:
+            return original_connect(("127.0.0.1", tls_port), timeout, source_address)
+        return original_connect(address, timeout, source_address)
+
+    monkeypatch.setattr(broker_module.socket, "create_connection", route_provider_connection)
+
+    class ProductionHost(GenericPackHost):
+        def _child_environment(self, record, attempt, **kwargs):
+            env, secrets = super()._child_environment(record, attempt, **kwargs)
+            child_cert = attempt / "provider-ca.pem"
+            child_cert.write_bytes(cert_path.read_bytes())
+            env["SSL_CERT_FILE"] = str(child_cert)
+            return env, secrets
+
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "production-qwen-https-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        host = ProductionHost(
+            pack_roots=[generation_root],
+            client=client,
+            executor_id="production-qwen-https-host",
+            credential_source={"FAL_KEY": "cpu-test-key"},
+        )
+        host.discover()
+        record = host.capabilities["generation.generate_image_edit"]
+        assert record.definition.kind == "built_in"
+        assert record.definition.isolation.network is True
+        assert record.definition.metadata["secrets_required"] == ["FAL_KEY"]
+        assert record.definition.metadata["fixed_inputs"] == {
+            "model": "qwen-image-edit-2511",
+            "mode": "edit",
+            "execution": "cloud",
+        }
+        assert record.definition.metadata["hc04_cas_param_ports"] == ["image_ref"]
+        assert "fal.media:443" in record.definition.metadata["network_policy"]["allowed_destinations"]
+        host.preflight("generation.generate_image_edit")
+        record = host.capabilities["generation.generate_image_edit"]
+        assert record.ready
+        host.register()
+        project = owner.create_project(
+            "Production Qwen edit command",
+            slug="production-qwen-edit-command",
+            idempotency_key="production-qwen-edit-project",
+        )
+        source_row = owner.ingest_project_object(
+            project.project_id,
+            png,
+            media_type="image/png",
+            filename="source.png",
+            idempotency_key="production-qwen-edit-source",
+        )
+        source_id = str(getattr(source_row, "object_id", None) or getattr(source_row, "digest"))
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[source_id],
+            project_id=project.project_id,
+            idempotency_key="production-qwen-edit-task",
+            spec={
+                "family": record.id,
+                "params": {
+                    "execution": "cloud",
+                    "mode": "edit",
+                    "model": "qwen-image-edit-2511",
+                    "prompt": "a" * 64,
+                    "image_ref": {
+                        "digest": source_id,
+                        "filename": "source.png",
+                        "media_type": "image/png",
+                    },
+                    "count": 1,
+                    "size": "1024x1024",
+                    "seed": 19,
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+        )
+        if oversized_output:
+            with pytest.raises(HostError, match="bounded body limit"):
+                host.run(once=True)
+            completed = owner.get_task(task.task_id)
+            assert completed.state == "failed"
+            assert not completed.result.get("outputs", [])
+        else:
+            settled = host.run(once=True)
+            assert len(settled) == 1 and settled[0].state == "succeeded"
+            completed = owner.get_task(task.task_id)
+            assert completed.state == "succeeded"
+            assert source_payloads == [png]
+            assert len(submitted_payloads) == 1
+            image_output = next(
+                output for output in completed.result["outputs"] if output["name"] == "generated_images"
+            )
+            image_bytes = owner.get_object(image_output["digest"]).data
+            assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            assert (b"a" * 64) in image_bytes
+            evidence = completed.result["network_evidence"]
+            routes = [
+                event["detail"]
+                for event in evidence["events"]
+                if event["kind"] == "broker_route" and event["allowed"]
+            ]
+            assert any("queue.fal.run" in route for route in routes)
+            assert any("fal.media" in route for route in routes)
+            assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
+        assert not provider_errors
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+        stop.set()
+        tls_listener.close()
+        provider_thread.join(timeout=2)
+
+
 def test_production_i2i_rejects_extra_or_misordered_single_cas_inputs(tmp_path: Path) -> None:
     """A single CAS port is still an ordered one-element input contract."""
     pack = _registered_image_executor_fixture(
@@ -1280,6 +1535,7 @@ def test_registered_qwen_edit_failure_is_terminal_and_does_not_settle(
             pack_roots=[pack],
             client=client,
             executor_id="typed-image-qwen-failure-host",
+            credential_source={"FAL_KEY": "fixture-key"},
         )
         record = host.discover()[0]
         host.preflight()

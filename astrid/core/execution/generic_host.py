@@ -2066,16 +2066,26 @@ class GenericPackHost:
         input_spec = admitted
         values = dict(input_spec.get("inputs", {})) if isinstance(input_spec.get("inputs", {}), Mapping) else {}
         params = input_spec.get("params")
-        if storage_policy_version == "astrid.cloud-i2i.z-image.v1":
+        bounded_policy = None
+        if storage_policy_version in {
+            "astrid.cloud-i2i.z-image.v1",
+            "astrid.cloud-edit.qwen-source.v1",
+        }:
             from astrid.core.generation.storage_policy import (
+                CLOUD_EDIT_STORAGE_POLICY,
                 CLOUD_I2I_STORAGE_POLICY,
                 ImageStoragePolicyError,
             )
 
             if not isinstance(params, Mapping):
-                raise HostError("bounded cloud i2i admission requires typed params")
+                raise HostError("bounded cloud image admission requires typed params")
+            bounded_policy = (
+                CLOUD_I2I_STORAGE_POLICY
+                if storage_policy_version == CLOUD_I2I_STORAGE_POLICY.version
+                else CLOUD_EDIT_STORAGE_POLICY
+            )
             try:
-                CLOUD_I2I_STORAGE_POLICY.validate_admission_request(
+                bounded_policy.validate_admission_request(
                     model=params.get("model"),
                     mode=params.get("mode"),
                     execution=params.get("execution"),
@@ -2085,11 +2095,11 @@ class GenericPackHost:
                 raise HostError(str(exc)) from exc
             if values:
                 raise HostError(
-                    "bounded cloud i2i does not accept legacy spec.inputs authority"
+                    "bounded cloud image admission does not accept legacy spec.inputs authority"
                 )
             if input_spec.get("input_digests"):
                 raise HostError(
-                    "bounded cloud i2i does not accept legacy input_digests authority"
+                    "bounded cloud image admission does not accept legacy input_digests authority"
                 )
         if task_param_ports is not None:
             if not isinstance(params, Mapping):
@@ -2261,7 +2271,10 @@ class GenericPackHost:
             digest = value.get("digest") if isinstance(value, Mapping) else (
                 value
                 if (
-                    storage_policy_version != "astrid.cloud-i2i.z-image.v1"
+                    storage_policy_version not in {
+                        "astrid.cloud-i2i.z-image.v1",
+                        "astrid.cloud-edit.qwen-source.v1",
+                    }
                     and isinstance(value, str)
                     and len(value) == 64
                 )
@@ -3333,8 +3346,12 @@ class GenericPackHost:
                     else None
                 ),
             )
-            if record.definition.metadata.get("storage_policy_version") == "astrid.cloud-i2i.z-image.v1":
+            if record.definition.metadata.get("storage_policy_version") in {
+                "astrid.cloud-i2i.z-image.v1",
+                "astrid.cloud-edit.qwen-source.v1",
+            }:
                 from astrid.core.generation.storage_policy import (
+                    CLOUD_EDIT_STORAGE_POLICY,
                     CLOUD_I2I_STORAGE_POLICY,
                     ImageStoragePolicyError,
                 )
@@ -3346,8 +3363,14 @@ class GenericPackHost:
                 media_type = descriptor.get("media_type") if isinstance(descriptor, Mapping) else None
                 if not isinstance(materialized, str) or not isinstance(media_type, str):
                     raise HostError("bounded cloud i2i source materialization is incomplete")
+                storage_policy = (
+                    CLOUD_I2I_STORAGE_POLICY
+                    if record.definition.metadata.get("storage_policy_version")
+                    == CLOUD_I2I_STORAGE_POLICY.version
+                    else CLOUD_EDIT_STORAGE_POLICY
+                )
                 try:
-                    CLOUD_I2I_STORAGE_POLICY.validate_materialized_source(
+                    storage_policy.validate_materialized_source(
                         materialized,
                         media_type=media_type,
                     )

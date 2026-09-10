@@ -188,19 +188,62 @@ def test_policy_reconciles_materialized_bytes_with_media_type(tmp_path: Path) ->
 def test_source_only_edit_profile_has_a_distinct_identity(tmp_path: Path) -> None:
     source = tmp_path / "source.png"
     source.write_bytes(_PNG)
+    params = _params(source)
+    params.pop("strength")
     assert CLOUD_EDIT_STORAGE_POLICY.version == "astrid.cloud-edit.qwen-source.v1"
     CLOUD_EDIT_STORAGE_POLICY.validate_request(
         model="qwen-image-edit-2511",
         mode="edit",
         execution="cloud",
-        params=_params(source),
+        params=params,
     )
     with pytest.raises(ImageStoragePolicyError, match="does not admit mask_ref"):
         CLOUD_EDIT_STORAGE_POLICY.validate_request(
             model="qwen-image-edit-2511",
             mode="edit",
             execution="cloud",
-            params=_params(source, mask_ref=str(source)),
+            params={**params, "mask_ref": str(source)},
+        )
+
+
+def test_source_only_edit_profile_validates_typed_admission_descriptor() -> None:
+    descriptor = {
+        "digest": "sha256:" + "b" * 64,
+        "filename": "source.png",
+        "media_type": "image/png",
+    }
+    params = {
+        "model": "qwen-image-edit-2511",
+        "mode": "edit",
+        "execution": "cloud",
+        "prompt": "q" * 64,
+        "count": 1,
+        "size": "1024x1024",
+        "seed": 19,
+        "image_ref": descriptor,
+    }
+    CLOUD_EDIT_STORAGE_POLICY.validate_admission_request(
+        model="qwen-image-edit-2511",
+        mode="edit",
+        execution="cloud",
+        params=params,
+    )
+    with pytest.raises(ImageStoragePolicyError, match="does not admit strength"):
+        CLOUD_EDIT_STORAGE_POLICY.validate_admission_request(
+            model="qwen-image-edit-2511",
+            mode="edit",
+            execution="cloud",
+            params={**params, "strength": 0.5},
+        )
+    with pytest.raises(ImageStoragePolicyError, match="filename and media_type"):
+        CLOUD_EDIT_STORAGE_POLICY.validate_admission_request(
+            model="qwen-image-edit-2511",
+            mode="edit",
+            execution="cloud",
+            params={
+                **params,
+                "image_ref": {**descriptor, "filename": "source.jpg"},
+            },
         )
 
 

@@ -470,6 +470,55 @@ class CloudEditStoragePolicy(CloudI2IStoragePolicy):
 
     version: str = "astrid.cloud-edit.qwen-source.v1"
 
+    def validate_admission_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        """Validate the immutable source-only Qwen request before materialization."""
+        if (model, mode, execution) != ("qwen-image-edit-2511", "edit", "cloud"):
+            raise ImageStoragePolicyError(
+                f"request is outside bounded storage policy {self.version}"
+            )
+        if "mask_ref" in params:
+            raise ImageStoragePolicyError(
+                "source-only Qwen edit profile does not admit mask_ref"
+            )
+        if "strength" in params:
+            raise ImageStoragePolicyError(
+                "source-only Qwen edit profile does not admit strength"
+            )
+        self._validate_controls(params, require_strength=False)
+        self._validate_size(params)
+        image_ref = params.get("image_ref")
+        if not isinstance(image_ref, Mapping):
+            raise ImageStoragePolicyError(
+                "source-only Qwen image_ref must be a typed CAS descriptor"
+            )
+        digest = image_ref.get("digest")
+        normalized = str(digest).removeprefix("sha256:") if isinstance(digest, str) else ""
+        if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ImageStoragePolicyError(
+                "source-only Qwen image_ref digest must be a SHA-256 object ID"
+            )
+        filename = image_ref.get("filename")
+        if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+            raise ImageStoragePolicyError(
+                "source-only Qwen image_ref filename must be a safe basename"
+            )
+        media_type = image_ref.get("media_type")
+        if not isinstance(media_type, str) or media_type.lower() not in self._IMAGE_EXTENSIONS:
+            raise ImageStoragePolicyError(
+                "source-only Qwen image_ref media_type is not a supported image type"
+            )
+        if Path(filename).suffix.lower() not in self._IMAGE_EXTENSIONS[media_type.lower()]:
+            raise ImageStoragePolicyError(
+                "source-only Qwen image_ref filename and media_type disagree"
+            )
+
     def validate_request(
         self,
         *,
@@ -486,9 +535,9 @@ class CloudEditStoragePolicy(CloudI2IStoragePolicy):
             raise ImageStoragePolicyError(
                 "source-only Qwen edit profile does not admit mask_ref"
             )
-        if params.get("count", 1) != self.max_count:
+        if "strength" in params:
             raise ImageStoragePolicyError(
-                f"bounded cloud i2i requires count={self.max_count}"
+                "source-only Qwen edit profile does not admit strength"
             )
         self._validate_materialized_request(params=params, require_strength=False)
 

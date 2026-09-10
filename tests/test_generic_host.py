@@ -320,6 +320,59 @@ def test_hc04_multi_cas_materialization_preserves_role_order_and_names(tmp_path)
         )
 
 
+def test_hc04_optional_video_end_frame_preserves_ordered_flf_roles(tmp_path):
+    start = b"start-image"
+    end = b"end-image"
+    start_digest = hashlib.sha256(start).hexdigest()
+    end_digest = hashlib.sha256(end).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            return {start_digest: start, end_digest: end}[object_digest]
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [start_digest, end_digest],
+            "spec": {
+                "family": "generation.generate_video",
+                "params": {
+                    "mode": "flf",
+                    "image_ref": {"digest": start_digest, "filename": "start.png"},
+                    "image_end_ref": {"digest": end_digest, "filename": "end.png"},
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-flf",
+        task_param_ports=("mode", "image_ref", "image_end_ref"),
+        cas_param_ports=("image_ref", "image_end_ref"),
+        optional_cas_param_ports=("image_end_ref",),
+    )
+    assert Path(values["image_ref"]).read_bytes() == start
+    assert Path(values["image_end_ref"]).read_bytes() == end
+
+    i2v_values = host._materialize_inputs(
+        {
+            "input_object_ids": [start_digest],
+            "spec": {
+                "family": "generation.generate_video",
+                "params": {
+                    "mode": "i2v",
+                    "image_ref": {"digest": start_digest, "filename": "start.png"},
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-i2v",
+        task_param_ports=("mode", "image_ref", "image_end_ref"),
+        cas_param_ports=("image_ref", "image_end_ref"),
+        optional_cas_param_ports=("image_end_ref",),
+    )
+    assert Path(i2v_values["image_ref"]).read_bytes() == start
+    assert "image_end_ref" not in i2v_values
+
+
 def test_hc04_cas_materialization_enforces_declared_size_before_write(tmp_path):
     payload = b"source-image"
     digest = hashlib.sha256(payload).hexdigest()

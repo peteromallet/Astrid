@@ -2020,6 +2020,7 @@ class GenericPackHost:
         authorized_input_object_ids: list[str] | tuple[str, ...] | None = None,
         task_param_ports: tuple[str, ...] | list[str] | None = None,
         cas_param_ports: tuple[str, ...] | list[str] | None = None,
+        optional_cas_param_ports: tuple[str, ...] | list[str] | None = None,
         storage_estimate: Mapping[str, int] | None = None,
         input_size_limits: Mapping[str, int] | None = None,
         storage_policy_version: str | None = None,
@@ -2180,14 +2181,19 @@ class GenericPackHost:
             if cas_param_ports is not None
             else ()
         )
-        # The unified edit capability has one optional CAS port: source-only
-        # edits carry image_ref, while inpaint carries image_ref + mask_ref.
-        # Resolve that optionality before enforcing ordered input custody;
-        # every present port still has to match input_object_ids in order.
-        ordered_cas_ports = (
-            tuple(name for name in declared_cas_ports if values.get(name) is not None)
-            if storage_policy_version == "astrid.cloud-edit.unified.v1"
-            else declared_cas_ports
+        # Optional CAS ports are omitted from the ordered role sequence when
+        # absent. Every present port still has to match input_object_ids in
+        # order; this supports one manifest serving both i2v and flf safely.
+        optional_cas = {str(value) for value in (optional_cas_param_ports or ())}
+        # Preserve the direct helper contract used by the unified edit
+        # profile when callers provide the storage policy without manifest
+        # metadata (the mask is optional for source-only edit).
+        if storage_policy_version == "astrid.cloud-edit.unified.v1":
+            optional_cas.add("mask_ref")
+        ordered_cas_ports = tuple(
+            name
+            for name in declared_cas_ports
+            if name not in optional_cas or values.get(name) is not None
         )
         # Multi-source capabilities use the Runtime input-object sequence as
         # the role/order contract.  Do this before fetching bytes so a caller
@@ -3348,12 +3354,21 @@ class GenericPackHost:
                 if isinstance(raw_cas_param_ports, (list, tuple))
                 else None
             )
+            raw_optional_cas_param_ports = record.definition.metadata.get(
+                "hc04_optional_cas_param_ports"
+            )
+            optional_cas_param_ports = (
+                tuple(str(value) for value in raw_optional_cas_param_ports)
+                if isinstance(raw_optional_cas_param_ports, (list, tuple))
+                else None
+            )
             inputs = self._materialize_inputs(
                 spec,
                 root,
                 authorized_input_object_ids=authorized_input_object_ids,
                 task_param_ports=task_param_ports,
                 cas_param_ports=cas_param_ports,
+                optional_cas_param_ports=optional_cas_param_ports,
                 storage_estimate=storage_estimate,
                 input_size_limits=input_size_limits,
                 storage_policy_version=(

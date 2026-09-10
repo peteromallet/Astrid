@@ -217,7 +217,9 @@ def _dispatch_product(args: list[str]) -> int:
     from astrid.sdk.client import AstridClient
 
     try:
-        with AstridClient.open_from_launcher() as client:
+        with AstridClient.open_from_launcher(
+            start_pack_host=_product_command_needs_pack_host(family, rest)
+        ) as client:
             return run_product_family(family, rest, client=client)
     except Exception as exc:
         from astrid.sdk.exceptions import ServiceUnavailableError
@@ -231,6 +233,24 @@ def _dispatch_product(args: list[str]) -> int:
             DomainResult.failure(exc.to_error_object()),
             as_json="--json" in rest,
         )
+
+
+def _product_command_needs_pack_host(family: str, args: list[str]) -> bool:
+    """Return whether this product route can execute pack-host work.
+
+    Keep this allowlist deliberately narrow.  A missing/unknown verb retains
+    the execution-backed default so adding a new command cannot accidentally
+    bypass host setup.
+    """
+    if not args:
+        return True
+    command = args[0]
+    read_only = {
+        "projects": {"list", "show", "current"},
+        "runs": {"list", "show", "events", "open"},
+        "timelines": {"list", "show", "history", "diff"},
+    }
+    return command not in read_only.get(family, set())
 
 
 def _product_top_level_commands() -> frozenset[str]:

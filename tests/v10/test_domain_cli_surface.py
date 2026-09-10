@@ -407,6 +407,27 @@ def test_dispatch_product_routes_family_and_closes_client(monkeypatch) -> None:
     assert _FakeClient.closed
 
 
+def test_dispatch_product_skips_pack_host_for_runtime_only_reads(monkeypatch) -> None:
+    import astrid.core.cli.domain_product as domain_product
+    import astrid.sdk.client as sdk_client
+
+    seen: dict[str, object] = {}
+
+    def _fake_open(cls, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        seen["start_pack_host"] = kwargs.get("start_pack_host")
+        return _FakeClient()
+
+    monkeypatch.setattr(sdk_client.AstridClient, "open_from_launcher", classmethod(_fake_open))
+    monkeypatch.setattr(domain_product, "run_product_family", lambda *args, **kwargs: 0)
+
+    from astrid.core.gateway import dispatch
+
+    assert dispatch._dispatch_product(["runs", "open", "--project", "demo"]) == 0
+    assert seen["start_pack_host"] is False
+    assert dispatch._dispatch_product(["runs", "retry", "RUN1"]) == 0
+    assert seen["start_pack_host"] is True
+
+
 def test_dispatch_product_help_does_not_open_client(monkeypatch, capsys) -> None:
     """Family/verb help remains available without touching the store."""
     import astrid.sdk.client as sdk_client

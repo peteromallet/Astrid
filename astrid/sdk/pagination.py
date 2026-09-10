@@ -6,9 +6,14 @@ from typing import Any
 
 
 def page_pair(value: Any) -> tuple[list[Any], str | None] | None:
-    """Decode the sole JSON-safe runtime page shape."""
+    """Decode a runtime page from JSON or the generated client's tuple form.
 
-    if not isinstance(value, list) or len(value) != 2:
+    The wire response is an object, while generated Python methods expose its
+    ``items`` and ``next_cursor`` fields as a tuple.  Product code consumes
+    both forms, so pagination must normalize them at this boundary.
+    """
+
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
         return None
     items, next_cursor = value
     if not isinstance(items, list):

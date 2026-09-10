@@ -48,6 +48,18 @@ The runtime owns projects, media, timelines, tasks, runs, receipts, and event
 history; Astrid does not use a checkout-local project database as live
 authority. See [Getting Started](docs/getting-started.md).
 
+## Unified execution boundary
+
+For generation work, the canonical sequence is Reigh UI producer → Runtime
+admission with typed family, project, CAS/input references, and idempotency →
+Worker `GenericPackHost` execution → Runtime-owned settlement and receipts →
+CAS/gallery/timeline readback. Runtime is the authority for task/run identity,
+provenance, and publication. The retired Reigh `create-task` endpoint and
+legacy timeline-agent task tools are not alternate Astrid admission paths.
+
+The current acceptance evidence is CPU-bound and does not claim GPU, model, or
+provider availability.
+
 ## License
 
 Open Source Native License (OSNL) v0.2 — see [`LICENSE`](LICENSE).

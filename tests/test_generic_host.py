@@ -18,6 +18,7 @@ from astrid.core.execution.generic_host import (
     GenericPackHost,
     HostCancelled,
     HostError,
+    HostRegistrationError,
     RuntimeProtocolClient,
     _completed_process_evidence,
     _terminate_process_group,
@@ -37,6 +38,7 @@ class FakeRuntime:
 
     def health(self):
         return {
+            "status": "ok",
             "protocol": "workspace.v1",
             "schema_digest": self.schema_digest,
             "runtime_epoch": 1,
@@ -174,6 +176,23 @@ def test_external_pack_import_root_is_fenced_before_direct_command(tmp_path):
                 "source_roots": [str(root) for root in (record.source_root, pack_root)],
             },
         )
+
+
+def test_child_environment_carries_explicit_runtime_connection(tmp_path):
+    """Runtime-backed children use the host connection, never discovery."""
+    _write_manifest(tmp_path / "echo")
+    runtime = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    record = host.capabilities["test.echo"]
+
+    child_env, secrets = host._child_environment(record, tmp_path / "attempt")
+    try:
+        assert child_env["BANODOCO_RUNTIME_ENDPOINT"] == "http://127.0.0.1:8765"
+        assert child_env["BANODOCO_RUNTIME_CREDENTIAL"] == "worker-token"
+    finally:
+        child_env.clear()
+        secrets.clear()
 
 
 def test_input_materialization_rejects_traversal_names(tmp_path):
@@ -608,6 +627,7 @@ def test_registration_carries_epochs_and_runtime_epoch_change_is_deterministic(t
 
         def health(self):
             return {
+                "status": "ok",
                 "protocol": "workspace.v1",
                 "schema_digest": self.schema_digest,
                 "runtime_epoch": self.epoch,
@@ -638,6 +658,7 @@ def test_runtime_protocol_mismatch_blocks_registration_before_publish(tmp_path):
     class IncompatibleRuntime(FakeRuntime):
         def health(self):
             return {
+                "status": "ok",
                 "protocol": "workspace.v0",
                 "schema_digest": self.schema_digest,
                 "runtime_epoch": 1,
@@ -649,6 +670,97 @@ def test_runtime_protocol_mismatch_blocks_registration_before_publish(tmp_path):
     with pytest.raises(HostError, match="runtime compatibility blocked: protocol expected=workspace.v1 actual=workspace.v0"):
         host.register()
     assert runtime.registrations == []
+
+
+def test_runtime_unhealthy_status_blocks_registration_before_publish(tmp_path):
+    _write_manifest(tmp_path / "echo")
+
+    class UnhealthyRuntime(FakeRuntime):
+        def health(self):
+            return {
+                "status": "unhealthy",
+                "protocol": "workspace.v1",
+                "schema_digest": self.schema_digest,
+                "runtime_epoch": 1,
+            }
+
+    runtime = UnhealthyRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+
+    with pytest.raises(HostError, match="status expected=ok actual=unhealthy"):
+        host.register()
+
+    assert runtime.capability_registrations == []
+    assert runtime.registrations == []
+
+
+def test_registration_failure_is_typed_and_has_no_capability_prepublication(tmp_path):
+    from banodoco_workspace_client import ApiError
+
+    _write_manifest(tmp_path / "echo")
+
+    class FailingRuntime(FakeRuntime):
+        def register_executor(self, executor_id, **payload):
+            raise ApiError(
+                503,
+                "registration_unavailable",
+                "executor registration unavailable",
+                request_id="request-registration-1",
+                details={"retryable": False},
+            )
+
+    runtime = FailingRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+
+    with pytest.raises(HostRegistrationError) as failure:
+        host.register()
+
+    assert failure.value.code == "registration_unavailable"
+    assert failure.value.request_id == "request-registration-1"
+    assert failure.value.status == 503
+    assert failure.value.details == {"retryable": False}
+    assert runtime.capability_registrations == []
+    assert runtime.registrations == []
+
+
+def test_failed_replacement_registration_does_not_withdraw_removed_capability(tmp_path):
+    from banodoco_workspace_client import ApiError
+
+    _write_manifest(tmp_path / "kept", capability_id="test.kept")
+    removed = _write_manifest(tmp_path / "removed")
+
+    class FailingReplacementRuntime(FakeRuntime):
+        fail_registration = False
+
+        def __init__(self):
+            super().__init__()
+            self.withdrawals = []
+
+        def register_executor(self, executor_id, **payload):
+            if self.fail_registration:
+                raise ApiError(
+                    503,
+                    "registration_unavailable",
+                    "executor registration unavailable",
+                    request_id="request-replacement-1",
+                )
+            return super().register_executor(executor_id, **payload)
+
+        def withdraw_capability(self, capability_id, *, digest, reason):
+            self.withdrawals.append((capability_id, digest, reason))
+
+    runtime = FailingReplacementRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.register()
+    removed.unlink()
+    host.refresh()
+    runtime.fail_registration = True
+
+    with pytest.raises(HostRegistrationError):
+        host.register(deliberate=True)
+
+    assert runtime.withdrawals == []
+    assert runtime.capability_registrations == []
 
 
 @pytest.mark.parametrize(
@@ -670,9 +782,10 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
     class WorkerGenerated:
         handshake_called = False
 
-        def __init__(self, endpoint, token):
+        def __init__(self, endpoint, token, *, timeout=30.0):
             self.endpoint = endpoint
             self.token = token
+            self.timeout = timeout
             self.registration_payloads = []
 
         def handshake(self, *_args, **_kwargs):
@@ -684,7 +797,9 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
             return {"executor_id": executor["executor_id"], "idempotency_key": idempotency_key}
 
     monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", WorkerGenerated)
-    client = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    client = RuntimeProtocolClient(
+        "http://127.0.0.1:8765", "worker-token", timeout=4.25
+    )
     response = client.register_executor(
         "worker-1",
         capabilities=[],
@@ -705,6 +820,7 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
     )
     assert response["executor_id"] == "worker-1"
     assert client.generated.handshake_called is False
+    assert client.generated.timeout == 4.25
     wire = client.generated.registration_payloads[0]
     assert wire["source_digest"] == "sha256:" + "a" * 64
     assert wire["dependency_digest"] == "sha256:" + "b" * 64
@@ -712,9 +828,141 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
     assert "schema_digest" not in wire
 
 
+def test_vendored_runtime_client_timeout_is_bounded_and_request_correlated(monkeypatch):
+    from banodoco_workspace_client import ApiError, WorkspaceClient
+
+    captured = {}
+
+    def timed_out(request, *, timeout):
+        captured["timeout"] = timeout
+        captured["request_id"] = request.get_header("X-request-id")
+        raise TimeoutError("fixture timeout")
+
+    monkeypatch.setattr("urllib.request.urlopen", timed_out)
+
+    with pytest.raises(ApiError) as failure:
+        WorkspaceClient("http://127.0.0.1:8765", timeout=0.125).health()
+
+    assert captured["timeout"] == 0.125
+    assert captured["request_id"].startswith("request-")
+    assert failure.value.code == "transport_timeout"
+    assert failure.value.request_id == captured["request_id"]
+    assert failure.value.details == {}
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_vendored_runtime_client_rejects_unbounded_timeout(timeout):
+    from banodoco_workspace_client import WorkspaceClient
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        WorkspaceClient("http://127.0.0.1:8765", timeout=timeout)
+
+
+def test_vendored_runtime_client_preserves_server_failure_diagnostic():
+    from banodoco_workspace_client import ApiError, WorkspaceClient
+
+    def transport(_method, _path, _headers, _body):
+        return 503, {}, json.dumps(
+            {
+                "code": "registration_unavailable",
+                "message": "executor registration unavailable",
+                "request_id": "request-server-1",
+                "details": {"retryable": False},
+            }
+        ).encode()
+
+    with pytest.raises(ApiError) as failure:
+        WorkspaceClient("http://127.0.0.1:8765", transport=transport).health()
+
+    assert failure.value.code == "registration_unavailable"
+    assert failure.value.request_id == "request-server-1"
+    assert failure.value.details == {"retryable": False}
+
+
+def test_cli_writes_terminal_correlated_registration_failure_marker(
+    tmp_path, monkeypatch, capsys
+):
+    from banodoco_workspace_client import ApiError
+    from banodoco_workspace_client.contract_metadata import SCHEMA_DIGEST
+    from astrid.core.execution import generic_host
+    from astrid.core.gateway.dispatch import compose_profile_handoff
+
+    _write_manifest(tmp_path / "pack")
+    support = tmp_path / "support"
+    support.mkdir()
+    ready = support / "generic-host.ready.json"
+    credential = support / "worker.token"
+    credential.write_text("worker-token", encoding="utf-8")
+    credential.chmod(0o600)
+    boot_manifest = support / "astrid-host" / "boot-manifest.json"
+    compose_profile_handoff(boot_manifest, support_root=support)
+
+    class FailingClient:
+        schema_digest = SCHEMA_DIGEST
+
+        def __init__(self, _endpoint, _credential):
+            pass
+
+        def health(self):
+            return {
+                "status": "ok",
+                "protocol": "workspace.v1",
+                "schema_digest": self.schema_digest,
+                "runtime_epoch": 1,
+            }
+
+        def register_executor(self, _executor_id, **_payload):
+            raise ApiError(
+                503,
+                "registration_unavailable",
+                "executor registration unavailable for worker-token",
+                request_id="request-cli-1",
+                details={"retryable": False},
+            )
+
+    monkeypatch.setattr(generic_host, "RuntimeProtocolClient", FailingClient)
+    monkeypatch.setattr(generic_host, "process_birth_identity", lambda: "birth-cli-1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "astrid-generic-host",
+            "--pack-root",
+            str(tmp_path / "pack"),
+            "--runtime-endpoint",
+            "http://127.0.0.1:8765",
+            "--credential-file",
+            str(credential),
+            "--register",
+            "--ready-file",
+            str(ready),
+            "--support-root",
+            str(support),
+            "--boot-manifest-path",
+            str(boot_manifest),
+        ],
+    )
+
+    assert generic_host._cli() == 1
+    marker = json.loads(ready.read_text(encoding="utf-8"))
+    assert marker == {
+        "status": "failed",
+        "terminal": True,
+        "pid": os.getpid(),
+        "process_birth_id": "birth-cli-1",
+        "error": {
+            "code": "registration_unavailable",
+            "request_id": "request-cli-1",
+            "message": "executor registration unavailable for [redacted]",
+        },
+    }
+    assert "worker-token" not in ready.read_text(encoding="utf-8")
+    assert '"terminal": true' in capsys.readouterr().err
+
+
 def test_runtime_protocol_client_settlement_preserves_structured_result(monkeypatch):
     class WorkerGenerated:
-        def __init__(self, endpoint, token):
+        def __init__(self, endpoint, token, *, timeout=30.0):
             self.settlements = []
 
         def health(self):
@@ -827,7 +1075,7 @@ def test_runtime_protocol_client_uses_a_fresh_idempotency_key_for_each_heartbeat
     monkeypatch,
 ):
     class WorkerGenerated:
-        def __init__(self, endpoint, token):
+        def __init__(self, endpoint, token, *, timeout=30.0):
             self.heartbeats = []
 
         def health(self):
@@ -857,7 +1105,8 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     host.discover()
     result = host.register()
     assert runtime.registrations[0][1]["resource_keys"] == ["cpu"]
-    assert runtime.capability_registrations[0][0] == "test.echo"
+    assert runtime.capability_registrations == []
+    assert runtime.registrations[0][1]["capabilities"][0]["capability_id"] == "test.echo"
     task = {
         "task": {
             "id": "task-1",
@@ -1080,26 +1329,29 @@ def test_register_preserves_declared_dispositions_and_block_reasons(tmp_path, mo
         schema_digest = FakeRuntime.schema_digest
 
         def __init__(self):
-            self.capability_registrations = []
+            self.registration_payload = None
 
         def health(self):
             return {
+                "status": "ok",
                 "protocol": "workspace.v1",
                 "schema_digest": self.schema_digest,
                 "runtime_epoch": 1,
             }
 
-        def register_capability(self, capability_id, **payload):
-            self.capability_registrations.append((capability_id, payload))
-
         def register_executor(self, executor_id, **payload):
+            self.registration_payload = payload
             return {"executor_id": executor_id, **payload}
 
     runtime = CaptureRuntime()
     host = GenericPackHost(pack_roots=[tmp_path], capability_matrix=matrix, client=runtime)
     host.discover()
     host.register()
-    registered = {capability_id: payload for capability_id, payload in runtime.capability_registrations}
+    assert runtime.registration_payload is not None
+    registered = {
+        item["capability_id"]: item
+        for item in runtime.registration_payload["capabilities"]
+    }
     assert registered["required.provider"]["status"] == "unavailable"
     unavailable_reason = registered["required.provider"]["unavailable_reason"]
     assert unavailable_reason

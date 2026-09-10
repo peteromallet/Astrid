@@ -114,6 +114,7 @@ def expand_shot_clips(
 
     _reject_unbounded_stills(clips)
 
+    shot_ordinal = 0
     for clip in clips:
         if not isinstance(clip, Mapping):
             raise ShotExpansionError("timeline clips must be objects")
@@ -132,6 +133,11 @@ def expand_shot_clips(
             raise ShotExpansionError(
                 f"Shot clip {clip.get('id', '?')} missing shot_id or timeline_document_id in params"
             )
+        # The ordinal is authored-parent order, not emitted-child order.  This
+        # keeps repeated shots distinct even when a child is empty, clamped, or
+        # has clips dropped at the parent boundary.
+        shot_occurrence_id = f"shot-occ-{shot_ordinal:04d}-{shot_id}"
+        shot_ordinal += 1
 
         parent_at = float(clip.get("at", 0.0))
         parent_hold = float(clip.get("hold", 0.0))
@@ -245,6 +251,11 @@ def expand_shot_clips(
                     expanded_sub["to"] = source_from + remaining * speed
             if sub_clip.get("track") is None:
                 expanded_sub["track"] = clip.get("track")
+            # Preserve the registered shot identity on every flattened child,
+            # including image/media payloads.  Admission adds the canonical
+            # registered name after this pure expansion step.
+            expanded_sub["shot_id"] = str(shot_id)
+            expanded_sub["shot_occurrence_id"] = shot_occurrence_id
             expanded_clips.append(expanded_sub)
 
     expanded_config = deepcopy(dict(config))

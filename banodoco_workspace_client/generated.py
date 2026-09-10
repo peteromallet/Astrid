@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -397,12 +399,12 @@ class Executor:
         return cls(executor_id=value["executor_id"], max_concurrency=int(value["max_concurrency"]), resource_keys=tuple(value.get("resource_keys", [])), capabilities=tuple(Capability.from_json(item) for item in value.get("capabilities", [])), protocol=value["protocol"], runtime_epoch=int(value["runtime_epoch"]) if value.get("runtime_epoch") is not None else None, source_digest=value.get("source_digest"), dependency_digest=value.get("dependency_digest"), source_epoch=value.get("source_epoch"), verified_facts=dict(value["verified_facts"]) if value.get("verified_facts") is not None else None)
 
 
-def _decode_error(status: int, body: bytes) -> ApiError:
+def _decode_error(status: int, body: bytes, *, request_id: str = "") -> ApiError:
     try:
         value = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         value = {}
-    return ApiError(status, str(value.get("code", "http_error")), str(value.get("message", f"HTTP {status}")), str(value.get("request_id", "")), value.get("details", {}))
+    return ApiError(status, str(value.get("code", "http_error")), str(value.get("message", f"HTTP {status}")), str(value.get("request_id") or request_id), value.get("details", {}))
 
 
 class MutationResult(dict):
@@ -429,29 +431,36 @@ class WorkspaceClient:
     headers, and body and returns ``(status, headers, body)``.
     """
 
-    def __init__(self, base_url: str, token: str | None = None, *, transport: Callable[..., tuple[int, Mapping[str, str], bytes]] | None = None):
+    def __init__(self, base_url: str, token: str | None = None, *, transport: Callable[..., tuple[int, Mapping[str, str], bytes]] | None = None, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._transport = transport
+        self.timeout = float(timeout)
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
         self.handshake_info: Handshake | None = None
 
     def _request(self, method: str, path: str, *, body: bytes | None = None, headers: Mapping[str, str] | None = None, expected: tuple[int, ...] = (200,)) -> tuple[int, Mapping[str, str], bytes]:
         request_headers = {"Accept": "application/json", **dict(headers or {})}
+        request_id = request_headers.setdefault("X-Request-ID", f"request-{uuid.uuid4().hex}")
         if self.token:
             request_headers.setdefault("Authorization", f"Bearer {self.token}")
-        if self._transport:
-            status, response_headers, response_body = self._transport(method, path, request_headers, body)
-        else:
-            request = urllib.request.Request(self.base_url + path, data=body, headers=request_headers, method=method)
-            try:
-                with urllib.request.urlopen(request) as response:  # noqa: S310 - endpoint is caller-configured
+        try:
+            if self._transport:
+                status, response_headers, response_body = self._transport(method, path, request_headers, body)
+            else:
+                request = urllib.request.Request(self.base_url + path, data=body, headers=request_headers, method=method)
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - endpoint is caller-configured
                     status, response_headers, response_body = response.status, dict(response.headers), response.read()
-            except urllib.error.HTTPError as error:
-                raise _decode_error(error.code, error.read()) from error
-            except urllib.error.URLError as error:
-                raise ApiError(0, "transport_error", str(error.reason)) from error
+        except urllib.error.HTTPError as error:
+            raise _decode_error(error.code, error.read(), request_id=request_id) from error
+        except (TimeoutError, urllib.error.URLError) as error:
+            reason = getattr(error, "reason", error)
+            code = "transport_timeout" if isinstance(error, TimeoutError) or isinstance(reason, TimeoutError) else "transport_error"
+            message = "runtime request timed out" if code == "transport_timeout" else str(reason)
+            raise ApiError(0, code, message, request_id=request_id) from error
         if status not in expected:
-            raise _decode_error(status, response_body)
+            raise _decode_error(status, response_body, request_id=request_id)
         return status, response_headers, response_body
 
     @staticmethod

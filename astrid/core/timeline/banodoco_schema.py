@@ -382,6 +382,10 @@ _CLIP_ALLOWED = frozenset(
         "cropLeft", "cropRight", "opacity", "params", "text", "entrance", "exit",
         "continuous", "transition", "effects", "source_uuid", "generation",
         "pool_id", "clip_order", "app", "label", "keyframes",
+        # Immutable render-admission provenance retained when shot composites
+        # are flattened into media/image/text clips.  These fields are not
+        # authoring hints: admission stamps them from the registered shot.
+        "shot_id", "shot_occurrence_id", "shot_name",
     }
 )
 _TRACK_ALLOWED = frozenset(
@@ -489,13 +493,19 @@ def _known_timeline_payload(config: Mapping[str, Any]) -> dict[str, Any]:
         key: value for key, value in config.items() if key in _TIMELINE_TOP_ALLOWED
     }
     known.pop("app", None)
+    render_provenance_fields = {"shot_id", "shot_occurrence_id", "shot_name"}
     for collection in ("clips", "tracks"):
         entries = known.get(collection)
         if not isinstance(entries, list):
             continue
         known[collection] = [
             (
-                {key: value for key, value in entry.items() if key != "app"}
+                {
+                    key: value for key, value in entry.items()
+                    if key != "app" and not (
+                        collection == "clips" and key in render_provenance_fields
+                    )
+                }
                 if isinstance(entry, Mapping)
                 else entry
             )

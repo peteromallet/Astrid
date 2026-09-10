@@ -31,6 +31,14 @@ def test_caller_cannot_supply_authority():
             {'view': 'filmstrip', 'filmstrip_authority': '{}'}, project='p')
 
 
+def test_filmstrip_cache_parent_is_project_namespaced(tmp_path, monkeypatch):
+    monkeypatch.setattr(invocation.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert invocation._filmstrip_cache_parent(project="astrid intro/v1") == (
+        tmp_path / "Library" / "Caches" / "Astrid" / "timeline-visualize" / "astrid_intro_v1"
+    )
+
+
 def test_managed_video_is_in_task_authorization_manifest():
     recorded = {}
     class ReachedAdmission(Exception): pass
@@ -74,11 +82,15 @@ def test_bundle_rehydration_preserves_html_and_pages(tmp_path):
     data = archive.getvalue()
     raw = {'outputs': {'artifacts': [{'name': 'filmstrip_bundle', 'digest': 'sha256:' + hashlib.sha256(data).hexdigest(), 'size': len(data)}]}}
     client = SimpleNamespace(media=SimpleNamespace(read_bytes=lambda _: data))
-    manifest = invocation._materialize_filmstrip_outputs(raw, client)
+    manifest = invocation._materialize_filmstrip_outputs(
+        raw, client, project="demo", cache_root=tmp_path
+    )
     try:
         result = invocation._invocation_outputs(raw, manifest_path=manifest, capability_id='rendering.timeline_visualize')
         assert result['html'].endswith('filmstrip.html')
         assert len(result['pages']) == 1
+        assert Path(manifest).parent == tmp_path / "demo" / hashlib.sha256(data).hexdigest()
+        assert "/private/tmp/astrid-filmstrip-" not in manifest
     finally:
         shutil.rmtree(raw['outputs']['pack_root'])
 
@@ -124,7 +136,9 @@ def test_bundle_rehydration_exposes_verified_audio_and_media(tmp_path):
     data = archive.getvalue()
     raw = {'outputs': {'artifacts': [{'name': 'filmstrip_bundle', 'digest': 'sha256:' + hashlib.sha256(data).hexdigest(), 'size': len(data)}]}}
     client = SimpleNamespace(media=SimpleNamespace(read_bytes=lambda _: data))
-    manifest = invocation._materialize_filmstrip_outputs(raw, client)
+    manifest = invocation._materialize_filmstrip_outputs(
+        raw, client, project="demo", cache_root=tmp_path
+    )
     try:
         assert raw['outputs']['audio_analysis'].endswith('audio-analysis.json')
         assert raw['outputs']['media'].endswith('rendered-video.mp4')

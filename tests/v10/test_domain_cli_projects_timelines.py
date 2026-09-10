@@ -1105,6 +1105,7 @@ def test_timelines_visualize_routes_public_sdk_and_normalizes_formats(capsys) ->
     assert kwargs["capability_id"] == "rendering.timeline_visualize"
     assert kwargs["kind"] == "executor"
     assert kwargs["project"] == "demo"
+    assert kwargs["wait"] is True
     assert kwargs["inputs"] == {
         "formats": ["png", "svg", "md"],
         "timeline_slug": "01TIMELINE",

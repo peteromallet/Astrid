@@ -133,6 +133,11 @@ def group_timeline_clips(*, shots, timelines, project, timeline, clip_ids,
         expanded, _ = expand_shot_clips({**config, "clips": [composite]}, registry,
                                       load_timeline=lambda _: (child, registry))
         for before, after in zip(selected, expanded["clips"], strict=True):
+            # Render-admission provenance is intentionally added by pure shot
+            # expansion; it is not an authored field and must not make a
+            # round-trip grouping appear to alter the selected edit.
+            provenance_fields = {"shot_id", "shot_occurrence_id", "shot_name"}
+            after = {key: value for key, value in after.items() if key not in provenance_fields}
             if "track" not in before and after.get("track") is None:
                 after.pop("track", None)
             if before.keys() != after.keys():

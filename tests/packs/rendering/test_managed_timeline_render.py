@@ -279,6 +279,29 @@ def test_registered_shot_expands_and_unknown_shot_rejects(tmp_path: Path) -> Non
         _prepare_managed_render_inputs({"timeline_ref": "main"}, project="demo", _client=runtime)
 
 
+def test_admission_stamps_flattened_image_with_registered_shot_identity() -> None:
+    runtime = _Runtime()
+    runtime.shot_rows['shot-1'] = {'shot_id': 'shot-1', 'project_id': 'project-demo', 'name': '01 Opening'}
+    runtime.extra_timelines['child'] = {
+        'timeline_id': 'child-1', 'slug': 'child', 'config_version': 1,
+        'config': {'tracks': [{'id': 'picture', 'kind': 'visual', 'label': 'Picture'}], 'clips': [{
+            'id': 'image-child', 'at': 0, 'hold': 1, 'track': 'picture', 'clipType': 'image',
+        }]},
+        'registry': {'assets': {}}, 'archived_at': None,
+    }
+    runtime.timeline['config'] = {'tracks': [{'id': 'picture', 'kind': 'visual', 'label': 'Picture'}], 'clips': [{
+        'id': 'shot', 'at': 2, 'hold': 1, 'track': 'picture', 'clipType': 'shot',
+        'params': {'shot_id': 'shot-1', 'timeline_document_id': 'child'},
+    }]}
+    prepared, authority = _prepare_managed_render_inputs({'timeline_ref': 'main'}, project='demo', _client=runtime)
+    flat = prepared['timeline_snapshot']['config']['clips'][0]
+    assert flat['clipType'] == 'image'
+    assert flat['shot_id'] == 'shot-1'
+    assert flat['shot_name'] == '01 Opening'
+    assert flat['shot_occurrence_id'] == 'shot-occ-0000-shot-1'
+    assert authority['expansion']['occurrences'][0]['shot_occurrence_id'] == 'shot-occ-0000-shot-1'
+
+
 def test_unknown_effect_structured_schema_and_opaque_params_contracts() -> None:
     runtime = _Runtime()
     runtime.timeline["config"] = {"tracks": [{"id": "v", "kind": "visual", "label": "Visual"}], "clips": [{
@@ -334,7 +357,9 @@ def test_review_pins_registered_names_and_ranges_without_changing_authority():
         {'timeline_ref': 'main', 'review': True, 'review_context': {'shots': ['forged']}}, project='demo', _client=runtime)
     assert prepared['review_context'] == {'shots': [{'shot_id': 'shot-1', 'name': '01 Opening', 'at': 1.25, 'hold': 2.75}]}
     clean, clean_authority = _prepare_managed_render_inputs({'timeline_ref': 'main'}, project='demo', _client=runtime)
-    assert 'review_context' not in clean
+    assert clean['review_context'] == {'shots': [
+        {'shot_id': 'shot-1', 'name': '01 Opening', 'at': 1.25, 'hold': 2.75}
+    ]}
     assert authority['expansion']['children'][0]['timeline_ulid'] == 'child-1'
     assert clean_authority == authority
     assert runtime.timeline == before

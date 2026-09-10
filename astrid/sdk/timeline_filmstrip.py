@@ -51,6 +51,17 @@ def _duration(clip: Mapping) -> float:
     return clip_timeline_duration(clip)
 
 
+def _is_spoken_binding(binding: Mapping) -> bool:
+    """Whether a shot text binding belongs on the spoken-word review lane."""
+    kind = binding.get('kind')
+    if kind == 'voiceover_script':
+        return True
+    # A generic transcript is not safe to display as narration unless the
+    # admission explicitly marks it spoken.  This prevents prompt and
+    # generation metadata from becoming accidental filmstrip captions.
+    return kind in {'transcript', 'transcript_text'} and binding.get('spoken') is True
+
+
 def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, run_id: str, video_digest: str) -> dict:
     """Pure snapshot mapping except verified reads of pinned immutable text objects."""
     inputs = envelope.get('inputs', {})
@@ -86,7 +97,13 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         clips.append(clip)
     # These occurrences were admitted by the renderer from canonical registered
     # shots. Never infer a shot from a filename, ordinal, or current document.
-    occurrences = inputs.get('review_context', {}).get('shots', [])
+    # New renders carry an admission-owned occurrence envelope and explicit
+    # identity on every flattened child.  Keep the old review_context path for
+    # legacy renders only; it is intentionally never used to infer identity
+    # when the new fields are present.
+    expansion_occurrences = authority.get('expansion', {}).get('occurrences', [])
+    occurrences = expansion_occurrences or inputs.get('review_context', {}).get('shots', [])
+    explicit_occurrences = bool(expansion_occurrences)
     frozen_shots = {s['shot_id']: s for s in authority.get('expansion', {}).get('shots', [])}
     scripts = []
     shot_occurrences = []
@@ -95,25 +112,38 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         shot = frozen_shots.get(shot_id)
         if not shot:
             continue
-        occurrence_id = f"occurrence-{occurrence_index:04d}-{shot_id}"
+        occurrence_id = occurrence.get('shot_occurrence_id') or f"occurrence-{occurrence_index:04d}-{shot_id}"
         start_frame = clip_start_frame(occurrence, float(fps))
         end_frame = clip_end_frame(occurrence, float(fps))
         start = start_frame / float(fps); end = end_frame / float(fps)
         shot_occurrences.append({'occurrence_id': occurrence_id, 'shot_id': shot_id,
             'shot_name': shot['name'], 'start': start, 'end': end,
             'start_frame': start_frame, 'end_frame': end_frame})
-        active = [c for c in clips if c['start_frame'] < end_frame and c['end_frame'] > start_frame]
-        for clip in active:
-            if clip['start_frame'] >= start_frame and clip['end_frame'] <= end_frame:
-                clip.setdefault('occurrence_ids', []).append(occurrence_id)
-                if len(clip['occurrence_ids']) == 1:
+        if explicit_occurrences:
+            # Admission stamped the exact occurrence onto every flattened
+            # payload.  A missing stamp is not silently repaired by timing.
+            for clip in clips:
+                if clip.get('shot_occurrence_id') == occurrence_id:
+                    clip.setdefault('occurrence_ids', []).append(occurrence_id)
                     clip.update(shot_id=shot_id, shot_name=shot['name'], occurrence_id=occurrence_id)
-                else:
-                    # Overlapping placements without explicit child identity are
-                    # ambiguous. Retain candidates, never overwrite ownership.
-                    for key in ('shot_id', 'shot_name', 'occurrence_id'):
-                        clip.pop(key, None)
+        else:
+            active = [c for c in clips if c['start_frame'] < end_frame and c['end_frame'] > start_frame]
+            for clip in active:
+                if clip['start_frame'] >= start_frame and clip['end_frame'] <= end_frame:
+                    clip.setdefault('occurrence_ids', []).append(occurrence_id)
+                    if len(clip['occurrence_ids']) == 1:
+                        clip.update(shot_id=shot_id, shot_name=shot['name'], occurrence_id=occurrence_id)
+                    else:
+                        # Overlapping placements without explicit child identity are
+                        # ambiguous. Retain candidates, never overwrite ownership.
+                        for key in ('shot_id', 'shot_name', 'occurrence_id'):
+                            clip.pop(key, None)
         for binding in shot.get('text_bindings', []):
+            # Prompt bindings describe how a frame was generated; they are not
+            # narration.  The filmstrip is a spoken-word review surface, so
+            # never leak positive/negative generation prompts into its cards.
+            if not _is_spoken_binding(binding):
+                continue
             text = _read_text(client, binding)
             # A canonical shot script is not an aligned audio transcript. Even
             # a single overlapping audio clip could be music: don't invent timing.

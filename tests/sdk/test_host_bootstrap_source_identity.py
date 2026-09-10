@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from astrid.sdk import host_bootstrap
 from astrid.core.execution.generic_host import source_checkout_digest
 from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
@@ -64,7 +66,7 @@ def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch,
             assert credential == "worker"
 
         def health(self):
-            return {"runtime_epoch": "epoch-1", "runtime_instance_id": "instance-1", "schema_digest": "schema-1"}
+            return {"status": "ok", "runtime_epoch": "epoch-1", "runtime_instance_id": "instance-1", "schema_digest": "schema-1"}
 
     monkeypatch.setattr(generic_host, "RuntimeProtocolClient", FakeRuntimeClient)
     state: dict = {}
@@ -144,3 +146,151 @@ def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch,
     assert result3["host_status"] == "ready"
     assert len(launches) == 3
     assert len(inventory_calls) == 3
+
+
+def test_bootstrap_stops_on_correlated_terminal_registration_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "source"
+    (source / "astrid" / "packs").mkdir(parents=True)
+    (source / "astrid" / "packs" / "marker.txt").write_text(
+        "pack", encoding="utf-8"
+    )
+    support = tmp_path / "support"
+    credentials = support / "credentials"
+    credentials.mkdir(parents=True)
+    credential = credentials / "worker.token"
+    credential.write_text("worker", encoding="utf-8")
+    os.chmod(credential, 0o600)
+    value = {
+        "worker_credential_file": str(credential),
+        "source_checkout": str(source),
+        "worker_actor": host_bootstrap.PACK_HOST_ACTOR,
+        "worker_scopes": list(host_bootstrap.PACK_HOST_SCOPES),
+        "endpoint": "http://runtime.test",
+        "runtime_epoch": 1,
+        "runtime_instance_id": "instance-1",
+        "schema_digest": "schema-1",
+    }
+    inventory = SimpleNamespace(identity="", roots=(), sources=())
+    monkeypatch.setattr(
+        "astrid.core.pack.source_setup.active_source_inventory", lambda: inventory
+    )
+
+    from astrid.core.execution import generic_host
+
+    class FakeRuntimeClient:
+        def __init__(self, endpoint, credential):
+            assert endpoint == "http://runtime.test"
+            assert credential == "worker"
+
+        def health(self):
+            return {
+                "status": "ok",
+                "runtime_epoch": 1,
+                "runtime_instance_id": "instance-1",
+                "schema_digest": "schema-1",
+            }
+
+    monkeypatch.setattr(generic_host, "RuntimeProtocolClient", FakeRuntimeClient)
+    ready: dict[str, object] = {}
+    launches: list[list[str]] = []
+    terminated: list[dict[str, object]] = []
+
+    class FakeProcess:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    def fake_read(path: Path):
+        if path.name == "generic-host.ready.json":
+            return ready or None
+        return None
+
+    def fake_popen(argv, **_kwargs):
+        launches.append(list(argv))
+        ready.update(
+            {
+                "status": "failed",
+                "terminal": True,
+                "pid": 4242,
+                "process_birth_id": "birth-failed",
+                "error": {
+                    "code": "registration_unavailable",
+                    "request_id": "request-bootstrap-1",
+                    "message": "executor registration unavailable",
+                },
+            }
+        )
+        return FakeProcess()
+
+    monkeypatch.setattr(host_bootstrap, "_read_object", fake_read)
+    monkeypatch.setattr(host_bootstrap.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        host_bootstrap, "_host_birth_identity", lambda _pid: "birth-failed"
+    )
+    monkeypatch.setattr(
+        host_bootstrap,
+        "_terminate_old_host",
+        lambda current: terminated.append(dict(current)),
+    )
+
+    with pytest.raises(host_bootstrap.PackHostBootstrapError) as caught:
+        host_bootstrap.ensure_pack_host(value, reconfigure_action="reconfigure")
+
+    assert caught.value.code == "registration_unavailable"
+    assert caught.value.request_id == "request-bootstrap-1"
+    assert caught.value.terminal is True
+    assert "request-bootstrap-1" in str(caught.value)
+    assert len(launches) == 1
+    assert len(terminated) == 1
+
+
+def test_bootstrap_refuses_runtime_health_without_ok_status(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "source"
+    (source / "astrid" / "packs").mkdir(parents=True)
+    credentials = tmp_path / "support" / "credentials"
+    credentials.mkdir(parents=True)
+    credential = credentials / "worker.token"
+    credential.write_text("worker", encoding="utf-8")
+    os.chmod(credential, 0o600)
+    value = {
+        "worker_credential_file": str(credential),
+        "source_checkout": str(source),
+        "worker_actor": host_bootstrap.PACK_HOST_ACTOR,
+        "worker_scopes": list(host_bootstrap.PACK_HOST_SCOPES),
+        "endpoint": "http://runtime.test",
+    }
+    monkeypatch.setattr(
+        "astrid.core.pack.source_setup.active_source_inventory",
+        lambda: SimpleNamespace(identity="", roots=(), sources=()),
+    )
+    from astrid.core.execution import generic_host
+
+    class UnhealthyRuntime:
+        def __init__(self, *_args):
+            pass
+
+        def health(self):
+            return {
+                "status": "unhealthy",
+                "runtime_epoch": 1,
+                "runtime_instance_id": "instance-1",
+                "schema_digest": "schema-1",
+            }
+
+    monkeypatch.setattr(generic_host, "RuntimeProtocolClient", UnhealthyRuntime)
+    monkeypatch.setattr(
+        host_bootstrap.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("unhealthy runtime launched pack host"),
+    )
+
+    with pytest.raises(host_bootstrap.PackHostBootstrapError) as caught:
+        host_bootstrap.ensure_pack_host(value, reconfigure_action="reconfigure")
+
+    assert caught.value.code == "runtime_not_ready"
+    assert caught.value.terminal is True

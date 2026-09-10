@@ -8,6 +8,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import platform
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -728,6 +731,26 @@ def _validate_timeline_visualize_inputs(
             }
             for row in selected
         ],
+        # The worker token used by the generic host is intentionally not
+        # granted projects:read. Carry the already-authenticated admission
+        # snapshot into the child so execution verifies the same rows without
+        # attempting a second project discovery under worker credentials.
+        "timeline_snapshots": [
+            {
+                "timeline_id": row.timeline_id,
+                "timeline_ulid": row.timeline_ulid,
+                "slug": row.slug,
+                "name": row.name,
+                "is_default": row.is_default,
+                "config": row.config,
+                "registry": row.registry,
+                "config_version": row.config_version,
+                "head_event_id": row.head_event_id,
+                "head_hash": row.head_hash,
+                "head_created_at": row.head_created_at,
+            }
+            for row in selected
+        ],
     }
 
 
@@ -940,12 +963,18 @@ def _prepare_managed_render_inputs(
         # missing shot and never talks to storage itself.
         child_records: list[dict[str, Any]] = []
         review_shots: list[dict[str, Any]] = []
+        shot_occurrences: list[dict[str, Any]] = []
         shot_records: dict[str, dict[str, Any]] = {}
         from .render_shot_snapshot import shot_text_snapshot
         raw_clips = snapshot.config.get("clips", [])
         for index, clip in enumerate(raw_clips):
             if not isinstance(clip, Mapping) or clip.get("clipType") != "shot":
                 continue
+            if clip.get("shot_occurrence_id"):
+                raise CapabilityValidationError(
+                    f"canonical timeline {snapshot.timeline_slug!r} shot clip at index {index} "
+                    "contains caller-authored shot_occurrence_id"
+                )
             params = clip.get("params")
             shot_id = params.get("shot_id") if isinstance(params, Mapping) else None
             timeline_document_id = (
@@ -969,8 +998,22 @@ def _prepare_managed_render_inputs(
                     "version": shot_result.data.get("version"),
                     "text_bindings": shot_text_snapshot(_client, str(project), shot_id),
                 }
-            if values.get("review"):
-                review_shots.append({"shot_id": shot_id, "name": str(shot_result.data.get("name") or shot_id), "at": float(clip.get("at", 0)), "hold": float(clip.get("hold", 0))})
+            # Placement is canonical render provenance, not a visual-only
+            # review option.  Freeze every authored shot occurrence so later
+            # filmstrip/visualizer consumers can map pinned bindings to the
+            # rendered timeline even when review labels are disabled.
+            occurrence_id = f"shot-occ-{len(shot_occurrences):04d}-{shot_id}"
+            occurrence = {
+                "shot_occurrence_id": occurrence_id,
+                "shot_id": shot_id,
+                "name": str(shot_result.data.get("name") or shot_id),
+                "at": float(clip.get("at", 0)),
+                "hold": float(clip.get("hold", 0)),
+                "timeline_document_id": str(timeline_document_id or ""),
+                "source_index": index,
+            }
+            shot_occurrences.append(occurrence)
+            review_shots.append({"shot_id": shot_id, "name": occurrence["name"], "at": occurrence["at"], "hold": occurrence["hold"]})
             if not isinstance(timeline_document_id, str) or not timeline_document_id:
                 raise CapabilityValidationError(
                     f"canonical timeline {snapshot.timeline_slug!r} shot {shot_id!r} "
@@ -1005,6 +1048,24 @@ def _prepare_managed_render_inputs(
             )
         except ValueError as exc:
             raise CapabilityValidationError(str(exc)) from exc
+        # The pure expander can carry the registered id and authored-order
+        # occurrence through arbitrary child payloads.  Pin the name here,
+        # after reading it from the canonical shot registry; child/caller
+        # metadata can never forge review provenance.
+        occurrence_names = {
+            item["shot_occurrence_id"]: item["name"] for item in shot_occurrences
+        }
+        for flat_clip in expanded_config.get("clips", []):
+            if not isinstance(flat_clip, Mapping):
+                continue
+            occurrence_id = flat_clip.get("shot_occurrence_id")
+            if occurrence_id is None:
+                continue
+            if occurrence_id not in occurrence_names:
+                raise CapabilityValidationError(
+                    f"expanded clip {flat_clip.get('id', '?')} has an unknown shot occurrence"
+                )
+            flat_clip["shot_name"] = occurrence_names[occurrence_id]
         from dataclasses import replace
 
         expanded_registry = _runtime_snapshot_registry(
@@ -1020,6 +1081,7 @@ def _prepare_managed_render_inputs(
             expansion={
                 "children": child_records,
                 "shots": [shot_records[key] for key in sorted(shot_records)],
+                "occurrences": shot_occurrences,
                 "expanded_config_hash": _expanded_config_hash(expanded_config),
             },
         )
@@ -1053,8 +1115,9 @@ def _prepare_managed_render_inputs(
         raise CapabilityValidationError(str(exc), details=exc.details) from exc
     # Never trust caller-authored review labels: pin registered names alongside the render.
     values.pop("review_context", None)
-    if values.get("review"):
-        values["review_context"] = {"shots": review_shots}
+    # ``review`` still controls only burned-in visual labels.  The occurrence
+    # envelope is always pinned at admission for provenance and script maps.
+    values["review_context"] = {"shots": review_shots}
     authority = snapshot.authority()
     values.update(
         {
@@ -1104,8 +1167,30 @@ def _discover_invocation_manifest_path(
     return None
 
 
-def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> str:
-    """Rehydrate verified published evidence in a disposable local cache."""
+def _filmstrip_cache_parent(
+    *,
+    project: str | None,
+    cache_root: Path | str | None = None,
+) -> Path:
+    """Return the durable, project-namespaced filmstrip cache parent."""
+    if cache_root is not None:
+        base = Path(cache_root).expanduser().resolve()
+    elif platform.system() == "Darwin":
+        base = Path.home() / "Library" / "Caches" / "Astrid" / "timeline-visualize"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrid" / "timeline-visualize"
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(project or "unscoped")).strip("._") or "unscoped"
+    return base / slug
+
+
+def _materialize_filmstrip_outputs(
+    raw_result: dict[str, Any],
+    client: Any,
+    *,
+    project: str | None = None,
+    cache_root: Path | str | None = None,
+) -> str:
+    """Rehydrate verified published evidence into a durable project cache."""
     import io
     import tempfile
     import zipfile
@@ -1122,7 +1207,10 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
     data = client.media.read_bytes("sha256:" + digest)
     if hashlib.sha256(data).hexdigest() != digest or len(data) != artifact.get("size"):
         raise CapabilityInvocationError("filmstrip bundle does not match its published digest and size")
-    root = Path(tempfile.mkdtemp(prefix="astrid-filmstrip-"))
+    parent = _filmstrip_cache_parent(project=project, cache_root=cache_root)
+    parent.mkdir(parents=True, exist_ok=True)
+    root = parent / digest
+    staging = Path(tempfile.mkdtemp(prefix=f".{digest[:12]}-", dir=parent))
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             members = archive.infolist()
@@ -1136,15 +1224,15 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
                         or (member.external_attr >> 16) & 0o170000 == 0o120000):
                     raise CapabilityInvocationError("filmstrip bundle contains an unsafe or duplicate path")
                 names.add(member.filename)
-                destination = root.joinpath(*path.parts)
+                destination = staging.joinpath(*path.parts)
                 if member.is_dir():
                     destination.mkdir(parents=True, exist_ok=True)
                 else:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(archive.read(member))
-        manifest = root / "manifest.json"
+        manifest = staging / "manifest.json"
         document = json.loads(manifest.read_text(encoding="utf-8"))
-        if document.get("kind") != "timeline_filmstrip" or not (root / "filmstrip.html").is_file():
+        if document.get("kind") != "timeline_filmstrip" or not (staging / "filmstrip.html").is_file():
             raise CapabilityInvocationError("filmstrip bundle is missing its manifest or HTML entrypoint")
         declared = document.get("outputs")
         if not isinstance(declared, list):
@@ -1159,7 +1247,7 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
             member_path = PurePosixPath(relative)
             if member_path.is_absolute() or ".." in member_path.parts or "\\" in relative:
                 raise CapabilityInvocationError("filmstrip manifest member escapes its bundle")
-            path = root.joinpath(*member_path.parts)
+            path = staging.joinpath(*member_path.parts)
             if not path.is_file():
                 raise CapabilityInvocationError("filmstrip manifest references a missing member")
             with path.open("rb") as stream:
@@ -1167,10 +1255,10 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
             if member_digest != member.get("content_hash") or path.stat().st_size != member.get("bytes"):
                 raise CapabilityInvocationError("filmstrip bundle member integrity mismatch")
             verified_members.add(relative)
-        actual_members = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+        actual_members = {p.relative_to(staging).as_posix() for p in staging.rglob("*") if p.is_file()}
         if actual_members != verified_members | {"manifest.json"}:
             raise CapabilityInvocationError("filmstrip bundle has unrecorded members")
-        index_path = root / "frame-index.json"
+        index_path = staging / "frame-index.json"
         try:
             frame_index = json.loads(index_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -1184,7 +1272,7 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
             relative = PurePosixPath(value)
             if relative.is_absolute() or not relative.parts or ".." in relative.parts or "\\" in value:
                 raise CapabilityInvocationError(f"filmstrip {label} path is unsafe")
-            candidate = root.joinpath(*relative.parts)
+            candidate = staging.joinpath(*relative.parts)
             if not candidate.is_file() or value not in verified_members:
                 raise CapabilityInvocationError(f"filmstrip {label} path is not verified")
             return candidate
@@ -1193,20 +1281,31 @@ def _materialize_filmstrip_outputs(raw_result: dict[str, Any], client: Any) -> s
         audio_sidecar = frame_index.get("audio_sidecar") if isinstance(frame_index, Mapping) else None
         media_path = verified_relative_member(media.get("path") if isinstance(media, Mapping) else None, "media")
         audio_path = verified_relative_member(audio_sidecar.get("path") if isinstance(audio_sidecar, Mapping) else None, "audio sidecar")
+        media_relative = media_path.relative_to(staging) if media_path is not None else None
+        audio_relative = audio_path.relative_to(staging) if audio_path is not None else None
+        # Publish only after the archive and every declared member have been
+        # verified. A successful retry replaces the prior cache atomically;
+        # a failed retry leaves an existing usable cache untouched.
+        if root.exists():
+            import shutil
+            shutil.rmtree(root)
+        os.replace(staging, root)
+        staging = root
+        manifest = root / "manifest.json"
         raw_result["outputs"].update({
             "pack_root": str(root), "manifest_path": str(manifest),
             "html": str(root / "filmstrip.html"),
             "pages": [str(p) for p in sorted(root.glob("filmstrip-*.png"))],
             "frame_index": str(root / "frame-index.json"),
         })
-        if media_path is not None:
-            raw_result["outputs"]["media"] = str(media_path)
-        if audio_path is not None:
-            raw_result["outputs"]["audio_analysis"] = str(audio_path)
+        if media_relative is not None:
+            raw_result["outputs"]["media"] = str(root / media_relative)
+        if audio_relative is not None:
+            raw_result["outputs"]["audio_analysis"] = str(root / audio_relative)
         return str(manifest)
     except Exception:
         import shutil
-        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
         raise
 
 
@@ -1241,9 +1340,9 @@ def _invocation_outputs(
             # not the logical pack root.  Reuse the frozen loader's verified
             # task-output rehydration so the long-standing ``pack_root`` SDK
             # convenience remains an actually navigable directory.
-            # The manifest is the runtime-owned result handle.  Rehydration,
-            # when needed for navigation, is attempt-local; Astrid never
-            # persists a project-side ``.astrid/views`` copy.
+            # The manifest is the runtime-owned result handle. Rehydration,
+            # when needed for navigation, is persisted in the deterministic,
+            # project-namespaced Astrid cache.
             outputs["pack_root"] = str(pack_root)
             outputs["manifest_path"] = str(manifest)
             page_pattern = "filmstrip-*.png" if isinstance(document, dict) and document.get("kind") == "timeline_filmstrip" else "PG*.png"
@@ -1325,10 +1424,25 @@ def _kernel_invoke(
     """
     del registry
 
+    request_inputs = dict(inputs or {})
+    # Runtime workers expand the manifest command directly and therefore do
+    # not see the public SDK's separate ``project=`` argument.  Mirror the
+    # in-process executor runner's derivation for declared project_slug ports
+    # so project-scoped executors receive the same explicit input on either
+    # path.  Callers can still provide the field, subject to preflight's
+    # project identity check.
+    input_ports = {
+        str(port.name)
+        for port in (getattr(capability, "inputs", ()) or ())
+        if getattr(port, "name", None)
+    }
+    if project and "project_slug" in input_ports and "project_slug" not in request_inputs:
+        request_inputs["project_slug"] = project
+
     spec: dict[str, Any] = {
         "capability_id": str(capability.id),
         "kind": str(kind),
-        "inputs": _json_safe_mapping(dict(inputs or {})),
+        "inputs": _json_safe_mapping(request_inputs),
         "outputs": _json_safe_mapping(dict(outputs or {})),
         "extra_pack_roots": list(extra_pack_roots),
     }
@@ -1342,7 +1456,7 @@ def _kernel_invoke(
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
     input_manifest: list[str] = []
-    raw_snapshot = (inputs or {}).get("timeline_snapshot")
+    raw_snapshot = request_inputs.get("timeline_snapshot")
     if isinstance(raw_snapshot, Mapping):
         raw_registry = raw_snapshot.get("registry")
         raw_assets = raw_registry.get("assets") if isinstance(raw_registry, Mapping) else None
@@ -1386,7 +1500,7 @@ def _kernel_invoke(
         # public file argument. Generic-host materialization requires the
         # same immutable object in both inputs and the authorization manifest.
         video_id = idempotency_context.get("video_object_id")
-        video_input = (inputs or {}).get("rendered_video")
+        video_input = request_inputs.get("rendered_video")
         if (not isinstance(video_id, str) or not video_id.startswith("sha256:")
                 or len(video_id) != 71
                 or any(c not in "0123456789abcdef" for c in video_id[7:])
@@ -1874,7 +1988,11 @@ def invoke(
         )
         if (wait and ok and capability.id == "rendering.timeline_visualize"
                 and (invocation_authority_context or {}).get("mode") == "filmstrip"):
-            manifest_path = _materialize_filmstrip_outputs(raw_result, _client)
+            manifest_path = _materialize_filmstrip_outputs(
+                raw_result,
+                _client,
+                project=project,
+            )
         return InvocationResult(
             capability_id=capability.id,
             capability_type=capability.capability_type,

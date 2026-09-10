@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 
+from .version import __version__
+
 _SDK_EXPORTS = (
     # Curated public SDK surface (m4 plan step 19, task T20): lazy
     # discovery, typed invoke, generate, and protocol rendering entrypoint, and the

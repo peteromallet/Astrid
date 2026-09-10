@@ -12,6 +12,11 @@ class _Capability:
     id = "render.basic"
 
 
+class _TimelineVisualizeCapability:
+    id = "rendering.timeline_visualize"
+    inputs = (SimpleNamespace(name="project_slug"),)
+
+
 class _Tasks:
     def __init__(self) -> None:
         self.kwargs = None
@@ -62,6 +67,22 @@ def test_kernel_invoke_admits_task_through_injected_runtime_client() -> None:
     assert client.tasks.kwargs["project_id"] == "demo"
     assert client.tasks.kwargs["capability"] == "render.basic"
     assert client.tasks.kwargs["spec"]["inputs"] == {"prompt": "hello"}
+
+
+def test_kernel_invoke_derives_project_slug_for_runtime_manifest_expansion() -> None:
+    client = _Client()
+    invocation._kernel_invoke(
+        _TimelineVisualizeCapability(),
+        kind="executor",
+        project="demo",
+        inputs={"timeline_slug": "main"},
+        outputs={},
+        _client=client,
+    )
+    assert client.tasks.kwargs["spec"]["inputs"] == {
+        "timeline_slug": "main",
+        "project_slug": "demo",
+    }
 
 
 def test_kernel_invoke_forwards_storage_estimate_to_runtime_and_audit_metadata() -> None:

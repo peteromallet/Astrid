@@ -78,6 +78,25 @@ class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
 
 
+class HostRegistrationError(HostError):
+    """A typed, request-correlated executor registration failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "registration_failed",
+        request_id: str = "",
+        status: int = 0,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.request_id = request_id
+        self.status = status
+        self.details = dict(details or {})
+
+
 _EXECUTION_FACT_EXACT_KEYS = frozenset(
     {
         "interpreter",
@@ -929,7 +948,11 @@ class RuntimeProtocolClient:
                 "generated banodoco_workspace_client is unavailable; reinstall the Astrid package"
             ) from exc
         self.schema_digest = SCHEMA_DIGEST
-        self.generated = WorkspaceClient(self.endpoint, self.credential)
+        self.generated = WorkspaceClient(
+            self.endpoint,
+            self.credential,
+            timeout=self.timeout,
+        )
         self._runtime_epoch: int | None = None
         self._heartbeat_session = secrets_module.token_hex(8)
         self._heartbeat_sequence = 0
@@ -1536,14 +1559,6 @@ class GenericPackHost:
             self._registered_state = state
             self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
             return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready], "withdrawn_capabilities": removed}
-        if removed:
-            self._withdraw_removed_capabilities(removed)
-        # Publish capability admission metadata before advertising the executor.
-        # A real runtime must be able to validate a task against the exact
-        # definition digest/source-derived readiness before it can claim work.
-        register_capability = getattr(self.client, "register_capability", None)
-        if not callable(register_capability):
-            raise HostError("runtime client lacks canonical capability registration operation")
         executor_capabilities: list[dict[str, Any]] = []
         for record in self.capabilities.values():
             disposition = str(record.matrix.get("disposition", ""))
@@ -1556,15 +1571,6 @@ class GenericPackHost:
             else:
                 status = "ready" if record.ready else "unavailable"
                 unavailable_reason = None if record.ready else _preflight_unavailable_reason(record)
-            register_capability(
-                record.id,
-                digest=record.capability_digest,
-                required_resource_keys=list(record.resource_keys),
-                status=status,
-                estimated_scratch_bytes=record.estimated_scratch_bytes,
-                estimated_output_bytes=record.estimated_output_bytes,
-                unavailable_reason=unavailable_reason,
-            )
             executor_capabilities.append(
                 {
                     "capability_id": record.id,
@@ -1593,14 +1599,45 @@ class GenericPackHost:
             "runtime_epoch": runtime_state.get("runtime_epoch"),
             "verified_facts": verified_facts,
         }
-        registration = self.client.register_executor(self.executor_id, **registration_kwargs)
+        try:
+            # The runtime owns one durable transaction for the executor and
+            # its complete capability descriptors.  Never pre-publish
+            # capabilities through separate requests: a failed registration
+            # must leave no half-visible executor surface.
+            registration = self.client.register_executor(
+                self.executor_id, **registration_kwargs
+            )
+            # Removed capabilities cannot be expressed by the current
+            # executor-registration payload.  Withdraw them only after the
+            # replacement executor state is committed, so failure is
+            # fail-closed rather than exposing a partial new registration.
+            if removed:
+                self._withdraw_removed_capabilities(removed)
+        except HostRegistrationError:
+            raise
+        except Exception as exc:
+            raw_details = getattr(exc, "details", None)
+            details = raw_details if isinstance(raw_details, Mapping) else None
+            raw_message = getattr(exc, "message", None)
+            message = (
+                str(raw_message)
+                if raw_message
+                else (str(exc) if isinstance(exc, HostError) else "executor registration failed")
+            )
+            raise HostRegistrationError(
+                message[:512],
+                code=str(getattr(exc, "code", "registration_failed"))[:128],
+                request_id=str(getattr(exc, "request_id", ""))[:128],
+                status=int(getattr(exc, "status", 0) or 0),
+                details=details,
+            ) from exc
         self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
         self._registered_state = state
         self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
         return {"registration": registration, "capabilities": [r.manifest() for r in self.capabilities.values()], "withdrawn_capabilities": removed}
 
     def _withdraw_removed_capabilities(self, capability_ids: list[str]) -> None:
-        """Make removed capabilities unavailable before publishing new state."""
+        """Make removed capabilities unavailable after replacement commits."""
         for capability_id in capability_ids:
             prior = self._registered_state[capability_id]
             reason = "capability removed from source checkout"
@@ -1649,6 +1686,7 @@ class GenericPackHost:
         if health is None:
             raise HostError("runtime health returned no protocol document")
         value = dict(health) if isinstance(health, Mapping) else {
+            "status": getattr(health, "status", None),
             "protocol": getattr(health, "protocol", None),
             "schema_digest": getattr(health, "schema_digest", None),
             "runtime_epoch": getattr(health, "runtime_epoch", None),
@@ -1656,6 +1694,11 @@ class GenericPackHost:
         actual_protocol = str(value.get("protocol", ""))
         actual_schema = str(value.get("schema_digest", ""))
         mismatches = []
+        actual_status = str(value.get("status", ""))
+        if actual_status != "ok":
+            mismatches.append(
+                f"status expected=ok actual={actual_status or 'missing'}"
+            )
         if actual_protocol != expected_protocol:
             mismatches.append(f"protocol expected={expected_protocol} actual={actual_protocol or 'missing'}")
         if expected_schema and actual_schema != expected_schema:
@@ -2067,6 +2110,7 @@ class GenericPackHost:
         attempt: Path,
         *,
         explicit_env: Mapping[str, str] | None = None,
+        authority_context: Mapping[str, Any] | None = None,
         admission: Mapping[str, Any] | None = None,
         network_broker: _NetworkBrokerContext | None = None,
         network_policy: Mapping[str, Any] | None = None,
@@ -2098,12 +2142,29 @@ class GenericPackHost:
                 explicit.pop(name, None)
             elif name.upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD")):
                 raise HostError(f"undeclared secret environment variable {name!r}")
+        # Runtime-backed pack executors (notably timeline visualization) read
+        # workspace facts from their isolated child process.  The host already
+        # holds the explicit endpoint/worker credential used for task
+        # admission, so pass that connection across the same short-lived
+        # environment boundary instead of asking the child to rediscover it.
+        runtime_endpoint = getattr(self.client, "endpoint", None)
+        runtime_credential = getattr(self.client, "credential", None)
+        if runtime_endpoint and runtime_credential:
+            explicit["BANODOCO_RUNTIME_ENDPOINT"] = str(runtime_endpoint)
+            secrets["BANODOCO_RUNTIME_CREDENTIAL"] = str(runtime_credential)
+            declared_secrets = (*declared, "BANODOCO_RUNTIME_CREDENTIAL")
+        else:
+            declared_secrets = declared
+        if isinstance(authority_context, Mapping):
+            explicit["ASTRID_TIMELINE_VISUALIZE_AUTHORITY_CONTEXT"] = json.dumps(
+                dict(authority_context), sort_keys=True, separators=(",", ":")
+            )
         env = build_child_subprocess_env(
             explicit_env=explicit,
             passthrough=record.definition.isolation.env_passthrough,
             declared_passthrough=record.definition.isolation.env_passthrough,
             secret_values=secrets,
-            declared_secrets=declared,
+            declared_secrets=declared_secrets,
         )
         policy = network_broker.policy if network_broker is not None else (dict(network_policy) if network_policy is not None else _network_policy(record))
         if policy is not None:
@@ -2285,7 +2346,7 @@ class GenericPackHost:
             })
         return uploaded
 
-    def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None) -> Any:
+    def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, authority_context: Mapping[str, Any] | None = None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None) -> Any:
         """Run a manifest command without importing Astrid's project authority.
 
         Built-in pipeline steps and command capabilities are both runnable from
@@ -2333,6 +2394,7 @@ class GenericPackHost:
         env, secrets = self._child_environment(
             record,
             attempt,
+            authority_context=authority_context,
             admission=admission,
             network_broker=network_broker,
             explicit_env={
@@ -2808,6 +2870,18 @@ class GenericPackHost:
                         output_root,
                         root,
                         cancelled=cancelled,
+                        authority_context=(
+                            (
+                                spec.get("authority_context")
+                                or (
+                                    spec.get("spec", {}).get("authority_context")
+                                    if isinstance(spec.get("spec"), Mapping)
+                                    else None
+                                )
+                            )
+                            if isinstance(spec, Mapping)
+                            else None
+                        ),
                         admission=network_admission,
                         network_broker=network_broker,
                     )
@@ -3221,6 +3295,17 @@ def _compose_cli_boot_manifest(
     return manifest_path, digest
 
 
+def _write_ready_marker(path: Path, payload: Mapping[str, Any]) -> None:
+    """Atomically publish one host bootstrap outcome."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), sort_keys=True, default=_json_safe),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def _cli() -> int:
 
     parser = argparse.ArgumentParser(prog="astrid-generic-host")
@@ -3249,6 +3334,9 @@ def _cli() -> int:
     parser.add_argument("--boot-manifest-path", help="existing explicit boot-manifest path")
     parser.add_argument("--boot-manifest-hash", help="expected SHA-256 hash of the boot manifest")
     args = parser.parse_args()
+    ready_path = Path(args.ready_file).expanduser() if args.ready_file else None
+    if ready_path is not None and (not ready_path.is_absolute() or ready_path.is_symlink()):
+        parser.error("--ready-file must be an absolute non-symlink path")
     credential = None
     credential_path = None
     if args.credential_file:
@@ -3298,13 +3386,36 @@ def _cli() -> int:
     signal.signal(signal.SIGINT, handle_shutdown)
     registration = None
     if args.register or not args.run_task:
-        registration = host.register() if args.register else {"capabilities": [record.manifest() for record in host.capabilities.values()]}
+        try:
+            registration = host.register() if args.register else {"capabilities": [record.manifest() for record in host.capabilities.values()]}
+        except Exception as exc:
+            code = str(getattr(exc, "code", "host_registration_failed"))[:128]
+            request_id = str(getattr(exc, "request_id", ""))[:128]
+            raw_message = getattr(exc, "message", None)
+            message = (
+                str(raw_message)
+                if raw_message
+                else (str(exc) if isinstance(exc, HostError) else "executor registration failed")
+            )[:512]
+            if credential:
+                message = message.replace(credential, "[redacted]")
+            failure = {
+                "status": "failed",
+                "terminal": True,
+                "pid": os.getpid(),
+                "process_birth_id": process_birth_identity(),
+                "error": {
+                    "code": code,
+                    "request_id": request_id,
+                    "message": message,
+                },
+            }
+            if ready_path is not None:
+                _write_ready_marker(ready_path, failure)
+            print(json.dumps(failure, sort_keys=True), file=sys.stderr, flush=True)
+            return 1
         print(json.dumps(registration, indent=2, sort_keys=True, default=_json_safe))
-    if args.ready_file:
-        ready_path = Path(args.ready_file).expanduser()
-        if not ready_path.is_absolute() or ready_path.is_symlink():
-            parser.error("--ready-file must be an absolute non-symlink path")
-        ready_path.parent.mkdir(parents=True, exist_ok=True)
+    if ready_path is not None:
         ready_payload = {
             "status": "ready",
             "python_executable": os.path.abspath(sys.executable),
@@ -3329,9 +3440,7 @@ def _cli() -> int:
             "runtime_epoch": host.runtime_state.get("runtime_epoch"),
             "schema_digest": host.runtime_state.get("schema_digest"),
         }
-        temporary = ready_path.with_name(f".{ready_path.name}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(ready_payload, sort_keys=True, default=_json_safe), encoding="utf-8")
-        temporary.replace(ready_path)
+        _write_ready_marker(ready_path, ready_payload)
     if args.run_task:
         if client is None or not args.lease_token:
             parser.error("--run-task requires --runtime-endpoint, --credential-file, and --lease-token")

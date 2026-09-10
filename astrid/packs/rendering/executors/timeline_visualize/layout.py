@@ -352,6 +352,12 @@ def _time_specs(
     for window_index, (window_start, window_end) in enumerate(windows):
         for band_index, band in enumerate(bands):
             owned = owners.get((window_index, band_index), [])
+            # Do not spend a full-height lane on an empty non-visual track in
+            # a time window.  Audio/text tracks commonly start later than the
+            # visual body; showing an empty box makes the evidence page look
+            # like a missing render and leaves no room for the populated lanes.
+            if not owned and not any(tracks[lane].kind == "visual" for lane in band):
+                continue
             for chunk_index, chunk in enumerate(_chunks(owned, max_objects_per_page)):
                 specs.append(
                     _PageSpec(
@@ -1736,7 +1742,10 @@ def _with_text_lanes(
                             box,
                             base_lane + 2,
                             _Z_CLIP_BASE + 30,
-                            f"{clip_ref} · OTHER TEXT · not_inspected",
+                            # The lane header already carries the provenance
+                            # state.  Keep per-clip labels to the short stable
+                            # reference so adjacent boxes remain legible.
+                            clip_ref,
                             None if box.w >= 72 else "pixel-text state box is too narrow",
                         )
                     )

@@ -521,6 +521,11 @@ def _canonical_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def _capability_digest(value: Any) -> str:
+    """Return the wire-format digest required by the Runtime capability contract."""
+    return "sha256:" + _canonical_digest(value)
+
+
 def _json_safe(value: Any) -> Any:
     """Convert request values to the small JSON wire format used by workers."""
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -1661,7 +1666,7 @@ class GenericPackHost:
                 manifest = next((executor_root / name for name in ("executor.yaml", "executor.yml", "executor.json") if (executor_root / name).is_file()), None)
                 matrix_entry = self.matrix.get(definition.id, {})
                 source_roots = _admitted_source_roots(executor_root, definition)
-                record = CapabilityRecord(definition=definition, capability_digest=_canonical_digest(definition.to_dict()), source_digest=_source_digest_for_roots(source_roots), source_root=executor_root, manifest_path=manifest, matrix=matrix_entry)
+                record = CapabilityRecord(definition=definition, capability_digest=_capability_digest(definition.to_dict()), source_digest=_source_digest_for_roots(source_roots), source_root=executor_root, manifest_path=manifest, matrix=matrix_entry)
                 records[record.id] = record
         if self.matrix:
             discovered = set(records)
@@ -1739,7 +1744,7 @@ class GenericPackHost:
                     definition = _attach_pack_metadata(definition, orchestrator_root)
                     source_roots = _admitted_source_roots(orchestrator_root, definition)
                     source_digest = _source_digest_for_roots(source_roots)
-                    capability_digest = _canonical_digest(definition.to_dict())
+                    capability_digest = _capability_digest(definition.to_dict())
                     return definition.to_dict(), {
                         "capability_digest": capability_digest,
                         "source_digest": source_digest,

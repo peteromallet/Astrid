@@ -9,6 +9,7 @@ native VibeComfy or provider readiness; those remain separate acceptance gates.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -27,6 +28,10 @@ import pytest
 RUNTIME_ROOT = Path(
     os.environ.get("BANODOCO_RUNTIME_CHECKOUT")
     or "/Users/hannahomalley/Documents/Codex/2026-09-09/can-you-see-the-poms-skills/work/astrid-prep/repos/Runtime"
+).resolve()
+REIGH_ROOT = Path(
+    os.environ.get("REIGH_APP_CHECKOUT")
+    or "/Users/hannahomalley/Documents/Codex/2026-09-09/can-you-see-the-poms-skills/work/astrid-prep/repos/reigh-app"
 ).resolve()
 sys.path.insert(0, str(RUNTIME_ROOT))
 
@@ -283,6 +288,232 @@ if __name__ == \"__main__\":
     return pack
 
 
+def _shipped_cpu_media_runner(
+    pack: Path,
+    *,
+    capability: str,
+    template_id: str,
+    model_id: str,
+    input_bindings: tuple[str, ...],
+    expected_inputs: tuple[bytes, ...],
+) -> tuple[Path, Path, str]:
+    """Wrap the shipped media runner around a deterministic provider boundary."""
+    readiness_path = pack / "cpu-readiness.json"
+    readiness_document = {
+        "environment_fingerprint": "astrid-cpu-provider-stub",
+        "runtime": {"runtime_instance_id": "astrid-cpu-provider-stub"},
+        "verified_facts": {"exact": {"model_digest": "sha256:" + "b" * 64}},
+    }
+    readiness_bytes = json.dumps(
+        readiness_document, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    readiness_path.write_bytes(readiness_bytes)
+    readiness_hash = "sha256:" + hashlib.sha256(readiness_bytes).hexdigest()
+    runner = pack / "cpu_provider_stub_runner.py"
+    runner.write_text(
+        f"""
+import hashlib
+import sys
+from pathlib import Path
+
+from astrid.packs.vibecomfy.media import run as media_run
+import astrid.packs.vibecomfy.production_engine as production_engine
+
+CAPABILITY = {capability!r}
+TEMPLATE_ID = {template_id!r}
+MODEL_ID = {model_id!r}
+INPUT_BINDINGS = {input_bindings!r}
+EXPECTED_INPUTS = {expected_inputs!r}
+
+
+def _load_workflow(workflow, _context, _scratch):
+    assert workflow["template_id"] == TEMPLATE_ID
+    assert set(INPUT_BINDINGS).issubset(workflow["bindings"])
+    return workflow
+
+
+def _run_profile(
+    resolved,
+    profile_id,
+    _profile_document,
+    *,
+    model_id,
+    template_id,
+    task_identity,
+    destination,
+):
+    assert profile_id == "pip_embedded"
+    assert model_id == MODEL_ID
+    assert template_id == TEMPLATE_ID
+    assert task_identity
+    paths = [Path(resolved["bindings"][name]) for name in INPUT_BINDINGS]
+    actual_inputs = [path.read_bytes() for path in paths]
+    assert actual_inputs == list(EXPECTED_INPUTS)
+    video_bytes = b"\\x00\\x00\\x00\\x18ftypisom" + hashlib.sha256(
+        b"\\x00".join(actual_inputs)
+    ).digest()
+    output = destination / "provider-stub-output.mp4"
+    output.write_bytes(video_bytes)
+    return (output,)
+
+
+production_engine._load_workflow = _load_workflow
+production_engine._run_profile = _run_profile
+_read_profile = media_run._read_profile
+
+
+def _checked_readiness(path, digest):
+    profile, context = _read_profile(path, digest)
+    assert path != "-"
+    assert digest != "-"
+    assert context["profile_digest"]
+    assert context["model_bytes_digest"]
+    return profile, context
+
+
+media_run._read_profile = _checked_readiness
+raise SystemExit(media_run.main(sys.argv[1:]))
+""",
+        encoding="utf-8",
+    )
+    return runner, readiness_path, readiness_hash
+
+
+def _set_cpu_readiness_environment(pack: Path) -> dict[str, str | None]:
+    """Supply the same host-owned readiness envelope as a registered worker."""
+    keys = (
+        "ASTRID_HOST_READINESS_PROFILE_PATH",
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+    )
+    previous = {key: os.environ.get(key) for key in keys}
+    profile = pack / "cpu-readiness.json"
+    os.environ[keys[0]] = str(profile)
+    os.environ[keys[1]] = "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest()
+    return previous
+
+
+def _restore_cpu_readiness_environment(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _video_enhance_cpu_fixture(root: Path) -> Path:
+    """Build a CPU provider-stub executor through the shipped media runner."""
+    pack = root / "typed-video-enhance-cpu"
+    executor = pack / "executors" / "video_enhance"
+    executor.mkdir(parents=True)
+    (pack / "pack.yaml").write_text(
+        "schema_version: 1\n"
+        "id: typed_video_enhance_cpu\n"
+        "name: Typed Video Enhance CPU Fixture\n"
+        "version: 1.0\n"
+        "capabilities: [vibecomfy.video_enhance]\n"
+        "content:\n  executors: executors\n",
+        encoding="utf-8",
+    )
+    definition = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "astrid/packs/vibecomfy/executors/video_enhance/executor.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    source_bytes = b"cpu-video-source"
+    runner, readiness_path, readiness_hash = _shipped_cpu_media_runner(
+        pack,
+        capability="vibecomfy.video_enhance",
+        template_id="video/basic_video_enhance",
+        model_id="video-enhance.upscale-2x",
+        input_bindings=("video_ref",),
+        expected_inputs=(source_bytes,),
+    )
+    definition["command"] = {
+        "argv": [
+            "{python_exec}",
+            str(runner),
+            "--capability", "vibecomfy.video_enhance",
+            "--profile", "pip_embedded",
+            "--task-identity", "{task_identity}",
+            "--readiness-profile-path", str(readiness_path),
+            "--readiness-profile-hash", readiness_hash,
+            "--out", "{out}",
+            "--video-ref", "{video_ref}",
+            "--enable-interpolation", "{enable_interpolation}",
+            "--enable-upscale", "{enable_upscale}",
+            "--interpolation-frames", "{interpolation_frames}",
+            "--scale", "{upscale_factor}",
+            "--color-fix", "{color_fix}",
+            "--output-quality", "{output_quality}",
+        ]
+    }
+    definition["isolation"] = {"mode": "subprocess", "network": False, "requirements": []}
+    metadata = dict(definition["metadata"])
+    metadata["adapter_family"] = "cpu"
+    metadata["resource_keys"] = ["cpu"]
+    definition["metadata"] = metadata
+    (executor / "executor.yaml").write_text(json.dumps(definition), encoding="utf-8")
+    return pack
+
+
+def _character_animation_cpu_fixture(root: Path) -> Path:
+    """Build a CPU provider-stub executor through the shipped media runner."""
+    pack = root / "typed-character-animation-cpu"
+    executor = pack / "executors" / "character_animation"
+    executor.mkdir(parents=True)
+    (pack / "pack.yaml").write_text(
+        "schema_version: 1\n"
+        "id: typed_character_animation_cpu\n"
+        "name: Typed Character Animation CPU Fixture\n"
+        "version: 1.0\n"
+        "capabilities: [vibecomfy.character_animation]\n"
+        "content:\n  executors: executors\n",
+        encoding="utf-8",
+    )
+    definition = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "astrid/packs/vibecomfy/executors/character_animation/executor.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    image_bytes = b"cpu-character-image"
+    motion_bytes = b"cpu-motion-video"
+    runner, readiness_path, readiness_hash = _shipped_cpu_media_runner(
+        pack,
+        capability="vibecomfy.character_animation",
+        template_id="video/wan22_animate_native_first_stage",
+        model_id="wan-2.2-animate-14b",
+        input_bindings=("input_image", "driving_video"),
+        expected_inputs=(image_bytes, motion_bytes),
+    )
+    definition["command"] = {
+        "argv": [
+            "{python_exec}",
+            str(runner),
+            "--capability", "vibecomfy.character_animation",
+            "--profile", "pip_embedded",
+            "--task-identity", "{task_identity}",
+            "--readiness-profile-path", str(readiness_path),
+            "--readiness-profile-hash", readiness_hash,
+            "--out", "{out}",
+            "--reference-image-ref", "{reference_image_ref}",
+            "--driving-video-ref", "{driving_video_ref}",
+            "--mode", "{mode}",
+            "--resolution", "{resolution}",
+            "--prompt", "{prompt}",
+            "--seed", "{seed}",
+        ]
+    }
+    definition["isolation"] = {"mode": "subprocess", "network": False, "requirements": []}
+    metadata = dict(definition["metadata"])
+    metadata["adapter_family"] = "cpu"
+    metadata["resource_keys"] = ["cpu"]
+    definition["metadata"] = metadata
+    (executor / "executor.yaml").write_text(json.dumps(definition), encoding="utf-8")
+    return pack
+
+
 def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> None:
     pack = _fixture_pack(tmp_path)
     daemon = RuntimeDaemon(
@@ -362,6 +593,487 @@ def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> N
             base64.b64decode(_PNG) + b"\x01",
         ]
     finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+
+
+def test_typed_video_enhance_admission_settles_variant_and_readback(tmp_path: Path) -> None:
+    """Exercise the bounded video contract through CPU Runtime custody."""
+    pack = _video_enhance_cpu_fixture(tmp_path)
+    previous_readiness = _set_cpu_readiness_environment(pack)
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "typed-video-enhance-cpu-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        probe = GenericPackHost(pack_roots=[pack])
+        record = probe.discover()[0]
+        assert record.id == "vibecomfy.video_enhance"
+
+        host = GenericPackHost(
+            pack_roots=[pack],
+            client=client,
+            executor_id="typed-video-enhance-cpu-host",
+        )
+        host.discover()
+        host.preflight()
+        assert host.capabilities[record.id].ready
+        host.register()
+
+        project = owner.create_project(
+            "Typed video enhance CPU",
+            slug="typed-video-enhance-cpu",
+            idempotency_key="typed-video-enhance-project",
+        )
+        source = owner.ingest_project_object(
+            project.project_id,
+            b"cpu-video-source",
+            media_type="video/mp4",
+            filename="source.mp4",
+            idempotency_key="typed-video-enhance-source",
+        )
+        source_id = source["object_id"]
+        generation_id = "generation-video-enhance"
+        source_variant_id = "variant-video-original"
+        owner.create_generation(
+            project.project_id,
+            generation_id,
+            idempotency_key="typed-video-enhance-generation",
+            type="video",
+        )
+        owner.create_variant(
+            generation_id,
+            source_variant_id,
+            idempotency_key="typed-video-enhance-variant",
+            object_id=source_id,
+            variant_type="original",
+            metadata={"is_primary": True},
+        )
+        settlement_effect = {
+            "effect_type": "generation.variant.append",
+            "target_id": generation_id,
+            "expected_version": 1,
+            "payload": {
+                "source_variant_id": source_variant_id,
+                "source_object_id": source_id,
+                "variant_type": "video_enhance",
+                "output_name": "enhanced_video",
+                "output_ordinal": 0,
+                "primary_policy": "preserve",
+            },
+        }
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[source_id],
+            project_id=project.project_id,
+            idempotency_key="typed-video-enhance-task",
+            spec={
+                "family": record.id,
+                "params": {
+                    "video_ref": {
+                        "digest": source_id,
+                        "filename": "source.mp4",
+                        "media_type": "video/mp4",
+                    },
+                    "enable_interpolation": False,
+                    "enable_upscale": True,
+                    "interpolation_frames": 1,
+                    "upscale_factor": 2,
+                    "color_fix": False,
+                    "output_quality": "maximum",
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+            settlement_effect=settlement_effect,
+        )
+
+        settled = host.run(once=True)
+        assert len(settled) == 1 and settled[0].state == "succeeded"
+        completed = owner.get_task(task.task_id)
+        assert completed.state == "succeeded"
+        output = next(item for item in completed.result["outputs"] if item["name"] == "enhanced_video")
+        video = owner.get_object(output["digest"]).data
+        assert video.startswith(b"\x00\x00\x00\x18ftypisom")
+        assert output["size"] == len(video)
+
+        generation = owner.get_generation(generation_id)
+        assert generation.version == 2
+        variants, cursor = owner.list_variants(generation_id)
+        assert cursor is None
+        assert len(variants) == 2
+        appended = variants[1]
+        assert appended.variant_type == "video_enhance"
+        assert appended.object_id == output["digest"]
+        assert appended.metadata["source_task_id"] == task.task_id
+        assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
+    finally:
+        _restore_cpu_readiness_environment(previous_readiness)
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+
+
+def test_typed_character_animation_admission_consumes_ordered_cas_and_readback(tmp_path: Path) -> None:
+    """Exercise the bounded two-input character profile through CPU custody."""
+    pack = _character_animation_cpu_fixture(tmp_path)
+    previous_readiness = _set_cpu_readiness_environment(pack)
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "typed-character-animation-cpu-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        probe = GenericPackHost(pack_roots=[pack])
+        record = probe.discover()[0]
+        assert record.id == "vibecomfy.character_animation"
+
+        host = GenericPackHost(
+            pack_roots=[pack],
+            client=client,
+            executor_id="typed-character-animation-cpu-host",
+        )
+        host.discover()
+        host.preflight()
+        assert host.capabilities[record.id].ready
+        host.register()
+
+        project = owner.create_project(
+            "Typed character animation CPU",
+            slug="typed-character-animation-cpu",
+            idempotency_key="typed-character-animation-project",
+        )
+        character = owner.ingest_project_object(
+            project.project_id,
+            b"cpu-character-image",
+            media_type="image/png",
+            filename="character.png",
+            idempotency_key="typed-character-image",
+        )
+        motion = owner.ingest_project_object(
+            project.project_id,
+            b"cpu-motion-video",
+            media_type="video/mp4",
+            filename="motion.mp4",
+            idempotency_key="typed-character-motion",
+        )
+        character_id = character["object_id"]
+        motion_id = motion["object_id"]
+        settlement_effect = {
+            "effect_type": "generation.create_with_variant",
+            "target_id": project.project_id,
+            "payload": {
+                "generation_type": "video",
+                "metadata": {
+                    "params": {
+                        "tool_type": "character-animate",
+                        "content_type": "video",
+                        "prompt": "cpu character proof",
+                        "mode": "animate",
+                        "resolution": "480p",
+                        "seed": 42,
+                    },
+                },
+                "variant_type": "character_animation",
+                "output_name": "animated_video",
+                "output_ordinal": 0,
+                "primary_policy": "preserve",
+            },
+        }
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[character_id, motion_id],
+            project_id=project.project_id,
+            idempotency_key="typed-character-animation-task",
+            spec={
+                "family": record.id,
+                "params": {
+                    "reference_image_ref": {
+                        "digest": character_id,
+                        "filename": "character.png",
+                        "media_type": "image/png",
+                    },
+                    "driving_video_ref": {
+                        "digest": motion_id,
+                        "filename": "motion.mp4",
+                        "media_type": "video/mp4",
+                    },
+                    "mode": "animate",
+                    "resolution": "480p",
+                    "prompt": "cpu character proof",
+                    "seed": 42,
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+            settlement_effect=settlement_effect,
+        )
+
+        settled = host.run(once=True)
+        assert len(settled) == 1 and settled[0].state == "succeeded"
+        completed = owner.get_task(task.task_id)
+        assert completed.state == "succeeded"
+        output = next(item for item in completed.result["outputs"] if item["name"] == "animated_video")
+        video = owner.get_object(output["digest"]).data
+        assert video == (
+            b"\x00\x00\x00\x18ftypisom"
+            + hashlib.sha256(b"cpu-character-image\x00cpu-motion-video").digest()
+        )
+        assert output["size"] == len(video)
+        generations, cursor = owner.list_generations(project.project_id)
+        assert cursor is None
+        assert len(generations) == 1
+        generation = generations[0]
+        assert generation.type == "video"
+        assert generation.status == "completed"
+        assert generation.metadata["source_task_id"] == task.task_id
+        assert generation.metadata["input_object_ids"] == [character_id, motion_id]
+        assert generation.metadata["params"]["tool_type"] == "character-animate"
+        variants, cursor = owner.list_variants(generation.generation_id)
+        assert cursor is None
+        assert len(variants) == 1
+        assert variants[0].variant_type == "character_animation"
+        assert variants[0].object_id == output["digest"]
+        assert variants[0].metadata["is_primary"] is True
+        assert variants[0].metadata["input_object_ids"] == [character_id, motion_id]
+        assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
+    finally:
+        _restore_cpu_readiness_environment(previous_readiness)
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+
+
+def test_reigh_character_animation_producer_composes_runtime_and_gallery_readback(tmp_path: Path) -> None:
+    """Prove the paired Reigh producer → Runtime → shipped host → gallery path."""
+    pack = _character_animation_cpu_fixture(tmp_path)
+    previous_readiness = _set_cpu_readiness_environment(pack)
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "reigh-character-animation-paired-trace",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        probe = GenericPackHost(pack_roots=[pack])
+        record = probe.discover()[0]
+        assert record.id == "vibecomfy.character_animation"
+
+        host = GenericPackHost(
+            pack_roots=[pack],
+            client=client,
+            executor_id="reigh-character-animation-paired-host",
+        )
+        host.discover()
+        host.preflight()
+        assert host.capabilities[record.id].ready
+        host.register()
+
+        project = owner.create_project(
+            "Reigh Character Animation Paired Trace",
+            slug="reigh-character-animation-paired-trace",
+            idempotency_key="reigh-character-animation-paired-project",
+        )
+        producer = tmp_path / "reigh_character_animation_producer.ts"
+        producer.write_text(
+            r"""
+const realFetch = globalThis.fetch;
+const endpoint = process.env.ASTRID_RUNTIME_ENDPOINT;
+const token = process.env.ASTRID_RUNTIME_TOKEN;
+if (!endpoint || !token) throw new Error('paired trace Runtime environment is incomplete');
+globalThis.fetch = async (input, init = {}) => {
+  const raw = typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.toString()
+      : input.url;
+  const source = new URL(raw, 'http://reigh.local');
+  const prefix = '/api/astrid';
+  const route = source.pathname.startsWith(prefix)
+    ? source.pathname.slice(prefix.length) || '/'
+    : source.pathname;
+  const target = new URL(`${route}${source.search}`, endpoint);
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  return realFetch(target, { ...init, headers });
+};
+(async () => {
+  const { createCharacterAnimateTask } = await import('@/tools/character-animate/lib/characterAnimate.ts');
+  const image = new Blob([new TextEncoder().encode('cpu-character-image')], { type: 'image/png' });
+  const motion = new Blob([new TextEncoder().encode('cpu-motion-video')], { type: 'video/mp4' });
+  const result = await createCharacterAnimateTask({
+    project_id: process.env.ASTRID_PROJECT,
+    character_image: image,
+    character_image_url: 'uploaded://character.png',
+    motion_video: motion,
+    motion_video_url: 'uploaded://motion.mp4',
+    prompt: 'cpu character proof',
+    mode: 'animate',
+    resolution: '480p',
+    seed: 42,
+    random_seed: false,
+  });
+  console.log(JSON.stringify(result));
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+""",
+            encoding="utf-8",
+        )
+        producer_env = os.environ.copy()
+        producer_env.update(
+            {
+                "ASTRID_RUNTIME_ENDPOINT": daemon.endpoint,
+                "ASTRID_RUNTIME_TOKEN": daemon.token,
+                "ASTRID_PROJECT": project.slug,
+            }
+        )
+        produced = subprocess.run(
+            [str(REIGH_ROOT / "node_modules/.bin/tsx"), str(producer)],
+            cwd=REIGH_ROOT,
+            env=producer_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert produced.returncode == 0, produced.stderr or produced.stdout
+        producer_payload = json.loads(
+            next(line for line in reversed(produced.stdout.splitlines()) if line.strip())
+        )
+        task_id = producer_payload["task_id"]
+        admitted = owner.get_task(task_id)
+        expected_inputs = [
+            "sha256:" + hashlib.sha256(b"cpu-character-image").hexdigest(),
+            "sha256:" + hashlib.sha256(b"cpu-motion-video").hexdigest(),
+        ]
+        assert admitted.project_id == project.project_id
+        assert admitted.capability_id == record.id
+        assert admitted.input_object_ids == expected_inputs
+        assert admitted.spec["spec"]["family"] == record.id
+        assert admitted.spec["spec"]["params"]["seed"] == 42
+        assert admitted.spec["spec"]["params"]["mode"] == "animate"
+
+        settled = host.run(once=True)
+        assert len(settled) == 1
+        assert settled[0].state == "succeeded"
+        completed = owner.get_task(task_id)
+        assert completed.state == "succeeded"
+        assert completed.result["generation_variant"]["generation_id"].startswith("generation-task-")
+        assert completed.result["generation_variant"]["variant_type"] == "character_animation"
+        output = next(item for item in completed.result["outputs"] if item["name"] == "animated_video")
+        video = owner.get_object(output["digest"]).data
+        assert video == (
+            b"\x00\x00\x00\x18ftypisom"
+            + hashlib.sha256(b"cpu-character-image\x00cpu-motion-video").digest()
+        )
+        assert output["size"] == len(video)
+        assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
+
+        readback = tmp_path / "reigh_character_animation_readback.ts"
+        readback.write_text(
+            r"""
+const realFetch = globalThis.fetch;
+const endpoint = process.env.ASTRID_RUNTIME_ENDPOINT;
+const token = process.env.ASTRID_RUNTIME_TOKEN;
+if (!endpoint || !token) throw new Error('paired trace Runtime environment is incomplete');
+globalThis.fetch = async (input, init = {}) => {
+  const raw = typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.toString()
+      : input.url;
+  const source = new URL(raw, 'http://reigh.local');
+  const prefix = '/api/astrid';
+  const route = source.pathname.startsWith(prefix)
+    ? source.pathname.slice(prefix.length) || '/'
+    : source.pathname;
+  const target = new URL(`${route}${source.search}`, endpoint);
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  return realFetch(target, { ...init, headers });
+};
+(async () => {
+  const { AstridLocalClient } = await import('@/integrations/astrid/client.ts');
+  const client = new AstridLocalClient({ projectSlug: process.env.ASTRID_PROJECT });
+  const page = await client.gallery.list({ limit: 50 });
+  const row = page.generations.find((generation) => generation.params?.tool_type === 'character-animate');
+  if (!row) throw new Error('paired trace gallery row was not found');
+  console.log(JSON.stringify(row));
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+""",
+            encoding="utf-8",
+        )
+        readback_env = producer_env.copy()
+        readback = subprocess.run(
+            [str(REIGH_ROOT / "node_modules/.bin/tsx"), str(readback)],
+            cwd=REIGH_ROOT,
+            env=readback_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert readback.returncode == 0, readback.stderr or readback.stdout
+        gallery_row = json.loads(
+            next(line for line in reversed(readback.stdout.splitlines()) if line.strip())
+        )
+        assert gallery_row["type"] == "video"
+        assert gallery_row["params"]["tool_type"] == "character-animate"
+        assert gallery_row["primary"]["variant_type"] == "character_animation"
+        print(
+            "PAIRED_TRACE "
+            + json.dumps(
+                {
+                    "project": project.slug,
+                    "task_id": task_id,
+                    "input_object_ids": expected_inputs,
+                    "output_digest": output["digest"],
+                    "output_size": output["size"],
+                    "generation_id": gallery_row["generation_id"],
+                    "tool_type": gallery_row["params"]["tool_type"],
+                    "variant_type": gallery_row["primary"]["variant_type"],
+                },
+                sort_keys=True,
+            )
+        )
+    finally:
+        _restore_cpu_readiness_environment(previous_readiness)
         if host is not None:
             host.shutdown()
         daemon.stop()

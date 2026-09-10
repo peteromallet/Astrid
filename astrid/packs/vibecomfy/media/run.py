@@ -130,8 +130,30 @@ def _run(
     destination = (out / "output.mp4").resolve()
     if source != destination:
         shutil.copy2(source, destination)
+    output_name = {
+        "vibecomfy.video_enhance": "enhanced_video",
+        "vibecomfy.character_animation": "animated_video",
+    }[capability]
+    result_payload = result.to_dict()
+    # The GenericPackHost receipt is a file inventory, not the executor's
+    # internal ``outputs`` mapping. Preserve the latter under an explicit
+    # execution key while emitting the canonical list consumed by CAS harvest.
+    result_payload["execution_result"] = dict(result_payload["outputs"])
+    result_payload["outputs"] = [{
+        "path": "output.mp4",
+        "name": output_name,
+        "ordinal": 0,
+        "role": "result",
+        "is_primary": True,
+        "content_hash": "sha256:" + hashlib.sha256(destination.read_bytes()).hexdigest(),
+        "bytes": destination.stat().st_size,
+    }]
     (out / "manifest.json").write_text(
-        json.dumps(result.to_dict() | {"output": "output.mp4"}, sort_keys=True),
+        json.dumps(
+            result_payload
+            | {"schema_version": 1, "kind": "video", "inputs": {}, "output": "output.mp4"},
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
 

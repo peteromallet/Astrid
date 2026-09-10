@@ -1,0 +1,86 @@
+{
+  "schema_version": "astrid.p7.b06.composition.v1",
+  "status": "candidate",
+  "captured_at": "2026-09-10",
+  "notes": [
+    "Source and dependency identities are pinned without downloading model payloads.",
+    "GPU readiness remains a separate gate requiring mounted-byte verification and provider capacity."
+  ],
+  "repositories": {
+    "astrid": {"commit": "974bb9d527957504e03e5160ae14e4aaf9469177", "tree": "1670651c99be88115d5c3871a6c43efa6cb710fb"},
+    "runtime": {"commit": "9b0a4432673e79b8acdcf7db1aee8db63c1c3621", "tree": "259db527e2ec51df2daffb2a534c444e376f18a5"},
+    "reigh_app": {"commit": "7521d3812c36087b2cd9cb9a9cc0a78a394cedee", "tree": "59b0ae3a001cc6f9a44d1abc663c94dd0913a39a"},
+    "reigh_worker": {"commit": "e0c6a0765bee05f27155b335bbf67110c0df6103", "tree": "ad4a1831f2f2f5b71d603e006de979eee7e97f36"},
+    "vibecomfy": {"commit": "8f58c8143dd84c981f985b409a17a3df8f05b026", "tree": "b19e51fa2e390fb24b6a15131a76e77b8cbaa89b"},
+    "runpod_lifecycle": {"commit": "14d12f3c5e100247ffb1360c8fe6ba82aa5c7aa6", "tree": "79b50f7321b56ff447b279acab4d6cf570462c81"},
+    "wan2gp": {"commit": "181bb71a21008032e4771e11663f33e4489c4512", "tree": "ffb942fba66d77ed19ddbed7e148ba5dd900bdf4"}
+  },
+  "comfyui": {
+    "checkout": {
+      "repository": "https://github.com/comfyanonymous/ComfyUI.git",
+      "tag": "v0.26.0",
+      "commit": "f6c162ddcfbd7eefb39c06fe5b8d4c46e8d09f40",
+      "tree": "5200d7ddd272423852556bf063d67ba8bd04e6ca",
+      "required_files": ["server.py", "nodes.py"]
+    },
+    "pip_embedded": {
+      "package": "comfyui==0.26.0",
+      "release": "v0.26.0.1",
+      "url": "https://github.com/hiddenswitch/pip-and-uv-installable-ComfyUI/releases/download/v0.26.0.1/comfyui-0.26.0-py3-none-any.whl",
+      "sha256": "180bace588836a911e66e978b458331de0e306c580dbbda73a5161ccc8c49711",
+      "bytes": 20956155,
+      "required_member": "comfy/client/embedded_comfy_client.py"
+    },
+    "uv_lock_sha256": "f9afaffd3e3b8f1aba24daf610f7659a403c7b8d03a91616376aa752a4d59344"
+  },
+  "custom_nodes": {
+    "selected": [
+      {"name": "ComfyUI-VideoHelperSuite", "commit": "4ee72c065db22c9d96c2427954dc69e7b908444b", "tree": "8890e310886c7bfbc62b42627b596889074f24bd"},
+      {"name": "ComfyUI-KJNodes", "commit": "b7646ad70a7daa7aeb919ca542274758d26ba2df", "tree": "372138053416bbb8abf9d6f932da8540dad263e4"},
+      {"name": "ComfyUI-segment-anything-2", "commit": "0c35fff5f382803e2310103357b5e985f5437f32", "tree": "e25aed37bf148bab2a8dcf86aa9fbe2102a5042f"},
+      {"name": "comfyui_controlnet_aux", "commit": "e8b689a513c3e6b63edc44066560ca5919c0576e", "tree": "d2ca43d24a80346e9604df26fb1f2d2db58bd07b"}
+    ],
+    "excluded": [
+      "ComfyUI-DepthAnythingV2", "ComfyUI-GGUF", "ComfyUI-LTXVideo", "ComfyUI-Qwen3-TTS",
+      "ComfyUI-QwenTTS", "ComfyUI-WanAnimatePreprocess", "ComfyUI-WanVideoWrapper", "rgthree-comfy", "ExamplePack"
+    ],
+    "lock_sha256": "323badf09c89585d01abfd10e9a116270381e0ff7bb20566cdcae56b36a1b4a9"
+  },
+  "templates": {
+    "video/basic_video_enhance": {"model_count": 0, "custom_nodes": ["ComfyUI-VideoHelperSuite"]},
+    "video/wan22_animate_native_first_stage": {
+      "model_count": 9,
+      "custom_nodes": ["ComfyUI-KJNodes", "ComfyUI-segment-anything-2", "comfyui_controlnet_aux"]
+    }
+  },
+  "models": [
+    {"name": "Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors", "revision": "5571ff9d81a631ee97946a703e94911d63214c44", "sha256": "2936b31473a967e7a429a6646bba60e7862d0938e178b58b2a140f391dd5b8e6", "bytes": 18401760586, "materialized": false},
+    {"name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", "revision": "8260d429d19fd7a72304cad059160b95d843913f", "sha256": "85c4a61c30e0497aa44b91d93a893b624708461a56fe5485183b28fa07e2dfb3", "bytes": 738005744, "materialized": false},
+    {"name": "WanAnimate_relight_lora_fp16.safetensors", "revision": "87badb1f794c15daf51db60838a433ca08bb218f", "sha256": "fc646c74c73f4b251f5fd9bc440ef21b03b27305f499966c68b2b3aa31498561", "bytes": 1436672440, "materialized": false},
+    {"name": "clip_vision_h.safetensors", "revision": "617a7633e636506f850e043bc4605f290a466a8e", "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161", "bytes": 1264219396, "materialized": false},
+    {"name": "sam2_hiera_base_plus.safetensors", "revision": "f885607d88bb3f9145efa49c3e3c50a9e5bf13eb", "sha256": "fa02d9028dcc4859c191f1d3f1ca1f7eefdb85f3b5e746c9ad738f322f3e89e2", "bytes": 323407992, "materialized": false},
+    {"name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "revision": "617a7633e636506f850e043bc4605f290a466a8e", "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68", "bytes": 6735906897, "materialized": false},
+    {"name": "wan_2.1_vae.safetensors", "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77", "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b", "bytes": 253815318, "materialized": false},
+    {"name": "yolox_l.onnx", "revision": "a124b32c3b7c5cebda1c7cd96178f0f9d2050125", "sha256": "7860ae79de6c89a3c1eb72ae9a2756c0ccfbe04b7791bb5880afabd97855a411", "bytes": 216746733, "materialized": false},
+    {"name": "dw-ll_ucoco_384_bs5.torchscript.pt", "revision": "359d662a9b33b73f6d0f21732baf8845f17bb4be", "sha256": "d86a0b2b59fddc0901a7076e9f59c9f8602602133ed72511c693fd11eea23d91", "bytes": 135059124, "materialized": false}
+  ],
+  "harness": {
+    "worker_live_matrix_cases": 36,
+    "vibecomfy_scenarios": 100,
+    "vibecomfy_corpus_files_and_envelopes": 111,
+    "astrid_pack_manifests": 20,
+    "c12_cpu_cases": 9,
+    "c12_cpu_result": "5 passed",
+    "combined_cpu_result": "31 passed"
+  },
+  "provider_observation": {
+    "network_volumes": 6,
+    "pods": 0,
+    "volume_membership": "1 expected / 1 present",
+    "local_free_gib": 22,
+    "gpu_probe_min_memory_gib": 48,
+    "gpu_probe_candidates_datacenter_available": 0,
+    "gpu_probe_min_memory_64gib_candidates": 0,
+    "mutations": false
+  }
+}

@@ -130,6 +130,23 @@ def test_video_enhance_unsupported_disposition_precedes_request_validation() -> 
         )
 
 
+def test_media_command_rejects_before_profile_read_or_scratch_creation(tmp_path) -> None:
+    from astrid.packs.vibecomfy.media import run
+
+    output = tmp_path / "attempt-output"
+    with pytest.raises(MediaCompileError, match="vibecomfy.video_enhance is unsupported"):
+        run._run(
+            capability="vibecomfy.video_enhance",
+            request=VideoEnhanceRequest(video_ref="media://source"),
+            task_identity="task-video",
+            profile_id="pip_embedded",
+            readiness_profile_path=str(tmp_path / "missing-profile.json"),
+            readiness_profile_hash="sha256:" + "a" * 64,
+            out=output,
+        )
+    assert not output.exists()
+
+
 def test_compilation_is_deterministic_and_rejects_native_wan_confusion() -> None:
     request = WanT2IRequest(prompt="a quiet lake")
     first = compile_wan_2_2_t2i(request)

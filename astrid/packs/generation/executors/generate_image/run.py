@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import random
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -499,7 +500,14 @@ def generate_core(
                     "and size bounds"
                 ),
             ) from exc
-    elif selected_storage_policy is CLOUD_UNIFIED_EDIT_STORAGE_POLICY:
+    elif (
+        selected_storage_policy is CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+        and isinstance(getattr(args, "image_ref", None), Mapping)
+    ):
+        # GenericPackHost performs this descriptor admission before it
+        # materializes CAS inputs. Standalone SDK callers may still supply a
+        # typed descriptor, but the subprocess receives the host-materialized
+        # path and must validate that path in the provider-boundary pass below.
         try:
             selected_storage_policy.validate_admission_request(
                 model=entry.id,

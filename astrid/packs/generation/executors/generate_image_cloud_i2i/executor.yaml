@@ -46,6 +46,7 @@
     "output_result_manifest": true,
     "api_provider": "fal",
     "env": ["FAL_KEY"],
+    "secrets_required": ["FAL_KEY"],
     "storage_estimate_required": true,
     "storage_estimate_exact": true,
     "fixed_inputs": {"model": "z-image", "mode": "i2i", "execution": "cloud"},
@@ -57,7 +58,7 @@
     "hc04_cas_param_ports": ["image_ref"],
     "network_policy": {
       "allowed_protocols": ["dns", "tcp"],
-      "allowed_destinations": ["queue.fal.run:443", "fal.run:443", "storage.fal.run:443"],
+      "allowed_destinations": ["queue.fal.run:443", "fal.run:443", "fal.media:443", "storage.fal.run:443"],
       "allow_redirects": false,
       "broker": {"host_managed": true, "kind": "broker", "enforced": true, "observable": true, "route": "declared-http-routes", "wrapper": "astrid-generic-host"},
       "descendant_enforcement": {"kind": "broker", "validated": true, "observable": true, "route": "declared-http-routes", "wrapper": "astrid-generic-host"}

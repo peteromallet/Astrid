@@ -108,10 +108,14 @@ a gateway command).
 
 The rendered view writes `filmstrip-view/` and publishes `filmstrip-bundle.zip`,
 a standalone HTML file, and its result manifest as managed objects. The SDK
-verifies and extracts the bundle into a disposable local delivery directory,
+verifies and extracts the bundle into the deterministic, project-namespaced
+cache at `~/Library/Caches/Astrid/timeline-visualize/<project>/<bundle-digest>/`
+on macOS (or `$XDG_CACHE_HOME/astrid/timeline-visualize/...` elsewhere),
 returning `html`, `pages`, `frame_index`, and `manifest_path`, plus verified
-`audio_analysis` and `media` paths when those members are present. The runtime
-objects remain the durable record and the result manifest covers every member.
+`audio_analysis` and `media` paths when those members are present. Extraction
+uses a hidden sibling staging directory and publishes only after all members
+pass integrity checks. The runtime objects remain the durable authority and
+the result manifest covers every member.
 
 The structural view writes `agent-view/manifest.json` plus the mandatory machine bundle:
 

@@ -36,7 +36,11 @@ dependencies = [
 ]
 
 [project.scripts]
-astrid = "astrid.core.gateway:main"
+# ``astrid-tools`` is the direct Astrid product gateway.  Keep ``python -m astrid``
+# as the package gateway, while the shorter ``astrid`` command opens the
+# named Astrid OMP agent (see ``astrid.omp_agent``).
+astrid-tools = "astrid.core.gateway:main"
+astrid = "astrid.omp_agent:main"
 
 [project.optional-dependencies]
 dev = [

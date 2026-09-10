@@ -334,7 +334,10 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
         project=parsed.project,
         inputs=inputs,
         out=parsed.out,
-        **({"wait": True} if getattr(parsed, "view", None) == "filmstrip" else {}),
+        # Both visualizer views return browsable evidence. Wait for the
+        # admitted task so the CLI cannot report a successful run before the
+        # PNG/manifest artifacts (or a terminal failure) exist.
+        wait=True,
     )
     if result.ok:
         outputs = result.outputs

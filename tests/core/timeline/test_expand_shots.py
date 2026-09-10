@@ -146,6 +146,8 @@ def test_shot_offset_clamp_drop():
     assert shot_1_expanded["hold"] == 2.0
     assert shot_1_expanded["track"] == "visual"
     assert shot_1_expanded["clipType"] == "media"
+    assert shot_1_expanded["shot_id"] == "shot_1"
+    assert shot_1_expanded["shot_occurrence_id"] == "shot-occ-0000-shot_1"
 
     # Verify sub_clip_2 expanded:
     #   - at = 1.0 + 1.5 = 2.5
@@ -155,6 +157,7 @@ def test_shot_offset_clamp_drop():
     assert shot_2_expanded is not None
     assert shot_2_expanded["at"] == 2.5
     assert shot_2_expanded["hold"] == 1.0
+    assert shot_2_expanded["shot_occurrence_id"] == "shot-occ-0000-shot_1"
 
     # Verify parent docs unchanged.
     assert _total_assets(expanded_registry) == 0

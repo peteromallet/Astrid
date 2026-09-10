@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import importlib
 import builtins
+import hashlib
 import json
 import re
 import uuid
@@ -125,6 +126,34 @@ _RAW_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # The five required, closed-shape fields of ``timeline_identity``
 # (``schemas/_defs.json:203-217``).
 _IDENTITY_FIELDS = ("stable_id", "qualified_ref", "uuid", "ulid", "slug")
+_CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def _stable_compat_ulid(seed: str) -> str:
+    """Derive a stable visualizer identity for runtimes without ULID fields.
+
+    The current workspace timeline API identifies rows by UUID and does not
+    expose the legacy timeline ULID/head projection used by this evidence
+    format.  Keep the evidence identity deterministic and explicitly derived
+    from the runtime UUID; it is never used as an authority or write key.
+    """
+
+    value = int.from_bytes(hashlib.sha256(seed.encode("utf-8")).digest()[:16], "big")
+    chars = ["0"] * 26
+    for index in range(25, -1, -1):
+        chars[index] = _CROCKFORD32[value & 31]
+        value >>= 5
+    return "".join(chars)
+
+
+def _compat_head_hash(config: Mapping[str, Any], registry: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        {"config": config, "registry": registry},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -169,6 +198,28 @@ class KernelTimeline:
     head_created_at: str
 
 
+def _runtime_reader(runtime_client: Any, *, family: str, operation: str) -> Any:
+    """Return one canonical paginated reader from either Astrid client surface.
+
+    The executor normally constructs the low-level ``WorkspaceClient`` in its
+    child process, while SDK preflight passes the public ``AstridClient``.  The
+    latter intentionally exposes runtime reads through product families
+    (``client.projects.list`` and ``client.timelines.list``), not as generated
+    client methods.  Keep the selector independent of that composition detail
+    without reaching into private ``_remote`` state.
+    """
+
+    direct = getattr(runtime_client, operation, None)
+    if callable(direct):
+        return direct
+    scoped = getattr(getattr(runtime_client, family, None), "list", None)
+    if callable(scoped):
+        return scoped
+    raise AttributeError(
+        f"runtime client does not expose {operation} or {family}.list"
+    )
+
+
 def select_kernel_timelines(
     project_dir: Path | None,
     *,
@@ -196,7 +247,13 @@ def select_kernel_timelines(
         except Exception as exc:
             return [], [f"workspace runtime is unavailable: {exc}"]
     try:
-        project_rows = paged_rows(runtime_client.list_projects)
+        project_reader = _runtime_reader(
+            runtime_client, family="projects", operation="list_projects"
+        )
+        timeline_reader = _runtime_reader(
+            runtime_client, family="timelines", operation="list_timelines"
+        )
+        project_rows = paged_rows(project_reader)
         if project_rows is None:
             return [], ["workspace project listing returned an invalid page"]
         project = next(
@@ -208,7 +265,7 @@ def select_kernel_timelines(
         project_id = project.get("project_id") or project.get("id")
         if not project_id:
             return [], [f"project {project_slug!r} has no runtime identity"]
-        rows = paged_rows(runtime_client.list_timelines, str(project_id))
+        rows = paged_rows(timeline_reader, str(project_id))
         if rows is None:
             return [], ["workspace timeline listing returned an invalid page"]
     except Exception as exc:
@@ -249,12 +306,24 @@ def select_kernel_timelines(
             assets = assets["assets"]
         # Runtime rows carry canonical object ids already.  Legacy media
         # rebasing is intentionally limited to the explicit filesystem path.
+        # The current runtime's public timeline DTO has config/registry and a
+        # version but omits the older ULID/event-head projection.  Fill only
+        # those evidence-only fields with deterministic compatibility values;
+        # the UUID, document, and version remain runtime-owned authority.
+        if not isinstance(timeline_ulid, str) and isinstance(timeline_id, str):
+            timeline_ulid = _stable_compat_ulid(f"timeline:{timeline_id}")
         if not isinstance(timeline_ulid, str) or not isinstance(alias, str):
             diagnostics.append(f"kernel timeline {timeline_id!r} has missing alias metadata")
             continue
         head_event_id = row.get("head_event_id", row.get("event_head", row.get("event_id")))
-        head_hash = row.get("head_hash", row.get("event_hash", ""))
-        head_created_at = row.get("head_created_at", row.get("updated_at", row.get("created_at", "")))
+        if not isinstance(head_event_id, str) and isinstance(timeline_id, str):
+            head_event_id = f"timeline:{timeline_id}:{row.get('config_version', row.get('version', 1))}"
+        head_hash = row.get("head_hash", row.get("event_hash"))
+        if not isinstance(head_hash, str):
+            head_hash = _compat_head_hash(config, assets)
+        head_created_at = row.get("head_created_at", row.get("updated_at", row.get("created_at")))
+        if not isinstance(head_created_at, str):
+            head_created_at = "1970-01-01T00:00:00+00:00"
         if not isinstance(timeline_id, str) or not isinstance(head_event_id, str) or not isinstance(head_created_at, str):
             diagnostics.append(f"kernel timeline {timeline_id!r} has no verifiable runtime head")
             continue

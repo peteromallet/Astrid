@@ -55,6 +55,24 @@ def test_exact_old_render_uses_frozen_script_without_current_binding_reads():
     assert not client.read_binding
 
 
+def test_filmstrip_exposes_spoken_text_only_not_generation_prompts():
+    value = envelope()
+    bindings = value['authority_context']['expansion']['shots'][0]['text_bindings']
+    bindings.extend([
+        {'binding_id': 'positive', 'head': 1, 'media_id': DIGEST,
+         'content_hash': DIGEST, 'byte_size': len(TEXT), 'kind': 'prompt', 'slot': 'positive'},
+        {'binding_id': 'negative', 'head': 1, 'media_id': DIGEST,
+         'content_hash': DIGEST, 'byte_size': len(TEXT), 'kind': 'prompt', 'slot': 'negative'},
+        {'binding_id': 'unmarked-transcript', 'head': 1, 'media_id': DIGEST,
+         'content_hash': DIGEST, 'byte_size': len(TEXT), 'kind': 'transcript'},
+        {'binding_id': 'spoken-transcript', 'head': 1, 'media_id': DIGEST,
+         'content_hash': DIGEST, 'byte_size': len(TEXT), 'kind': 'transcript', 'spoken': True},
+    ])
+    result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
+    assert [script['kind'] for script in result['scripts']] == ['voiceover_script', 'transcript']
+    assert [script['binding_id'] for script in result['scripts']] == ['binding', 'spoken-transcript']
+
+
 @pytest.mark.parametrize('field', ['current_version', 'current_head'])
 def test_default_refuses_stale_timeline_or_script(field):
     client = FakeClient(); setattr(client, field, 2)
@@ -73,6 +91,28 @@ def test_missing_placement_does_not_guess_script_from_clip_name():
     result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
     assert result['scripts'] == []
     assert not result['metadata']['script_mapping_available']
+
+
+def test_flattened_image_clip_uses_admission_occurrence_identity():
+    value = envelope()
+    authority = value['authority_context']
+    authority['expansion']['occurrences'] = [{
+        'shot_occurrence_id': 'shot-occ-0000-sh', 'shot_id': 'sh',
+        'name': 'Blue', 'at': 0, 'hold': 3,
+        'timeline_document_id': 'child', 'source_index': 0,
+    }]
+    config = value['inputs']['timeline_snapshot']['config']
+    config['clips'][0].update(
+        clipType='image', shot_id='sh', shot_name='forged child name',
+        shot_occurrence_id='shot-occ-0000-sh',
+    )
+    # The sidecar is the source of truth for the name/script; no timing join
+    # or filename/clip-type inference is needed for this flattened payload.
+    result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
+    assert result['metadata']['script_mapping_available']
+    assert result['scripts'][0]['occurrence_id'] == 'shot-occ-0000-sh'
+    assert result['clips'][0]['shot_name'] == 'Blue'
+    assert result['clips'][0]['shot_id'] == 'sh'
 
 
 def test_rejects_foreign_output_and_arbitrary_path():

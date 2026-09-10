@@ -63,7 +63,8 @@ class Runtime:
 def test_group_preserves_order_source_bounds_speed_audio_and_registry():
     r = Runtime(); result = r.group(); assert result.ok, result
     expanded, registry = expand_shot_clips(r.parent['config'], r.parent['registry'], load_timeline=lambda ref: (r.children[ref]['config'], r.children[ref]['registry']))
-    assert expanded == r.original['config']
+    assert [{k: v for k, v in clip.items() if k not in {'shot_id', 'shot_occurrence_id', 'shot_name'}} for clip in expanded['clips']] == r.original['config']['clips']
+    assert expanded['clips'][0]['shot_occurrence_id'].startswith('shot-occ-0000-')
     assert registry == r.original['registry']
     assert len(r.items) == 2 and len(r.records) == 1
     assert r.calls[-1] == 'save'

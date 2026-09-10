@@ -9,4 +9,4 @@ OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'rest
 # Astrid provenance for this vendored generated client.
 SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
 SOURCE_COMMIT = "afccb430e2a983c968b6a8a96fd630ba3a6262fc"
-GENERATED_CLIENT_SHA256 = "sha256:de535ff4c501c8f0ad10f0a6a1b9d1a6fa6e2bc14870974eea9a42738e1679da"
+GENERATED_CLIENT_SHA256 = "sha256:b47b179fdfdd819570d934fbfddf88dbfad82d5022261d81cc5a1e6ced7c62c2"

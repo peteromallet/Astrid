@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -100,10 +101,19 @@ def validate_runtime_endpoint(endpoint: str) -> str:
 
 
 class WorkspaceClientError(RuntimeError):
-    def __init__(self, status: int, code: str, message: str, details: Mapping[str, Any] | None = None):
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        message: str,
+        details: Mapping[str, Any] | None = None,
+        *,
+        request_id: str = "",
+    ) -> None:
         super().__init__(message)
         self.status, self.code, self.message = status, code, message
         self.details = dict(details or {})
+        self.request_id = request_id
 
 
 def _read_credential(path: Path) -> str:
@@ -124,8 +134,28 @@ def _read_credential(path: Path) -> str:
     return token
 
 
-def resolve_runtime_connection(endpoint: str, credential: str | Path) -> tuple[str, str]:
-    """Validate an explicitly supplied endpoint and credential."""
+def resolve_runtime_connection(
+    endpoint: str | None = None,
+    credential: str | Path | None = None,
+) -> tuple[str, str]:
+    """Validate a runtime connection supplied by the caller or host boundary.
+
+    Pack executors run in a host-created child process.  The host may provide
+    the same explicit connection through ``BANODOCO_RUNTIME_ENDPOINT`` and
+    ``BANODOCO_RUNTIME_CREDENTIAL``; this is still an explicit boundary, not
+    runtime discovery.  A credential environment value is treated as an
+    owner-only path when it names an existing file, otherwise as a bearer
+    token already held by the host.
+    """
+    if endpoint is None:
+        endpoint = os.environ.get("BANODOCO_RUNTIME_ENDPOINT", "")
+    if credential is None:
+        raw_credential = os.environ.get("BANODOCO_RUNTIME_CREDENTIAL", "").strip()
+        credential = (
+            Path(raw_credential)
+            if raw_credential and Path(raw_credential).expanduser().is_file()
+            else raw_credential
+        )
     endpoint = validate_runtime_endpoint(endpoint)
     if not isinstance(credential, (str, Path)):
         raise _reconfigure("credential", f"runtime credential must be explicit and non-empty; {RECONFIGURE_ACTION}")
@@ -191,12 +221,12 @@ class WorkspaceClient:
                 raise AttributeError(f"generated workspace operation is not callable: {operation!r}")
             value = generated(*args, **kwargs)
         except Exception as exc:  # generated ApiError has stable fields
-            fields = exc.__dict__ if hasattr(exc, "__dict__") else {}
             raise WorkspaceClientError(
-                int(fields.get("status", 0)),
-                str(fields.get("code", "transport_error")),
-                str(fields.get("message", exc)),
-                fields.get("details", {}),
+                int(getattr(exc, "status", 0)),
+                str(getattr(exc, "code", "transport_error")),
+                str(getattr(exc, "message", exc)),
+                getattr(exc, "details", {}),
+                request_id=str(getattr(exc, "request_id", "")),
             ) from exc
         def plain(item: Any) -> Any:
             if is_dataclass(item):

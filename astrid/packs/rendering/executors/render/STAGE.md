@@ -195,6 +195,11 @@ exits.
 
 Canonical shot renders pin each referenced shot’s name, version, and canonical text-binding rows under `timeline_authority.expansion.shots`. A binding’s `head`, immutable `media_id`, and `content_hash` identify the exact narration or other attached text at admission. Rebinding text changes render identity even when the visual timeline stays unchanged. This records source provenance; it does not generate speech or draw captions. The bound text remains inspectable through the canonical shot text-binding and media APIs.
 
+Shot occurrence placements are pinned for every managed render, regardless of
+the optional `review` flag. `review` controls only the burned-in visual labels;
+the immutable occurrence envelope is also consumed by filmstrip and timeline
+visualizer tooling to map each admitted shot binding to its rendered interval.
+
 Every successful facade render writes `<output>.provenance.json`. Core owns its
 routing and identity fields: request digest, requested policy, planner, ordered
 segments and renderer resolution, finalizer, manifest/input/artifact hashes,

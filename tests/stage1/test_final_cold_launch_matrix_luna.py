@@ -58,7 +58,7 @@ RUNTIME_CHECKOUT = Path(
 # current main or weakening the historical check.
 RUNTIME_COMMIT = os.environ.get(
     "ASTRID_STAGE1_RUNTIME_COMMIT",
-    "d778b1f9c83237079bd765df2bf87753e495ff16",
+    "9b0a4432673e79b8acdcf7db1aee8db63c1c3621",
 )
 
 

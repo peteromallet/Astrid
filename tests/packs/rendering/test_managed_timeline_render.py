@@ -351,15 +351,25 @@ def test_review_pins_registered_names_and_ranges_without_changing_authority():
     }]}
     runtime.text_binding_rows = [{'binding_id': 'binding-1', 'shot_id': 'shot-1',
         'kind': 'voiceover_script', 'slot': None, 'head': 1,
-        'media_id': 'sha256:' + 'a' * 64, 'content_hash': 'sha256:' + 'a' * 64}]
+        'media_id': 'sha256:' + 'a' * 64, 'content_hash': 'sha256:' + 'a' * 64,
+        'text': 'A pinned narration line.'}]
     before = copy.deepcopy(runtime.timeline)
     prepared, authority = _prepare_managed_render_inputs(
         {'timeline_ref': 'main', 'review': True, 'review_context': {'shots': ['forged']}}, project='demo', _client=runtime)
-    assert prepared['review_context'] == {'shots': [{'shot_id': 'shot-1', 'name': '01 Opening', 'at': 1.25, 'hold': 2.75}]}
+    assert prepared['review_context'] == {
+        'shots': [{'shot_id': 'shot-1', 'name': '01 Opening', 'at': 1.25, 'hold': 2.75}],
+        'speech': {'status': 'projected', 'phrases': [{
+            'id': 'shot-script:shot-occ-0000-shot-1:binding-1',
+            'shot_id': 'shot-1', 'shot_occurrence_id': 'shot-occ-0000-shot-1',
+            'text': 'A pinned narration line.', 'status': 'projected',
+            'render_interval': {'start': 1.25, 'end': 4.0},
+            'timing_basis': 'shot_script', 'word_aligned': False,
+            'binding_id': 'binding-1', 'head': 1,
+            'media_id': 'sha256:' + 'a' * 64,
+        }]},
+    }
     clean, clean_authority = _prepare_managed_render_inputs({'timeline_ref': 'main'}, project='demo', _client=runtime)
-    assert clean['review_context'] == {'shots': [
-        {'shot_id': 'shot-1', 'name': '01 Opening', 'at': 1.25, 'hold': 2.75}
-    ]}
+    assert clean['review_context'] == prepared['review_context']
     assert authority['expansion']['children'][0]['timeline_ulid'] == 'child-1'
     assert clean_authority == authority
     assert runtime.timeline == before

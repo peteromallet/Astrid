@@ -111,6 +111,7 @@ _EXECUTION_FACT_EXACT_KEYS = frozenset(
 )
 _EXECUTION_FACT_MINIMUM_KEYS = frozenset({"vram_bytes", "scratch_bytes"})
 _MAX_EXECUTION_FACT_BYTES = (1 << 53) - 1
+_EXECUTOR_REFRESH_SECONDS = 30.0
 _HOST_OWNED_ENVELOPE_PORTS = (
     "task_spec_json",
     "input_object_paths_json",
@@ -957,6 +958,12 @@ class RuntimeProtocolClient:
         self._heartbeat_session = secrets_module.token_hex(8)
         self._heartbeat_sequence = 0
         self._heartbeat_lock = threading.Lock()
+        # Registration is the runtime's executor liveness pulse.  Keep one
+        # stable nonce for retries, then rotate it only for an intentional
+        # renewal so a new host session cannot replay an old registration
+        # receipt while transport retries remain idempotent.
+        self._registration_session = secrets_module.token_hex(8)
+        self._registration_refresh_deadline = 0.0
 
     def health(self):
         """Read protocol/schema/runtime epoch through the generated client."""
@@ -995,8 +1002,15 @@ class RuntimeProtocolClient:
             payload["verified_facts"] = dict(verified_facts)
         return self.generated.register_executor(
             payload,
-            idempotency_key=f"executor-{executor_id}-{_canonical_digest(payload)}",
+            idempotency_key=(
+                f"executor-{executor_id}-{_canonical_digest(payload)}-"
+                f"{self._registration_session}"
+            ),
         )
+
+    def renew_registration_session(self) -> None:
+        """Rotate the host-session nonce before an intentional renewal."""
+        self._registration_session = secrets_module.token_hex(8)
 
     def register_capability(
         self,
@@ -1244,6 +1258,9 @@ class GenericPackHost:
         self._active_processes: set[subprocess.Popen] = set()
         self._process_lock = threading.RLock()
         self._shutdown = threading.Event()
+        # An unregistered host must retain the existing claim-loop failure
+        # semantics. register() arms the first refresh after success.
+        self._registration_refresh_deadline = float("inf")
 
     def _track_process(self, process: subprocess.Popen) -> None:
         with self._process_lock:
@@ -1634,7 +1651,15 @@ class GenericPackHost:
         self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
         self._registered_state = state
         self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
+        self._registration_refresh_deadline = time.monotonic() + _EXECUTOR_REFRESH_SECONDS
         return {"registration": registration, "capabilities": [r.manifest() for r in self.capabilities.values()], "withdrawn_capabilities": removed}
+
+    def _renew_executor_registration(self) -> None:
+        """Refresh runtime executor liveness without replaying a receipt."""
+        renew = getattr(self.client, "renew_registration_session", None)
+        if callable(renew):
+            renew()
+        self.register()
 
     def _withdraw_removed_capabilities(self, capability_ids: list[str]) -> None:
         """Make removed capabilities unavailable after replacement commits."""
@@ -3177,6 +3202,8 @@ class GenericPackHost:
         consecutive_claim_failures = 0
         while not self._shutdown.is_set() and (max_tasks is None or len(results) < max_tasks):
             try:
+                if time.monotonic() >= self._registration_refresh_deadline:
+                    self._renew_executor_registration()
                 result = self.claim_once()
             except Exception as exc:
                 # ``--once`` is a diagnostic/test surface and must preserve the

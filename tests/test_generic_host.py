@@ -828,6 +828,53 @@ def test_runtime_protocol_client_uses_worker_token_contract_without_user_handsha
     assert "schema_digest" not in wire
 
 
+def test_runtime_protocol_client_registration_retries_are_session_idempotent(
+    monkeypatch,
+):
+    class WorkerGenerated:
+        def __init__(self, *_args, **_kwargs):
+            self.keys = []
+
+        def register_executor(self, executor, *, idempotency_key):
+            self.keys.append(idempotency_key)
+            return {"executor_id": executor["executor_id"], "idempotency_key": idempotency_key}
+
+    monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", WorkerGenerated)
+    kwargs = {
+        "capabilities": [],
+        "max_concurrency": 1,
+        "resource_keys": [],
+        "source_digest": "sha256:" + "a" * 64,
+        "dependency_digest": "sha256:" + "b" * 64,
+        "source_epoch": "source-epoch-1",
+    }
+    first = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    first.register_executor("worker-1", **kwargs)
+    first.register_executor("worker-1", **kwargs)
+    first.renew_registration_session()
+    first.register_executor("worker-1", **kwargs)
+    second = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    second.register_executor("worker-1", **kwargs)
+
+    assert first.generated.keys[0] == first.generated.keys[1]
+    assert first.generated.keys[0] != first.generated.keys[2]
+    assert first.generated.keys[2] != second.generated.keys[0]
+
+
+def test_claim_loop_renews_executor_registration_after_liveness_interval(
+    tmp_path, monkeypatch
+):
+    _write_manifest(tmp_path / "echo")
+    host = GenericPackHost(pack_roots=[tmp_path], client=FakeRuntime())
+    host.discover()
+    renewed = []
+    monkeypatch.setattr(host, "_renew_executor_registration", lambda: renewed.append(True))
+    host._registration_refresh_deadline = 0.0
+    monkeypatch.setattr(host, "claim_once", lambda: None)
+    host.run(once=True)
+    assert renewed == [True]
+
+
 def test_vendored_runtime_client_timeout_is_bounded_and_request_correlated(monkeypatch):
     from banodoco_workspace_client import ApiError, WorkspaceClient
 

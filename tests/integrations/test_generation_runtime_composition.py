@@ -822,9 +822,11 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
                     if host == "queue.fal.run":
                         assert headers.get("authorization") == "Key cpu-test-key"
                         if method == "POST":
+                            assert path == "/fal-ai/z-image/turbo/image-to-image"
                             payload = json.loads(body[:content_length].decode())
                             assert payload["prompt"] == "https connect i2i proof"
-                            assert payload["image_size"] == "1024x1024"
+                            assert payload["image_size"] == {"width": 1024, "height": 1024}
+                            assert payload["seed"] == 19
                             assert payload["strength"] == 0.5
                             image_url = payload["image_url"]
                             assert image_url.startswith("data:image/png;base64,")
@@ -955,6 +957,7 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
                     "count": 1,
                     "size": "1024x1024",
                     "strength": 0.5,
+                    "seed": 19,
                 },
                 "output_policy": {},
             },
@@ -1001,6 +1004,95 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
         stop.set()
         tls_listener.close()
         provider_thread.join(timeout=2)
+
+
+def test_production_i2i_rejects_extra_or_misordered_single_cas_inputs(tmp_path: Path) -> None:
+    """A single CAS port is still an ordered one-element input contract."""
+    pack = _registered_image_executor_fixture(
+        tmp_path,
+        manifest_name="generate_image_cloud_i2i",
+    )
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "production-i2i-cas-order-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        host = GenericPackHost(
+            pack_roots=[pack],
+            client=RuntimeProtocolClient(daemon.endpoint, daemon.token),
+            executor_id="production-i2i-cas-order-host",
+            credential_source={"FAL_KEY": "fixture-key"},
+        )
+        record = host.discover()[0]
+        host.preflight()
+        host.register()
+        project = owner.create_project(
+            "Production i2i CAS order",
+            slug="production-i2i-cas-order",
+            idempotency_key="production-i2i-cas-order-project",
+        )
+        source_row = owner.ingest_project_object(
+            project.project_id,
+            base64.b64decode(_PNG),
+            media_type="image/png",
+            filename="source.png",
+            idempotency_key="production-i2i-cas-order-source",
+        )
+        extra_row = owner.ingest_project_object(
+            project.project_id,
+            b"extra-cas-object",
+            media_type="application/octet-stream",
+            filename="extra.bin",
+            idempotency_key="production-i2i-cas-order-extra",
+        )
+        source_id = str(getattr(source_row, "object_id", None) or getattr(source_row, "digest"))
+        extra_id = str(getattr(extra_row, "object_id", None) or getattr(extra_row, "digest"))
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[extra_id, source_id],
+            project_id=project.project_id,
+            idempotency_key="production-i2i-cas-order-task",
+            spec={
+                "family": record.id,
+                "params": {
+                    "execution": "cloud",
+                    "mode": "i2i",
+                    "model": "z-image",
+                    "prompt": "misordered source proof",
+                    "image_ref": {
+                        "digest": source_id,
+                        "filename": "source.png",
+                        "media_type": "image/png",
+                    },
+                    "count": 1,
+                    "size": "1024x1024",
+                    "strength": 0.5,
+                },
+                "output_policy": {},
+            },
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+        )
+        with pytest.raises(HostError, match="ordered CAS inputs"):
+            host.run(once=True)
+        failed = owner.get_task(task.task_id)
+        assert failed.state == "failed"
+        assert not failed.result.get("outputs", [])
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
 
 
 @pytest.mark.parametrize(

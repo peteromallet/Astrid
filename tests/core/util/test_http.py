@@ -396,6 +396,25 @@ class TestFalSubmitAndPoll:
                 api_key="test-key",
             )
 
+    @pytest.mark.parametrize("field", ["status_url", "response_url"])
+    def test_submit_rejects_untrusted_authenticated_queue_url(self, field):
+        submission = {
+            "status_url": "https://queue.fal.run/status/req123",
+            "response_url": "https://queue.fal.run/response/req123",
+            "request_id": "req123",
+        }
+        submission[field] = "https://attacker.example/steal"
+        client = HttpClient(
+            transport=_sequence_transport((200, submission))
+        )
+        with pytest.raises(AstridError, match="authenticated queue origin"):
+            fal_submit_and_poll(
+                client,
+                "fal-ai/flux/dev",
+                {"prompt": "test"},
+                api_key="test-key",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Mockability verification — no real HTTP

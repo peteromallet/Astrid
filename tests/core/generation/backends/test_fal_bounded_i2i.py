@@ -63,6 +63,9 @@ def test_bounded_i2i_caps_provider_response_and_download(tmp_path: Path) -> None
     assert len(result.image_paths) == 1
     assert get_bytes.call_args.kwargs["max_bytes"] == 64 * 1024 * 1024
     assert submit.call_args.kwargs["max_response_bytes"] == 1 * 1024 * 1024
+    payload = submit.call_args.args[2]
+    assert payload["image_size"] == {"width": 1024, "height": 1024}
+    assert payload["image_url"] == f"data:image/png;base64,{base64.b64encode(_PNG).decode()}"
 
 
 def test_bounded_i2i_rejects_extra_provider_output(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -250,6 +251,153 @@ class CloudI2IStoragePolicy:
             "output_bytes": self.estimated_output_bytes,
         }
 
+    _IMAGE_EXTENSIONS = {
+        "image/png": {".png"},
+        "image/jpeg": {".jpg", ".jpeg"},
+        "image/webp": {".webp"},
+        "image/gif": {".gif"},
+    }
+    _IMAGE_FORMATS = {
+        "image/png": "PNG",
+        "image/jpeg": "JPEG",
+        "image/webp": "WEBP",
+        "image/gif": "GIF",
+    }
+    _MAX_SEED = 2_147_483_647
+
+    def _validate_size(self, params: Mapping[str, Any]) -> tuple[int, int]:
+        size = params.get("size")
+        if not isinstance(size, str) or "x" not in size.lower():
+            raise ImageStoragePolicyError("bounded cloud i2i requires explicit WIDTHxHEIGHT size")
+        try:
+            width_text, height_text = size.lower().split("x", 1)
+            width, height = int(width_text), int(height_text)
+        except (TypeError, ValueError) as exc:
+            raise ImageStoragePolicyError("bounded cloud i2i size must be WIDTHxHEIGHT") from exc
+        if not (1 <= width <= self.max_width and 1 <= height <= self.max_height):
+            raise ImageStoragePolicyError(
+                f"bounded cloud i2i dimensions must be at most {self.max_width}x{self.max_height}"
+            )
+        return width, height
+
+    def _validate_controls(
+        self,
+        params: Mapping[str, Any],
+        *,
+        require_strength: bool,
+    ) -> None:
+        count = params.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int) or count != self.max_count:
+            raise ImageStoragePolicyError(
+                f"bounded cloud i2i requires count={self.max_count} as an integer"
+            )
+        prompt = params.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ImageStoragePolicyError("bounded cloud i2i requires a prompt")
+        if len(prompt) > self.max_prompt_chars:
+            raise ImageStoragePolicyError(
+                f"prompt exceeds bounded limit of {self.max_prompt_chars} characters"
+            )
+        strength = params.get("strength")
+        if require_strength and strength is None:
+            raise ImageStoragePolicyError("bounded cloud i2i requires numeric strength")
+        if strength is not None and (
+            isinstance(strength, bool)
+            or not isinstance(strength, (int, float))
+            or not math.isfinite(float(strength))
+            or not 0 <= float(strength) <= 1
+        ):
+            raise ImageStoragePolicyError("bounded cloud i2i strength must be a finite number from 0 through 1")
+        seed = params.get("seed")
+        if seed is not None and (
+            isinstance(seed, bool)
+            or not isinstance(seed, int)
+            or not 0 <= seed <= self._MAX_SEED
+        ):
+            raise ImageStoragePolicyError(
+                f"bounded cloud i2i seed must be an integer from 0 through {self._MAX_SEED}"
+            )
+
+    def validate_admission_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        """Validate the immutable HC-04 values before host stringification."""
+        if (model, mode, execution) != ("z-image", "i2i", "cloud"):
+            raise ImageStoragePolicyError(
+                f"request is outside bounded storage policy {self.version}"
+            )
+        self._validate_controls(params, require_strength=True)
+        self._validate_size(params)
+        image_ref = params.get("image_ref")
+        if not isinstance(image_ref, Mapping):
+            raise ImageStoragePolicyError(
+                "bounded cloud i2i image_ref must be a typed CAS descriptor"
+            )
+        digest = image_ref.get("digest")
+        normalized = str(digest).removeprefix("sha256:") if isinstance(digest, str) else ""
+        if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ImageStoragePolicyError("bounded cloud i2i image_ref digest must be a SHA-256 object ID")
+        filename = image_ref.get("filename")
+        if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+            raise ImageStoragePolicyError("bounded cloud i2i image_ref filename must be a safe basename")
+        media_type = image_ref.get("media_type")
+        if not isinstance(media_type, str) or media_type.lower() not in self._IMAGE_EXTENSIONS:
+            raise ImageStoragePolicyError("bounded cloud i2i image_ref media_type is not a supported image type")
+        if Path(filename).suffix.lower() not in self._IMAGE_EXTENSIONS[media_type.lower()]:
+            raise ImageStoragePolicyError(
+                "bounded cloud i2i image_ref filename and media_type disagree"
+            )
+
+    def _validate_source_file(self, source: Path, *, media_type: str | None = None) -> None:
+        if source.stat().st_size > self.source_max_bytes:
+            raise ImageStoragePolicyError(
+                f"image_ref exceeds bounded source limit of {self.source_max_bytes} bytes"
+            )
+        try:
+            from PIL import Image
+
+            with Image.open(source) as image:
+                expected_format = self._IMAGE_FORMATS.get(media_type.lower()) if media_type else None
+                if expected_format is not None and image.format != expected_format:
+                    raise ImageStoragePolicyError(
+                        "image_ref bytes do not match the admitted media_type"
+                    )
+                width, height = image.size
+                if width > self.max_width or height > self.max_height:
+                    raise ImageStoragePolicyError(
+                        f"image_ref dimensions {width}x{height} exceed bounded limits"
+                    )
+                image.load()
+        except ImageStoragePolicyError:
+            raise
+        except Exception as exc:
+            raise ImageStoragePolicyError("bounded cloud i2i image_ref is not a decodable image") from exc
+
+    def validate_materialized_source(self, path: str | Path, *, media_type: str) -> None:
+        """Reconcile the fetched bytes with the immutable media-type descriptor."""
+        self._validate_source_file(Path(path), media_type=media_type)
+
+    def _validate_materialized_request(
+        self,
+        *,
+        params: Mapping[str, Any],
+        require_strength: bool,
+    ) -> None:
+        self._validate_controls(params, require_strength=require_strength)
+        self._validate_size(params)
+        image_ref = params.get("image_ref")
+        if not isinstance(image_ref, str) or not image_ref.strip():
+            raise ImageStoragePolicyError("bounded cloud i2i requires a materialized image_ref")
+        source = Path(image_ref)
+        if not source.is_file():
+            raise ImageStoragePolicyError("bounded cloud i2i image_ref is not a file")
+        self._validate_source_file(source)
+
     def validate_request(
         self,
         *,
@@ -263,39 +411,7 @@ class CloudI2IStoragePolicy:
             raise ImageStoragePolicyError(
                 f"request is outside bounded storage policy {self.version}"
             )
-        if params.get("count", 1) != self.max_count:
-            raise ImageStoragePolicyError(
-                f"bounded cloud i2i requires count={self.max_count}"
-            )
-        prompt = params.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ImageStoragePolicyError("bounded cloud i2i requires a prompt")
-        if len(prompt) > self.max_prompt_chars:
-            raise ImageStoragePolicyError(
-                f"prompt exceeds bounded limit of {self.max_prompt_chars} characters"
-            )
-        image_ref = params.get("image_ref")
-        if not isinstance(image_ref, str) or not image_ref.strip():
-            raise ImageStoragePolicyError("bounded cloud i2i requires a materialized image_ref")
-        source = Path(image_ref)
-        if not source.is_file():
-            raise ImageStoragePolicyError("bounded cloud i2i image_ref is not a file")
-        if source.stat().st_size > self.source_max_bytes:
-            raise ImageStoragePolicyError(
-                f"image_ref exceeds bounded source limit of {self.source_max_bytes} bytes"
-            )
-        size = params.get("size")
-        if not isinstance(size, str) or "x" not in size.lower():
-            raise ImageStoragePolicyError("bounded cloud i2i requires explicit WIDTHxHEIGHT size")
-        try:
-            width_text, height_text = size.lower().split("x", 1)
-            width, height = int(width_text), int(height_text)
-        except (TypeError, ValueError) as exc:
-            raise ImageStoragePolicyError("bounded cloud i2i size must be WIDTHxHEIGHT") from exc
-        if not (1 <= width <= self.max_width and 1 <= height <= self.max_height):
-            raise ImageStoragePolicyError(
-                f"bounded cloud i2i dimensions must be at most {self.max_width}x{self.max_height}"
-            )
+        self._validate_materialized_request(params=params, require_strength=True)
 
     def validate_download(self, data: bytes, *, index: int = 0) -> tuple[int, int]:
         """Validate byte size and decoded image dimensions before staging."""
@@ -370,13 +486,11 @@ class CloudEditStoragePolicy(CloudI2IStoragePolicy):
             raise ImageStoragePolicyError(
                 "source-only Qwen edit profile does not admit mask_ref"
             )
-        CloudI2IStoragePolicy.validate_request(
-            self,
-            model="z-image",
-            mode="i2i",
-            execution="cloud",
-            params=params,
-        )
+        if params.get("count", 1) != self.max_count:
+            raise ImageStoragePolicyError(
+                f"bounded cloud i2i requires count={self.max_count}"
+            )
+        self._validate_materialized_request(params=params, require_strength=False)
 
 CLOUD_T2I_STORAGE_POLICY = CloudT2IStoragePolicy()
 CLOUD_I2I_STORAGE_POLICY = CloudI2IStoragePolicy()

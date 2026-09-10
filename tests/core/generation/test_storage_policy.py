@@ -27,6 +27,7 @@ def _params(source: Path, **overrides):
         "prompt": "bounded proof",
         "count": 1,
         "size": "1024x1024",
+        "strength": 0.5,
         "image_ref": str(source),
     }
     value.update(overrides)
@@ -128,6 +129,60 @@ def test_policy_accepts_exact_bounded_request(tmp_path: Path) -> None:
         execution="cloud",
         params=_params(source),
     )
+
+
+def test_policy_validates_immutable_cas_descriptor_and_controls() -> None:
+    descriptor = {
+        "digest": "sha256:" + "a" * 64,
+        "filename": "source.png",
+        "media_type": "image/png",
+    }
+    params = {
+        "model": "z-image",
+        "mode": "i2i",
+        "execution": "cloud",
+        "prompt": "bounded proof",
+        "count": 1,
+        "size": "1024x1024",
+        "strength": 0.5,
+        "image_ref": descriptor,
+    }
+    CLOUD_I2I_STORAGE_POLICY.validate_admission_request(
+        model="z-image",
+        mode="i2i",
+        execution="cloud",
+        params=params,
+    )
+    for strength in (-0.1, 1.1, "0.5", float("nan")):
+        with pytest.raises(ImageStoragePolicyError, match="strength"):
+            CLOUD_I2I_STORAGE_POLICY.validate_admission_request(
+                model="z-image",
+                mode="i2i",
+                execution="cloud",
+                params={**params, "strength": strength},
+            )
+
+
+def test_policy_rejects_non_image_source_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    source.write_text("not an image", encoding="utf-8")
+    with pytest.raises(ImageStoragePolicyError, match="decodable image"):
+        CLOUD_I2I_STORAGE_POLICY.validate_request(
+            model="z-image",
+            mode="i2i",
+            execution="cloud",
+            params=_params(source),
+        )
+
+
+def test_policy_reconciles_materialized_bytes_with_media_type(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(_PNG)
+    with pytest.raises(ImageStoragePolicyError, match="media_type"):
+        CLOUD_I2I_STORAGE_POLICY.validate_materialized_source(
+            source,
+            media_type="image/jpeg",
+        )
 
 
 def test_source_only_edit_profile_has_a_distinct_identity(tmp_path: Path) -> None:

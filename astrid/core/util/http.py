@@ -12,6 +12,7 @@ from base64 import b64encode
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from astrid.core.contracts.errors import AstridError
@@ -73,6 +74,36 @@ def _bounded_body(body: bytes, *, max_bytes: int | None = None) -> bytes:
             f"HTTP response exceeds bounded body limit of {int(max_bytes)} bytes"
         )
     return body
+
+
+def _validate_fal_queue_url(value: Any, *, field: str) -> str:
+    """Accept only HTTPS queue URLs before attaching the FAL credential."""
+    if not isinstance(value, str) or not value:
+        raise AstridError(
+            f"fal submission {field} must be a URL",
+            recovery_command="retry; the fal submission response was malformed",
+        )
+    parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise AstridError(
+            f"fal submission {field} has an invalid port",
+            recovery_command="retry; the fal submission response was malformed",
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "queue.fal.run"
+        or port not in (None, 443)
+        or not parsed.path.startswith("/")
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise AstridError(
+            f"fal submission {field} is outside the authenticated queue origin",
+            recovery_command="retry; the fal submission response was malformed",
+        )
+    return value
 
 
 def _read_http_error_body(exc: HTTPError, *, max_bytes: int | None) -> str:
@@ -462,6 +493,8 @@ def fal_submit_and_poll(
             ),
             recovery_command="retry; the fal submission response was malformed",
         )
+    status_url = _validate_fal_queue_url(status_url, field="status_url")
+    response_url = _validate_fal_queue_url(response_url, field="response_url")
     result = client.poll_until(
         status_url,
         response_url,

@@ -357,7 +357,13 @@ class FalBackend(BackendAdapter):
             if canon == "size":
                 normalized = _parse_size(str(value))
                 if normalized:
-                    if entry.id == "qwen-image-edit-2511" and remote_param == "image_size":
+                    if (
+                        remote_param == "image_size"
+                        and (
+                            entry.id == "qwen-image-edit-2511"
+                            or (entry.id == "z-image" and mode == "i2i")
+                        )
+                    ):
                         width, height = parse_dimension_pair(normalized) or (None, None)
                         payload[remote_param] = (
                             {"width": width, "height": height}

@@ -2022,6 +2022,7 @@ class GenericPackHost:
         cas_param_ports: tuple[str, ...] | list[str] | None = None,
         storage_estimate: Mapping[str, int] | None = None,
         input_size_limits: Mapping[str, int] | None = None,
+        storage_policy_version: str | None = None,
     ) -> dict[str, Any]:
         """Materialize digest inputs and managed registry objects in *attempt*.
 
@@ -2065,6 +2066,31 @@ class GenericPackHost:
         input_spec = admitted
         values = dict(input_spec.get("inputs", {})) if isinstance(input_spec.get("inputs", {}), Mapping) else {}
         params = input_spec.get("params")
+        if storage_policy_version == "astrid.cloud-i2i.z-image.v1":
+            from astrid.core.generation.storage_policy import (
+                CLOUD_I2I_STORAGE_POLICY,
+                ImageStoragePolicyError,
+            )
+
+            if not isinstance(params, Mapping):
+                raise HostError("bounded cloud i2i admission requires typed params")
+            try:
+                CLOUD_I2I_STORAGE_POLICY.validate_admission_request(
+                    model=params.get("model"),
+                    mode=params.get("mode"),
+                    execution=params.get("execution"),
+                    params=params,
+                )
+            except ImageStoragePolicyError as exc:
+                raise HostError(str(exc)) from exc
+            if values:
+                raise HostError(
+                    "bounded cloud i2i does not accept legacy spec.inputs authority"
+                )
+            if input_spec.get("input_digests"):
+                raise HostError(
+                    "bounded cloud i2i does not accept legacy input_digests authority"
+                )
         if task_param_ports is not None:
             if not isinstance(params, Mapping):
                 raise HostError("HC-04 task spec params must be an object")
@@ -2142,7 +2168,7 @@ class GenericPackHost:
         # the role/order contract.  Do this before fetching bytes so a caller
         # cannot swap (for example) a driving video into the reference-image
         # port while both objects remain individually authorized.
-        if len(ordered_cas_ports) > 1:
+        if ordered_cas_ports:
             if len(authorized_digests) != len(ordered_cas_ports):
                 raise HostError(
                     "HC-04 ordered CAS inputs must match the capability's CAS port count"
@@ -3293,7 +3319,32 @@ class GenericPackHost:
                 cas_param_ports=cas_param_ports,
                 storage_estimate=storage_estimate,
                 input_size_limits=input_size_limits,
+                storage_policy_version=(
+                    str(record.definition.metadata.get("storage_policy_version"))
+                    if record.definition.metadata.get("storage_policy_version") is not None
+                    else None
+                ),
             )
+            if record.definition.metadata.get("storage_policy_version") == "astrid.cloud-i2i.z-image.v1":
+                from astrid.core.generation.storage_policy import (
+                    CLOUD_I2I_STORAGE_POLICY,
+                    ImageStoragePolicyError,
+                )
+
+                admitted_spec = spec.get("spec") if isinstance(spec, Mapping) else None
+                admitted_params = admitted_spec.get("params") if isinstance(admitted_spec, Mapping) else None
+                descriptor = admitted_params.get("image_ref") if isinstance(admitted_params, Mapping) else None
+                materialized = inputs.get("image_ref")
+                media_type = descriptor.get("media_type") if isinstance(descriptor, Mapping) else None
+                if not isinstance(materialized, str) or not isinstance(media_type, str):
+                    raise HostError("bounded cloud i2i source materialization is incomplete")
+                try:
+                    CLOUD_I2I_STORAGE_POLICY.validate_materialized_source(
+                        materialized,
+                        media_type=media_type,
+                    )
+                except ImageStoragePolicyError as exc:
+                    raise HostError(str(exc)) from exc
             _assert_live_storage_envelope(storage_estimate, root, root / "outputs")
             immutable_input_baseline = {}
             for input_root in (root / "inputs", root / "managed-objects"):

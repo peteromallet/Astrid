@@ -33,6 +33,82 @@
     },
     "uv_lock_sha256": "f9afaffd3e3b8f1aba24daf610f7659a403c7b8d03a91616376aa752a4d59344"
   },
+  "profiles": {
+    "pip_embedded": {
+      "portable": {
+        "name": "pip_embedded",
+        "dependency_lock": "vibecomfy-pip-comfyui-0.26.0",
+        "session_kind": "embedded_session",
+        "warm_policy": "never",
+        "cancellation": "owned_process_group"
+      },
+      "bootstrap": {
+        "source": "astrid/packs/vibecomfy/production_engine.py:_bootstrap_embedded_comfy_client",
+        "source_sha256": "ecd976c5cf0921eb0cc41100ad1254439e7e5f9eb69f28e0a2388746a8115872",
+        "path_precedence": ["COMFYUI_PATH", "/root/b06-t04/comfyui-embedded"],
+        "required_import": "comfy.client.embedded_comfy_client.Comfy",
+        "import_path_must_equal_root": true
+      },
+      "effective_configuration": {
+        "warm_policy": "never",
+        "disable_known_models": true,
+        "quiet_schema_degradation": false,
+        "runtime_root": "<task-destination>/.vibecomfy-runtime",
+        "output_root": "<task-destination>/engine-output",
+        "network": "profile-managed",
+        "model_download": false,
+        "node_install": false
+      },
+      "readiness": "dependency graph not installed in the prepared CPU interpreter"
+    },
+    "checkout_server": {
+      "portable": {
+        "name": "checkout_server",
+        "dependency_lock": "vibecomfy-checkout-comfyui-0.26.0",
+        "session_kind": "server_session",
+        "warm_policy": "auto",
+        "cancellation": "interrupt-clear-free-then-owned_process_group"
+      },
+      "bootstrap": {
+        "adapter": "astrid/core/generation/backends/vibecomfy.py::CheckoutServerAdapter.from_host_session",
+        "readiness_schema": "hc03-worker-readiness.v1",
+        "host_profile_required": true,
+        "required_exact_facts": ["interpreter", "runtime_lock", "engine_lock", "model_digest", "custom_node_digest", "driver", "root", "port"],
+        "required_minimum_facts": ["vram_bytes", "scratch_bytes"],
+        "manager_owned_session_facts": ["session_dir", "server_url", "pid", "launch_token", "process_birth_id", "comfy_pid", "comfy_process_birth_id", "source_revision", "source_content_digest"]
+      },
+      "effective_configuration": {
+        "warm_policy": "auto",
+        "output_root": "<hc03.launch.output_root>",
+        "server_url": "<hc03.vibecomfy_session.server_url>",
+        "network": "profile-managed",
+        "model_download": false,
+        "node_install": false
+      },
+      "readiness": "requires a manager-issued HC-03 profile and live server"
+    }
+  },
+  "environment": {
+    "python": {
+      "path": "/Users/hannahomalley/Documents/Codex/2026-09-09/can-you-see-the-poms-skills/work/astrid-prep/runtime-venv/bin/python",
+      "version": "3.11.16",
+      "executable_sha256": "b9d3df7892a0d6e27ee0c3e11495c5f2cc1e46a09e9450b632a755108191f944"
+    },
+    "node": {"path": "/opt/homebrew/bin/node", "version": "v26.7.0", "sha256": "aa7c3390685f1388f3b898b7d7f84edf95fcee4aa062725aa56dee348afbe6be"},
+    "npm": {"path": "/opt/homebrew/bin/npm", "version": "11.19.0", "sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7"},
+    "dependency_installation": "VibeComfy/uv.lock is pinned; the full ComfyUI dependency graph is not installed in the shared CPU interpreter"
+  },
+  "dependency_locks": {
+    "astrid_pyproject_sha256": "8290c0b1ead583ea08625f4debc96029b576791bafc9cb81c11a47a06f62cac1",
+    "runtime_pyproject_sha256": "577ba10d4c230a6a3ac68066259f737b05d5fbaa0a0e1dc9a03469da4772833a",
+    "worker_pyproject_sha256": "f2523238646e1a67d1a0cf0c045572f471181aee89bfafcf9ef3286fe821e114",
+    "worker_live_matrix_sha256": "6c3dcc6458483da79582cb114dd7f09657d2a2c4b715c15f3f78012c7a6c1ad2",
+    "reigh_package_lock_sha256": "a1e67b15ae25fbfbec06e42ce7ab8a22efed4e9dca8106defbfa51024542c300",
+    "vibecomfy_uv_lock_sha256": "f9afaffd3e3b8f1aba24daf610f7659a403c7b8d03a91616376aa752a4d59344",
+    "vibecomfy_custom_nodes_lock_sha256": "323badf09c89585d01abfd10e9a116270381e0ff7bb20566cdcae56b36a1b4a9",
+    "wan2gp_requirements_sha256": "46cbe42a38987df50a364d02a362d12c388c681d99c66873f9f794c3a84a871f",
+    "wan2gp_setup_config_sha256": "55497e06347db59f37df1e07bab478a87983e71c164915508620aec1d0801355"
+  },
   "custom_nodes": {
     "selected": [
       {"name": "ComfyUI-VideoHelperSuite", "commit": "4ee72c065db22c9d96c2427954dc69e7b908444b", "tree": "8890e310886c7bfbc62b42627b596889074f24bd"},
@@ -44,7 +120,9 @@
       "ComfyUI-DepthAnythingV2", "ComfyUI-GGUF", "ComfyUI-LTXVideo", "ComfyUI-Qwen3-TTS",
       "ComfyUI-QwenTTS", "ComfyUI-WanAnimatePreprocess", "ComfyUI-WanVideoWrapper", "rgthree-comfy", "ExamplePack"
     ],
-    "lock_sha256": "323badf09c89585d01abfd10e9a116270381e0ff7bb20566cdcae56b36a1b4a9"
+    "lock_sha256": "323badf09c89585d01abfd10e9a116270381e0ff7bb20566cdcae56b36a1b4a9",
+    "materialization_root": "<ComfyUI checkout>/custom_nodes",
+    "exclusion_enforcement": "profile root contains only selected packs; readiness must reject any non-selected pack before launch"
   },
   "templates": {
     "video/basic_video_enhance": {"model_count": 0, "custom_nodes": ["ComfyUI-VideoHelperSuite"]},
@@ -71,7 +149,26 @@
     "astrid_pack_manifests": 20,
     "c12_cpu_cases": 9,
     "c12_cpu_result": "5 passed",
-    "combined_cpu_result": "31 passed"
+    "combined_cpu_result": "31 passed",
+    "case_inventory": {
+      "path": "tests/integrations/c12_cpu_case_inventory.json",
+      "sha256": "02e23c6dfa96ecacfe1b3658f9437dcac10d7d6cc52d3e83d4a7bf85018c9414",
+      "cases": ["cold_success", "cancel_confirmed", "cancel_uncertain_fences", "deadline_contained", "changed_identity", "restart_replaces_incarnation", "stale_fence_rejected", "cas_settlement_exactly_once", "cleanup_releases_owned_session"],
+      "gpu_claim": false,
+      "warm_reuse_expected": false
+    },
+    "drivers": [
+      {"path": "tests/integrations/test_c12_cpu_harness.py", "sha256": "4a2fe25e207871bf42b09db24bf36bf77dac2eb6cac3004d4d2831f8fe2d8da6", "role": "manager custody and durable supervisor"},
+      {"path": "tests/integrations/test_c12_cpu_runtime_harness.py", "sha256": "dcc206f2ccac2c88088c18860e87087b8d671bf343b4eb1cde6940d0c38bcf4c", "role": "Runtime-to-Worker-to-GenericPackHost CPU seam"},
+      {"path": "tests/integrations/test_generation_runtime_composition.py", "sha256": "5adc5dfbd49508f7ee4aa2f484b86d0e1a31f9b68fff7db891a82360dd478cd4", "role": "typed image-generation CPU composition"},
+      {"path": "../reigh-worker/scripts/capability_contracts/live_matrix_manifest.json", "sha256": "6c3dcc6458483da79582cb114dd7f09657d2a2c4b715c15f3f78012c7a6c1ad2", "role": "Worker live case inventory, 36 cases"},
+      {"path": "../VibeComfy/tests/live_agentic_harness/scenario_manifest.json", "sha256": "07cf5308c64c40189751df84c74cd4a7e9a127c3d419ba86ac22630933f062e7", "role": "VibeComfy scenario inventory, 100 scenarios"}
+    ],
+    "fixtures": [
+      {"path": "tests/fixtures/c12_cpu_pack/pack.yaml", "sha256": "0416f7478cc30bc1445031cb1711f9fb88aeecc57d60deb4f181d5f310f5ea09"},
+      {"path": "tests/fixtures/c12_cpu_pack/executors/echo/executor.yaml", "sha256": "767b0f0bb3dcb38fc8958c3800dbd8906247286e95e51cff0a0897df2f82f51e"},
+      {"path": "tests/fixtures/c12_cpu_pack/executors/slow/executor.yaml", "sha256": "b6d212e19fd0d788ec7ba8b0ed4cfe24b283a66fb783093207c08a564c6da3fe"}
+    ]
   },
   "provider_observation": {
     "network_volumes": 6,
@@ -82,5 +179,18 @@
     "gpu_probe_candidates_datacenter_available": 0,
     "gpu_probe_min_memory_64gib_candidates": 0,
     "mutations": false
+  },
+  "custody": {
+    "mutators_stopped": true,
+    "provider_pods_observed": 0,
+    "model_downloads": false,
+    "gpu_launches": false,
+    "reigh_app_gitlink": {
+      "path": ".megaplan/runtime/editable-engine",
+      "gitlink": "501b1267b9d448e006e65437c192f40c1954c637",
+      "gitmodules_mapping": "absent",
+      "live_execution_reachability": "not admitted by the B05 live paths inspected",
+      "disposition": "retained historical custody fact; not silently repaired or used as an authority"
+    }
   }
 }

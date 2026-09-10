@@ -1031,7 +1031,7 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
             "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
             "-keyout", str(key_path), "-out", str(cert_path), "-days", "1",
             "-subj", "/CN=queue.fal.run",
-            "-addext", "subjectAltName=DNS:queue.fal.run,DNS:fal.media",
+            "-addext", "subjectAltName=DNS:queue.fal.run,DNS:fal.media,DNS:v3b.fal.media",
         ],
         check=True,
         stdout=subprocess.DEVNULL,
@@ -1101,10 +1101,11 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
                         elif path == "/status/https-connect-qwen":
                             response_body = b'{"status":"COMPLETED"}'
                         elif path == "/response/https-connect-qwen":
-                            response_body = b'{"images":[{"url":"https://fal.media/cpu-qwen-result.png"}]}'
+                            response_body = b'{"images":[{"url":"https://v3b.fal.media/cpu-qwen-result.png"}]}'
                         else:
                             response_body = b"{}"
-                    elif host == "fal.media" and method == "GET":
+                    elif host == "v3b.fal.media" and method == "GET":
+                        assert "authorization" not in headers
                         if oversized_output:
                             response_body = b""
                             response_length = 64 * 1024 * 1024 + 1
@@ -1131,7 +1132,7 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
 
     def route_provider_connection(address, timeout=None, source_address=None):
         host, port = address
-        if host in {"queue.fal.run", "fal.media", "fal.run"} and int(port) == 443:
+        if host in {"queue.fal.run", "fal.media", "v3b.fal.media", "fal.run"} and int(port) == 443:
             return original_connect(("127.0.0.1", tls_port), timeout, source_address)
         return original_connect(address, timeout, source_address)
 
@@ -1177,6 +1178,7 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
         }
         assert record.definition.metadata["hc04_cas_param_ports"] == ["image_ref"]
         assert "fal.media:443" in record.definition.metadata["network_policy"]["allowed_destinations"]
+        assert "v3b.fal.media:443" in record.definition.metadata["network_policy"]["allowed_destinations"]
         host.preflight("generation.generate_image_edit")
         record = host.capabilities["generation.generate_image_edit"]
         assert record.ready
@@ -1249,7 +1251,7 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
                 if event["kind"] == "broker_route" and event["allowed"]
             ]
             assert any("queue.fal.run" in route for route in routes)
-            assert any("fal.media" in route for route in routes)
+            assert any("v3b.fal.media" in route for route in routes)
             assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
         assert not provider_errors
     finally:
@@ -1259,6 +1261,19 @@ def test_production_qwen_edit_command_uses_ordered_cas_through_https_connect_and
         stop.set()
         tls_listener.close()
         provider_thread.join(timeout=2)
+
+
+def test_production_qwen_edit_manifest_requires_fal_secret() -> None:
+    generation_root = Path(__file__).resolve().parents[2] / "astrid/packs/generation"
+    host = GenericPackHost(pack_roots=[generation_root], credential_source={})
+    host.discover()
+    host.preflight("generation.generate_image_edit")
+    record = host.capabilities["generation.generate_image_edit"]
+    assert record.ready is False
+    assert record.preflight["credentials"] == {
+        "ok": False,
+        "missing": ["FAL_KEY"],
+    }
 
 
 def test_production_i2i_rejects_extra_or_misordered_single_cas_inputs(tmp_path: Path) -> None:

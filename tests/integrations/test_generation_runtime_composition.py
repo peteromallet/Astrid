@@ -13,9 +13,11 @@ import json
 import os
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import threading
+import zlib
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -36,6 +38,21 @@ from astrid.core.execution.network_broker import _BrokerHandler  # noqa: E402
 
 
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+
+def _solid_png(rgba: tuple[int, int, int, int]) -> bytes:
+    """Build a distinct 1x1 PNG without adding an image-library dependency."""
+    raw = b"\x00" + bytes(rgba)
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
 
 
 def _fixture_pack(root: Path) -> Path:
@@ -1270,6 +1287,335 @@ def test_production_qwen_edit_manifest_requires_fal_secret() -> None:
         "ok": False,
         "missing": ["FAL_KEY"],
     }
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        pytest.param(
+            {
+                "id": "qwen-inpaint",
+                "model": "qwen-image-edit-inpaint",
+                "mode": "inpaint",
+                "endpoint": "/fal-ai/qwen-image-edit/inpaint",
+                "reference_key": "image_url",
+                "requires_mask": True,
+            },
+            id="qwen-inpaint",
+        ),
+        pytest.param(
+            {
+                "id": "klein-4b",
+                "model": "flux2-klein-4b",
+                "mode": "edit",
+                "endpoint": "/fal-ai/flux-2/klein/4b/edit",
+                "reference_key": "image_urls",
+                "requires_mask": False,
+            },
+            id="klein-4b",
+        ),
+        pytest.param(
+            {
+                "id": "klein-9b",
+                "model": "flux2-klein-9b",
+                "mode": "edit",
+                "endpoint": "/fal-ai/flux-2/klein/9b/edit",
+                "reference_key": "image_urls",
+                "requires_mask": False,
+            },
+            id="klein-9b",
+        ),
+    ],
+)
+def test_production_unified_edit_profiles_settle_variant_and_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile: dict[str, object],
+) -> None:
+    """Exercise inpaint and Klein through the shipped unified edit boundary."""
+    import astrid.core.execution.network_broker as broker_module
+
+    generation_root = Path(__file__).resolve().parents[2] / "astrid/packs/generation"
+    png = base64.b64decode(_PNG)
+    mask_png = _solid_png((255, 0, 0, 255))
+    media_host = "v3b.fal.media"
+    request_id = f"https-connect-{profile['id']}"
+    cert_dir = tmp_path / "provider-cert"
+    cert_dir.mkdir()
+    cert_path = cert_dir / "provider.pem"
+    key_path = cert_dir / "provider.key"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key_path), "-out", str(cert_path), "-days", "1",
+            "-subj", "/CN=queue.fal.run",
+            "-addext", f"subjectAltName=DNS:queue.fal.run,DNS:{media_host}",
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    tls_listener = socket.socket()
+    tls_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tls_listener.bind(("127.0.0.1", 0))
+    tls_listener.listen(8)
+    tls_listener.settimeout(0.2)
+    tls_port = tls_listener.getsockname()[1]
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    stop = threading.Event()
+    provider_errors: list[BaseException] = []
+    submitted_payloads: list[dict[str, object]] = []
+    source_payloads: list[bytes] = []
+    mask_payloads: list[bytes] = []
+
+    def provider_loop() -> None:
+        while not stop.is_set():
+            try:
+                raw, _address = tls_listener.accept()
+            except TimeoutError:
+                continue
+            try:
+                with tls_context.wrap_socket(raw, server_side=True) as connection:
+                    wire = b""
+                    while b"\r\n\r\n" not in wire:
+                        wire += connection.recv(65536)
+                    header, body = wire.split(b"\r\n\r\n", 1)
+                    lines = header.decode("iso-8859-1").split("\r\n")
+                    method, target, _version = lines[0].split(" ", 2)
+                    headers = {
+                        name.lower(): value.strip()
+                        for name, value in (
+                            line.split(":", 1) for line in lines[1:] if ":" in line
+                        )
+                    }
+                    content_length = int(headers.get("content-length", "0"))
+                    while len(body) < content_length:
+                        body += connection.recv(65536)
+                    host = headers.get("host", "").split(":", 1)[0]
+                    path = target.split("?", 1)[0]
+                    if host == "queue.fal.run":
+                        assert headers.get("authorization") == "Key cpu-test-key"
+                        if method == "POST":
+                            assert path == profile["endpoint"]
+                            payload = json.loads(body[:content_length].decode())
+                            assert payload["prompt"] == "u" * 64
+                            assert payload["image_size"] == {"width": 1024, "height": 1024}
+                            assert payload["seed"] == 19
+                            assert payload["num_images"] == 1
+                            reference = payload[profile["reference_key"]]
+                            if profile["reference_key"] == "image_urls":
+                                assert isinstance(reference, list) and len(reference) == 1
+                                reference = reference[0]
+                            assert reference.startswith("data:image/png;base64,")
+                            source_payloads.append(base64.b64decode(reference.split(",", 1)[1]))
+                            if profile["requires_mask"]:
+                                assert payload["strength"] == 0.93
+                                mask_reference = payload["mask_url"]
+                                assert mask_reference.startswith("data:image/png;base64,")
+                                mask_payloads.append(base64.b64decode(mask_reference.split(",", 1)[1]))
+                            submitted_payloads.append(payload)
+                            response_body = json.dumps(
+                                {
+                                    "request_id": request_id,
+                                    "status_url": f"https://queue.fal.run/status/{request_id}",
+                                    "response_url": f"https://queue.fal.run/response/{request_id}",
+                                }
+                            ).encode()
+                        elif path == f"/status/{request_id}":
+                            response_body = b'{"status":"COMPLETED"}'
+                        elif path == f"/response/{request_id}":
+                            response_body = json.dumps(
+                                {"images": [{"url": f"https://{media_host}/{request_id}.png"}]}
+                            ).encode()
+                        else:
+                            response_body = b"{}"
+                    elif host == media_host and method == "GET":
+                        assert "authorization" not in headers
+                        response_body = png
+                    else:
+                        response_body = b"unknown provider route"
+                    status = HTTPStatus.OK if response_body != b"unknown provider route" else HTTPStatus.NOT_FOUND
+                    connection.sendall(
+                        f"HTTP/1.1 {status.value} {status.phrase}\r\n"
+                        f"Content-Length: {len(response_body)}\r\n"
+                        "Connection: close\r\n\r\n".encode() + response_body
+                    )
+            except BaseException as exc:
+                provider_errors.append(exc)
+
+    provider_thread = threading.Thread(target=provider_loop, daemon=True)
+    provider_thread.start()
+    original_connect = broker_module.socket.create_connection
+
+    def route_provider_connection(address, timeout=None, source_address=None):
+        host, port = address
+        if host in {"queue.fal.run", media_host, "fal.run"} and int(port) == 443:
+            return original_connect(("127.0.0.1", tls_port), timeout, source_address)
+        return original_connect(address, timeout, source_address)
+
+    monkeypatch.setattr(broker_module.socket, "create_connection", route_provider_connection)
+
+    class ProductionHost(GenericPackHost):
+        def _child_environment(self, record, attempt, **kwargs):
+            env, secrets = super()._child_environment(record, attempt, **kwargs)
+            child_cert = attempt / "provider-ca.pem"
+            child_cert.write_bytes(cert_path.read_bytes())
+            env["SSL_CERT_FILE"] = str(child_cert)
+            return env, secrets
+
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            f"production-{profile['id']}-https-test",
+            "0.1.0",
+            ["projects:read", "projects:write", "objects:read", "objects:write", "worker:execute"],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        host = ProductionHost(
+            pack_roots=[generation_root],
+            client=client,
+            executor_id=f"production-{profile['id']}-https-host",
+            credential_source={"FAL_KEY": "cpu-test-key"},
+        )
+        host.discover()
+        record = host.capabilities["generation.generate_image_edit"]
+        assert record.definition.metadata["fixed_inputs"] == {"execution": "cloud"}
+        assert record.definition.metadata["hc04_cas_param_ports"] == ["image_ref", "mask_ref"]
+        assert f"{media_host}:443" in record.definition.metadata["network_policy"]["allowed_destinations"]
+        host.preflight("generation.generate_image_edit")
+        assert host.capabilities["generation.generate_image_edit"].ready
+        host.register()
+        project = owner.create_project(
+            f"Production {profile['id']} edit",
+            slug=f"production-{profile['id']}-edit",
+            idempotency_key=f"production-{profile['id']}-project",
+        )
+        source_row = owner.ingest_project_object(
+            project.project_id,
+            png,
+            media_type="image/png",
+            filename="source.png",
+            idempotency_key=f"production-{profile['id']}-source",
+        )
+        source_id = str(getattr(source_row, "object_id", None) or getattr(source_row, "digest"))
+        input_object_ids = [source_id]
+        params = {
+            "execution": "cloud",
+            "mode": profile["mode"],
+            "model": profile["model"],
+            "prompt": "u" * 64,
+            "image_ref": {"digest": source_id, "filename": "source.png", "media_type": "image/png"},
+            "count": 1,
+            "size": "1024x1024",
+            "seed": 19,
+        }
+        if profile["requires_mask"]:
+            mask_row = owner.ingest_project_object(
+                project.project_id,
+                mask_png,
+                media_type="image/png",
+                filename="mask.png",
+                idempotency_key=f"production-{profile['id']}-mask",
+            )
+            mask_id = str(getattr(mask_row, "object_id", None) or getattr(mask_row, "digest"))
+            input_object_ids.append(mask_id)
+            params["strength"] = 0.93
+            params["mask_ref"] = {"digest": mask_id, "filename": "mask.png", "media_type": "image/png"}
+
+        generation_id = f"generation-{profile['id']}"
+        source_variant_id = f"source-variant-{profile['id']}"
+        owner.create_generation(
+            project.project_id,
+            generation_id,
+            idempotency_key=f"{profile['id']}-generation",
+            type="image",
+            metadata={"prompt": "source"},
+        )
+        owner.create_variant(
+            generation_id,
+            source_variant_id,
+            idempotency_key=f"{profile['id']}-variant",
+            object_id=source_id,
+            variant_type="original",
+            metadata={"role": "source"},
+        )
+        settlement_effect = {
+            "effect_type": "generation.variant.append",
+            "target_id": generation_id,
+            "expected_version": 1,
+            "payload": {
+                "source_variant_id": source_variant_id,
+                "source_object_id": source_id,
+                "variant_type": "inpaint" if profile["requires_mask"] else "magic_edit",
+                "output_name": "generated_images",
+                "output_ordinal": 0,
+                "primary_policy": "preserve",
+            },
+        }
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=input_object_ids,
+            project_id=project.project_id,
+            idempotency_key=f"production-{profile['id']}-task",
+            spec={"family": record.id, "params": params, "output_policy": {}},
+            storage_estimate={
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
+            },
+            settlement_effect=settlement_effect,
+        )
+        try:
+            settled = host.run(once=True)
+        except Exception as exc:
+            if provider_errors:
+                raise provider_errors[0] from exc
+            raise
+        assert len(settled) == 1 and settled[0].state == "succeeded"
+        completed = owner.get_task(task.task_id)
+        assert completed.state == "succeeded"
+        assert source_payloads == [png]
+        assert len(submitted_payloads) == 1
+        if profile["requires_mask"]:
+            assert mask_payloads == [mask_png]
+        image_output = next(
+            output for output in completed.result["outputs"] if output["name"] == "generated_images"
+        )
+        image_bytes = owner.get_object(image_output["digest"]).data
+        assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        generation = owner.get_generation(generation_id)
+        assert generation.version == 2
+        variants, cursor = owner.list_variants(generation_id)
+        assert cursor is None
+        assert len(variants) == 2
+        appended = variants[1]
+        assert appended.variant_type == settlement_effect["payload"]["variant_type"]
+        assert appended.object_id == image_output["digest"]
+        assert appended.metadata["source_task_id"] == task.task_id
+        routes = [
+            event["detail"]
+            for event in completed.result["network_evidence"]["events"]
+            if event["kind"] == "broker_route" and event["allowed"]
+        ]
+        assert any("queue.fal.run" in route for route in routes)
+        assert any(media_host in route for route in routes)
+        assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
+        assert not provider_errors
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+        stop.set()
+        tls_listener.close()
+        provider_thread.join(timeout=2)
 
 
 def test_production_i2i_rejects_extra_or_misordered_single_cas_inputs(tmp_path: Path) -> None:

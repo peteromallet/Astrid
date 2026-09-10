@@ -393,6 +393,8 @@ class FalBackend(BackendAdapter):
                             entry.id in {
                                 "qwen-image-edit-2511",
                                 "qwen-image-edit-inpaint",
+                                "flux2-klein-4b",
+                                "flux2-klein-9b",
                             }
                             or (entry.id == "z-image" and mode == "i2i")
                         )

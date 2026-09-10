@@ -3950,6 +3950,7 @@ class GenericPackHost:
             "input_object_ids": list(getattr(claim, "input_object_ids", ()) or ()),
             "spec": getattr(claim, "spec", None),
             "project_id": getattr(claim, "project_id", None),
+            "expected_effect": getattr(claim, "expected_effect", None),
         }
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
@@ -3981,6 +3982,8 @@ class GenericPackHost:
         # handoff).
         if claim_data.get("spec") is not None:
             task_data["spec"] = claim_data["spec"]
+        if claim_data.get("expected_effect") is not None:
+            task_data["expected_effect"] = claim_data["expected_effect"]
         return self.run_task(
             {"task": task_data},
             lease_token=str(claim_data.get("lease_id") or ""),

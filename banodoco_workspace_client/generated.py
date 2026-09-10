@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 PROTOCOL = "workspace.v1"
-SCHEMA_DIGEST = "sha256:18eaeef02d99ef7d9276d93d8621db71fd551b2bf3d2173bd7d934095a432521"
+SCHEMA_DIGEST = "sha256:c82038812ebc66de625de2e30c66976194022bef201eb76db1de72025935d0a2"
 OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
 
 
@@ -251,12 +251,13 @@ class AttemptFence:
     input_object_ids: list[str]
     spec: Mapping[str, Any]
     project_id: str | None = None
+    expected_effect: Mapping[str, Any] | None = None
     storage_estimate: Mapping[str, int] | None = None
     required_facts: Mapping[str, Any] | None = None
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "AttemptFence":
-        return cls(attempt_id=value["attempt_id"], task_id=value["task_id"], lease_id=value["lease_id"], fence=int(value["fence"]), lease_expires_at=value["lease_expires_at"], runtime_epoch=int(value["runtime_epoch"]), input_object_ids=list(value.get("input_object_ids") or []), spec=dict(value.get("spec") or {}), project_id=value.get("project_id"), storage_estimate=dict(value["storage_estimate"]) if value.get("storage_estimate") is not None else None, required_facts=dict(value["required_facts"]) if value.get("required_facts") is not None else None)
+        return cls(attempt_id=value["attempt_id"], task_id=value["task_id"], lease_id=value["lease_id"], fence=int(value["fence"]), lease_expires_at=value["lease_expires_at"], runtime_epoch=int(value["runtime_epoch"]), input_object_ids=list(value.get("input_object_ids") or []), spec=dict(value.get("spec") or {}), project_id=value.get("project_id"), expected_effect=dict(value["expected_effect"]) if value.get("expected_effect") is not None else None, storage_estimate=dict(value["storage_estimate"]) if value.get("storage_estimate") is not None else None, required_facts=dict(value["required_facts"]) if value.get("required_facts") is not None else None)
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)

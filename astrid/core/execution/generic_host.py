@@ -2258,7 +2258,15 @@ class GenericPackHost:
             "hype_assets",
         }
         for name, value in list(values.items()):
-            digest = value.get("digest") if isinstance(value, Mapping) else (value if isinstance(value, str) and len(value) == 64 else None)
+            digest = value.get("digest") if isinstance(value, Mapping) else (
+                value
+                if (
+                    storage_policy_version != "astrid.cloud-i2i.z-image.v1"
+                    and isinstance(value, str)
+                    and len(value) == 64
+                )
+                else None
+            )
             if digest:
                 if self.client is None or not callable(getattr(self.client, "get_object", None)):
                     raise HostError(

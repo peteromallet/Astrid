@@ -824,7 +824,7 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
                         if method == "POST":
                             assert path == "/fal-ai/z-image/turbo/image-to-image"
                             payload = json.loads(body[:content_length].decode())
-                            assert payload["prompt"] == "https connect i2i proof"
+                            assert payload["prompt"] == "p" * 64
                             assert payload["image_size"] == {"width": 1024, "height": 1024}
                             assert payload["seed"] == 19
                             assert payload["strength"] == 0.5
@@ -948,7 +948,7 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
                     "execution": "cloud",
                     "mode": "i2i",
                     "model": "z-image",
-                    "prompt": "https connect i2i proof",
+                    "prompt": "p" * 64,
                     "image_ref": {
                         "digest": source_id,
                         "filename": "source.png",
@@ -986,7 +986,7 @@ def test_production_i2i_command_uses_ordered_cas_through_https_connect_and_auth(
             assert len(images) == 1
             image_bytes = owner.get_object(images[0]["digest"]).data
             assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-            assert b"https connect i2i proof" in image_bytes
+            assert (b"p" * 64) in image_bytes
             evidence = completed.result["network_evidence"]
             routes = [
                 event["detail"]

@@ -9,7 +9,8 @@ The regression gate for the `Timeline` domain class. Three assertions:
 3. Astrid's Python allowlists (`_TIMELINE_TOP_ALLOWED`, `_CLIP_ALLOWED`,
    `_TRACK_ALLOWED`) match the imported `@banodoco/timeline-schema` JSON
    Schema. The shared schema is the source of truth, with Astrid's documented
-   top-level `app` extension metadata retained around the renderable shape.
+   top-level `app` and clip-level render-provenance extension metadata retained
+   around the renderable shape.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURE_PATH = REPO_ROOT / "examples" / "hype.timeline.full.json"
 
 _ASTRID_TOP_LEVEL_OVERLAY = frozenset({"app"})
+_ASTRID_CLIP_OVERLAY = frozenset({"shot_id", "shot_occurrence_id", "shot_name"})
 
 
 def _load_shared_schema() -> tuple[dict, str] | None:
@@ -171,8 +173,9 @@ class TimelineRoundTripFixtureTest(unittest.TestCase):
         track_items = tracks_node.get("items") or {}
         shared_track = set((track_items.get("properties") or {}).keys())
 
-        # The shared schema is the source of truth. Astrid retains only the
-        # documented top-level editor metadata overlay around that shape.
+        # The shared schema is the source of truth. Astrid retains the
+        # documented top-level editor metadata overlay and the clip-level
+        # render-admission provenance overlay around the shape.
         expected_top = shared_top | _ASTRID_TOP_LEVEL_OVERLAY
         self.assertEqual(
             set(_TIMELINE_TOP_ALLOWED),
@@ -185,15 +188,16 @@ class TimelineRoundTripFixtureTest(unittest.TestCase):
         )
         # ``derived_output`` is a runtime-produced result envelope accepted
         # by the shared schema, not an authoring field Astrid admits from an
-        # editor. Keep it out of the input allowlist while checking every
-        # other shared clip key remains aligned.
+        # editor. The three ``shot_*`` fields are an explicit Astrid
+        # render-admission provenance overlay and are stripped before shared
+        # validation by ``_known_timeline_payload``.
         self.assertEqual(
             set(_CLIP_ALLOWED),
-            shared_clip - {"derived_output"},
+            (shared_clip - {"derived_output"}) | _ASTRID_CLIP_OVERLAY,
             "Clip allowlist drift between Astrid (_CLIP_ALLOWED) and "
             "the supported subset of imported schema (TimelineClip); "
             f"schema-origin={schema_origin}; "
-            f"only-in-astrid={set(_CLIP_ALLOWED) - shared_clip}, "
+            f"only-in-astrid={set(_CLIP_ALLOWED) - (shared_clip | _ASTRID_CLIP_OVERLAY)}, "
             f"only-in-schema={shared_clip - set(_CLIP_ALLOWED) - {'derived_output'}}",
         )
         self.assertEqual(

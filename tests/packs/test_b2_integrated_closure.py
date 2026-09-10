@@ -27,6 +27,7 @@ PACK_IDS = (
     "foley",
     "generation",
     "iteration",
+    "local",
     "media",
     "moirae",
     "rendering",
@@ -37,6 +38,7 @@ PACK_IDS = (
     "understanding",
     "vibecomfy",
     "video_editing",
+    "wan2gp",
     "youtube",
 )
 RETIRED = {"builtin", "references", "reigh", "runaway", "shots", "timeline"}
@@ -68,8 +70,8 @@ def test_catalog_preserves_stage1_capability_census() -> None:
     elements = load_elements()
     assert tuple(pack.id for pack in packs) == PACK_IDS
     assert (len(packs), len(executors.list()), len(orchestrators.list()), len(elements.list())) == (
-        18,
-        61,
+        20,
+        68,
         12,
         10,
     )

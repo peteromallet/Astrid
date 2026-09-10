@@ -713,7 +713,7 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
 
 def _configure_render(subparser: argparse.ArgumentParser) -> None:
     _add_project_arg(subparser)
-    subparser.add_argument("--review", action="store_true", default=None, help="Show shot names and current timeline time in the top-right corner (Remotion/Three.js).")
+    subparser.add_argument("--review", action="store_true", default=None, help="Burn in shot names/time plus pinned authored speech captions at the bottom (Remotion/Three.js).")
     subparser.add_argument(
         "ref",
         nargs="?",

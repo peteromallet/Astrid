@@ -10,15 +10,28 @@ from .exceptions import CapabilityValidationError
 from .pagination import page_pair
 
 
-def shot_text_snapshot(client: Any, project: str, shot_id: str) -> list[dict[str, Any]]:
+def shot_text_snapshot(
+    client: Any,
+    project: str,
+    shot_id: str,
+    *,
+    include_text: bool = False,
+) -> list[dict[str, Any]]:
     """Read the complete canonical binding set without creating a text authority.
 
     The runtime validates each bound text object. Its immutable media identity,
-    content hash and binding head pin the exact text, including after rebinding.
+    content hash, binding head, and verified text bytes pin the exact text,
+    including after rebinding.
     This endpoint currently returns every matching binding and no cursor; never
     accept a partial page as complete provenance.
     """
-    result = client.shots.list_text_bindings(project, shot_id=shot_id)
+    # Review renders need the exact authored speech bytes as well as their
+    # immutable identity. The remote facade verifies the CAS digest before
+    # returning ``text``; this remains an admission read, never a new text
+    # authority. Clean renders retain the identity-only path.
+    result = client.shots.list_text_bindings(
+        project, shot_id=shot_id, include_text=include_text
+    )
     page = page_pair(result.data) if result.ok else None
     if page is None or page[1] is not None:
         raise CapabilityValidationError(f"cannot pin complete text bindings for shot {shot_id!r}")

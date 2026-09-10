@@ -963,8 +963,10 @@ def _prepare_managed_render_inputs(
         # missing shot and never talks to storage itself.
         child_records: list[dict[str, Any]] = []
         review_shots: list[dict[str, Any]] = []
+        review_phrases: list[dict[str, Any]] = []
         shot_occurrences: list[dict[str, Any]] = []
         shot_records: dict[str, dict[str, Any]] = {}
+        review_bindings: dict[str, list[dict[str, Any]]] = {}
         from .render_shot_snapshot import shot_text_snapshot
         raw_clips = snapshot.config.get("clips", [])
         for index, clip in enumerate(raw_clips):
@@ -992,12 +994,19 @@ def _prepare_managed_render_inputs(
                     f"{shot_id!r}"
                 )
             if shot_id not in shot_records:
+                bindings = shot_text_snapshot(
+                    _client,
+                    str(project),
+                    shot_id,
+                    include_text=values.get("review") is True,
+                )
                 shot_records[shot_id] = {
                     "shot_id": shot_id,
                     "name": str(shot_result.data.get("name") or shot_id),
                     "version": shot_result.data.get("version"),
-                    "text_bindings": shot_text_snapshot(_client, str(project), shot_id),
+                    "text_bindings": [{key: value for key, value in binding.items() if key != "text"} for binding in bindings],
                 }
+                review_bindings[shot_id] = bindings
             # Placement is canonical render provenance, not a visual-only
             # review option.  Freeze every authored shot occurrence so later
             # filmstrip/visualizer consumers can map pinned bindings to the
@@ -1014,6 +1023,28 @@ def _prepare_managed_render_inputs(
             }
             shot_occurrences.append(occurrence)
             review_shots.append({"shot_id": shot_id, "name": occurrence["name"], "at": occurrence["at"], "hold": occurrence["hold"]})
+            for binding in review_bindings.get(shot_id, []):
+                text = binding.get("text")
+                if binding.get("kind") != "voiceover_script" or not isinstance(text, str) or not text.strip():
+                    continue
+                review_phrases.append(
+                    {
+                        "id": f"shot-script:{occurrence_id}:{binding['binding_id']}",
+                        "shot_id": shot_id,
+                        "shot_occurrence_id": occurrence_id,
+                        "text": text.strip(),
+                        "status": "projected",
+                        "render_interval": {
+                            "start": occurrence["at"],
+                            "end": occurrence["at"] + occurrence["hold"],
+                        },
+                        "timing_basis": "shot_script",
+                        "word_aligned": False,
+                        "binding_id": binding["binding_id"],
+                        "head": binding["head"],
+                        "media_id": binding["media_id"],
+                    }
+                )
             if not isinstance(timeline_document_id, str) or not timeline_document_id:
                 raise CapabilityValidationError(
                     f"canonical timeline {snapshot.timeline_slug!r} shot {shot_id!r} "
@@ -1117,7 +1148,10 @@ def _prepare_managed_render_inputs(
     values.pop("review_context", None)
     # ``review`` still controls only burned-in visual labels.  The occurrence
     # envelope is always pinned at admission for provenance and script maps.
-    values["review_context"] = {"shots": review_shots}
+    values["review_context"] = {
+        "shots": review_shots,
+        "speech": {"status": "projected", "phrases": review_phrases},
+    }
     authority = snapshot.authority()
     values.update(
         {

@@ -112,7 +112,7 @@ The equivalent product command is
 | selector        | string | no       | Qualified renderer id: `rendering.remotion`, `rendering.ffmpeg`, or `rendering.threejs`. Omit to select `rendering.remotion`. |
 | backend_config  | JSON   | no       | Object keyed by qualified implementation id. The service forwards only the selected implementation's namespace. |
 | output_name     | string | no       | Plain basename; defaults to `hype.mp4`. `.mov` is admitted only when the timeline has the exact `metadata.astrid_layer.alpha: true` stamp, and an explicit profile must declare MOV/ProRes/`yuva444p12le` plus PCM S16LE/48 kHz/stereo. The video and sidecar outputs use this value. |
-| review | boolean | no | Render-only top-right registered shot names plus running timeline time. Supported by Remotion and Three.js; FFmpeg rejects it. Gaps display `No shot`, overlaps display all active names. Saved timelines are unchanged. |
+| review | boolean | no | Render-only top-right registered shot names/time plus bottom captions from pinned authored `voiceover_script` bindings. Caption timing uses the shot interval and is not word-aligned unless explicit admitted speech timing is present. Supported by Remotion and Three.js; FFmpeg rejects it. Gaps display `No shot`, overlaps display all active names. Saved timelines are unchanged. |
 | keep_previous_renders | boolean | no | Preserve prior provenance-linked sibling render outputs. |
 
 Qualified renderer selection fails closed when that implementation reports the

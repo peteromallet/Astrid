@@ -205,7 +205,7 @@ python3 -m astrid timelines render <slug-or-id> --project <project> \
   --expected-version <version> --output-name <name>.mp4 --json
 ```
 
-For a review copy, add `--review`: `astrid timelines render <ref> --project <project> --review`. Remotion and Three.js show the registered shot name and running timeline time in the top-right corner, above all authored visuals. Names are pinned from canonical shot references before expansion. Gaps show `No shot`; overlapping shots show both names. The overlay exists only in this render; saved timeline documents are unchanged. FFmpeg rejects review mode explicitly. Omit the flag for a clean export. SDK inputs use `"review": true`.
+For a review copy, add `--review`: `astrid timelines render <ref> --project <project> --review`. Remotion and Three.js show the registered shot name and running timeline time in the top-right corner, plus the pinned authored voiceover script as a readable bottom caption. Caption timing is the canonical shot interval and is explicitly marked non-word-aligned; no ASR timing is invented. Names and captions are pinned from canonical shot references and text bindings before expansion. Gaps show `No shot`; overlapping shots show all active names. The overlay exists only in this render; saved timeline documents are unchanged. FFmpeg rejects review mode explicitly. Omit the flag for a clean export. SDK inputs use `"review": true`.
 
 The default waits for completion and propagates terminal failure. A successful
 render records its run and provenance in the runtime. Review the newest

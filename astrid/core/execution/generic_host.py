@@ -1584,7 +1584,7 @@ class GenericPackHost:
         """Return completion provenance for the root-owned manifest stamp."""
         if self.boot_manifest_path is None:
             return None
-        from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+        from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
         stamped_manifest_hash = load_boot_manifest_hash(
             self.boot_manifest_path,
@@ -3989,7 +3989,7 @@ def _compose_cli_boot_manifest(
     if args.support_root is None:
         parser.error("generic host requires explicit --support-root")
     try:
-        from astrid.core.integrations.reigh.boot_manifest import (
+        from astrid.core._shared.boot_manifest import (
             load_boot_manifest_hash,
             validate_manifest_path,
         )

@@ -9,7 +9,7 @@ import pytest
 from astrid.core.execution import generic_host
 from astrid.core.execution.generic_host import GenericPackHost, HostError
 from astrid.core.gateway.dispatch import compose_profile_handoff
-from astrid.core.integrations.reigh.boot_manifest import (
+from astrid.core._shared.boot_manifest import (
     BootManifestCorrupt,
     BootManifestDrift,
     BootManifestError,

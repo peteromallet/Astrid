@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 from astrid.sdk import host_bootstrap
@@ -39,12 +41,13 @@ def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
         captured.append(list(argv))
         ready = Path(argv[argv.index("--ready-file") + 1])
         manifest = Path(argv[argv.index("--boot-manifest-path") + 1])
-        from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+        from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
         expected = {
             "status": "ready",
             "pid": FakeProcess.pid,
             "process_birth_id": "birth-4242",
+            "python_executable": os.path.abspath(sys.executable),
             "endpoint": "http://127.0.0.1:9999",
             "executor_id": "astrid-pack-host",
             "ready_file": str(ready),

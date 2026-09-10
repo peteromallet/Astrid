@@ -64,6 +64,43 @@ def test_scanner_is_deterministic_and_marks_missing_source_unknown(tmp_path: Pat
     }
 
 
+def test_scanner_does_not_confuse_canonical_materialization_or_domain_data_with_task_authority(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "astrid/core/host.py",
+        "def read():\n    return require_runtime_materialized_file(path)\n",
+    )
+    _write(
+        tmp_path,
+        "src/domain/media.py",
+        "async def load():\n    return supabase().from_('generations')\n",
+    )
+    _write(tmp_path, "tests/stage1/test_preserved.py", "assert True\n")
+
+    report = scan_repositories([("fixture", tmp_path)])
+    facts = _statuses(report, "fixture")
+    assert {fact["id"] for fact in facts["blocked"]} == set()
+    assert {fact["id"] for fact in facts["implemented"]} == {
+        "forbidden.inpaint_frames",
+        "forbidden.qwen_image_hires",
+        "forbidden.supabase_task_authority",
+        "forbidden.legacy_selector",
+        "forbidden.direct_engine",
+        "stage1.paths_preserved",
+    }
+
+
+def test_scanner_includes_worker_source_tree_in_production_negative_evidence(tmp_path: Path) -> None:
+    _write(tmp_path, "source/task_handlers/task_registry.py", "HANDLER = 'inpaint_frames'\n")
+    _write(tmp_path, "source/task_handlers/task_conversion.py", "MODEL = 'qwen_image_hires'\n")
+
+    report = scan_repositories([("worker", tmp_path)])
+    facts = _statuses(report, "worker")
+    blocked = {fact["id"] for fact in facts["blocked"]}
+    assert blocked == {"forbidden.inpaint_frames", "forbidden.qwen_image_hires"}
+    assert any(path.startswith("source/") for path in report["repos"][0]["scanned_files"])
+
+
 def test_cli_emits_machine_readable_json_without_mutating_root(tmp_path: Path) -> None:
     _write(tmp_path, "src/clean.py", "def ok():\n    return 1\n")
     before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))

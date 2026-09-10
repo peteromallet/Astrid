@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from astrid.sdk import host_bootstrap
 from astrid.core.execution.generic_host import source_checkout_digest
-from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
 
 def test_bootstrap_passes_inventory_identity_and_restarts_on_change(monkeypatch, tmp_path: Path) -> None:

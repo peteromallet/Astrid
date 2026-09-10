@@ -7,7 +7,7 @@ import pytest
 from astrid.sdk import host_bootstrap as bootstrap
 from astrid.core.execution import generic_host
 from astrid.core.gateway.dispatch import compose_profile_handoff
-from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
 
 @pytest.mark.parametrize("source_changed", [False, True])

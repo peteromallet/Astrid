@@ -263,7 +263,7 @@ def compose_profile_handoff(
     consumes the resulting stamp, but never discovers profiles or emits it.
     """
 
-    from astrid.core.integrations.reigh.boot_manifest import (
+    from astrid.core._shared.boot_manifest import (
         manifest_hash,
         stamp_boot_manifest,
         validate_manifest_path,

@@ -38,6 +38,7 @@ SOURCE_DIRS = frozenset(
         "lib",
         "packages",
         "reigh",
+        "source",
         "src",
         "worker",
     }
@@ -77,17 +78,30 @@ MARKERS = (
     Marker(
         "forbidden.supabase_task_authority",
         "Supabase task lifecycle/materialization",
-        re.compile(r"(?:supabase|materializ(?:e|ation|ed)|task[_ -]?(?:claim|lifecycle|status|retry|settle))", re.IGNORECASE),
+        # Do not treat every domain-level Supabase read or every canonical
+        # Runtime materialization as a legacy task-authority hit.  The P7
+        # obligation is specifically the old task-table/lifecycle path.
+        re.compile(
+            r"(?:"
+            r"(?:supabase\s*\(\s*\)|supabase|db|client)\s*\.\s*from\s*\(\s*['\"](?:tasks?|task_[^'\"]+)['\"]"
+            r"|(?:supabase|db)[^\n]{0,160}\b(?:materialize[_ -]?task|materialized_(?:inputs?|outputs?)|task[_ -]?(?:claim|lifecycle|retry|settle|status))\b"
+            r"|(?:supabase|db)\s*\.\s*functions\s*\.\s*invoke(?:<[^>]+>)?\s*\(\s*['\"](?:create[_-]task|task[_-][^'\"]+)['\"]"
+            r")",
+            re.IGNORECASE,
+        ),
     ),
     Marker(
         "forbidden.legacy_selector",
         "legacy selectors",
-        re.compile(r"(?:legacy[_ -]?selector|selector[_ -]?legacy|legacy[_ -]?route|TASK_TYPE_TO_MODEL)", re.IGNORECASE),
+        re.compile(r"(?:legacy[_ -]?selector|selector[_ -]?legacy|legacy[_ -]?route|TASK_TYPE_TO_MODEL)\b", re.IGNORECASE),
     ),
     Marker(
         "forbidden.direct_engine",
         "direct-engine entrypoints",
-        re.compile(r"(?:direct[_ -]?engine|run[_ -]?direct|native[_ -]?worker|backend[_ -]?warm)", re.IGNORECASE),
+        re.compile(
+            r"(?:direct[_ -]?engine|run[_ -]?direct(?:[_ -]?engine)?|native[_ -]?worker|backend[_ -]?warm(?:th)?)\b",
+            re.IGNORECASE,
+        ),
     ),
 )
 

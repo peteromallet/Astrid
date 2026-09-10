@@ -43,7 +43,7 @@ from astrid.sdk.workspace_client import WorkspaceClient  # noqa: E402
 
 
 FIXTURE_PACK = Path(__file__).parents[1] / "fixtures" / "c12_cpu_pack"
-PINNED_RUNTIME_COMMIT = "976ca6f4d9f5aa21714cc1f3351c682676ca0604"
+PINNED_RUNTIME_COMMIT = "16dfd09da1c2965e9757d47f5ffdf5d8f5d0eab2"
 PINNED_WORKER_COMMIT = "6d6f231a0ca138e257d56c923b6115d25a03e672"
 
 

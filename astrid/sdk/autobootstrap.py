@@ -88,8 +88,13 @@ def _launcher_command() -> list[str]:
     )
 
 
-def ensure_runtime() -> Mapping[str, Any]:
-    """Invoke the installed launcher once and return its bounded result."""
+def ensure_runtime(*, start_pack_host: bool = True) -> Mapping[str, Any]:
+    """Invoke the installed launcher once and return its bounded result.
+
+    Runtime reads may connect while an existing pack-host child is busy.  The
+    neutral runtime remains the authority for those reads; only execution
+    needs the generic pack host to be registered and preflight-ready.
+    """
     manifest = _manifest_from_environment()
     command = [*_launcher_command(), "up", "--profile", PROFILE]
     if manifest is not None:
@@ -184,7 +189,7 @@ def ensure_runtime() -> Mapping[str, Any]:
         "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
     }
     result.update(worker_handoff)
-    if worker_handoff:
+    if worker_handoff and start_pack_host:
         from astrid.sdk.host_bootstrap import PackHostBootstrapError, ensure_pack_host
 
         try:

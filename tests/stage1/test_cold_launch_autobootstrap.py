@@ -103,6 +103,95 @@ def test_neutral_launcher_is_invoked_with_ephemeral_profile(monkeypatch, tmp_pat
     assert command[-1] == "--json"
 
 
+def test_read_runtime_connection_skips_pack_host_setup(monkeypatch, tmp_path):
+    from astrid.sdk import host_bootstrap
+
+    worker = tmp_path / "worker.token"
+    worker.write_text("worker-secret", encoding="utf-8")
+    credential = tmp_path / "astrid.json"
+    credential.write_text("{}", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({
+                "status": "reconnected",
+                "realm_id": "realm-1",
+                "endpoint": "http://127.0.0.1:1",
+                "actor_id": "actor-1",
+                "credential_file": str(credential),
+                "worker_credential_file": str(worker),
+                "worker_actor": "astrid-pack-host",
+                "worker_scopes": [
+                    "handshake", "worker:register", "worker:execute",
+                    "tasks:read", "objects:read", "objects:write",
+                ],
+            }),
+            "",
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        host_bootstrap,
+        "ensure_pack_host",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("host setup must be skipped")),
+        raising=False,
+    )
+
+    result = autobootstrap.ensure_runtime(start_pack_host=False)
+
+    assert result["status"] == "reconnected"
+    assert seen["command"][:4] == ["/usr/bin/banodoco-local", "up", "--profile", "astrid"]
+
+
+def test_default_runtime_connection_still_starts_pack_host(monkeypatch, tmp_path):
+    from astrid.sdk import host_bootstrap
+
+    worker = tmp_path / "worker.token"
+    worker.write_text("worker-secret", encoding="utf-8")
+    credential = tmp_path / "astrid.json"
+    credential.write_text("{}", encoding="utf-8")
+    seen: list[bool] = []
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({
+                "status": "reconnected",
+                "realm_id": "realm-1",
+                "endpoint": "http://127.0.0.1:1",
+                "actor_id": "actor-1",
+                "credential_file": str(credential),
+                "worker_credential_file": str(worker),
+                "worker_actor": "astrid-pack-host",
+                "worker_scopes": [
+                    "handshake", "worker:register", "worker:execute",
+                    "tasks:read", "objects:read", "objects:write",
+                ],
+            }),
+            "",
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        host_bootstrap,
+        "ensure_pack_host",
+        lambda *args, **kwargs: seen.append(True) or {"host_status": "ready"},
+        raising=False,
+    )
+
+    result = autobootstrap.ensure_runtime()
+
+    assert result["host_status"] == "ready"
+    assert seen == [True]
+
+
 def test_installed_runtime_module_is_used_when_console_script_is_off_path(
     monkeypatch, tmp_path
 ):

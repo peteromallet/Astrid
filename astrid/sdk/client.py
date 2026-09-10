@@ -205,6 +205,7 @@ class AstridClient:
         client_name: str = "astrid",
         client_version: str = "stage1",
         protocol_version: str = "workspace.v1",
+        start_pack_host: bool = True,
     ) -> Self:
         """Launch the neutral runtime at Astrid's explicit CLI boundary.
 
@@ -219,7 +220,11 @@ class AstridClient:
         from astrid.sdk.exceptions import ServiceUnavailableError
 
         try:
-            result = ensure_runtime()
+            result = (
+                ensure_runtime()
+                if start_pack_host
+                else ensure_runtime(start_pack_host=False)
+            )
         except AutoBootstrapError as exc:
             raise ServiceUnavailableError(
                 str(exc), details={"next_action": exc.next_action}

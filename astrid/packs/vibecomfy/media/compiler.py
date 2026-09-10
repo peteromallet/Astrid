@@ -23,6 +23,28 @@ class MediaCompileError(ValueError):
     """Raised when a typed direct-media request cannot be admitted."""
 
 
+UNSUPPORTED_MEDIA_CAPABILITIES: dict[str, str] = {
+    "vibecomfy.video_enhance": (
+        "the current ready graph does not implement interpolation, color correction, "
+        "source-FPS preservation, or typed encoder-quality semantics"
+    ),
+    "vibecomfy.character_animation": (
+        "the current ready graph does not expose a proven mode/resolution contract "
+        "for this producer and its bindings are not equivalent to the typed fixture"
+    ),
+}
+
+
+def ensure_media_capability_supported(capability_id: str) -> None:
+    """Reject media families whose current pinned graph is not semantically proven."""
+
+    reason = UNSUPPORTED_MEDIA_CAPABILITIES.get(capability_id)
+    if reason is not None:
+        raise MediaCompileError(
+            f"{capability_id} is unsupported until its pinned ready graph is repaired: {reason}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class VibeProfileSemantics:
     """The lifecycle facts a profile-specific executor must preserve."""
@@ -331,6 +353,8 @@ def compile_wan_2_2_i2v(request: WanI2VRequest, *, profile: str = "pip_embedded"
 def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_embedded") -> CompiledVibeMedia:
     """Compile deterministic video-enhance/upscale semantics."""
 
+    ensure_media_capability_supported("vibecomfy.video_enhance")
+
     if request.enable_interpolation is not True and request.enable_upscale is not True:
         raise MediaCompileError("enable_interpolation or enable_upscale must be true")
     interpolation_frames = _positive_int(request.interpolation_frames, "interpolation_frames")
@@ -359,6 +383,8 @@ def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_e
 
 def compile_character_animation(request: CharacterAnimationRequest, *, profile: str = "pip_embedded") -> CompiledVibeMedia:
     """Compile Wan Animate reference-image plus driving-video semantics."""
+
+    ensure_media_capability_supported("vibecomfy.character_animation")
 
     mode = _required_text(request.mode, "mode")
     if mode not in {"replace", "animate"}:
@@ -395,6 +421,7 @@ __all__ = [
     "CharacterAnimationRequest",
     "CompiledVibeMedia",
     "MediaCompileError",
+    "UNSUPPORTED_MEDIA_CAPABILITIES",
     "VideoEnhanceRequest",
     "VibeProfileSemantics",
     "WanI2VRequest",
@@ -403,5 +430,6 @@ __all__ = [
     "compile_video_enhance",
     "compile_wan_2_2_i2v",
     "compile_wan_2_2_t2i",
+    "ensure_media_capability_supported",
     "profile_semantics",
 ]

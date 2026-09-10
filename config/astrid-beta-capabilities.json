@@ -764,8 +764,8 @@
   },
   {
    "id": "vibecomfy.character_animation",
-   "disposition": "optional",
-   "evidence_reason": "Typed Wan Animate character-animation capability; readiness is gated by the pinned VibeComfy profile and GPU worker availability.",
+   "disposition": "unsupported",
+   "evidence_reason": "Unsupported until the pinned Wan Animate ready graph proves producer mode/resolution semantics and equivalent typed bindings; registration must fail closed before claims.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -792,8 +792,8 @@
   },
   {
    "id": "vibecomfy.video_enhance",
-   "disposition": "optional",
-   "evidence_reason": "Typed VibeComfy video-enhancement capability; readiness is gated by the pinned VibeComfy profile and GPU worker availability.",
+   "disposition": "unsupported",
+   "evidence_reason": "Unsupported until the pinned video-enhance ready graph implements interpolation, color correction, source-FPS/audio handling, and typed encoder-quality semantics; registration must fail closed before claims.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"

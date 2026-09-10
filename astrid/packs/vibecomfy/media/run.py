@@ -22,6 +22,7 @@ guard_canonical_entrypoint("vibecomfy.run")
 from .compiler import (  # noqa: E402
     CharacterAnimationRequest,
     VideoEnhanceRequest,
+    ensure_media_capability_supported,
 )
 from .executor import DirectVibeMediaExecutor  # noqa: E402
 
@@ -74,6 +75,10 @@ def _run(
     readiness_profile_hash: str,
     out: Path,
 ) -> None:
+    # Keep the unsupported disposition ahead of readiness/profile resolution,
+    # scratch creation, and the runner.  A typed media request must not create
+    # an attempt directory or touch a GPU session for an unproven graph.
+    ensure_media_capability_supported(capability)
     profile_document, runtime_context = _read_profile(readiness_profile_path, readiness_profile_hash)
     out.mkdir(parents=True, exist_ok=True)
 

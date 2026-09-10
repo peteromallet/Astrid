@@ -52,39 +52,78 @@ def test_profile_semantics_are_explicit_and_distinct() -> None:
 
 
 @pytest.mark.parametrize("profile", ["pip_embedded", "checkout_server"])
-def test_remaining_media_family_compilers_preserve_input_semantics(profile: str) -> None:
-    enhance = compile_video_enhance(
-        VideoEnhanceRequest(video_ref="media://source"), profile=profile
-    )
-    animate = compile_character_animation(
-        CharacterAnimationRequest(
-            reference_image_ref="media://character",
-            driving_video_ref="media://motion",
-            prompt="walk forward",
+@pytest.mark.parametrize(
+    "media_request",
+    [
+        VideoEnhanceRequest(
+            video_ref="media://source",
+            enable_interpolation=True,
+            enable_upscale=False,
         ),
-        profile=profile,
-    )
+        VideoEnhanceRequest(
+            video_ref="media://source",
+            enable_interpolation=False,
+            enable_upscale=True,
+        ),
+        VideoEnhanceRequest(
+            video_ref="media://source",
+            enable_interpolation=True,
+            enable_upscale=True,
+        ),
+    ],
+)
+def test_video_enhance_unproven_combinations_fail_before_runner(
+    profile: str, media_request: VideoEnhanceRequest
+) -> None:
+    seen: list[object] = []
 
-    assert enhance.capability_id == "vibecomfy.video_enhance"
-    assert enhance.inputs["preserve_audio"] is True
-    assert enhance.inputs["preserve_source_fps"] is True
-    assert enhance.inputs["interpolation_frames"] == 1
-    assert enhance.inputs["color_fix"] is True
-    assert enhance.inputs["output_quality"] == "maximum"
-    assert enhance.workflow["nodes"]["input"]["inputs"]["video"] == "media://source"
-    assert animate.capability_id == "vibecomfy.character_animation"
-    assert animate.model_identity == "wan-2.2-animate-14b"
-    assert animate.inputs["mode"] == "animate"
-    assert animate.inputs["resolution"] == "480p"
-    assert animate.workflow["nodes"]["reference"]["inputs"]["image"] == "media://character"
-    assert animate.workflow["nodes"]["driving"]["inputs"]["video"] == "media://motion"
+    def runner(*args, **kwargs):
+        seen.append((args, kwargs))
+        return {"artifact": "should-not-exist"}
+
+    executor = DirectVibeMediaExecutor(profile, runner)
+    with pytest.raises(MediaExecutionError, match="vibecomfy.video_enhance is unsupported"):
+        executor.execute_video_enhance(
+            media_request,
+            task_identity="task-video",
+            runtime_context={},
+        )
+    assert seen == []
 
 
-def test_video_enhance_requires_one_enabled_operation() -> None:
-    with pytest.raises(MediaCompileError, match="enable_interpolation or enable_upscale"):
+@pytest.mark.parametrize("profile", ["pip_embedded", "checkout_server"])
+@pytest.mark.parametrize("mode", ["replace", "animate"])
+@pytest.mark.parametrize("resolution", ["480p", "720p"])
+def test_character_animation_unproven_combinations_fail_before_runner(
+    profile: str, mode: str, resolution: str
+) -> None:
+    seen: list[object] = []
+
+    def runner(*args, **kwargs):
+        seen.append((args, kwargs))
+        return {"artifact": "should-not-exist"}
+
+    executor = DirectVibeMediaExecutor(profile, runner)
+    with pytest.raises(MediaExecutionError, match="vibecomfy.character_animation is unsupported"):
+        executor.execute_character_animation(
+            CharacterAnimationRequest(
+                reference_image_ref="media://character",
+                driving_video_ref="media://motion",
+                mode=mode,
+                resolution=resolution,
+                prompt="walk forward",
+            ),
+            task_identity="task-character",
+            runtime_context={},
+        )
+    assert seen == []
+
+
+def test_video_enhance_unsupported_disposition_precedes_request_validation() -> None:
+    with pytest.raises(MediaCompileError, match="vibecomfy.video_enhance is unsupported"):
         compile_video_enhance(
             VideoEnhanceRequest(
-                video_ref="media://source",
+                video_ref="",
                 enable_interpolation=False,
                 enable_upscale=False,
             )

@@ -69,6 +69,14 @@ class DirectVibeMediaExecutor:
         self.profile = profile_semantics(profile_id)
         self._runner = runner
 
+    def _compile(self, compiler, request: Any) -> CompiledVibeMedia:
+        """Normalize admission failures at the execution boundary."""
+
+        try:
+            return compiler(request, profile=self.profile.profile_id)
+        except MediaCompileError as exc:
+            raise MediaExecutionError(str(exc)) from exc
+
     def _execute(
         self,
         compiled: CompiledVibeMedia,
@@ -132,7 +140,7 @@ class DirectVibeMediaExecutor:
         self, request: WanT2IRequest, *, task_identity: str, runtime_context: Mapping[str, Any]
     ) -> MediaExecutionResult:
         return self._execute(
-            compile_wan_2_2_t2i(request, profile=self.profile.profile_id),
+            self._compile(compile_wan_2_2_t2i, request),
             runtime_context={**runtime_context, "task_identity": task_identity},
         )
 
@@ -140,7 +148,7 @@ class DirectVibeMediaExecutor:
         self, request: WanI2VRequest, *, task_identity: str, runtime_context: Mapping[str, Any]
     ) -> MediaExecutionResult:
         return self._execute(
-            compile_wan_2_2_i2v(request, profile=self.profile.profile_id),
+            self._compile(compile_wan_2_2_i2v, request),
             runtime_context={**runtime_context, "task_identity": task_identity},
         )
 
@@ -148,7 +156,7 @@ class DirectVibeMediaExecutor:
         self, request: VideoEnhanceRequest, *, task_identity: str, runtime_context: Mapping[str, Any]
     ) -> MediaExecutionResult:
         return self._execute(
-            compile_video_enhance(request, profile=self.profile.profile_id),
+            self._compile(compile_video_enhance, request),
             runtime_context={**runtime_context, "task_identity": task_identity},
         )
 
@@ -160,7 +168,7 @@ class DirectVibeMediaExecutor:
         runtime_context: Mapping[str, Any],
     ) -> MediaExecutionResult:
         return self._execute(
-            compile_character_animation(request, profile=self.profile.profile_id),
+            self._compile(compile_character_animation, request),
             runtime_context={**runtime_context, "task_identity": task_identity},
         )
 

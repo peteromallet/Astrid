@@ -74,6 +74,17 @@ def test_beta_reference_family_preflight_is_truthful_on_this_machine():
         assert local.preflight["packages"]["missing"]
 
 
+def test_unproven_typed_media_is_withdrawn_before_claims():
+    host = GenericPackHost(pack_roots=[Path("astrid/packs")])
+    host.discover()
+    host.preflight()
+
+    for capability_id in ("vibecomfy.video_enhance", "vibecomfy.character_animation"):
+        record = host.capabilities[capability_id]
+        assert record.matrix["disposition"] == "unsupported"
+        assert "Unsupported until" in record.matrix["evidence_reason"]
+
+
 def test_provider_ledger_rows_are_networked_and_credential_dispositions_match():
     """B9.4: provider declarations cannot silently become offline executors."""
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])

@@ -83,6 +83,7 @@ def test_unproven_typed_media_is_withdrawn_before_claims():
         record = host.capabilities[capability_id]
         assert record.matrix["disposition"] == "unsupported"
         assert "Unsupported until" in record.matrix["evidence_reason"]
+        assert record.ready is False
 
 
 def test_provider_ledger_rows_are_networked_and_credential_dispositions_match():

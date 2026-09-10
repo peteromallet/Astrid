@@ -602,6 +602,23 @@ def _preflight_unavailable_reason(record: "CapabilityRecord") -> str:
     return str(record.matrix.get("evidence_reason") or "capability preflight is not ready")
 
 
+_WITHDRAWN_DISPOSITIONS = frozenset({"unsupported", "retired"})
+
+
+def _is_withdrawn(record: "CapabilityRecord") -> bool:
+    """Return whether the ledger withdraws a capability from every admission path."""
+
+    return str(record.matrix.get("disposition", "")) in _WITHDRAWN_DISPOSITIONS
+
+
+def _withdrawn_reason(record: "CapabilityRecord") -> str:
+    return str(
+        record.matrix.get("evidence_reason")
+        or record.matrix.get("disposition")
+        or "withdrawn"
+    )
+
+
 def _required_secret_names(record: "CapabilityRecord") -> tuple[str, ...]:
     """Return the manifest/matrix credential names admitted to one child.
 
@@ -1810,6 +1827,11 @@ class GenericPackHost:
             pack_source = _hivemind_source_preflight(record)
             if pack_source is not None:
                 checks["pack_source"] = pack_source
+            if _is_withdrawn(record):
+                checks["disposition"] = {
+                    "ok": False,
+                    "reason": _withdrawn_reason(record),
+                }
             ready = all(value is True or (isinstance(value, dict) and value.get("ok") is True) for value in checks.values())
             updated[record.id] = CapabilityRecord(**{**record.__dict__, "preflight": checks, "ready": ready})
         self.capabilities = updated
@@ -1852,7 +1874,7 @@ class GenericPackHost:
             self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
             self._registered_state = state
             self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
-            return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready], "withdrawn_capabilities": removed}
+            return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready and not _is_withdrawn(r)], "withdrawn_capabilities": removed}
         if removed:
             self._withdraw_removed_capabilities(removed)
         # Publish capability admission metadata before advertising the executor.
@@ -2994,11 +3016,7 @@ class GenericPackHost:
             record = self.capabilities.get(capability_id)
         if record is None:
             raise HostError(f"capability not discovered: {capability_id}")
-        if not record.ready:
-            self.preflight(capability_id)
-            record = self.capabilities[capability_id]
-        if not record.ready:
-            raise HostError(f"capability {capability_id!r} is unavailable: {record.preflight}")
+
         def fail_admission(error: Exception) -> None:
             """Fence deterministic admission failures as terminal attempts."""
             try:
@@ -3015,6 +3033,18 @@ class GenericPackHost:
                     "deterministic admission failure was not recorded by Runtime"
                 ) from runtime_exc
             raise HostError(str(error)) from error
+
+        if _is_withdrawn(record):
+            fail_admission(
+                HostError(
+                    f"capability {capability_id!r} is {_withdrawn_reason(record)}"
+                )
+            )
+        if not record.ready:
+            self.preflight(capability_id)
+            record = self.capabilities[capability_id]
+        if not record.ready:
+            raise HostError(f"capability {capability_id!r} is unavailable: {record.preflight}")
 
         try:
             _assert_fixed_request_scope(record, task_data)
@@ -3776,9 +3806,7 @@ class GenericPackHost:
         capability_ids = sorted(
             record.id
             for record in ready_records
-            if record.ready
-            and str(record.matrix.get("disposition", ""))
-            not in {"unsupported", "retired"}
+            if record.ready and not _is_withdrawn(record)
         )
         if not capability_ids:
             return None

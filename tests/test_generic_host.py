@@ -1269,6 +1269,25 @@ def test_unready_capability_is_not_dispatched(tmp_path, monkeypatch):
     assert host.capabilities["test.echo"].ready
 
 
+def test_withdrawn_capability_cannot_run_even_on_direct_task_path():
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[Path("astrid/packs")], client=runtime)
+    host.discover()
+
+    task = {
+        "id": "task-withdrawn-media",
+        "capability": "vibecomfy.video_enhance",
+        "attempt_id": "attempt-withdrawn-media",
+        "fence": 1,
+    }
+    with pytest.raises(HostError, match="is Unsupported until"):
+        host.run_task(task, lease_token="lease-withdrawn-media")
+
+    assert runtime.settlements == []
+    assert runtime.failures
+    assert runtime.failures[0][3]["retryable"] is False
+
+
 def test_claim_loop_fails_explicitly_without_canonical_claim_operation(tmp_path):
     _write_manifest(tmp_path / "echo")
     host = GenericPackHost(pack_roots=[tmp_path], client=object())

@@ -36,6 +36,7 @@
     "media.clip_extract",
     "media.gif_search",
     "media.speech_repair_lavasr",
+    "rendering.assemble_timeline",
     "rendering.html_canvas_effect",
     "rendering.sprite_sheet",
     "rendering.timeline_storyboard",

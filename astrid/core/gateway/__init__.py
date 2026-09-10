@@ -36,6 +36,7 @@ from astrid.core.gateway.help import (
     _print_product_help,
     _product_help_text,
 )
+from astrid.version import ASTRID_VERSION
 
 from . import dispatch as _gateway_dispatch
 
@@ -81,7 +82,7 @@ def _main_impl(raw: list[str]) -> int:
         _print_product_help()
         return 0
     if first_arg == "--version":
-        print("astrid")
+        print(f"astrid/{ASTRID_VERSION}")
         return 0
     return _dispatch(raw)
 

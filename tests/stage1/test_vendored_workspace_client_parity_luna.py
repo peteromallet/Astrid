@@ -16,24 +16,27 @@ from pathlib import Path
 
 from banodoco_workspace_client import WorkspaceClient, generated
 from banodoco_workspace_client.contract_metadata import (
-    COMPONENT_MANIFEST_SHA256,
+    GENERATED_CLIENT_SHA256,
     OPERATIONS,
     PROTOCOL,
     SCHEMA_DIGEST,
+    SOURCE_COMMIT,
+    SOURCE_REPOSITORY,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED_PATH = ROOT / "banodoco_workspace_client" / "generated.py"
 
-# These values are intentionally duplicated in the release gate. A future
-# contract refresh must update the canonical component/schema digests and this
-# test in one reviewed change; no ambient sibling checkout can silently alter
-# the shipped transport.
-PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:889a00e55cf2e3b5d6ae1832579c7540fd8bc9c71ae5a31a0f0ea358b441af1e"
+# These values are intentionally duplicated in the immutable test gate. A
+# future runtime contract refresh must update the source commit, digest, and
+# this test in one reviewed change; no ambient sibling checkout can silently
+# alter the shipped transport.
+PINNED_SOURCE_COMMIT = "16984bae4a35fd2ad00be768296b52c64a7673ed"
+PINNED_SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
 PINNED_PROTOCOL = "workspace.v1"
-PINNED_SCHEMA_DIGEST = "sha256:c82038812ebc66de625de2e30c66976194022bef201eb76db1de72025935d0a2"
-PINNED_GENERATED_CLIENT_SHA256 = "sha256:770a9633cd93206697c544e58b700941507ae2dd6cba9e875ffaf3cf22752b4a"
-PINNED_SIGNATURE_SHA256 = "sha256:d833b3002ced1c8440e4b960ec64b2209b3d4691d244d62bf1ab65013254239f"
+PINNED_SCHEMA_DIGEST = "sha256:a55266ecc5ac7abc096b8c6addc781b2278030b3e668b2f466565b45a6e46e37"
+PINNED_GENERATED_CLIENT_SHA256 = "sha256:0cec23ab4d6ebb4a0775632f7ef18619ffcc1c3efed4b5e33cc9191d61d29fdf"
+PINNED_SIGNATURE_SHA256 = "sha256:1777df9695172844f6c27e7e09be69ba9a19851dd98a51017c86b699e4933428"
 
 
 def _signature_digest() -> str:
@@ -58,10 +61,12 @@ def _camel_to_snake(value: str) -> str:
 
 
 def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
-    assert COMPONENT_MANIFEST_SHA256 == PINNED_COMPONENT_MANIFEST_SHA256
+    assert SOURCE_REPOSITORY == PINNED_SOURCE_REPOSITORY
+    assert SOURCE_COMMIT == PINNED_SOURCE_COMMIT
     assert PROTOCOL == PINNED_PROTOCOL == generated.PROTOCOL
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST
-    assert "sha256:" + hashlib.sha256(GENERATED_PATH.read_bytes()).hexdigest() == PINNED_GENERATED_CLIENT_SHA256
+    assert GENERATED_CLIENT_SHA256 == PINNED_GENERATED_CLIENT_SHA256
+    assert "sha256:" + hashlib.sha256(GENERATED_PATH.read_bytes()).hexdigest() == GENERATED_CLIENT_SHA256
     assert _signature_digest() == PINNED_SIGNATURE_SHA256
 
 

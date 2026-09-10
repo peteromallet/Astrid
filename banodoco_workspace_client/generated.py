@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 PROTOCOL = "workspace.v1"
-SCHEMA_DIGEST = "sha256:f28637d61b547a20dfd6df839e53e4efb5abcceee885d6836a9adc57d2e56fd4"
-OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
+SCHEMA_DIGEST = "sha256:a55266ecc5ac7abc096b8c6addc781b2278030b3e668b2f466565b45a6e46e37"
+OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
 
 
 @dataclass(frozen=True)
@@ -398,12 +400,12 @@ class Executor:
         return cls(executor_id=value["executor_id"], max_concurrency=int(value["max_concurrency"]), resource_keys=tuple(value.get("resource_keys", [])), capabilities=tuple(Capability.from_json(item) for item in value.get("capabilities", [])), protocol=value["protocol"], runtime_epoch=int(value["runtime_epoch"]) if value.get("runtime_epoch") is not None else None, source_digest=value.get("source_digest"), dependency_digest=value.get("dependency_digest"), source_epoch=value.get("source_epoch"), verified_facts=dict(value["verified_facts"]) if value.get("verified_facts") is not None else None)
 
 
-def _decode_error(status: int, body: bytes) -> ApiError:
+def _decode_error(status: int, body: bytes, *, request_id: str = "") -> ApiError:
     try:
         value = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         value = {}
-    return ApiError(status, str(value.get("code", "http_error")), str(value.get("message", f"HTTP {status}")), str(value.get("request_id", "")), value.get("details", {}))
+    return ApiError(status, str(value.get("code", "http_error")), str(value.get("message", f"HTTP {status}")), str(value.get("request_id") or request_id), value.get("details", {}))
 
 
 class MutationResult(dict):
@@ -430,29 +432,36 @@ class WorkspaceClient:
     headers, and body and returns ``(status, headers, body)``.
     """
 
-    def __init__(self, base_url: str, token: str | None = None, *, transport: Callable[..., tuple[int, Mapping[str, str], bytes]] | None = None):
+    def __init__(self, base_url: str, token: str | None = None, *, transport: Callable[..., tuple[int, Mapping[str, str], bytes]] | None = None, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._transport = transport
+        self.timeout = float(timeout)
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
         self.handshake_info: Handshake | None = None
 
     def _request(self, method: str, path: str, *, body: bytes | None = None, headers: Mapping[str, str] | None = None, expected: tuple[int, ...] = (200,)) -> tuple[int, Mapping[str, str], bytes]:
         request_headers = {"Accept": "application/json", **dict(headers or {})}
+        request_id = request_headers.setdefault("X-Request-ID", f"request-{uuid.uuid4().hex}")
         if self.token:
             request_headers.setdefault("Authorization", f"Bearer {self.token}")
-        if self._transport:
-            status, response_headers, response_body = self._transport(method, path, request_headers, body)
-        else:
-            request = urllib.request.Request(self.base_url + path, data=body, headers=request_headers, method=method)
-            try:
-                with urllib.request.urlopen(request) as response:  # noqa: S310 - endpoint is caller-configured
+        try:
+            if self._transport:
+                status, response_headers, response_body = self._transport(method, path, request_headers, body)
+            else:
+                request = urllib.request.Request(self.base_url + path, data=body, headers=request_headers, method=method)
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - endpoint is caller-configured
                     status, response_headers, response_body = response.status, dict(response.headers), response.read()
-            except urllib.error.HTTPError as error:
-                raise _decode_error(error.code, error.read()) from error
-            except urllib.error.URLError as error:
-                raise ApiError(0, "transport_error", str(error.reason)) from error
+        except urllib.error.HTTPError as error:
+            raise _decode_error(error.code, error.read(), request_id=request_id) from error
+        except (TimeoutError, urllib.error.URLError) as error:
+            reason = getattr(error, "reason", error)
+            code = "transport_timeout" if isinstance(error, TimeoutError) or isinstance(reason, TimeoutError) else "transport_error"
+            message = "runtime request timed out" if code == "transport_timeout" else str(reason)
+            raise ApiError(0, code, message, request_id=request_id) from error
         if status not in expected:
-            raise _decode_error(status, response_body)
+            raise _decode_error(status, response_body, request_id=request_id)
         return status, response_headers, response_body
 
     @staticmethod
@@ -631,6 +640,31 @@ class WorkspaceClient:
         value = self._json(self._request("GET", f"/v1/timelines/{_path_part(timeline_id)}/history" + query)[2])
         items, next_cursor = self._page(value)
         return list(items), next_cursor
+
+    def replace_timeline_clip(
+        self,
+        timeline_id: str,
+        *,
+        clip_id: str,
+        source_object_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        timing: str = "preserve-duration",
+    ) -> MutationResult:
+        payload = {
+            "clip_id": clip_id,
+            "source_object_id": source_object_id,
+            "expected_version": expected_version,
+            "timing": timing,
+        }
+        return self._mutation_json(
+            self._request(
+                "POST",
+                f"/v1/timelines/{_path_part(timeline_id)}/replace-clip",
+                body=json.dumps(payload, separators=(",", ":")).encode(),
+                headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key},
+            )[2]
+        )
 
     def diff_timeline(self, timeline_id: str, *, from_version: int, to_version: int) -> Mapping[str, Any]:
         path = f"/v1/timelines/{_path_part(timeline_id)}/diff?from_version={int(from_version)}&to_version={int(to_version)}"
@@ -894,6 +928,12 @@ class WorkspaceClient:
     def checkpoint_attempt(self, attempt_id: str, *, lease_id: str, fence: int, nonce: str, authorization: str, state: Mapping[str, Any] | None = None, runtime_epoch: int) -> RecoveryCheckpointReceipt:
         payload: dict[str, Any] = {"lease_id": lease_id, "fence": fence, "nonce": nonce, "authorization": authorization, "state": dict(state or {}), "runtime_epoch": runtime_epoch}
         return RecoveryCheckpointReceipt.from_json(self._json(self._request("POST", f"/v1/attempts/{_path_part(attempt_id)}/checkpoint", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json"}, expected=(200, 201))[2]))
+
+    def publish_timeline_render(self, attempt_id: str, *, lease_id: str, fence: int, runtime_epoch: int, timeline_id: str, expected_version: int, config: Mapping[str, Any], registry: Mapping[str, Any], render: Mapping[str, Any], idempotency_key: str, slug: str | None = None, name: str | None = None) -> Mapping[str, Any]:
+        payload: dict[str, Any] = {"lease_id": lease_id, "fence": fence, "runtime_epoch": runtime_epoch, "timeline_id": timeline_id, "expected_version": expected_version, "config": dict(config), "registry": dict(registry), "render": dict(render)}
+        if slug is not None: payload["slug"] = slug
+        if name is not None: payload["name"] = name
+        return self._json(self._request("POST", f"/v1/attempts/{_path_part(attempt_id)}/publish-timeline-render", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})[2])
 
     def request_reboot(self, *, checkpoint_id: str, nonce: str, authorization: str, runtime_epoch: int, command: str = "reboot") -> RecoveryReceipt:
         payload = {"checkpoint_id": checkpoint_id, "nonce": nonce, "authorization": authorization, "runtime_epoch": runtime_epoch, "command": command}

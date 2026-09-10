@@ -449,6 +449,14 @@ class InvocationAssetServer:
             directory=str(self.staging_dir),
             allowed_origin=self.allowed_origin,
         )
+        # Remotion opens several browser workers and can request the same image
+        # concurrently.  TCPServer's default listen backlog is only five, so a
+        # burst can be reset by the kernel before a handler thread is created,
+        # surfacing in Chromium as ERR_EMPTY_RESPONSE.  Set this before bind;
+        # the symbol remains patchable in tests and for restricted runtimes.
+        ThreadingHTTPServer.request_queue_size = max(
+            int(getattr(ThreadingHTTPServer, "request_queue_size", 5)), 128
+        )
         server = ThreadingHTTPServer((self.host, self.bind_port), handler)
         try:
             thread = threading.Thread(

@@ -9,6 +9,7 @@ executor definition while replacing only the render subprocess.
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -99,6 +100,30 @@ def _noop_render_subprocess_direct(monkeypatch: pytest.MonkeyPatch, commands: li
             out_path = Path(argv_list[argv_list.index("--out") + 1])
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(b"fake-mp4")
+            digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
+            (out_path.parent / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "rendering.render",
+                        "inputs": {"selector": "rendering.ffmpeg"},
+                        "outputs": [
+                            {
+                                "name": "video",
+                                "path": out_path.name,
+                                "content_hash": f"sha256:{digest}",
+                                "bytes": out_path.stat().st_size,
+                                "ordinal": 0,
+                                "role": "result",
+                                "is_primary": True,
+                            }
+                        ],
+                        "created": "test",
+                        "warnings": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             return subprocess.CompletedProcess(argv_list, 0, stdout="", stderr="")
         return real_run(argv, **kwargs)
 
@@ -152,10 +177,10 @@ def test_kernel_admitted_runner_uses_staging_without_filesystem_ledger(
     assert result.returncode == 0
     assert result.run_root is None
     assert (staging / "hype.mp4").read_bytes() == b"fake-mp4"
-    assert result.outputs["video"] == str(staging / "hype.mp4")
+    assert next(item for item in result.outputs if item["name"] == "video")["path"] == str(staging / "hype.mp4")
     assert _run_jsons(projects_root) == []
     assert not (staging / "run.json").exists()
-    assert len(commands) == 1
+    assert len([command for command in commands if "astrid.packs.rendering.executors.render.run" in " ".join(command[0])]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +246,7 @@ def test_auto_resolved_project_retains_kernel_selected_staging(
     assert result.returncode == 0
     assert result.run_root is None
     assert (staging / "hype.mp4").read_bytes() == b"fake-mp4"
-    argv = commands[0][0]
+    argv = next(command[0] for command in commands if "astrid.packs.rendering.executors.render.run" in " ".join(command[0]))
     out_value = argv[argv.index("--out") + 1]
     assert Path(out_value).resolve().is_relative_to(staging.resolve())
     assert _run_jsons(projects_root) == []

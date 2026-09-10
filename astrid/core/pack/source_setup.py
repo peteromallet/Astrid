@@ -31,9 +31,14 @@ DEFAULT_PROFILE = "default"
 SOURCE_DECLARATIONS_ENV = "ASTRID_SOURCE_DECLARATIONS"
 SOURCE_STATE_ENV = "ASTRID_SOURCE_STATE"
 SOURCE_DATA_ENV = "ASTRID_SOURCE_DATA"
+HIVEMIND_REVISION_ENV = "ASTRID_HIVEMIND_REVISION"
+HIVEMIND_REPOSITORY_ENV = "ASTRID_HIVEMIND_REPOSITORY"
 _OID_LENGTHS = {40, 64}
 DEFAULT_HIVEMIND_REPOSITORY = "https://github.com/banodoco/hivemind.git"
-DEFAULT_HIVEMIND_REVISION = "50ff509240c5582a7335dc71920533b59be7792c"
+# Delivery pin: local immutable Hivemind commit containing the v2 pack and
+# contributor-auth implementation. Publication to the upstream remote remains
+# outside this task; a caller may override the repository for local rehearsal.
+DEFAULT_HIVEMIND_REVISION = "a4c6610cba1032adb3b4bec541ccf821afba6ba8"
 
 
 class SourceSetupError(RuntimeError):
@@ -97,22 +102,57 @@ class SourceDeclaration:
 
 
 def default_source_declarations() -> tuple[SourceDeclaration, ...]:
-    """Return the versioned default external source policy.
+    """Return the configured default external source policy.
 
-    The repository pin is intentionally separate from the installed source
-    inventory.  Setup may be pointed at a local Git mirror through
-    ``ASTRID_SOURCE_DECLARATIONS`` for offline development, while a normal
-    installation uses the canonical upstream URL at the same immutable
-    revision.
+    The Hivemind revision is pinned to a full immutable delivery commit and
+    may be overridden for a later published commit. The repository override is
+    useful for local rehearsal; normal installs use the canonical upstream URL.
+    ``ASTRID_SOURCE_DECLARATIONS`` remains available for a complete declaration
+    file and is resolved by ``declarations_from_json``.
     """
+    revision = os.environ.get(HIVEMIND_REVISION_ENV, DEFAULT_HIVEMIND_REVISION).strip()
+    repository = os.environ.get(HIVEMIND_REPOSITORY_ENV, DEFAULT_HIVEMIND_REPOSITORY).strip()
+    try:
+        declaration = SourceDeclaration.from_mapping(
+            {
+                "pack_id": "hivemind",
+                "repository": repository,
+                "revision": revision,
+                "pack_subpath": ".",
+            }
+        )
+    except SourceSetupError as exc:
+        raise SourceSetupError(
+            f"{HIVEMIND_REVISION_ENV} must contain a full immutable Hivemind Git object id"
+        ) from exc
     return (
-        SourceDeclaration(
-            pack_id="hivemind",
-            repository=DEFAULT_HIVEMIND_REPOSITORY,
-            revision=DEFAULT_HIVEMIND_REVISION,
-            pack_subpath=".",
-        ),
+        declaration,
     )
+
+
+def hivemind_pin_report(
+    declarations: Iterable[SourceDeclaration] = (),
+) -> dict[str, Any]:
+    """Describe the Hivemind pin without claiming unresolved source readiness."""
+    selected = next((item for item in declarations if item.pack_id == "hivemind"), None)
+    if selected is not None:
+        return {
+            "pack_id": "hivemind",
+            "status": "configured",
+            "repository": selected.repository,
+            "revision": selected.revision,
+            "source": "ASTRID_HIVEMIND_REVISION"
+            if os.environ.get(HIVEMIND_REVISION_ENV, "").strip() == selected.revision
+            else "ASTRID_SOURCE_DECLARATIONS",
+        }
+    return {
+        "pack_id": "hivemind",
+        "status": "configured",
+        "repository": DEFAULT_HIVEMIND_REPOSITORY,
+        "revision": DEFAULT_HIVEMIND_REVISION,
+        "configuration": HIVEMIND_REVISION_ENV,
+        "message": "Hivemind is pinned to the local delivery commit; publish it before remote installation.",
+    }
 
 
 @dataclass(frozen=True)
@@ -226,11 +266,38 @@ def _run_git(repository: str, *args: str, cwd: Path | None = None) -> str:
 
 
 def _tree_digest(root: Path) -> str:
+    """Hash the immutable checkout contents without generated cache files.
+
+    Managed packs are Python packages, so importing one can create ignored
+    ``__pycache__`` bytecode in an otherwise clean checkout.  The source
+    inventory already rejects tracked or non-ignored working-tree changes via
+    ``git status``; the digest therefore needs to cover the tracked tree only
+    so ordinary interpreter caches do not invalidate an installed pack.
+    """
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or ".git" in path.parts:
-            continue
-        relative = path.relative_to(root).as_posix().encode()
+    root = root.resolve()
+    try:
+        repo_root = Path(_run_git("", "-C", str(root), "rev-parse", "--show-toplevel")).resolve()
+        tracked = _run_git("", "-C", str(root), "ls-files", "-z").split("\0")
+        paths = []
+        for item in tracked:
+            if not item:
+                continue
+            path = repo_root / item
+            try:
+                relative_path = path.relative_to(root)
+            except ValueError:
+                continue
+            if path.is_file():
+                paths.append((relative_path.as_posix(), path))
+    except SourceSetupError:
+        paths = [
+            (path.relative_to(root).as_posix(), path)
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and ".git" not in path.parts
+        ]
+    for relative_name, path in sorted(paths):
+        relative = relative_name.encode()
         data = path.read_bytes()
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
@@ -390,7 +457,9 @@ def provision(
         state["disabled"] = sorted(set(state.get("disabled", [])) | {disable_pack})
         if not check:
             _write_state(state, state_path)
-        return inventory_report(state, check=check)
+        report = inventory_report(state, check=check)
+        report["hivemind_pin"] = hivemind_pin_report(declarations)
+        return report
     if restore_pack:
         if restore_pack not in by_id:
             raise SourceSetupError(f"no declaration for pack {restore_pack!r}")
@@ -414,11 +483,17 @@ def provision(
             errors.append(str(exc))
         if errors:
             if check:
-                return {**inventory_report(state, check=True), "ok": False, "errors": errors}
+                report = inventory_report(state, check=True)
+                report["ok"] = False
+                report["errors"] = errors
+                report["hivemind_pin"] = hivemind_pin_report(declarations)
+                return report
             raise SourceSetupError("; ".join(errors))
     if not check:
         _write_state(state, state_path)
-    return inventory_report(state, check=check)
+    report = inventory_report(state, check=check)
+    report["hivemind_pin"] = hivemind_pin_report(declarations)
+    return report
 
 
 def inventory_report(state: Mapping[str, Any] | None = None, *, check: bool = True) -> dict[str, Any]:
@@ -494,10 +569,12 @@ def _cli(argv: list[str] | None = None) -> int:
 
 __all__ = [
     "DEFAULT_HIVEMIND_REPOSITORY", "DEFAULT_HIVEMIND_REVISION", "DEFAULT_PROFILE",
+    "HIVEMIND_REVISION_ENV", "HIVEMIND_REPOSITORY_ENV",
     "InstalledSource", "ManagedSourceInventory", "SOURCE_DATA_ENV",
     "SOURCE_DECLARATIONS_ENV", "SOURCE_STATE_ENV", "SourceDeclaration", "SourceSetupError",
     "active_source_inventory", "active_sources",
-    "default_source_declarations", "declarations_from_json", "inventory_report", "provision", "source_data_root",
+    "default_source_declarations", "declarations_from_json", "hivemind_pin_report",
+    "inventory_report", "provision", "source_data_root",
     "source_inventory_identity", "source_state_path",
 ]
 

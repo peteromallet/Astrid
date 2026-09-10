@@ -22,6 +22,14 @@ def test_paged_rows_traverses_all_pages_with_canonical_arguments() -> None:
     assert calls == [(None, 1), ("next-1", 1)]
 
 
+def test_paged_rows_accepts_generated_client_tuple_pages() -> None:
+    def reader(*, cursor: str | None, limit: int):
+        assert limit == 50
+        return ([{"id": 1}], None)
+
+    assert paged_rows(reader) == [{"id": 1}]
+
+
 def test_paged_rows_fails_closed_without_retrying_a_legacy_reader() -> None:
     calls = 0
 

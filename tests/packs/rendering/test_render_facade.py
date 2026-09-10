@@ -7,6 +7,7 @@ without spawning any media tool.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,27 @@ def test_render_delegates_to_service_with_default_selector(fake_service: _FakeSe
     assert request.backend_config["rendering.remotion"] == {
         "composition_id": "TimelineComposition"
     }
+
+
+def test_render_writes_universal_result_manifest(
+    fake_service: _FakeService, tmp_path: Path
+) -> None:
+    timeline, assets, out = _inputs(tmp_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(b"fake-mp4")
+    provenance = Path(f"{out}.provenance.json")
+    provenance.write_text("{}\n", encoding="utf-8")
+    fake_service.sentinel = out
+
+    result = render_run.render(timeline, assets, out, selector="rendering.ffmpeg")
+
+    assert result == out
+    receipt = json.loads((out.parent / "manifest.json").read_text(encoding="utf-8"))
+    assert receipt["kind"] == "rendering.render"
+    assert [item["name"] for item in receipt["outputs"]] == ["video", "provenance"]
+    assert receipt["outputs"][0]["path"] == out.name
+    assert receipt["outputs"][0]["is_primary"] is True
+    assert receipt["outputs"][1]["role"] == "auxiliary"
 
 
 @pytest.mark.parametrize(

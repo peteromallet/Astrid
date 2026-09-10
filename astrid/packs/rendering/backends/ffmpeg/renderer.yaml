@@ -1,7 +1,7 @@
 schema_version: 1
 id: rendering.ffmpeg
 name: FFmpeg Media Renderer
-version: 1.0.0
+version: 1.1.0
 protocol_version: 1
 command:
   - python3
@@ -9,7 +9,7 @@ command:
 operations:
   - render
   - support
-description: Render media and text-overlay timelines with FFmpeg.
+description: Render media, text overlays, and one canvas-sized transparent PNG overlay with FFmpeg.
 capabilities:
   clip_types:
     - media
@@ -23,6 +23,7 @@ capabilities:
     fade_envelope: true
     stream_copy: true
     sequential_audio: true
+    static_image_overlay: true
   supports_full_timeline: true
   supports_windows: false
   output_profiles:

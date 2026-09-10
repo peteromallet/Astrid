@@ -32,6 +32,38 @@ brand, captions, effects, b-roll, source) and descriptive clip ids. Read the
 canvas. Set `theme_overrides.visual.canvas` when changing the canvas, and match
 an explicit render profile to that canvas. The default is 1920x1080 at 30 fps.
 
+### Constrained transparent PNG overlay
+
+The FFmpeg backend accepts one static transparent PNG as a managed media layer
+when it is held for the full ordinary picture duration. Put the overlay track
+first so it is composited on top, and put exactly one ordinary visual picture
+track beneath it:
+
+```json
+{
+  "tracks": [
+    {"id": "overlay", "kind": "visual"},
+    {"id": "picture", "kind": "visual"}
+  ],
+  "clips": [
+    {"id": "overlay", "at": 0, "track": "overlay", "clipType": "media", "asset": "managed-alpha.png", "hold": 1.0},
+    {"id": "picture", "at": 0, "track": "picture", "clipType": "media", "asset": "managed-video.mp4", "from": 0, "to": 1.0, "volume": 0}
+  ]
+}
+```
+
+The registry entry for `managed-alpha.png` must point to a local PNG whose
+decoded dimensions exactly match the visual canvas and whose PNG bytes declare
+transparency. Strict support also requires a positive `hold`, timeline start at
+zero, no `from`/`to` on the held clip, and the hold to equal the ordinary
+picture duration. The layer is looped, bounded to its hold interval, normalized
+to the canvas, and composited after the base visual concat; existing text
+overlays are then composited using their current path, and stream copy is
+disabled for this path.
+
+This subset supports one full-duration static layer. It does not implement
+arbitrary transforms, crop, per-layer blending, or multiple held overlays.
+
 ## Registry and authority
 
 The `registry` supplied to `create`/`save` is the complete asset registry for

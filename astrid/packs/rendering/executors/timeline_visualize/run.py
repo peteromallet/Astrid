@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 from copy import deepcopy
 from dataclasses import replace
 from operator import itemgetter
@@ -312,9 +313,21 @@ def _verify_selected_execution_authority(
     expected_rows = authority.get("timelines")
     if mode != "kernel" or not isinstance(expected_rows, list):
         raise ValueError("timeline visualization authority mode changed before execution")
+    def comparable_timeline_id(value: Any) -> Any:
+        """Compare compact runtime UUIDs and canonical UUID text alike."""
+
+        try:
+            return str(uuid.UUID(str(value)))
+        except (ValueError, AttributeError, TypeError):
+            return value
+
+    expected_rows = [
+        {**row, "timeline_id": comparable_timeline_id(row.get("timeline_id"))}
+        for row in expected_rows
+    ]
     actual_rows = [
         {
-            "timeline_id": row.timeline_id,
+            "timeline_id": comparable_timeline_id(row.timeline_id),
             "head_version": row.kernel_head_version,
             "head_event_id": row.kernel_source_event_id,
             "head_hash": row.kernel_head_hash,
@@ -515,6 +528,14 @@ def _materialize_kernel_timeline(
 
     del project_root, project_slug, destination
     timeline_ulid = row.timeline_ulid.upper()
+    # The workspace DTO currently uses a compact 32-hex UUID, while the
+    # visualization snapshot digest contract requires canonical UUID text.
+    # Keep selector authority in the DTO form, and normalize only at the
+    # materialization boundary.
+    try:
+        timeline_id = str(uuid.UUID(str(row.timeline_id)))
+    except ValueError:
+        timeline_id = row.timeline_id
     config = dict(row.config)
     if not isinstance(config.get("clips"), list) or not isinstance(config.get("tracks"), list):
         raise ValueError(
@@ -534,7 +555,7 @@ def _materialize_kernel_timeline(
     ):
         event = TimelineEvent(
             event_id=_stable_kernel_event_ulid(f"{row.head_event_id}:{kind}"),
-            timeline_id=row.timeline_id,
+            timeline_id=timeline_id,
             ts=timestamp,
             actor=actor,
             prev_hash=None,
@@ -543,7 +564,7 @@ def _materialize_kernel_timeline(
             payload=payload,
             expected_version=len(events),
             source_backend="astrid.kernel",
-            source_timeline_id=row.timeline_id,
+            source_timeline_id=timeline_id,
             source_event_id=row.head_event_id,
             source_version=row.config_version,
             source_hash=row.head_hash,
@@ -552,7 +573,7 @@ def _materialize_kernel_timeline(
         events.append(event)
     return ManagedTimeline(
         timeline_dir=None,
-        timeline_id=row.timeline_id,
+        timeline_id=timeline_id,
         timeline_ulid=timeline_ulid,
         slug=row.slug,
         is_default=row.is_default,
@@ -572,13 +593,28 @@ def _select_timelines(
     project_root: Path,
     *,
     kernel_materialization_root: Path | None = None,
+    authority: Mapping[str, Any] | None = None,
 ) -> list[ManagedTimeline]:
+    authority_rows = authority.get("timeline_snapshots") if isinstance(authority, Mapping) else None
+    authority_client = None
+    if authority and authority.get("mode") == "kernel" and isinstance(authority_rows, list):
+        class _AdmissionRuntime:
+            def list_projects(self, *, cursor=None, limit=50):
+                del cursor, limit
+                return [[{"project_id": args.project_slug, "slug": args.project_slug}], None]
+
+            def list_timelines(self, project_id, *, cursor=None, limit=50):
+                del project_id, cursor, limit
+                return [authority_rows, None]
+
+        authority_client = _AdmissionRuntime()
     kernel_rows, diagnostics = select_kernel_timelines(
         project_root,
         project_slug=args.project_slug,
         slug=args.timeline_slug,
         all=args.select_all,
         default=not args.timeline_slug and not args.select_all,
+        runtime_client=authority_client,
     )
     selected = []
     if kernel_rows and kernel_materialization_root is not None:
@@ -1662,6 +1698,7 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
         args,
         project_root,
         kernel_materialization_root=kernel_materialization_root,
+        authority=execution_authority,
     )
     _verify_selected_execution_authority(selected, execution_authority)
     timeline_ids = sorted({row.timeline_ulid for row in selected})
@@ -1704,6 +1741,28 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
         )
         pages = [path for child in children for path in child.pages]
         file_hashes = _all_file_hashes(pack_root)
+
+    # The generic host requires a receipt at the assigned output root even
+    # though the domain evidence manifest intentionally lives under
+    # ``agent-view/``.  Keep the domain manifest authoritative and publish a
+    # tiny host receipt that points at it; without this boundary receipt the
+    # child succeeds but the admitted task is reported as missing outputs.
+    write_manifest(
+        out_root / "manifest.json",
+        build_manifest(
+            kind="timeline_visualization_result",
+            created="1970-01-01T00:00:00Z",
+            inputs={"timeline_ids": timeline_ids},
+            outputs=[
+                {
+                    "name": "manifest_path",
+                    "path": str(manifest_path.relative_to(out_root)),
+                    "role": "result",
+                    "is_primary": True,
+                }
+            ],
+        ),
+    )
 
     outputs: dict[str, Any] = {
         "pack_root": str(pack_root),

@@ -422,7 +422,23 @@ class RenderExportTaskAdapter:
             if not result.ok:
                 detail = result.error.message if result.error is not None else result.payload
                 raise RenderExportRefused(f"render_export executor failed: {detail}")
-            rendered = result.outputs.get("video", output_path)
+            # ``run_executor`` returns harvested output descriptors as a
+            # sequence when the universal result receipt is present.  Keep
+            # compatibility with older in-process doubles that returned a
+            # mapping, but use the adapter's declared output path by default
+            # so receipt harvesting never changes the render identity.
+            rendered = output_path
+            result_outputs = getattr(result, "outputs", ())
+            if isinstance(result_outputs, Mapping):
+                rendered = result_outputs.get("video", output_path)
+            elif isinstance(result_outputs, (list, tuple)):
+                for descriptor in result_outputs:
+                    if not isinstance(descriptor, Mapping) or descriptor.get("name") != "video":
+                        continue
+                    candidate = descriptor.get("path")
+                    if candidate:
+                        rendered = candidate
+                    break
         except RenderExportRefused:
             raise
         except Exception as exc:  # noqa: BLE001 - typed by the task boundary

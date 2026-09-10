@@ -34,6 +34,19 @@ PACK_HOST_SCOPES = (
 class PackHostBootstrapError(RuntimeError):
     """A bounded, secret-free failure while starting the generic host."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "pack_host_bootstrap_failed",
+        request_id: str = "",
+        terminal: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.request_id = request_id
+        self.terminal = terminal
+
 
 def _host_pid_alive(pid: Any) -> bool:
     try:
@@ -49,14 +62,29 @@ def _host_pid_alive(pid: Any) -> bool:
     except OSError:
         return False
     # A terminated process can remain as a zombie until its original parent
-    # reaps it.  It is not a live host and must not block a fresh launch.
+    # reaps it.  It is not a live host and must not block a fresh launch.  The
+    # Linux /proc probe is not available on macOS, which is the primary local
+    # deployment, so keep a portable ``ps`` fallback as well.  Without this,
+    # a host killed alongside an interrupted CLI remains recorded forever and
+    # every next launch attempts to terminate the zombie until it times out.
     try:
         stat = Path(f"/proc/{value}/stat").read_text(encoding="ascii")
         state = stat.rsplit(")", 1)[-1].lstrip().split(None, 1)[0]
         if state == "Z":
             return False
     except (OSError, UnicodeDecodeError, IndexError):
-        pass
+        try:
+            # ``subprocess.run`` is deliberately avoided here: the bootstrap
+            # tests (and some embedded launchers) replace ``Popen`` while
+            # modelling host startup.  The PID is already parsed as an int,
+            # so this small, read-only ps probe has no shell-input surface.
+            with os.popen(f"/bin/ps -p {value} -o state=", "r") as probe:
+                state_text = probe.read()
+            state = state_text.strip().split(None, 1)[0] if state_text.strip() else ""
+            if state.upper().startswith("Z"):
+                return False
+        except (OSError, ValueError, IndexError):
+            pass
     return True
 
 
@@ -367,11 +395,18 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
     finally:
         worker_token = ""
     health_value = dict(health) if isinstance(health, Mapping) else {
+        "status": getattr(health, "status", None),
         "runtime_epoch": getattr(health, "runtime_epoch", None),
         "schema_digest": getattr(health, "schema_digest", None),
         "runtime_instance_id": getattr(health, "runtime_instance_id", None),
         "coordinator_epoch": getattr(health, "coordinator_epoch", None),
     }
+    if str(health_value.get("status", "")) != "ok":
+        raise PackHostBootstrapError(
+            f"generic Astrid pack host runtime is not healthy; {reconfigure_action}",
+            code="runtime_not_ready",
+            terminal=True,
+        )
     runtime_epoch = health_value.get("runtime_epoch", value.get("runtime_epoch"))
     runtime_instance_id = (
         value.get("runtime_instance_id")
@@ -541,13 +576,40 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             raise PackHostBootstrapError(f"generic Astrid pack host identity could not be captured; {reconfigure_action}")
         deadline = time.monotonic() + 20.0
         ready = None
+        terminal_failure = None
         while time.monotonic() < deadline:
             ready = _read_object(ready_path)
             if ready and str(ready.get("status")) == "ready":
                 break
+            if (
+                ready
+                and str(ready.get("status")) == "failed"
+                and ready.get("terminal") is True
+                and str(ready.get("pid")) == str(process.pid)
+                and str(ready.get("process_birth_id"))
+                == str(process_state["process_birth_id"])
+            ):
+                terminal_failure = ready
+                break
             if process.poll() is not None:
                 break
             time.sleep(0.05)
+        if terminal_failure is not None:
+            _terminate_old_host(process_state)
+            error = terminal_failure.get("error")
+            diagnostic = error if isinstance(error, Mapping) else {}
+            code = str(diagnostic.get("code") or "host_registration_failed")[:128]
+            request_id = str(diagnostic.get("request_id") or "")[:128]
+            message = str(
+                diagnostic.get("message") or "generic Astrid pack host registration failed"
+            )[:512]
+            suffix = f" [request_id={request_id}]" if request_id else ""
+            raise PackHostBootstrapError(
+                message + suffix,
+                code=code,
+                request_id=request_id,
+                terminal=True,
+            )
         if (not ready or ready.get("status") != "ready"
                 or str(ready.get("pid")) != str(process.pid)
                 or str(ready.get("process_birth_id")) != str(process_state["process_birth_id"])

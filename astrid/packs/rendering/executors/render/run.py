@@ -16,11 +16,13 @@ import hashlib
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Mapping, Sequence
 
 from astrid.core import timeline
+from astrid.core._shared.result_manifest import build_manifest, write_manifest
 from astrid.core.foundation.paths import REPO_ROOT
 from astrid.core.rendering.errors import RendererException
 from astrid.core.rendering.contracts import RenderRequest, SCHEMA_VERSION
@@ -185,6 +187,56 @@ def _write_empty_asset_registry(path: Path) -> None:
     timeline.save_registry({"assets": {}}, path)
 
 
+def _write_render_manifest(output: Path, *, timeline_path: Path, selector: str) -> None:
+    """Write the universal receipt consumed by the host output harvester.
+
+    ``rendering.render`` declares media output ports, so the host requires a
+    receipt rather than guessing output identity from filenames.  The
+    provenance sidecar is included when the selected backend produced it;
+    lightweight/fake renderers that only produce the required video remain
+    valid and are harvested as a single result.
+    """
+    if not output.is_file():
+        # RenderService normally guarantees this invariant.  Leave the
+        # missing receipt for the host to report as a missing concrete output,
+        # preserving the renderer's existing error boundary for malformed
+        # service results and test doubles.
+        return
+    outputs: list[dict[str, Any]] = [
+        {
+            "name": "video",
+            "path": output.name,
+            "type": "file",
+            "artifact_type": "clip/visual",
+            "role": "result",
+            "is_primary": True,
+        }
+    ]
+    provenance = Path(f"{output}.provenance.json")
+    if provenance.is_file():
+        outputs.append(
+            {
+                "name": "provenance",
+                "path": provenance.name,
+                "type": "file",
+                "artifact_type": "metadata/provenance",
+                "role": "auxiliary",
+                "is_primary": False,
+            }
+        )
+    manifest = build_manifest(
+        kind="rendering.render",
+        inputs={
+            "timeline": str(Path(timeline_path).expanduser().resolve()),
+            "selector": selector,
+            "output_name": output.name,
+        },
+        outputs=outputs,
+        created=datetime.now(timezone.utc).isoformat(),
+    )
+    write_manifest(output.parent / "manifest.json", manifest)
+
+
 def _previous_render_outputs_for_timeline(
     out_path: Path,
     timeline_path: Path,
@@ -302,6 +354,7 @@ def render(
         Path(output),
         timeline_authority=timeline_authority,
     )
+    _write_render_manifest(Path(output), timeline_path=timeline_path, selector=selector)
     return output
 
 

@@ -358,7 +358,7 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
     coverage = {
         "source_labels": {"source": 88, "ledger": len(labels), "missing": [], "complete": len(labels) == 88},
         "historical_source_labels": {"source": 93, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 93},
-        "executor_inventory": {"source": 83, "ledger": len(executors), "missing": [], "complete": len(executors) == 83},
+        "executor_inventory": {"source": 84, "ledger": len(executors), "missing": [], "complete": len(executors) == 84},
         "legacy_ids": {"source": 19, "ledger": len(legacy), "missing": [], "complete": len(legacy) == 19},
     }
     if not all(section["complete"] for section in coverage.values()):

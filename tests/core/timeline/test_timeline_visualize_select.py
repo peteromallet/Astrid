@@ -73,6 +73,65 @@ def test_runtime_selection_reads_rows_and_honors_default_and_slug() -> None:
     assert selected[0].timeline_id == UUID_A
 
 
+def test_runtime_selection_accepts_public_astrid_client_family_readers() -> None:
+    """SDK preflight passes AstridClient, not its private WorkspaceClient."""
+
+    class PublicClient:
+        class Projects:
+            def list(self, *, cursor=None, limit=50):
+                return [[
+                    {
+                        "project_id": PROJECT_ID,
+                        "slug": "demo",
+                        "metadata": {"default_timeline_id": UUID_A},
+                    }
+                ], None]
+
+        class Timelines:
+            def list(self, project_id, *, cursor=None, limit=50):
+                assert project_id == PROJECT_ID
+                return [[_row(UUID_A, ULID_A, "main")], None]
+
+        projects = Projects()
+        timelines = Timelines()
+
+    selected, diagnostics = select_kernel_timelines(
+        None,
+        project_slug="demo",
+        default=True,
+        runtime_client=PublicClient(),
+    )
+    assert diagnostics == []
+    assert [item.timeline_id for item in selected] == [UUID_A]
+
+
+def test_runtime_selection_backfills_legacy_identity_fields_from_current_dto() -> None:
+    class CurrentRuntime:
+        def list_projects(self, *, cursor=None, limit=50):
+            return [[{"project_id": PROJECT_ID, "slug": "demo"}], None]
+
+        def list_timelines(self, project_id: str, *, cursor=None, limit=50):
+            return [[
+                {
+                    "timeline_id": UUID_A,
+                    "slug": "main",
+                    "name": "Main",
+                    "config": {"tracks": [], "clips": []},
+                    "registry": {"assets": {}},
+                    "config_version": 26,
+                }
+            ], None]
+
+    selected, diagnostics = select_kernel_timelines(
+        None, project_slug="demo", slug="main", runtime_client=CurrentRuntime()
+    )
+    assert diagnostics == []
+    assert selected[0].timeline_id == UUID_A
+    assert len(selected[0].timeline_ulid) == 26
+    assert selected[0].head_event_id == f"timeline:{UUID_A}:26"
+    assert selected[0].head_created_at == "1970-01-01T00:00:00+00:00"
+
+
 def test_runtime_selection_excludes_archived_rows() -> None:
     runtime = _Runtime(
         [_row(UUID_A, ULID_A, "main"), _row(UUID_B, ULID_B, "gone", state="archived")]

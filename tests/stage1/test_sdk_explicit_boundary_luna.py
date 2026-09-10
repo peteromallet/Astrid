@@ -10,7 +10,11 @@ import pytest
 from astrid.sdk import autobootstrap
 from astrid.sdk.client import AstridClient
 from astrid.sdk.remote import RemoteAstridClient, RemoteTimelines
-from astrid.sdk.workspace_client import WorkspaceClientError, resolve_runtime_connection
+from astrid.sdk.workspace_client import (
+    WorkspaceClient,
+    WorkspaceClientError,
+    resolve_runtime_connection,
+)
 
 
 def test_open_requires_explicit_context_and_never_bootstraps(monkeypatch):
@@ -31,6 +35,42 @@ def test_connection_resolution_does_not_guess_a_checkout_or_catalog(tmp_path: Pa
         "https://127.0.0.1:8443",
         "token",
     )
+
+
+def test_connection_resolution_accepts_host_injected_runtime_context(tmp_path: Path, monkeypatch):
+    credential = tmp_path / "owner.token"
+    credential.write_text("child-token\n", encoding="utf-8")
+    credential.chmod(0o600)
+    monkeypatch.setenv("BANODOCO_RUNTIME_ENDPOINT", "http://127.0.0.1:8443/")
+    monkeypatch.setenv("BANODOCO_RUNTIME_CREDENTIAL", str(credential))
+
+    assert resolve_runtime_connection() == ("http://127.0.0.1:8443", "child-token")
+
+
+def test_generated_failure_keeps_request_correlation(monkeypatch):
+    class GeneratedFailure(RuntimeError):
+        status = 503
+        code = "registration_unavailable"
+        message = "registration unavailable"
+        request_id = "request-sdk-1"
+        details = {"retryable": False}
+
+    class Generated:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def health(self):
+            raise GeneratedFailure()
+
+    monkeypatch.setattr("astrid.sdk.workspace_client.GeneratedWorkspaceClient", Generated)
+    client = WorkspaceClient("http://127.0.0.1:8443", "token")
+
+    with pytest.raises(WorkspaceClientError) as caught:
+        client.health()
+
+    assert caught.value.code == "registration_unavailable"
+    assert caught.value.request_id == "request-sdk-1"
+    assert caught.value.details == {"retryable": False}
 
 
 def test_timeline_creation_has_only_atomic_generated_route():

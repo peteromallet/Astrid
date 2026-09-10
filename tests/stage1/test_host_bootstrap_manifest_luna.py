@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from astrid.sdk import host_bootstrap
 
@@ -26,6 +27,7 @@ def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
 
         def health(self):
             return {
+                "status": "ok",
                 "runtime_epoch": 7,
                 "runtime_instance_id": "runtime-7",
                 "schema_digest": "schema-7",
@@ -82,6 +84,10 @@ def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
     monkeypatch.setattr(
         "astrid.core.execution.generic_host.source_checkout_digest",
         lambda _path: "source-digest",
+    )
+    monkeypatch.setattr(
+        "astrid.core.pack.source_setup.active_source_inventory",
+        lambda: SimpleNamespace(identity="", roots=(), sources=()),
     )
 
     value = {

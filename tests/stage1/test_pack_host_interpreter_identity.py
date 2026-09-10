@@ -43,7 +43,11 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
     monkeypatch.setattr(bootstrap.sys, "executable", "/selected-venv/bin/python")
     monkeypatch.setattr(generic_host, "source_checkout_digest", lambda _: "source-digest")
     monkeypatch.setattr(generic_host, "RuntimeProtocolClient", lambda *args: SimpleNamespace(
-        health=lambda: {"runtime_epoch": 1, "schema_digest": "schema"}))
+        health=lambda: {"status": "ok", "runtime_epoch": 1, "schema_digest": "schema"}))
+    monkeypatch.setattr(
+        "astrid.core.pack.source_setup.active_source_inventory",
+        lambda: SimpleNamespace(identity="", roots=(), sources=()),
+    )
     monkeypatch.setattr(bootstrap, "_host_identity_matches", lambda _: True)
     monkeypatch.setattr(bootstrap, "_host_birth_identity", lambda _: "new-birth")
     monkeypatch.setattr(bootstrap, "_descendant_snapshot",

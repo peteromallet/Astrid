@@ -27,6 +27,9 @@ each):
 - ``show`` — ``client.timelines.show`` by UUID, ULID, or slug;
 - ``save`` — whole-document CAS ``client.timelines.save`` with
   ``--config``/``--registry`` and ``--expected-version``;
+- ``replace-clip`` — atomically replace one explicit managed-media clip through
+  ``client.timelines.replace_clip`` with ``--expected-version`` and
+  ``preserve-duration`` timing;
 - ``archive`` — reversible event-backed ``client.timelines.archive``;
 - ``recover`` — idempotent recovery through ``client.timelines.recover``;
 - ``history`` — ordered lifecycle events (read);
@@ -207,6 +210,19 @@ def _cmd_save(parsed: argparse.Namespace) -> int:
     return print_result(result, as_json=parsed.json)
 
 
+def _cmd_replace_clip(parsed: argparse.Namespace) -> int:
+    result = parsed.client.timelines.replace_clip(
+        parsed.project,
+        parsed.ref,
+        clip_id=parsed.clip_id,
+        source_object_id=parsed.source_object_id,
+        expected_version=parsed.expected_version,
+        timing=parsed.timing,
+        idempotency_key=parsed.idempotency_key,
+    )
+    return print_result(result, as_json=parsed.json)
+
+
 def _cmd_archive(parsed: argparse.Namespace) -> int:
     result = parsed.client.timelines.archive(
         parsed.project,
@@ -318,7 +334,10 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
         project=parsed.project,
         inputs=inputs,
         out=parsed.out,
-        **({"wait": True} if getattr(parsed, "view", None) == "filmstrip" else {}),
+        # Both visualizer views return browsable evidence. Wait for the
+        # admitted task so the CLI cannot report a successful run before the
+        # PNG/manifest artifacts (or a terminal failure) exist.
+        wait=True,
     )
     if result.ok:
         outputs = result.outputs
@@ -567,6 +586,29 @@ def _configure_save(subparser: argparse.ArgumentParser) -> None:
     subparser.set_defaults(handler=_cmd_save)
 
 
+def _configure_replace_clip(subparser: argparse.ArgumentParser) -> None:
+    _add_project_arg(subparser)
+    subparser.add_argument("ref", help="Timeline UUID, ULID, or slug.")
+    subparser.add_argument("--clip-id", required=True, help="Authored clip id to replace.")
+    subparser.add_argument("--source-object-id", required=True, help="Project-owned managed object id (sha256:<64 hex chars>).")
+    subparser.add_argument(
+        "--expected-version",
+        dest="expected_version",
+        type=int,
+        required=True,
+        help="Expected canonical timeline document version for the atomic replacement.",
+    )
+    subparser.add_argument(
+        "--timing",
+        choices=("preserve-duration",),
+        default="preserve-duration",
+        help="Timing policy (the only supported policy is preserve-duration).",
+    )
+    _add_idempotency_key(subparser)
+    _add_json_flag(subparser)
+    subparser.set_defaults(handler=_cmd_replace_clip)
+
+
 def _configure_archive(subparser: argparse.ArgumentParser) -> None:
     _add_project_arg(subparser)
     subparser.add_argument("ref", help="Timeline UUID, ULID, or slug.")
@@ -671,7 +713,7 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
 
 def _configure_render(subparser: argparse.ArgumentParser) -> None:
     _add_project_arg(subparser)
-    subparser.add_argument("--review", action="store_true", default=None, help="Show shot names and current timeline time in the top-right corner (Remotion/Three.js).")
+    subparser.add_argument("--review", action="store_true", default=None, help="Burn in shot names/time plus pinned authored speech captions at the bottom (Remotion/Three.js).")
     subparser.add_argument(
         "ref",
         nargs="?",
@@ -768,6 +810,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
         configure=_configure_save,
     ),
     CommandSpec(
+        "replace-clip",
+        help="Atomically replace one managed-media clip while preserving duration.",
+        configure=_configure_replace_clip,
+    ),
+    CommandSpec(
         "archive",
         help="Archive a timeline (reversible with recover).",
         configure=_configure_archive,
@@ -818,7 +865,7 @@ def build_parser(client: Any) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="astrid timelines",
         description=(
-            "Timeline create/list/show/save/archive/recover/history/diff/visualize/render "
+            "Timeline create/list/show/save/replace-clip/archive/recover/history/diff/visualize/render "
             "(product family); nested shots beneath 'timelines shots'."
         ),
     )

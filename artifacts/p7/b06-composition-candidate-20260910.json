@@ -7,7 +7,7 @@
     "GPU readiness remains a separate gate requiring mounted-byte verification and provider capacity."
   ],
   "repositories": {
-    "astrid": {"commit": "974bb9d527957504e03e5160ae14e4aaf9469177", "tree": "1670651c99be88115d5c3871a6c43efa6cb710fb"},
+    "astrid": {"commit": "2967717902e09184c17438e8397da8779126b81e", "tree": "c1b07f07847a67f2c8f2cf597e69031679f8a8f1"},
     "runtime": {"commit": "9b0a4432673e79b8acdcf7db1aee8db63c1c3621", "tree": "259db527e2ec51df2daffb2a534c444e376f18a5"},
     "reigh_app": {"commit": "7521d3812c36087b2cd9cb9a9cc0a78a394cedee", "tree": "59b0ae3a001cc6f9a44d1abc663c94dd0913a39a"},
     "reigh_worker": {"commit": "e0c6a0765bee05f27155b335bbf67110c0df6103", "tree": "ad4a1831f2f2f5b71d603e006de979eee7e97f36"},
@@ -88,6 +88,64 @@
       "readiness": "requires a manager-issued HC-03 profile and live server"
     }
   },
+  "effective_configuration": {
+    "path_parameterization": {
+      "<profile-root>": "manager-owned ComfyUI root for the active profile",
+      "<task-destination>": "GenericPackHost-owned per-task staging root",
+      "<custom-node-root>": "<profile-root>/custom_nodes"
+    },
+    "extra_model_paths_yaml": {
+      "path": "<profile-root>/extra_model_paths.yaml",
+      "rendering": "substitute <profile-root> with the manager-owned profile root before launch; the rendered file is part of HC-03 readiness identity",
+      "template_sha256": "c98be97d45cf80c43edbea13a5fe5a9222031cdc8caacfb4d0066d5318cba4af",
+      "template_content": "comfyui:\n  base_path: <profile-root>\n  checkpoints: models/checkpoints\n  clip_vision: models/clip_vision\n  custom_nodes: custom_nodes\n  diffusion_models: models/diffusion_models\n  loras: models/loras\n  text_encoders: models/text_encoders\n  vae: models/vae\n"
+    },
+    "loader_roots": {
+      "comfy_standard_models": "<profile-root>/models",
+      "sam2": "<profile-root>/models/sam2",
+      "controlnet_aux_annotators": "<custom-node-root>/comfyui_controlnet_aux/ckpts",
+      "controlnet_aux_download_policy": "AUX_ANNOTATOR_CKPTS_PATH is pinned to the path above and AUX_USE_SYMLINKS=false; missing files are readiness failures, never download permission"
+    },
+    "model_download": false,
+    "node_install": false,
+    "readiness_must_verify": [
+      "rendered extra_model_paths.yaml digest",
+      "all declared model bytes at their effective loader paths",
+      "all selected custom-node trees and their dependency lock",
+      "no non-selected custom-node directory is present",
+      "no implicit Hugging Face download occurs during the task"
+    ]
+  },
+  "gpu_case_inventory": {
+    "canonical_route": "Runtime admission -> Worker source/runtime/entrypoints/run_worker.py -> one GenericPackHost -> typed Astrid capability -> private spool -> CAS/settlement",
+    "driver_bindings": [
+      {"path": "astrid/core/execution/generic_host.py", "sha256": "849b50e1fbc393747dd0f99d05ca57ad6454cb785083c6cd94e78fed1db12097", "role": "single GenericPackHost lifecycle, output harvest, CAS/settlement boundary"},
+      {"path": "../reigh-worker/source/runtime/supervisor.py", "sha256": "8c0a824f7a56a67bacc65ee488ef99f4321b8e5614f1d0073c2b255985dafe97", "role": "neutral Worker launcher and owned host/session readiness"},
+      {"path": "../reigh-worker/source/runtime/entrypoints/run_worker.py", "sha256": "09f74ca4d718e72f6b909cc971c1a1ffc3e8348d3f4cb57aee154c1deb75d4b2", "role": "supported Worker entrypoint"},
+      {"path": "astrid/packs/wan2gp/executors/generate_video/run.py", "sha256": "93988efb541f0d329d41321a3b56e66d67391d0c8026078f1c89a36cd90249ef", "role": "typed wan2gp.generate_video executor"},
+      {"path": "astrid/packs/wan2gp/src/driver.py", "sha256": "3ffddb94cd78ba140fe3e8e890d2044ab3ed5098179259b97e617744739f89ce", "role": "native Wan2GP one-shot driver and output containment"},
+      {"path": "astrid/packs/vibecomfy/direct_image/compiler.py", "sha256": "82ba904cc4b871e1e947753f98e6d9e6685243a17254a355321e9b42dc8074eb", "role": "typed z_image_turbo capability/profile compiler"},
+      {"path": "astrid/packs/vibecomfy/direct_image/executor.py", "sha256": "3e58aa1e7246e52349beacacb631b9521088b1fcc9dfc4f8c6dbcfc36a33c3fa", "role": "typed direct-image executor"},
+      {"path": "astrid/packs/vibecomfy/production_engine.py", "sha256": "ecd976c5cf0921eb0cc41100ad1254439e7e5f9eb69f28e0a2388746a8115872", "role": "pip_embedded and checkout_server production profile dispatch"},
+      {"path": "astrid/core/generation/backends/vibecomfy.py", "sha256": "f9e04830d46b77680f126559ad5ea8c72b40f2842966362c1fc8b8a631cdc109", "role": "manager-bound checkout_server adapter and lifecycle fencing"}
+    ],
+    "required_lifecycle_matrix": {
+      "wan2gp": ["cold_success", "cancel_confirmed", "changed_identity_no_reuse", "restart_replaces_incarnation", "stale_fence_rejected", "cas_settlement_exactly_once", "cleanup_releases_owned_session", "warm_claim_is_honest_nonreuse"],
+      "pip_embedded": ["cold_success", "warm_request_reports_reuse_false", "changed_identity_no_reuse", "cancel_confirmed", "cas_settlement_exactly_once", "cleanup_releases_owned_session"],
+      "checkout_server": ["cold_success", "compatible_warm_reuse_or_honest_nonreuse", "incompatible_no_reuse", "cancel_confirmed", "changed_identity_no_reuse", "restart_replaces_incarnation", "stale_fence_rejected", "cas_settlement_exactly_once", "cleanup_releases_owned_session"]
+    },
+    "cases": [
+      {"case_id": "wan2gp.generate_video", "capability_id": "wan2gp.generate_video", "profile": "wan2gp", "warm_policy": "one_shot_no_reuse", "required_input": "typed prompt/model/settings", "output_kind": "video", "driver": "astrid/packs/wan2gp/executors/generate_video/run.py"},
+      {"case_id": "z_image_turbo.pip_embedded", "capability_id": "z_image_turbo", "profile": "pip_embedded", "model_id": "z-image-turbo", "template_id": "image/z_image", "warm_policy": "never; warm request must prove nonreuse", "output_kind": "image", "driver": "astrid/packs/vibecomfy/direct_image/executor.py"},
+      {"case_id": "z_image_turbo.checkout_server", "capability_id": "z_image_turbo", "profile": "checkout_server", "model_id": "z-image-turbo", "template_id": "image/z_image", "warm_policy": "auto; prove compatible reuse or honest nonreuse", "output_kind": "image", "driver": "astrid/packs/vibecomfy/direct_image/executor.py"}
+    ],
+    "worker_matrix_cross_reference": {
+      "z_image_turbo": "../reigh-worker/scripts/capability_contracts/live_matrix_manifest.json#z_image_turbo",
+      "z_image_turbo_db_task": "../reigh-worker/scripts/worker_matrix_cases.json#z_image_turbo_db_task",
+      "wan2gp": "astrid/packs/wan2gp/executors/generate_video/executor.yaml"
+    },
+    "acceptance_note": "This inventory binds the three retained C12 routes. It is an execution plan, not GPU evidence; B06-T04 remains open until real mounted-byte, task-bound output, lifecycle, CAS, settlement, and provider-cleanup receipts exist."
+  },
   "environment": {
     "python": {
       "path": "/Users/hannahomalley/Documents/Codex/2026-09-09/can-you-see-the-poms-skills/work/astrid-prep/runtime-venv/bin/python",
@@ -125,6 +183,7 @@
     "exclusion_enforcement": "profile root contains only selected packs; readiness must reject any non-selected pack before launch"
   },
   "templates": {
+    "image/z_image": {"model_count": 3, "custom_nodes": []},
     "video/basic_video_enhance": {"model_count": 0, "custom_nodes": ["ComfyUI-VideoHelperSuite"]},
     "video/wan22_animate_native_first_stage": {
       "model_count": 9,
@@ -132,15 +191,18 @@
     }
   },
   "models": [
-    {"name": "Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors", "revision": "5571ff9d81a631ee97946a703e94911d63214c44", "sha256": "2936b31473a967e7a429a6646bba60e7862d0938e178b58b2a140f391dd5b8e6", "bytes": 18401760586, "materialized": false},
-    {"name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", "revision": "8260d429d19fd7a72304cad059160b95d843913f", "sha256": "85c4a61c30e0497aa44b91d93a893b624708461a56fe5485183b28fa07e2dfb3", "bytes": 738005744, "materialized": false},
-    {"name": "WanAnimate_relight_lora_fp16.safetensors", "revision": "87badb1f794c15daf51db60838a433ca08bb218f", "sha256": "fc646c74c73f4b251f5fd9bc440ef21b03b27305f499966c68b2b3aa31498561", "bytes": 1436672440, "materialized": false},
-    {"name": "clip_vision_h.safetensors", "revision": "617a7633e636506f850e043bc4605f290a466a8e", "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161", "bytes": 1264219396, "materialized": false},
-    {"name": "sam2_hiera_base_plus.safetensors", "revision": "f885607d88bb3f9145efa49c3e3c50a9e5bf13eb", "sha256": "fa02d9028dcc4859c191f1d3f1ca1f7eefdb85f3b5e746c9ad738f322f3e89e2", "bytes": 323407992, "materialized": false},
-    {"name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "revision": "617a7633e636506f850e043bc4605f290a466a8e", "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68", "bytes": 6735906897, "materialized": false},
-    {"name": "wan_2.1_vae.safetensors", "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77", "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b", "bytes": 253815318, "materialized": false},
-    {"name": "yolox_l.onnx", "revision": "a124b32c3b7c5cebda1c7cd96178f0f9d2050125", "sha256": "7860ae79de6c89a3c1eb72ae9a2756c0ccfbe04b7791bb5880afabd97855a411", "bytes": 216746733, "materialized": false},
-    {"name": "dw-ll_ucoco_384_bs5.torchscript.pt", "revision": "359d662a9b33b73f6d0f21732baf8845f17bb4be", "sha256": "d86a0b2b59fddc0901a7076e9f59c9f8602602133ed72511c693fd11eea23d91", "bytes": 135059124, "materialized": false}
+    {"name": "z_image_bf16.safetensors", "source": "Comfy-Org/z_image@f2278092b6599e2907bb04cf70789d3fa114ddee:split_files/diffusion_models/z_image_bf16.safetensors", "revision": "f2278092b6599e2907bb04cf70789d3fa114ddee", "sha256": "996a67d3ff666946b1c25cbc16d1b1918b6cc0ac166309e23fe3b3d830263dee", "bytes": 12309866400, "loader_path": "models/diffusion_models/z_image_bf16.safetensors", "materialized": false},
+    {"name": "qwen_3_4b.safetensors", "source": "Comfy-Org/z_image_turbo@08d04455279082882deaabc8d0d09fc914c071e1:split_files/text_encoders/qwen_3_4b.safetensors", "revision": "08d04455279082882deaabc8d0d09fc914c071e1", "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a", "bytes": 8044982048, "loader_path": "models/text_encoders/qwen_3_4b.safetensors", "materialized": false},
+    {"name": "ae.safetensors", "source": "Comfy-Org/z_image_turbo@08d04455279082882deaabc8d0d09fc914c071e1:split_files/vae/ae.safetensors", "revision": "08d04455279082882deaabc8d0d09fc914c071e1", "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "bytes": 335304388, "loader_path": "models/vae/ae.safetensors", "materialized": false},
+    {"name": "Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors", "source": "Kijai/WanVideo_comfy_fp8_scaled@5571ff9d81a631ee97946a703e94911d63214c44:Wan22Animate/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors", "revision": "5571ff9d81a631ee97946a703e94911d63214c44", "sha256": "2936b31473a967e7a429a6646bba60e7862d0938e178b58b2a140f391dd5b8e6", "bytes": 18401760586, "loader_path": "models/diffusion_models/Wan2_2-Animate-14B_fp8_e4m3fn_scaled_KJ.safetensors", "materialized": false},
+    {"name": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", "source": "Kijai/WanVideo_comfy@8260d429d19fd7a72304cad059160b95d843913f:Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", "revision": "8260d429d19fd7a72304cad059160b95d843913f", "sha256": "85c4a61c30e0497aa44b91d93a893b624708461a56fe5485183b28fa07e2dfb3", "bytes": 738005744, "loader_path": "models/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", "materialized": false},
+    {"name": "WanAnimate_relight_lora_fp16.safetensors", "source": "Kijai/WanVideo_comfy@87badb1f794c15daf51db60838a433ca08bb218f:LoRAs/Wan22_relight/WanAnimate_relight_lora_fp16.safetensors", "revision": "87badb1f794c15daf51db60838a433ca08bb218f", "sha256": "fc646c74c73f4b251f5fd9bc440ef21b03b27305f499966c68b2b3aa31498561", "bytes": 1436672440, "loader_path": "models/loras/WanAnimate_relight_lora_fp16.safetensors", "materialized": false},
+    {"name": "clip_vision_h.safetensors", "source": "Comfy-Org/Wan_2.1_ComfyUI_repackaged@617a7633e636506f850e043bc4605f290a466a8e:split_files/clip_vision/clip_vision_h.safetensors", "revision": "617a7633e636506f850e043bc4605f290a466a8e", "sha256": "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161", "bytes": 1264219396, "loader_path": "models/clip_vision/clip_vision_h.safetensors", "materialized": false},
+    {"name": "sam2_hiera_base_plus.safetensors", "source": "Kijai/sam2-safetensors@f885607d88bb3f9145efa49c3e3c50a9e5bf13eb:sam2_hiera_base_plus.safetensors", "revision": "f885607d88bb3f9145efa49c3e3c50a9e5bf13eb", "sha256": "fa02d9028dcc4859c191f1d3f1ca1f7eefdb85f3b5e746c9ad738f322f3e89e2", "bytes": 323407992, "loader_path": "models/sam2/sam2_hiera_base_plus.safetensors", "materialized": false},
+    {"name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "source": "Comfy-Org/Wan_2.1_ComfyUI_repackaged@617a7633e636506f850e043bc4605f290a466a8e:split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "revision": "617a7633e636506f850e043bc4605f290a466a8e", "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68", "bytes": 6735906897, "loader_path": "models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "materialized": false},
+    {"name": "wan_2.1_vae.safetensors", "source": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged@c4f60d30c55a624e35427060fdd217579a6c1d77:split_files/vae/wan_2.1_vae.safetensors", "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77", "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b", "bytes": 253815318, "loader_path": "models/vae/wan_2.1_vae.safetensors", "materialized": false},
+    {"name": "yolox_l.onnx", "source": "yzd-v/DWPose@1a7144101628d69ee7a3768d1ee3a094070dc388:yolox_l.onnx", "revision": "1a7144101628d69ee7a3768d1ee3a094070dc388", "sha256": "7860ae79de6c89a3c1eb72ae9a2756c0ccfbe04b7791bb5880afabd97855a411", "bytes": 216746733, "loader_path": "custom_nodes/comfyui_controlnet_aux/ckpts/yzd-v/DWPose/yolox_l.onnx", "template_source_alias": "hr16/yolox-onnx; same x-linked-etag, runtime exact-name lookup is yzd-v/DWPose", "materialized": false},
+    {"name": "dw-ll_ucoco_384_bs5.torchscript.pt", "source": "hr16/DWPose-TorchScript-BatchSize5@359d662a9b33b73f6d0f21732baf8845f17bb4be:dw-ll_ucoco_384_bs5.torchscript.pt", "revision": "359d662a9b33b73f6d0f21732baf8845f17bb4be", "sha256": "d86a0b2b59fddc0901a7076e9f59c9f8602602133ed72511c693fd11eea23d91", "bytes": 135059124, "loader_path": "custom_nodes/comfyui_controlnet_aux/ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt", "materialized": false}
   ],
   "harness": {
     "worker_live_matrix_cases": 36,

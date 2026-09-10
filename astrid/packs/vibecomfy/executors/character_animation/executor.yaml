@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "cache": {"mode": "none"},
+  "command": {
+    "argv": [
+      "{python_exec}", "-m", "astrid.packs.vibecomfy.media.run",
+      "--capability", "vibecomfy.character_animation", "--profile", "pip_embedded",
+      "--task-identity", "{task_identity}",
+      "--readiness-profile-path", "{readiness_profile_path}",
+      "--readiness-profile-hash", "{readiness_profile_hash}", "--out", "{out}",
+      "--reference-image-ref", "{reference_image_ref}", "--driving-video-ref", "{driving_video_ref}",
+      "--mode", "{mode}", "--resolution", "{resolution}", "--prompt", "{prompt}", "--seed", "{seed}"
+    ]
+  },
+  "conditions": [
+    {"input": "reference_image_ref", "kind": "requires_input"},
+    {"input": "driving_video_ref", "kind": "requires_input"}
+  ],
+  "description": "Typed Wan 2.2 Animate execution with ordered image/video CAS custody and bounded storage.",
+  "graph": {"consumes": ["reference_image_ref", "driving_video_ref"], "provides": ["animated_video", "video_manifest"]},
+  "id": "vibecomfy.character_animation",
+  "name": "VibeComfy Character Animation",
+  "inputs": [
+    {"name": "reference_image_ref", "required": true, "type": "file", "artifact_type": "image"},
+    {"name": "driving_video_ref", "required": true, "type": "file", "artifact_type": "video"},
+    {"name": "mode", "required": true, "type": "string"},
+    {"name": "resolution", "required": true, "type": "string"},
+    {"name": "prompt", "required": true, "type": "string"},
+    {"name": "seed", "required": true, "type": "integer"},
+    {"name": "task_identity", "required": false, "type": "string"},
+    {"name": "readiness_profile_path", "required": false, "type": "string"},
+    {"name": "readiness_profile_hash", "required": false, "type": "string"}
+  ],
+  "isolation": {"mode": "subprocess", "network": false, "requirements": ["vibecomfy"]},
+  "kind": "external",
+  "metadata": {
+    "storage_estimate_required": true,
+    "storage_estimate_exact": true,
+    "storage_input_max_bytes": {"reference_image_ref": 8388608, "driving_video_ref": 67108864},
+    "estimated_scratch_bytes": 614465536,
+    "estimated_output_bytes": 269484032,
+    "hc04_param_ports": ["reference_image_ref", "driving_video_ref", "mode", "resolution", "prompt", "seed"],
+    "hc04_cas_param_ports": ["reference_image_ref", "driving_video_ref"],
+    "runtime_file": "run.py",
+    "runtime_module": "astrid.packs.vibecomfy.media.run",
+    "output_result_manifest": true
+  },
+  "outputs": [
+    {"name": "animated_video", "path_template": "{out}/output.mp4", "type": "file", "artifact_type": "video", "mode": "create_or_replace"},
+    {"name": "video_manifest", "path_template": "{out}/manifest.json", "type": "file", "artifact_type": null, "mode": "create_or_replace"}
+  ],
+  "short_description": "Typed Wan 2.2 Animate character animation with bounded storage.",
+  "version": "1.0"
+}

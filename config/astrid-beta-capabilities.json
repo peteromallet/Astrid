@@ -323,6 +323,20 @@
    "required_packages": []
   },
   {
+   "id": "generation.generate_image_upscale",
+   "disposition": "required",
+   "evidence_reason": "Bounded SeedVR2 image-upscale capability with project-CAS source custody and provider readiness gated by FAL_KEY.",
+   "adapter_family": "provider",
+   "resource_keys": [
+    "provider"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
    "id": "generation.generate_image_openai",
    "disposition": "required",
    "evidence_reason": "Required GPT image facade; OpenAI credential readiness is explicit.",
@@ -749,9 +763,37 @@
    ]
   },
   {
+   "id": "vibecomfy.character_animation",
+   "disposition": "optional",
+   "evidence_reason": "Typed Wan Animate character-animation capability; readiness is gated by the pinned VibeComfy profile and GPU worker availability.",
+   "adapter_family": "local_generation",
+   "resource_keys": [
+    "gpu"
+   ],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": [
+    "vibecomfy"
+   ]
+  },
+  {
    "id": "vibecomfy.validate",
    "disposition": "required",
    "evidence_reason": "Required local-generation validation path; VibeComfy readiness is explicit.",
+   "adapter_family": "local_generation",
+   "resource_keys": [
+    "gpu"
+   ],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": [
+    "vibecomfy"
+   ]
+  },
+  {
+   "id": "vibecomfy.video_enhance",
+   "disposition": "optional",
+   "evidence_reason": "Typed VibeComfy video-enhancement capability; readiness is gated by the pinned VibeComfy profile and GPU worker availability.",
    "adapter_family": "local_generation",
    "resource_keys": [
     "gpu"
@@ -904,12 +946,8 @@
    "disposition": "optional",
    "evidence_reason": "Optional hosted FAL integration; retained with truthful credential preflight.",
    "adapter_family": "provider",
-   "resource_keys": [
-    "provider"
-   ],
-   "required_env": [
-    "FAL_KEY"
-   ],
+   "resource_keys": ["provider"],
+   "required_env": ["FAL_KEY"],
    "required_binaries": [],
    "required_packages": []
   },
@@ -942,13 +980,9 @@
    "disposition": "optional",
    "evidence_reason": "Optional personal Discord adapter; retained with truthful binary preflight.",
    "adapter_family": "provider",
-   "resource_keys": [
-    "provider"
-   ],
+   "resource_keys": ["provider"],
    "required_env": [],
-   "required_binaries": [
-    "node"
-   ],
+   "required_binaries": ["node"],
    "required_packages": []
   }
  ]

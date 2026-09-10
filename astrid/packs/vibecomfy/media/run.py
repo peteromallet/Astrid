@@ -1,0 +1,188 @@
+"""Runtime command for the typed VibeComfy media-family capabilities.
+
+This is a thin adapter: the media compiler owns request semantics, the
+production engine owns profile execution, and GenericPackHost owns lifecycle,
+CAS, storage, and settlement.  If a pinned ready template/profile is absent,
+the command fails closed; it never emits a synthetic media artifact.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import shutil
+from pathlib import Path
+from typing import Any, Mapping
+
+from astrid.core.pack.entrypoint import guard_canonical_entrypoint
+
+guard_canonical_entrypoint("vibecomfy.run")
+
+from .compiler import (  # noqa: E402
+    CharacterAnimationRequest,
+    VideoEnhanceRequest,
+)
+from .executor import DirectVibeMediaExecutor  # noqa: E402
+
+
+def _bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean, got {value!r}")
+
+
+def _read_profile(path: str, digest: str) -> tuple[Mapping[str, Any], dict[str, Any]]:
+    if path == "-":
+        profile: Mapping[str, Any] = {}
+    else:
+        raw = Path(path).read_bytes()
+        actual = "sha256:" + hashlib.sha256(raw).hexdigest()
+        if digest == "-" or actual != digest:
+            raise RuntimeError("readiness profile hash does not match the supplied profile")
+        parsed = json.loads(raw.decode("utf-8"))
+        if not isinstance(parsed, Mapping):
+            raise RuntimeError("readiness profile is not an object")
+        profile = parsed
+    facts = profile.get("verified_facts") if isinstance(profile, Mapping) else None
+    exact = facts.get("exact") if isinstance(facts, Mapping) else {}
+    if not isinstance(exact, Mapping):
+        exact = {}
+    runtime = profile.get("runtime") if isinstance(profile, Mapping) else {}
+    if not isinstance(runtime, Mapping):
+        runtime = {}
+    return profile, {
+        "profile_digest": digest if digest != "-" else None,
+        "model_bytes_digest": exact.get("model_digest"),
+        "runtime_instance_id": runtime.get("runtime_instance_id"),
+        "environment_fingerprint": profile.get("environment_fingerprint") or exact.get("engine_lock"),
+        "declared_root": exact.get("root"),
+        "declared_port": exact.get("port"),
+    }
+
+
+def _run(
+    *,
+    capability: str,
+    request: VideoEnhanceRequest | CharacterAnimationRequest,
+    task_identity: str,
+    profile_id: str,
+    readiness_profile_path: str,
+    readiness_profile_hash: str,
+    out: Path,
+) -> None:
+    profile_document, runtime_context = _read_profile(readiness_profile_path, readiness_profile_hash)
+    out.mkdir(parents=True, exist_ok=True)
+
+    from astrid.packs.vibecomfy.production_engine import _load_workflow, _run_profile
+
+    def runner(
+        workflow: Mapping[str, Any],
+        *,
+        capability_id: str,
+        model_identity: str,
+        profile_id: str,
+        task_identity: str,
+    ) -> Mapping[str, Any]:
+        resolved = _load_workflow(workflow, {}, out)
+        raw_outputs = _run_profile(
+            resolved,
+            profile_id,
+            profile_document,
+            model_id=model_identity,
+            template_id=str(workflow.get("template_id") or capability_id),
+            task_identity=task_identity,
+            destination=out,
+        )
+        if not raw_outputs:
+            raise RuntimeError("VibeComfy produced no output artifacts")
+        return {"paths": [str(Path(value).resolve(strict=True)) for value in raw_outputs]}
+
+    executor = DirectVibeMediaExecutor(profile_id, runner)
+    if capability == "vibecomfy.video_enhance":
+        result = executor.execute_video_enhance(
+            request, task_identity=task_identity, runtime_context=runtime_context  # type: ignore[arg-type]
+        )
+    elif capability == "vibecomfy.character_animation":
+        result = executor.execute_character_animation(
+            request, task_identity=task_identity, runtime_context=runtime_context  # type: ignore[arg-type]
+        )
+    else:
+        raise RuntimeError(f"unsupported typed Vibe media capability: {capability}")
+    paths = result.outputs.get("paths")
+    if not isinstance(paths, list) or not paths:
+        raise RuntimeError("typed Vibe media runner returned no output paths")
+    source = Path(str(paths[0])).resolve(strict=True)
+    destination = (out / "output.mp4").resolve()
+    if source != destination:
+        shutil.copy2(source, destination)
+    (out / "manifest.json").write_text(
+        json.dumps(result.to_dict() | {"output": "output.mp4"}, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--capability", required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--task-identity", required=True)
+    parser.add_argument("--profile", choices=("pip_embedded", "checkout_server"), required=True)
+    parser.add_argument("--readiness-profile-path", default="-")
+    parser.add_argument("--readiness-profile-hash", default="-")
+    parser.add_argument("--video-ref")
+    parser.add_argument("--enable-interpolation", type=_bool)
+    parser.add_argument("--enable-upscale", type=_bool)
+    parser.add_argument("--interpolation-frames", type=int, default=1)
+    parser.add_argument("--scale", type=float, default=2.0)
+    parser.add_argument("--color-fix", type=_bool, default=True)
+    parser.add_argument("--output-quality", default="maximum")
+    parser.add_argument("--reference-image-ref")
+    parser.add_argument("--driving-video-ref")
+    parser.add_argument("--mode")
+    parser.add_argument("--resolution")
+    parser.add_argument("--prompt", default="")
+    parser.add_argument("--seed", type=int, default=42)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.capability == "vibecomfy.video_enhance":
+        request: VideoEnhanceRequest | CharacterAnimationRequest = VideoEnhanceRequest(
+            video_ref=args.video_ref or "",
+            scale=args.scale,
+            enable_interpolation=bool(args.enable_interpolation),
+            enable_upscale=bool(args.enable_upscale),
+            interpolation_frames=args.interpolation_frames,
+            color_fix=args.color_fix,
+            output_quality=args.output_quality,
+        )
+    elif args.capability == "vibecomfy.character_animation":
+        request = CharacterAnimationRequest(
+            reference_image_ref=args.reference_image_ref or "",
+            driving_video_ref=args.driving_video_ref or "",
+            mode=args.mode or "",
+            resolution=args.resolution or "",
+            prompt=args.prompt,
+            seed=args.seed,
+        )
+    else:
+        raise SystemExit(f"unsupported typed Vibe media capability: {args.capability}")
+    _run(
+        capability=args.capability,
+        request=request,
+        task_identity=args.task_identity,
+        profile_id=args.profile,
+        readiness_profile_path=args.readiness_profile_path,
+        readiness_profile_hash=args.readiness_profile_hash,
+        out=args.out.resolve(),
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "cache": {"mode": "none"},
+  "command": {
+    "argv": [
+      "{python_exec}", "-m", "astrid.packs.generation.executors.generate_image_upscale.run",
+      "--model", "{model}", "--mode", "{mode}", "--execution", "{execution}",
+      "--image-ref", "{image_ref}", "--upscale-mode", "{upscale_mode}",
+      "--upscale-factor", "{upscale_factor}", "--noise-scale", "{noise_scale}",
+      "--count", "{count}", "--out", "{out}"
+    ]
+  },
+  "conditions": [
+    {"input": "image_ref", "kind": "requires_input"},
+    {"input": "upscale_mode", "kind": "requires_input"},
+    {"input": "upscale_factor", "kind": "requires_input"},
+    {"input": "noise_scale", "kind": "requires_input"}
+  ],
+  "description": "Bounded SeedVR2 image upscale with project-CAS source custody and exact storage limits.",
+  "graph": {"consumes": ["image_ref"], "provides": ["generated_images", "image_manifest"]},
+  "id": "generation.generate_image_upscale",
+  "name": "Bounded Image Upscale",
+  "inputs": [
+    {"name": "model", "required": true, "type": "string"},
+    {"name": "mode", "required": true, "type": "string"},
+    {"name": "execution", "required": true, "type": "string"},
+    {"name": "count", "default": 1, "required": false, "type": "integer"},
+    {"name": "image_ref", "required": true, "type": "file", "artifact_type": "image"},
+    {"name": "upscale_mode", "required": true, "type": "string"},
+    {"name": "upscale_factor", "required": true, "type": "number"},
+    {"name": "noise_scale", "required": true, "type": "number"}
+  ],
+  "isolation": {"mode": "subprocess", "network": true},
+  "kind": "built_in",
+  "metadata": {
+    "output_result_manifest": true,
+    "api_provider": "fal",
+    "env": ["FAL_KEY"],
+    "storage_estimate_required": true,
+    "storage_estimate_exact": true,
+    "fixed_inputs": {"model": "seedvr2-upscaler", "mode": "upscale", "execution": "cloud"},
+    "storage_input_max_bytes": {"image_ref": 512000},
+    "estimated_scratch_bytes": 136826880,
+    "estimated_output_bytes": 68157440,
+    "hc04_param_ports": ["model", "mode", "execution", "count", "image_ref", "upscale_mode", "upscale_factor", "noise_scale"],
+    "hc04_cas_param_ports": ["image_ref"],
+    "network_policy": {
+      "allowed_protocols": ["dns", "tcp"],
+      "allowed_destinations": ["queue.fal.run:443", "fal.run:443", "storage.fal.run:443"],
+      "allow_redirects": false,
+      "broker": {"host_managed": true, "kind": "broker", "enforced": true, "observable": true, "route": "declared-http-routes", "wrapper": "astrid-generic-host"},
+      "descendant_enforcement": {"kind": "broker", "validated": true, "observable": true, "route": "declared-http-routes", "wrapper": "astrid-generic-host"}
+    }
+  },
+  "outputs": [
+    {"name": "generated_images", "type": "file", "artifact_type": "image", "mode": "create_or_replace"},
+    {"name": "image_manifest", "path_template": "{out}/manifest.json", "type": "file", "artifact_type": null, "mode": "create_or_replace"}
+  ],
+  "scoped_configs": ["credentials.fal"],
+  "short_description": "One bounded SeedVR2 image upscale task.",
+  "version": "1.0"
+}

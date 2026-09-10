@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "cache": {"mode": "none"},
+  "command": {
+    "argv": [
+      "{python_exec}", "-m", "astrid.packs.vibecomfy.media.run",
+      "--capability", "vibecomfy.video_enhance", "--profile", "pip_embedded",
+      "--task-identity", "{task_identity}",
+      "--readiness-profile-path", "{readiness_profile_path}",
+      "--readiness-profile-hash", "{readiness_profile_hash}", "--out", "{out}",
+      "--video-ref", "{video_ref}", "--enable-interpolation", "{enable_interpolation}",
+      "--enable-upscale", "{enable_upscale}", "--interpolation-frames", "{interpolation_frames}",
+      "--scale", "{upscale_factor}", "--color-fix", "{color_fix}",
+      "--output-quality", "{output_quality}"
+    ]
+  },
+  "conditions": [{"input": "video_ref", "kind": "requires_input"}],
+  "description": "Typed VibeComfy video interpolation/upscale with explicit source custody and output bounds.",
+  "graph": {"consumes": ["video_ref"], "provides": ["enhanced_video", "video_manifest"]},
+  "id": "vibecomfy.video_enhance",
+  "name": "VibeComfy Video Enhance",
+  "inputs": [
+    {"name": "video_ref", "required": true, "type": "file", "artifact_type": "video"},
+    {"name": "enable_interpolation", "required": true, "type": "boolean"},
+    {"name": "enable_upscale", "required": true, "type": "boolean"},
+    {"name": "interpolation_frames", "default": 1, "required": false, "type": "integer"},
+    {"name": "upscale_factor", "default": 2, "required": false, "type": "number"},
+    {"name": "color_fix", "default": true, "required": false, "type": "boolean"},
+    {"name": "output_quality", "default": "maximum", "required": false, "type": "string"},
+    {"name": "task_identity", "required": false, "type": "string"},
+    {"name": "readiness_profile_path", "required": false, "type": "string"},
+    {"name": "readiness_profile_hash", "required": false, "type": "string"}
+  ],
+  "isolation": {"mode": "subprocess", "network": false, "requirements": ["vibecomfy"]},
+  "kind": "external",
+  "metadata": {
+    "storage_estimate_required": true,
+    "storage_estimate_exact": true,
+    "storage_input_max_bytes": {"video_ref": 67108864},
+    "estimated_scratch_bytes": 606076928,
+    "estimated_output_bytes": 269484032,
+    "hc04_param_ports": ["video_ref", "enable_interpolation", "enable_upscale", "interpolation_frames", "upscale_factor", "color_fix", "output_quality"],
+    "hc04_cas_param_ports": ["video_ref"],
+    "runtime_file": "run.py",
+    "runtime_module": "astrid.packs.vibecomfy.media.run",
+    "output_result_manifest": true
+  },
+  "outputs": [
+    {"name": "enhanced_video", "path_template": "{out}/output.mp4", "type": "file", "artifact_type": "video", "mode": "create_or_replace"},
+    {"name": "video_manifest", "path_template": "{out}/manifest.json", "type": "file", "artifact_type": null, "mode": "create_or_replace"}
+  ],
+  "short_description": "Typed VibeComfy video enhancement with bounded storage.",
+  "version": "1.0"
+}

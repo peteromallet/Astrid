@@ -68,9 +68,14 @@ def test_remaining_media_family_compilers_preserve_input_semantics(profile: str)
     assert enhance.capability_id == "vibecomfy.video_enhance"
     assert enhance.inputs["preserve_audio"] is True
     assert enhance.inputs["preserve_source_fps"] is True
+    assert enhance.inputs["interpolation_frames"] == 1
+    assert enhance.inputs["color_fix"] is True
+    assert enhance.inputs["output_quality"] == "maximum"
     assert enhance.workflow["nodes"]["input"]["inputs"]["video"] == "media://source"
     assert animate.capability_id == "vibecomfy.character_animation"
     assert animate.model_identity == "wan-2.2-animate-14b"
+    assert animate.inputs["mode"] == "animate"
+    assert animate.inputs["resolution"] == "480p"
     assert animate.workflow["nodes"]["reference"]["inputs"]["image"] == "media://character"
     assert animate.workflow["nodes"]["driving"]["inputs"]["video"] == "media://motion"
 

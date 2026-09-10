@@ -31,6 +31,8 @@ capabilities:
 - edit_workflow_ir
 - run_workflow
 - validate_workflow
+- video_enhance
+- character_animation
 agent:
   purpose: Choose this pack to inspect, typed-edit, validate, or execute a ComfyUI/VibeComfy workflow JSON.
   do_not_use_for: Do not use to understand existing media (use understanding) or to cut/render timelines (use video_editing); it runs workflow graphs, not editorial pipelines.
@@ -39,6 +41,8 @@ agent:
   - vibecomfy.edit
   - vibecomfy.run
   - vibecomfy.validate
+  - vibecomfy.video_enhance
+  - vibecomfy.character_animation
 content:
   executors: executors
 documentation:

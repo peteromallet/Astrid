@@ -1446,6 +1446,9 @@ class RuntimeProtocolClient:
             )
 
 
+_OPTIONAL_EXTERNAL_MATRIX_PREFIXES = ("discord_local.", "hivemind.", "seedance_local.")
+
+
 class GenericPackHost:
     """Discover, register, preflight, and execute pack capabilities."""
 
@@ -1647,7 +1650,11 @@ class GenericPackHost:
             discovered = set(records)
             expected = set(self.matrix)
             missing = sorted(discovered - expected)
-            stale = sorted(expected - discovered)
+            stale = sorted(
+                capability_id
+                for capability_id in expected - discovered
+                if not capability_id.startswith(_OPTIONAL_EXTERNAL_MATRIX_PREFIXES)
+            )
             if missing or stale:
                 details = []
                 if missing:
@@ -2104,6 +2111,33 @@ class GenericPackHost:
                         f"HC-04 input_digests contains undeclared input: {name}"
                     )
                 values.setdefault(name, {"digest": str(item["digest"])})
+        ordered_cas_ports = (
+            tuple(str(value) for value in cas_param_ports)
+            if cas_param_ports is not None
+            else ()
+        )
+        # Multi-source capabilities use the Runtime input-object sequence as
+        # the role/order contract.  Do this before fetching bytes so a caller
+        # cannot swap (for example) a driving video into the reference-image
+        # port while both objects remain individually authorized.
+        if len(ordered_cas_ports) > 1:
+            if len(authorized_digests) != len(ordered_cas_ports):
+                raise HostError(
+                    "HC-04 ordered CAS inputs must match the capability's CAS port count"
+                )
+            ordered_authorized = tuple(
+                str(object_id).removeprefix("sha256:")
+                for object_id in raw_authorized
+            )
+            for index, name in enumerate(ordered_cas_ports):
+                candidate = values.get(name)
+                if not isinstance(candidate, Mapping) or not isinstance(candidate.get("digest"), str):
+                    raise HostError(f"HC-04 ordered CAS parameter {name!r} is missing a digest")
+                normalized = require_authorized(str(candidate["digest"]), name)
+                if normalized != ordered_authorized[index]:
+                    raise HostError(
+                        f"HC-04 CAS parameter {name!r} does not match ordered input_object_ids[{index}]"
+                    )
         for name in values:
             input_name = Path(str(name))
             if not str(name) or input_name.is_absolute() or ".." in input_name.parts:
@@ -2142,11 +2176,7 @@ class GenericPackHost:
                 attempt / "outputs",
             )
 
-        cas_names = (
-            {str(value) for value in cas_param_ports}
-            if cas_param_ports is not None
-            else set()
-        )
+        cas_names = set(ordered_cas_ports)
 
         def fetch_object(reference: str, digest: str, name: str, *, filename: str | None = None) -> Path:
             if self.client is None:
@@ -2205,6 +2235,10 @@ class GenericPackHost:
                         raise HostError(
                             f"HC-04 CAS parameter {name!r} requires a safe filename"
                         )
+                    if len(ordered_cas_ports) > 1:
+                        # Preserve role identity even when two CAS objects
+                        # arrive with the same user filename.
+                        filename = f"{name}--{filename}"
                     input_name = Path(filename)
                 input_root = (attempt / "inputs").resolve()
                 path = (input_root / input_name).resolve()

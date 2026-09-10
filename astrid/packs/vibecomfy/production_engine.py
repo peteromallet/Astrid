@@ -119,8 +119,13 @@ def _load_workflow(workflow: Mapping[str, Any], references: Mapping[str, str], s
             try:
                 resolved.set_input(name, _replace_references(value, references))
             except ValueError as exc:
-                if "no registered public input" not in str(exc):
-                    raise
+                # A typed producer must not silently lose a control or source
+                # binding merely because the selected ready template does not
+                # expose it.  Ignoring that case can run a template against a
+                # default local file, violating CAS custody and UI semantics.
+                raise ProductionEngineError(
+                    f"ready template {template_id!r} does not expose typed input {name!r}"
+                ) from exc
         return resolved
 
     raise ProductionEngineError(

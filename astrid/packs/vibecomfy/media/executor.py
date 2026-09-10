@@ -97,9 +97,17 @@ class DirectVibeMediaExecutor:
         task_identity = runtime_context["task_identity"]
         if not isinstance(task_identity, str) or not task_identity.strip():
             raise MediaExecutionError("task_identity must be a non-empty string")
+        # Keep the CPU-compiled node graph available for tests and diagnostics,
+        # while adding the canonical ready-template envelope consumed by the
+        # production engine.  Passing only ``compiled.workflow`` used to make
+        # the runtime reject these tasks before it could resolve a ready
+        # template.
+        execution_workflow = dict(compiled.workflow)
+        execution_workflow["template_id"] = compiled.template_id
+        execution_workflow["bindings"] = dict(compiled.inputs)
         try:
             outputs = self._runner(
-                compiled.workflow,
+                execution_workflow,
                 capability_id=compiled.capability_id,
                 model_identity=compiled.model_identity,
                 profile_id=self.profile.profile_id,

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "template_id": "video/video_enhance_direct",
+  "template_id": "video/basic_video_enhance",
   "capability_id": "vibecomfy.video_enhance",
   "model_identity": "video-enhance.upscale-2x",
   "engine": "vibecomfy",
@@ -11,6 +11,9 @@
     "upscale_method": {"node": "scale", "field": "upscale_method"},
     "enable_interpolation": {"node": "output", "field": "enable_interpolation"},
     "enable_upscale": {"node": "output", "field": "enable_upscale"},
+    "interpolation_frames": {"node": "output", "field": "interpolation_frames"},
+    "color_fix": {"node": "output", "field": "color_fix"},
+    "output_quality": {"node": "output", "field": "output_quality"},
     "preserve_audio": {"node": "output", "field": "preserve_audio"},
     "preserve_source_fps": {"node": "output", "field": "preserve_source_fps"}
   },
@@ -18,7 +21,7 @@
     "nodes": {
       "input": {"class_type": "VHS_LoadVideo", "inputs": {"video": ""}},
       "scale": {"class_type": "ImageScaleBy", "inputs": {"image": ["input", 0], "scale_by": 2.0, "upscale_method": "lanczos"}},
-      "output": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["scale", 0], "audio": ["input", 2], "enable_interpolation": false, "enable_upscale": true, "preserve_audio": true, "preserve_source_fps": true, "filename_prefix": "video-enhance"}}
+      "output": {"class_type": "VHS_VideoCombine", "inputs": {"images": ["scale", 0], "audio": ["input", 2], "enable_interpolation": false, "enable_upscale": true, "interpolation_frames": 1, "color_fix": true, "output_quality": "maximum", "preserve_audio": true, "preserve_source_fps": true, "filename_prefix": "video-enhance"}}
     }
   }
 }

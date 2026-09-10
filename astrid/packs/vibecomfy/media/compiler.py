@@ -101,11 +101,16 @@ class VideoEnhanceRequest:
     upscale_method: str = "lanczos"
     enable_interpolation: bool = False
     enable_upscale: bool = True
+    interpolation_frames: int = 1
+    color_fix: bool = True
+    output_quality: str = "maximum"
 
 @dataclass(frozen=True, slots=True)
 class CharacterAnimationRequest:
     reference_image_ref: str
     driving_video_ref: str
+    mode: str = "animate"
+    resolution: str = "480p"
     prompt: str = ""
     negative_prompt: str = ""
     seed: int = 42
@@ -328,6 +333,10 @@ def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_e
 
     if request.enable_interpolation is not True and request.enable_upscale is not True:
         raise MediaCompileError("enable_interpolation or enable_upscale must be true")
+    interpolation_frames = _positive_int(request.interpolation_frames, "interpolation_frames")
+    output_quality = _required_text(request.output_quality, "output_quality")
+    if output_quality not in {"low", "medium", "high", "maximum"}:
+        raise MediaCompileError("output_quality must be low, medium, high, or maximum")
     return _compile(
         capability_id="vibecomfy.video_enhance",
         model_identity="video-enhance.upscale-2x",
@@ -339,6 +348,9 @@ def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_e
             "upscale_method": _required_text(request.upscale_method, "upscale_method"),
             "enable_interpolation": request.enable_interpolation,
             "enable_upscale": request.enable_upscale,
+            "interpolation_frames": interpolation_frames,
+            "color_fix": request.color_fix,
+            "output_quality": output_quality,
             "preserve_audio": True,
             "preserve_source_fps": True,
         },
@@ -348,6 +360,15 @@ def compile_video_enhance(request: VideoEnhanceRequest, *, profile: str = "pip_e
 def compile_character_animation(request: CharacterAnimationRequest, *, profile: str = "pip_embedded") -> CompiledVibeMedia:
     """Compile Wan Animate reference-image plus driving-video semantics."""
 
+    mode = _required_text(request.mode, "mode")
+    if mode not in {"replace", "animate"}:
+        raise MediaCompileError("mode must be replace or animate")
+    resolution = _required_text(request.resolution, "resolution")
+    dimensions = {"480p": (832, 480), "720p": (1280, 720)}.get(resolution)
+    if dimensions is None:
+        raise MediaCompileError("resolution must be 480p or 720p")
+    width, height = dimensions
+
     return _compile(
         capability_id="vibecomfy.character_animation",
         model_identity="wan-2.2-animate-14b",
@@ -356,11 +377,13 @@ def compile_character_animation(request: CharacterAnimationRequest, *, profile: 
         typed_inputs={
             "reference_image_ref": _required_text(request.reference_image_ref, "reference_image_ref"),
             "driving_video_ref": _required_text(request.driving_video_ref, "driving_video_ref"),
+            "mode": mode,
+            "resolution": resolution,
             "prompt": request.prompt,
             "negative_prompt": request.negative_prompt,
             "seed": _nonnegative_int(request.seed, "seed"),
-            "width": _positive_int(request.width, "width"),
-            "height": _positive_int(request.height, "height"),
+            "width": width,
+            "height": height,
             "frames": _positive_int(request.frames, "frames"),
             "fps": _positive_int(request.fps, "fps"),
             "steps": _positive_int(request.steps, "steps"),

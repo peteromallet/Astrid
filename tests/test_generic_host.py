@@ -267,6 +267,59 @@ def test_hc04_cas_param_materializes_authorized_image_reference(tmp_path):
     assert staged.read_bytes() == payload
 
 
+def test_hc04_multi_cas_materialization_preserves_role_order_and_names(tmp_path):
+    image = b"character-image"
+    video = b"driving-video"
+    image_digest = hashlib.sha256(image).hexdigest()
+    video_digest = hashlib.sha256(video).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            return {image_digest: image, video_digest: video}[object_digest]
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [image_digest, video_digest],
+            "spec": {
+                "family": "vibecomfy.character_animation",
+                "params": {
+                    "reference_image_ref": {"digest": image_digest, "filename": "source.bin"},
+                    "driving_video_ref": {"digest": video_digest, "filename": "source.bin"},
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-ordered",
+        task_param_ports=("reference_image_ref", "driving_video_ref"),
+        cas_param_ports=("reference_image_ref", "driving_video_ref"),
+    )
+    image_path = Path(values["reference_image_ref"])
+    video_path = Path(values["driving_video_ref"])
+    assert image_path.name == "reference_image_ref--source.bin"
+    assert video_path.name == "driving_video_ref--source.bin"
+    assert image_path.read_bytes() == image
+    assert video_path.read_bytes() == video
+
+    with pytest.raises(HostError, match="ordered input_object_ids\\[0\\]"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [video_digest, image_digest],
+                "spec": {
+                    "family": "vibecomfy.character_animation",
+                    "params": {
+                        "reference_image_ref": {"digest": image_digest, "filename": "source.png"},
+                        "driving_video_ref": {"digest": video_digest, "filename": "source.mp4"},
+                    },
+                    "output_policy": {},
+                },
+            },
+            tmp_path / "attempt-swapped",
+            task_param_ports=("reference_image_ref", "driving_video_ref"),
+            cas_param_ports=("reference_image_ref", "driving_video_ref"),
+        )
+
+
 def test_hc04_cas_materialization_enforces_declared_size_before_write(tmp_path):
     payload = b"source-image"
     digest = hashlib.sha256(payload).hexdigest()

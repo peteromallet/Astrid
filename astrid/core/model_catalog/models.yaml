@@ -222,6 +222,40 @@ models:
               steps: steps
 
   # =========================================================================
+  # qwen-image-edit-2511 — versioned Qwen Image Edit 2511 cloud route
+  #
+  # This is deliberately a separate model identity from qwen-image-edit.
+  # Fal exposes the 2511 endpoint with the plural image_urls input, so the
+  # UI alias must not silently resolve to the generic Qwen edit endpoint.
+  # =========================================================================
+  - id: qwen-image-edit-2511
+    modality: image
+    modes:
+      edit:
+        supports:
+          - prompt
+          - seed
+          - count
+          - image_ref
+          - size
+          - guidance_scale
+          - steps
+        requires:
+          - prompt
+          - image_ref
+        backends:
+          cloud:
+            endpoint: fal-ai/qwen-image-edit-2511
+            param_map:
+              prompt: prompt
+              seed: seed
+              count: num_images
+              image_ref: image_urls
+              size: image_size
+              guidance_scale: guidance_scale
+              steps: num_inference_steps
+
+  # =========================================================================
   # seedream-v5-pro — ByteDance Seedream 5.0 Pro image editing (cloud-only)
   #
   # Cloud endpoint (fal):

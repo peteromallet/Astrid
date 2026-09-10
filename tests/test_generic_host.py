@@ -19,7 +19,9 @@ from astrid.core.execution.generic_host import (
     HostCancelled,
     HostError,
     RuntimeProtocolClient,
+    _assert_live_storage_envelope,
     _completed_process_evidence,
+    _task_storage_envelope,
     _terminate_process_group,
 )
 
@@ -263,6 +265,41 @@ def test_hc04_cas_param_materializes_authorized_image_reference(tmp_path):
     staged = Path(values["image_ref"])
     assert staged == tmp_path / "attempt" / "inputs" / "source.jpg"
     assert staged.read_bytes() == payload
+
+
+def test_hc04_cas_materialization_enforces_declared_size_before_write(tmp_path):
+    payload = b"source-image"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            assert object_digest == digest
+            return payload
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    with pytest.raises(HostError, match="exceeding bounded materialization limit"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [digest],
+                "spec": {
+                    "inputs": {},
+                    "params": {
+                        "image_ref": {
+                            "digest": digest,
+                            "filename": "source.png",
+                            "media_type": "image/png",
+                        }
+                    },
+                },
+            },
+            tmp_path / "attempt-limit",
+            authorized_input_object_ids=[digest],
+            task_param_ports=("image_ref",),
+            cas_param_ports=("image_ref",),
+            storage_estimate={"scratch_bytes": 1024, "output_bytes": 0},
+            input_size_limits={"image_ref": 3},
+        )
+    assert not (tmp_path / "attempt-limit" / "inputs" / "source.png").exists()
 
     with pytest.raises(HostError, match="CAS parameter 'image_ref'"):
         host._materialize_inputs(
@@ -979,6 +1016,169 @@ def test_explicit_task_storage_envelope_rejects_output_overrun_and_cleans_up(tmp
     assert runtime.settlements == []
     assert runtime.failures and "output bytes 2" in runtime.failures[0][2]
     assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_live_storage_envelope_charges_atomic_temps_to_scratch(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    output.mkdir(parents=True)
+    (output / "image.png").write_bytes(b"12345")
+    (output / ".image.png.temporary.png.tmp").write_bytes(b"x" * 80)
+
+    _assert_live_storage_envelope(
+        {"scratch_bytes": 80, "output_bytes": 5},
+        attempt,
+        output,
+    )
+
+
+def test_final_storage_envelope_counts_published_temps_and_rejects_escape(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    output.mkdir(parents=True)
+    published_temp = output / "published.png.tmp"
+    published_temp.write_bytes(b"x" * 10)
+    with pytest.raises(HostError, match="output bytes 10 exceed task output limit 0"):
+        _task_storage_envelope(
+            {"storage_estimate": {"scratch_bytes": 10, "output_bytes": 0}},
+            attempt,
+            [{"path": str(published_temp), "name": "generated_images"}],
+        )
+
+    outside = attempt / "outside.png"
+    outside.write_bytes(b"x")
+    with pytest.raises(HostError, match="escapes the output directory"):
+        _task_storage_envelope(
+            {"storage_estimate": {"scratch_bytes": 10, "output_bytes": 10}},
+            attempt,
+            [{"path": str(outside), "name": "generated_images"}],
+        )
+
+
+def test_final_storage_envelope_counts_stable_and_published_paths_as_a_union(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    output.mkdir(parents=True)
+    stable = output / "image.png"
+    published_temp = output / "image.png.tmp"
+    stable.write_bytes(b"x" * 6)
+    published_temp.write_bytes(b"y" * 6)
+
+    with pytest.raises(HostError, match="output bytes 12 exceed task output limit 10"):
+        _task_storage_envelope(
+            {"storage_estimate": {"scratch_bytes": 10, "output_bytes": 10}},
+            attempt,
+            [{"path": str(published_temp), "name": "generated_images"}],
+        )
+
+
+def test_required_storage_admission_failure_is_terminal_and_not_dispatched(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"].update({
+        "storage_estimate_required": True,
+        "storage_estimate_exact": True,
+        "estimated_scratch_bytes": 7,
+        "estimated_output_bytes": 11,
+    })
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-invalid-storage-admission",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-invalid-storage-admission",
+            "fence": 1,
+            "storage_estimate": {"scratch_bytes": 7, "output_bytes": 12},
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-invalid-storage-admission"] = task
+    with pytest.raises(HostError, match="requires storage_estimate"):
+        host.run_task(task, lease_token="lease-invalid-storage-admission")
+    assert runtime.settlements == []
+    assert runtime.failures
+    assert runtime.failures[0][3]["retryable"] is False
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_fixed_request_scope_rejects_conflicting_task_parameters(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["inputs"] = [
+        {"name": "model", "type": "string", "required": True},
+        {"name": "mode", "type": "string", "required": True},
+        {"name": "execution", "type": "string", "required": True},
+    ]
+    manifest["metadata"]["fixed_inputs"] = {"model": "z-image", "mode": "i2i", "execution": "cloud"}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-fixed-scope",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-fixed-scope",
+            "fence": 1,
+            "spec": {
+                "spec": {
+                    "params": {"model": "other-model", "mode": "i2i", "execution": "cloud"},
+                    "inputs": {},
+                }
+            },
+        }
+    }
+    runtime.tasks["task-fixed-scope"] = task
+    with pytest.raises(HostError, match="request escapes fixed scope"):
+        host.run_task(task, lease_token="lease-fixed-scope")
+    assert runtime.failures and runtime.failures[0][3]["retryable"] is False
+
+
+def test_fixed_request_scope_rejects_unsupported_legacy_inputs(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["inputs"] = [
+        {"name": "model", "type": "string", "required": True},
+        {"name": "mode", "type": "string", "required": True},
+        {"name": "execution", "type": "string", "required": True},
+    ]
+    manifest["metadata"]["fixed_inputs"] = {
+        "model": "qwen-image-edit-2511",
+        "mode": "edit",
+        "execution": "cloud",
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-fixed-legacy-input",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-fixed-legacy-input",
+            "fence": 1,
+            "spec": {
+                "spec": {
+                    "params": {
+                        "model": "qwen-image-edit-2511",
+                        "mode": "edit",
+                        "execution": "cloud",
+                    },
+                    "inputs": {"mask_ref": "/tmp/mask.png"},
+                }
+            },
+        }
+    }
+    runtime.tasks["task-fixed-legacy-input"] = task
+    with pytest.raises(HostError, match="unsupported legacy input"):
+        host.run_task(task, lease_token="lease-fixed-legacy-input")
+    assert runtime.failures and runtime.failures[0][3]["retryable"] is False
 
 
 def test_completed_process_evidence_reads_settlement_payload_when_result_omits_identity():

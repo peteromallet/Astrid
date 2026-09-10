@@ -309,6 +309,20 @@
    "required_packages": []
   },
   {
+   "id": "generation.generate_image_edit",
+   "disposition": "required",
+   "evidence_reason": "Narrow source-only Qwen cloud edit prerequisite with an enforced whole-task storage envelope; masked and Klein routes remain separate and blocked.",
+   "adapter_family": "provider",
+   "resource_keys": [
+    "provider"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
    "id": "generation.generate_image_openai",
    "disposition": "required",
    "evidence_reason": "Required GPT image facade; OpenAI credential readiness is explicit.",

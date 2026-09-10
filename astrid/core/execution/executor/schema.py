@@ -493,6 +493,7 @@ def _validate_executor(executor: ExecutorDefinition) -> None:
 
     input_names = _validate_unique_named(executor.inputs, "input")
     output_names = _validate_unique_named(executor.outputs, "output")
+    _validate_fixed_inputs(executor.metadata, executor.inputs, input_names)
     placeholders: set[str] = set(KNOWN_RUNTIME_PLACEHOLDERS)
     placeholders.update(input_names)
     placeholders.update(output_names)
@@ -525,6 +526,41 @@ def _validate_executor(executor: ExecutorDefinition) -> None:
     _validate_external_runtime(executor)
     if executor.command is not None:
         _validate_command(executor.command, placeholders)
+
+
+def _validate_fixed_inputs(
+    metadata: dict[str, Any],
+    inputs: tuple[ExecutorPort, ...],
+    input_names: set[str],
+) -> None:
+    """Validate exact manifest-owned values for narrow command profiles."""
+    raw = metadata.get("fixed_inputs")
+    if raw is None:
+        return
+    if not isinstance(raw, dict) or not raw:
+        raise ExecutorValidationError("executor.metadata.fixed_inputs must be a non-empty object")
+    ports = {port.name: port for port in inputs}
+    for name, expected in raw.items():
+        if not isinstance(name, str) or not name:
+            raise ExecutorValidationError(
+                "executor.metadata.fixed_inputs keys must be non-empty strings"
+            )
+        if name not in input_names:
+            raise ExecutorValidationError(
+                f"executor.metadata.fixed_inputs references undeclared input {name!r}"
+            )
+        if ports[name].type not in {"string", "text"}:
+            raise ExecutorValidationError(
+                f"executor.metadata.fixed_inputs input {name!r} must be a string port"
+            )
+        if not isinstance(expected, str) or not expected:
+            raise ExecutorValidationError(
+                f"executor.metadata.fixed_inputs value for {name!r} must be a non-empty string"
+            )
+        if ports[name].default is not None and ports[name].default != expected:
+            raise ExecutorValidationError(
+                f"executor.metadata.fixed_inputs conflicts with default for {name!r}"
+            )
 
 
 def _validate_port(port: ExecutorPort) -> None:

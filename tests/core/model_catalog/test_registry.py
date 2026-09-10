@@ -766,6 +766,11 @@ class TestSD001ModelIdentity:
         assert "edit" in entry_edit.modes
         assert "t2i" not in entry_edit.modes
 
+        entry_2511, mode_2511 = reg.get_by_mode("qwen-image-edit-2511", "edit")
+        assert entry_2511.id == "qwen-image-edit-2511"
+        assert mode_2511.backends["cloud"].endpoint == "fal-ai/qwen-image-edit-2511"
+        assert mode_2511.backends["cloud"].param_map["image_ref"] == "image_urls"
+
 
 # ---------------------------------------------------------------------------
 # T16: Load shipped models.yaml end-to-end
@@ -780,6 +785,7 @@ class TestShippedRegistry:
         "z-image",
         "qwen-image-2512",
         "qwen-image-edit",
+        "qwen-image-edit-2511",
         "seedream-v5-pro",
         "flux-dev",
         "flux-schnell",
@@ -917,6 +923,7 @@ class TestListByModalityV2:
             "z-image",
             "qwen-image-2512",
             "qwen-image-edit",
+            "qwen-image-edit-2511",
             "seedream-v5-pro",
             "flux-dev",
             "flux-schnell",

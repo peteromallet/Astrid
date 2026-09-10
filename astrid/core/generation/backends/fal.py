@@ -21,6 +21,7 @@ from astrid.core.generation.backends.base import (
     split_feature_support,
 )
 from astrid.core.generation.storage_policy import (
+    CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
     ImageStoragePolicyError,
 )
@@ -224,12 +225,24 @@ class FalBackend(BackendAdapter):
 
         api_key = self._resolve_api_key()
 
-        bounded_i2i = (
-            entry.id == "z-image" and mode == "i2i" and params.get("execution") == "cloud"
-        )
-        if bounded_i2i:
+        bounded_policy = None
+        if (
+            entry.id == "z-image"
+            and mode == "i2i"
+            and params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_I2I_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_I2I_STORAGE_POLICY
+        elif (
+            entry.id == "qwen-image-edit-2511"
+            and mode == "edit"
+            and params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_EDIT_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_EDIT_STORAGE_POLICY
+        if bounded_policy is not None:
             try:
-                CLOUD_I2I_STORAGE_POLICY.validate_request(
+                bounded_policy.validate_request(
                     model=entry.id,
                     mode=mode,
                     execution="cloud",
@@ -337,7 +350,15 @@ class FalBackend(BackendAdapter):
             if canon == "size":
                 normalized = _parse_size(str(value))
                 if normalized:
-                    payload[remote_param] = normalized
+                    if entry.id == "qwen-image-edit-2511" and remote_param == "image_size":
+                        width, height = parse_dimension_pair(normalized) or (None, None)
+                        payload[remote_param] = (
+                            {"width": width, "height": height}
+                            if width is not None and height is not None
+                            else normalized
+                        )
+                    else:
+                        payload[remote_param] = normalized
                 continue
 
             # Special handling for image_ref / image_end_ref — upload if local path
@@ -348,8 +369,8 @@ class FalBackend(BackendAdapter):
                     self._client,
                     api_key,
                     max_bytes=(
-                        CLOUD_I2I_STORAGE_POLICY.source_max_bytes
-                        if bounded_i2i and canon == "image_ref"
+                        bounded_policy.source_max_bytes
+                        if bounded_policy is not None and canon == "image_ref"
                         else None
                     ),
                 )
@@ -414,8 +435,8 @@ class FalBackend(BackendAdapter):
         # --- submit + poll ---------------------------------------------------
         t0 = time.monotonic()
         submit_kwargs = (
-            {"max_response_bytes": CLOUD_I2I_STORAGE_POLICY.control_max_bytes}
-            if bounded_i2i
+            {"max_response_bytes": bounded_policy.control_max_bytes}
+            if bounded_policy is not None
             else {}
         )
         result = fal_submit_and_poll(
@@ -446,10 +467,10 @@ class FalBackend(BackendAdapter):
         # or {"image": {"url": ...}} or {"video": {"url": ...}} etc.
         asset_urls = _extract_asset_urls(result)
         source_urls = list(asset_urls)
-        if bounded_i2i and len(asset_urls) != CLOUD_I2I_STORAGE_POLICY.max_count:
+        if bounded_policy is not None and len(asset_urls) != bounded_policy.max_count:
             raise ValueError(
                 f"bounded cloud i2i expected exactly "
-                f"{CLOUD_I2I_STORAGE_POLICY.max_count} provider output, "
+                f"{bounded_policy.max_count} provider output, "
                 f"got {len(asset_urls)}"
             )
 
@@ -466,8 +487,8 @@ class FalBackend(BackendAdapter):
         for idx, url in enumerate(asset_urls):
             try:
                 download_kwargs = (
-                    {"max_bytes": CLOUD_I2I_STORAGE_POLICY.output_max_bytes}
-                    if bounded_i2i
+                    {"max_bytes": bounded_policy.output_max_bytes}
+                    if bounded_policy is not None
                     else {}
                 )
                 data = self._client.get_bytes(
@@ -475,8 +496,8 @@ class FalBackend(BackendAdapter):
                     timeout=120,
                     **download_kwargs,
                 )
-                if bounded_i2i:
-                    CLOUD_I2I_STORAGE_POLICY.validate_download(data, index=idx)
+                if bounded_policy is not None:
+                    bounded_policy.validate_download(data, index=idx)
             except ImageStoragePolicyError as exc:
                 raise ValueError(str(exc)) from exc
             except Exception as exc:

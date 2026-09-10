@@ -27,6 +27,7 @@ from astrid.core.cli_choices import add_choice_arg
 from astrid.core.foundation.atomic_io import write_json_atomic
 from astrid.core.generation import GENERATION_RESULT_KEY
 from astrid.core.generation.storage_policy import (
+    CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
     ImageStoragePolicyError,
 )
@@ -255,6 +256,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Backend: 'local' (vibecomfy) or 'cloud' (fal).",
     )
     p.add_argument(
+        "--storage-policy-version",
+        dest="storage_policy_version",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    p.add_argument(
         "--count",
         type=int,
         default=1,
@@ -410,6 +417,19 @@ def generate_core(
             recovery_command="check available models and modes with --help and retry with a valid (model, mode) pair",
         ) from exc
 
+    bounded_profile = getattr(args, "storage_policy_version", None)
+    bounded_profiles = {
+        CLOUD_I2I_STORAGE_POLICY.version: ("z-image", "i2i"),
+        CLOUD_EDIT_STORAGE_POLICY.version: ("qwen-image-edit-2511", "edit"),
+    }
+    if bounded_profile is not None:
+        expected_identity = bounded_profiles.get(bounded_profile)
+        if expected_identity is None or expected_identity != (entry.id, mode_name) or args.execution != "cloud":
+            raise AstridError(
+                f"storage policy {bounded_profile!r} does not match the admitted model/mode/backend",
+                recovery_command="use the capability's declared storage policy",
+            )
+
     warnings: list[dict[str, str]] = []
     dropped_features: list[str] = []
     fallback_warning = _resolve_execution_with_codex_fallback(args, mode_spec)
@@ -474,17 +494,13 @@ def generate_core(
     loras_parsed = _parse_loras_arg(args.loras)
     all_outputs: list[dict[str, Any]] = []
     generated_paths: list[Path] = []
-    count = max(1, args.count or 1)
-    if (
-        entry.id == "z-image"
-        and mode_name == "i2i"
-        and args.execution == "cloud"
-        and count != CLOUD_I2I_STORAGE_POLICY.max_count
-    ):
+    raw_count = args.count
+    if bounded_profile is not None and raw_count != CLOUD_I2I_STORAGE_POLICY.max_count:
         raise AstridError(
-            "bounded cloud i2i requires one output for the whole task",
-            recovery_command="use --count 1 for bounded z-image cloud i2i",
+            "bounded cloud image profile requires one output for the whole task",
+            recovery_command="use --count 1 for the declared bounded image profile",
         )
+    count = max(1, raw_count or 1)
     prompt_text: str | None = None
     final_seed: int = 0
     model_actual: str = ""
@@ -579,6 +595,8 @@ def generate_core(
         # the generic feature compiler.
         params["execution"] = args.execution
         params["count"] = 1  # N=1 per loop iteration
+        if bounded_profile is not None:
+            params["storage_policy_version"] = bounded_profile
         if loras_parsed:
             params["loras"] = loras_parsed
         if args.execution == CODEX_BACKEND_ID:
@@ -588,8 +606,12 @@ def generate_core(
             if args.background:
                 params["background"] = args.background
 
-        if entry.id == "z-image" and mode_name == "i2i" and args.execution == "cloud":
-            bounded_policy = CLOUD_I2I_STORAGE_POLICY
+        if bounded_profile is not None:
+            bounded_policy = (
+                CLOUD_I2I_STORAGE_POLICY
+                if bounded_profile == CLOUD_I2I_STORAGE_POLICY.version
+                else CLOUD_EDIT_STORAGE_POLICY
+            )
             try:
                 bounded_policy.validate_request(
                     model=entry.id,
@@ -600,7 +622,7 @@ def generate_core(
             except ImageStoragePolicyError as exc:
                 raise AstridError(
                     str(exc),
-                    recovery_command="use one bounded z-image cloud i2i output with explicit dimensions",
+                    recovery_command="use one bounded cloud image output with explicit dimensions",
                 ) from exc
         else:
             bounded_policy = None

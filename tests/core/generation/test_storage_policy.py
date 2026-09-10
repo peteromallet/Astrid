@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from astrid.core.generation.storage_policy import (
+    CLOUD_EDIT_STORAGE_POLICY,
     CLOUD_I2I_STORAGE_POLICY,
     CloudI2IStoragePolicy,
     ImageStoragePolicyError,
@@ -67,6 +68,25 @@ def test_policy_accepts_exact_bounded_request(tmp_path: Path) -> None:
         execution="cloud",
         params=_params(source),
     )
+
+
+def test_source_only_edit_profile_has_a_distinct_identity(tmp_path: Path) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(_PNG)
+    assert CLOUD_EDIT_STORAGE_POLICY.version == "astrid.cloud-edit.qwen-source.v1"
+    CLOUD_EDIT_STORAGE_POLICY.validate_request(
+        model="qwen-image-edit-2511",
+        mode="edit",
+        execution="cloud",
+        params=_params(source),
+    )
+    with pytest.raises(ImageStoragePolicyError, match="does not admit mask_ref"):
+        CLOUD_EDIT_STORAGE_POLICY.validate_request(
+            model="qwen-image-edit-2511",
+            mode="edit",
+            execution="cloud",
+            params=_params(source, mask_ref=str(source)),
+        )
 
 
 def test_policy_rejects_download_at_limit_plus_one_and_checks_dimensions() -> None:

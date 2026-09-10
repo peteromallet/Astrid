@@ -819,10 +819,77 @@ def _storage_tree_bytes(root: Path) -> int:
         return 0
     total = 0
     for path in root.rglob("*"):
-        if path.is_symlink() or not path.is_file():
+        # Atomic writers use sibling ``*.tmp`` files.  Those bytes are
+        # scratch during the write and must not be charged to the final-output
+        # bucket while the child is still running.
+        if path.is_symlink() or not path.is_file() or path.name.endswith(".tmp"):
             continue
         total += int(path.stat().st_size)
     return total
+
+
+def _fixed_request_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a host-owned model/mode/execution scope, if declared."""
+    raw = metadata.get("fixed_inputs")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping) or not raw:
+        raise HostError("capability fixed_inputs must be a non-empty object")
+    scope = dict(raw)
+    if any(not isinstance(key, str) or not key for key in scope):
+        raise HostError("capability fixed_inputs keys must be non-empty strings")
+    return scope
+
+
+def _assert_fixed_request_scope(record: Any, task_data: Mapping[str, Any]) -> None:
+    """Reject task parameters that escape a capability's declared profile."""
+    scope = _fixed_request_scope(record.definition.metadata)
+    if not scope:
+        return
+    spec = task_data.get("spec")
+    if isinstance(spec, Mapping) and isinstance(spec.get("spec"), Mapping):
+        spec = spec["spec"]
+    params = spec.get("params") if isinstance(spec, Mapping) else None
+    if not isinstance(params, Mapping):
+        raise HostError(f"capability {record.id!r} requires a fixed request scope")
+    legacy_inputs = spec.get("inputs") if isinstance(spec, Mapping) else None
+    if isinstance(legacy_inputs, Mapping):
+        declared_inputs = {port.name for port in record.definition.inputs}
+        unsupported_inputs = sorted(
+            str(name) for name in legacy_inputs if str(name) not in declared_inputs
+        )
+        if unsupported_inputs:
+            raise HostError(
+                f"capability {record.id!r} received unsupported legacy input(s): "
+                + ", ".join(unsupported_inputs)
+            )
+    mismatches = {
+        key: {"expected": expected, "actual": params.get(key)}
+        for key, expected in scope.items()
+        if params.get(key) != expected
+    }
+    if mismatches:
+        raise HostError(
+            f"capability {record.id!r} request escapes fixed scope: "
+            f"{json.dumps(mismatches, sort_keys=True)}"
+        )
+
+
+def _storage_input_limits(metadata: Mapping[str, Any]) -> dict[str, int]:
+    """Read optional per-port byte limits for bounded CAS materialization."""
+    raw = metadata.get("storage_input_max_bytes")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise HostError("capability storage_input_max_bytes must be an object")
+    limits: dict[str, int] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not name:
+            raise HostError("capability storage input limit names must be non-empty strings")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise HostError(f"capability storage input limit for {name!r} must be a non-negative integer")
+        limits[name] = value
+    return limits
 
 
 def _task_storage_estimate(task_data: Mapping[str, Any]) -> dict[str, int] | None:
@@ -877,7 +944,10 @@ def _task_storage_envelope(
         return None
     scratch_limit = estimate["scratch_bytes"]
     output_limit = estimate["output_bytes"]
-    output_bytes = 0
+    output_root = root / "outputs"
+    resolved_output_root = output_root.resolve()
+    published_output_bytes = 0
+    published_paths: set[Path] = set()
     for descriptor in staged_outputs:
         raw_path = descriptor.get("path")
         if not raw_path:
@@ -885,7 +955,23 @@ def _task_storage_envelope(
         path = Path(str(raw_path))
         if path.is_symlink() or not path.is_file():
             raise HostError("staged output path is not a regular file")
-        output_bytes += int(path.stat().st_size)
+        resolved_path = path.resolve()
+        if not resolved_path.is_relative_to(resolved_output_root):
+            raise HostError("staged output path escapes the output directory")
+        if resolved_path not in published_paths:
+            published_paths.add(resolved_path)
+            published_output_bytes += int(path.stat().st_size)
+    # Use the same stable-output view as the live counter.  This includes the
+    # published result manifest and any undeclared stable file, while treating
+    # atomic writer temporaries as scratch.  The latter prevents the estimate
+    # from changing meaning between polling and final settlement.
+    stable_output_paths = {
+        path.resolve()
+        for path in output_root.rglob("*")
+        if not path.is_symlink() and path.is_file() and not path.name.endswith(".tmp")
+    }
+    output_paths = stable_output_paths | published_paths
+    output_bytes = sum(int(path.stat().st_size) for path in output_paths)
     total_bytes = _attempt_tree_bytes(root)
     scratch_bytes = max(0, total_bytes - output_bytes)
     if output_bytes > output_limit:
@@ -1905,6 +1991,8 @@ class GenericPackHost:
         authorized_input_object_ids: list[str] | tuple[str, ...] | None = None,
         task_param_ports: tuple[str, ...] | list[str] | None = None,
         cas_param_ports: tuple[str, ...] | list[str] | None = None,
+        storage_estimate: Mapping[str, int] | None = None,
+        input_size_limits: Mapping[str, int] | None = None,
     ) -> dict[str, Any]:
         """Materialize digest inputs and managed registry objects in *attempt*.
 
@@ -2010,7 +2098,12 @@ class GenericPackHost:
         input_digests = input_spec.get("input_digests", ())
         for item in input_digests if isinstance(input_digests, list) else ():
             if isinstance(item, Mapping) and item.get("name") and item.get("digest"):
-                values.setdefault(str(item["name"]), {"digest": str(item["digest"])})
+                name = str(item["name"])
+                if task_param_ports is not None and name not in declared_set:
+                    raise HostError(
+                        f"HC-04 input_digests contains undeclared input: {name}"
+                    )
+                values.setdefault(name, {"digest": str(item["digest"])})
         for name in values:
             input_name = Path(str(name))
             if not str(name) or input_name.is_absolute() or ".." in input_name.parts:
@@ -2020,6 +2113,35 @@ class GenericPackHost:
         managed_root.mkdir(parents=True, exist_ok=True)
         materialized_objects: dict[str, str] = {}
         fetched_objects: dict[tuple[str, str], Path] = {}
+        scratch_limit = (
+            int(storage_estimate["scratch_bytes"])
+            if storage_estimate is not None
+            else None
+        )
+        bounded_input_limits = dict(input_size_limits or {})
+
+        def write_scratch(path: Path, payload: bytes, *, name: str) -> None:
+            limit = bounded_input_limits.get(name)
+            if limit is not None and len(payload) > limit:
+                raise HostError(
+                    f"managed input {name!r} is {len(payload)} bytes, "
+                    f"exceeding bounded materialization limit {limit}"
+                )
+            if scratch_limit is not None:
+                existing = _attempt_tree_bytes(attempt)
+                if existing + len(payload) > scratch_limit:
+                    raise HostError(
+                        f"materializing {name!r} would exceed task scratch limit "
+                        f"{scratch_limit} bytes"
+                    )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            _assert_live_storage_envelope(
+                storage_estimate,
+                attempt,
+                attempt / "outputs",
+            )
+
         cas_names = (
             {str(value) for value in cas_param_ports}
             if cas_param_ports is not None
@@ -2047,7 +2169,7 @@ class GenericPackHost:
                 if filename is not None
                 else f"{len(list(managed_root.iterdir())):04d}-{hashlib.sha256(reference.encode()).hexdigest()[:16]}"
             )
-            destination.write_bytes(payload)
+            write_scratch(destination, payload, name=name)
             fetched_objects[cache_key] = destination
             return destination
 
@@ -2093,8 +2215,7 @@ class GenericPackHost:
                     data = getattr(data, "data", None)
                 if not isinstance(data, (bytes, bytearray)) or hashlib.sha256(bytes(data)).hexdigest() != normalized:
                     raise HostError(f"input object hash mismatch for {name}")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(bytes(data))
+                write_scratch(path, bytes(data), name=str(name))
                 values[name] = str(path)
 
             if name not in registry_input_names:
@@ -2844,21 +2965,43 @@ class GenericPackHost:
             record = self.capabilities[capability_id]
         if not record.ready:
             raise HostError(f"capability {capability_id!r} is unavailable: {record.preflight}")
-        storage_estimate = _task_storage_estimate(task_data)
-        if record.definition.metadata.get("storage_estimate_required"):
-            if storage_estimate is None:
-                raise HostError(
-                    f"capability {capability_id!r} requires a whole-task storage_estimate"
+        def fail_admission(error: Exception) -> None:
+            """Fence deterministic admission failures as terminal attempts."""
+            try:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    str(error),
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
                 )
-            expected = {
-                "scratch_bytes": record.estimated_scratch_bytes,
-                "output_bytes": record.estimated_output_bytes,
-            }
-            if storage_estimate != expected:
+            except Exception as runtime_exc:
                 raise HostError(
-                    f"capability {capability_id!r} requires storage_estimate={expected}, "
-                    f"got {storage_estimate}"
-                )
+                    "deterministic admission failure was not recorded by Runtime"
+                ) from runtime_exc
+            raise HostError(str(error)) from error
+
+        try:
+            _assert_fixed_request_scope(record, task_data)
+            storage_estimate = _task_storage_estimate(task_data)
+            if record.definition.metadata.get("storage_estimate_required"):
+                if storage_estimate is None:
+                    raise HostError(
+                        f"capability {capability_id!r} requires a whole-task storage_estimate"
+                    )
+                expected = {
+                    "scratch_bytes": record.estimated_scratch_bytes,
+                    "output_bytes": record.estimated_output_bytes,
+                }
+                if storage_estimate != expected:
+                    raise HostError(
+                        f"capability {capability_id!r} requires storage_estimate={expected}, "
+                        f"got {storage_estimate}"
+                    )
+            input_size_limits = _storage_input_limits(record.definition.metadata)
+        except Exception as exc:
+            fail_admission(exc)
         try:
             self.execution_policy.assert_budget_available()
         except ExecutionGuardError as exc:
@@ -3084,6 +3227,8 @@ class GenericPackHost:
                 authorized_input_object_ids=authorized_input_object_ids,
                 task_param_ports=task_param_ports,
                 cas_param_ports=cas_param_ports,
+                storage_estimate=storage_estimate,
+                input_size_limits=input_size_limits,
             )
             _assert_live_storage_envelope(storage_estimate, root, root / "outputs")
             immutable_input_baseline = {}

@@ -150,11 +150,50 @@ class CloudI2IStoragePolicy:
         return size
 
 
+@dataclass(frozen=True, slots=True)
+class CloudEditStoragePolicy(CloudI2IStoragePolicy):
+    """Bounded source-only Qwen cloud edit profile.
+
+    Masked edits are intentionally not included: the public Qwen template and
+    provider contract currently expose no verified mask input.  This separate
+    identity prevents source-only evidence from being reused for inpaint or
+    Klein routes.
+    """
+
+    version: str = "astrid.cloud-edit.qwen-source.v1"
+
+    def validate_request(
+        self,
+        *,
+        model: str,
+        mode: str,
+        execution: str,
+        params: Mapping[str, Any],
+    ) -> None:
+        if (model, mode, execution) != ("qwen-image-edit-2511", "edit", "cloud"):
+            raise ImageStoragePolicyError(
+                f"request is outside bounded storage policy {self.version}"
+            )
+        if "mask_ref" in params:
+            raise ImageStoragePolicyError(
+                "source-only Qwen edit profile does not admit mask_ref"
+            )
+        CloudI2IStoragePolicy.validate_request(
+            self,
+            model="z-image",
+            mode="i2i",
+            execution="cloud",
+            params=params,
+        )
+
 CLOUD_I2I_STORAGE_POLICY = CloudI2IStoragePolicy()
+CLOUD_EDIT_STORAGE_POLICY = CloudEditStoragePolicy()
 
 
 __all__ = [
     "CLOUD_I2I_STORAGE_POLICY",
+    "CLOUD_EDIT_STORAGE_POLICY",
+    "CloudEditStoragePolicy",
     "CloudI2IStoragePolicy",
     "ImageStoragePolicyError",
 ]

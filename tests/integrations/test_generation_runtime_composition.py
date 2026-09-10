@@ -14,6 +14,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 RUNTIME_ROOT = Path(
     os.environ.get("BANODOCO_RUNTIME_CHECKOUT")
     or "/Users/hannahomalley/Documents/Codex/2026-09-09/can-you-see-the-poms-skills/work/astrid-prep/repos/Runtime"
@@ -23,7 +25,7 @@ sys.path.insert(0, str(RUNTIME_ROOT))
 from banodoco_workspace_client import WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
 
-from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
+from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient  # noqa: E402
 
 
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -139,12 +141,17 @@ image_group = {{'name': 'generated_images', 'artifact_type': 'image/png', 'path'
     return pack
 
 
-def _registered_image_executor_fixture(root: Path) -> Path:
+def _registered_image_executor_fixture(
+    root: Path,
+    *,
+    manifest_name: str = "generate_image",
+    oversized_output: bool = False,
+) -> Path:
     """Copy the registered image manifest with a deterministic CPU backend.
 
     The child still runs the production ``generate_image.run`` command. The
-    fixture wrapper substitutes the provider backend and disables network
-    readiness only for this CPU proof, so no fal request is made.
+    fixture wrapper uses the production Fal backend with only its HTTP
+    transport substituted, so no provider request leaves the test process.
     """
     pack = root / "typed_image_cpu"
     executor = pack / "executors" / "generate_image"
@@ -162,7 +169,7 @@ def _registered_image_executor_fixture(root: Path) -> Path:
     definition = json.loads(
         (
             Path(__file__).resolve().parents[2]
-            / "astrid/packs/generation/executors/generate_image/executor.yaml"
+            / f"astrid/packs/generation/executors/{manifest_name}/executor.yaml"
         ).read_text(encoding="utf-8")
     )
     definition["kind"] = "external"
@@ -172,11 +179,11 @@ def _registered_image_executor_fixture(root: Path) -> Path:
     metadata.pop("env", None)
     metadata.pop("network_policy", None)
     metadata["adapter_family"] = "cpu"
-    # These are fixture-only reservations for the bounded CPU proof.  The
-    # production manifest intentionally remains at zero until provider-backed
-    # storage and output limits are evidenced and enforced.
-    metadata["estimated_scratch_bytes"] = 8 * 1024 * 1024
-    metadata["estimated_output_bytes"] = 64 * 1024 * 1024
+    if manifest_name == "generate_image":
+        # The broad fixture is retained for the legacy composition proof.  The
+        # dedicated bounded manifest must keep its production estimates.
+        metadata["estimated_scratch_bytes"] = 8 * 1024 * 1024
+        metadata["estimated_output_bytes"] = 64 * 1024 * 1024
     definition["metadata"] = metadata
     definition.pop("scoped_configs", None)
     (executor / "executor.yaml").write_text(
@@ -184,33 +191,51 @@ def _registered_image_executor_fixture(root: Path) -> Path:
     )
     (pack / "runtime.py").write_text(
         f"""
-import hashlib
+import base64
+import json
+import os
 import sys
-from pathlib import Path
 
-from astrid.core.generation.backends.base import BackendAdapter, GenerationResult
+from astrid.core.generation.backends.fal import FalBackend
+from astrid.core.util.http import HttpClient
 from astrid.packs.generation.executors.generate_image import run as image_run
 
+_PNG = base64.b64decode({_PNG!r})
+_OVERSIZED_OUTPUT = {oversized_output!r}
+_RESULT = _PNG
 
-class _Transport(BackendAdapter):
-    def generate(self, entry, mode, params, out_dir):
-        source = Path(params[\"image_ref\"])
-        source_bytes = source.read_bytes()
-        output = Path(out_dir) / \"transport.png\"
-        output.write_bytes(source_bytes)
-        source_digest = hashlib.sha256(source_bytes).hexdigest()
-        return GenerationResult(
-            image_paths=[output],
-            seed_used=int(params[\"seed\"]),
-            model_actual=\"cpu-transport:\" + source_digest,
-            applied_features=sorted(params),
-        )
+
+def _transport(request):
+    global _RESULT
+    url = request.full_url if hasattr(request, \"full_url\") else str(request)
+    method = request.method if hasattr(request, \"method\") else \"GET\"
+    if method == \"POST\" and \"queue.fal.run\" in url:
+        payload = json.loads((request.data or b\"{{}}\").decode())
+        image_urls = payload.get(\"image_urls\")
+        refs = image_urls if isinstance(image_urls, list) else [payload.get(\"image_url\", \"\")]
+        assert refs and all(isinstance(ref, str) for ref in refs)
+        assert all(ref.startswith(\"data:image/png;base64,\") for ref in refs)
+        assert all(base64.b64decode(ref.split(\",\", 1)[1]) == _PNG for ref in refs)
+        _RESULT = b"x" * (64 * 1024 * 1024 + 1) if _OVERSIZED_OUTPUT else _PNG
+        return 200, json.dumps({{
+            \"request_id\": \"cpu-fal-request\",
+            \"status_url\": \"https://queue.fal.run/status/cpu-fal-request\",
+            \"response_url\": \"https://queue.fal.run/response/cpu-fal-request\",
+        }}).encode()
+    if url.endswith(\"/status/cpu-fal-request\"):
+        return 200, b\"{{\\\"status\\\":\\\"COMPLETED\\\"}}\"
+    if url.endswith(\"/response/cpu-fal-request\"):
+        return 200, b\"{{\\\"images\\\":[{{\\\"url\\\":\\\"https://fal.media/cpu-result.png\\\"}}]}}\"
+    if \"fal.media/cpu-result.png\" in url:
+        return 200, _RESULT
+    raise AssertionError(f\"unexpected CPU Fal transport request: {{method}} {{url}}\")
 
 
 class _Registry:
     def create(self, backend_id, **kwargs):
         assert backend_id == \"cloud\"
-        return _Transport()
+        os.environ[\"FAL_KEY\"] = \"cpu-test-key\"
+        return FalBackend(client=HttpClient(transport=_transport))
 
 
 image_run.load_default_generation_backend_registry = lambda: _Registry()
@@ -308,10 +333,22 @@ def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> N
         daemon.stop()
 
 
-def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
+@pytest.mark.parametrize(
+    ("manifest_name", "expected_capability", "model", "mode"),
+    [
+        ("generate_image", "generation.generate_image", "z-image", "i2i"),
+        ("generate_image_cloud_i2i", "generation.generate_image_cloud_i2i", "z-image", "i2i"),
+        ("generate_image_edit", "generation.generate_image_edit", "qwen-image-edit-2511", "edit"),
+    ],
+)
+def test_registered_image_executor_consumes_cas_image_and_cleans_attempt(
     tmp_path: Path,
+    manifest_name: str,
+    expected_capability: str,
+    model: str,
+    mode: str,
 ) -> None:
-    pack = _registered_image_executor_fixture(tmp_path)
+    pack = _registered_image_executor_fixture(tmp_path, manifest_name=manifest_name)
     daemon = RuntimeDaemon(
         tmp_path / "realm",
         support_root=tmp_path / "support",
@@ -338,7 +375,7 @@ def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
             executor_id="typed-image-registered-host",
         )
         record = host.discover()[0]
-        assert record.id == "generation.generate_image"
+        assert record.id == expected_capability
         host.preflight()
         assert host.capabilities[record.id].ready
         registration = host.register()
@@ -364,7 +401,22 @@ def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
             getattr(source_row, "object_id", None)
             or getattr(source_row, "digest")
         )
-        source_digest = source_id.removeprefix("sha256:")
+        params = {
+            "execution": "cloud",
+            "mode": mode,
+            "model": model,
+            "prompt": "cpu i2i proof" if mode == "i2i" else "cpu edit proof",
+            "count": 1,
+            "seed": 11,
+            "size": "1024x1024",
+            "image_ref": {
+                "digest": source_id,
+                "filename": "source.png",
+                "media_type": "image/png",
+            },
+        }
+        if mode == "i2i":
+            params["strength"] = 0.5
         task = owner.admit_task(
             capability_id=record.id,
             capability_digest=record.capability_digest,
@@ -372,26 +424,13 @@ def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
             project_id=project.project_id,
             idempotency_key="registered-task",
             spec={
-                "family": "generation.generate_image",
-                "params": {
-                    "execution": "cloud",
-                    "mode": "i2i",
-                    "model": "z-image",
-                    "prompt": "cpu i2i proof",
-                    "count": 1,
-                    "seed": 11,
-                    "size": "1024x1024",
-                    "image_ref": {
-                        "digest": source_id,
-                        "filename": "source.png",
-                        "media_type": "image/png",
-                    },
-                },
+                "family": expected_capability,
+                "params": params,
                 "output_policy": {},
             },
             storage_estimate={
-                "scratch_bytes": 8 * 1024 * 1024,
-                "output_bytes": 64 * 1024 * 1024,
+                "scratch_bytes": record.estimated_scratch_bytes,
+                "output_bytes": record.estimated_output_bytes,
             },
         )
         settled = host.run(once=True)
@@ -403,12 +442,119 @@ def test_registered_image_executor_consumes_cas_i2i_and_cleans_attempt(
         image_output = next(output for output in outputs if output["name"] == "generated_images")
         image_bytes = owner.get_object(image_output["digest"]).data
         assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-        # ``generate_image.run`` embeds model_actual after the transport
-        # returns; the digest proves the real executor consumed the staged CAS
-        # bytes rather than merely receiving an untrusted path token.
-        assert source_digest.encode("ascii") in image_bytes
+        # ``generate_image.run`` embeds the submitted prompt after the real
+        # Fal backend returns; the transport also checked the staged CAS bytes
+        # in the request's data URI before returning this result.
+        assert b"astrid_prompt" in image_bytes
+        assert (b"cpu i2i proof" if mode == "i2i" else b"cpu edit proof") in image_bytes
         cleanup_path = completed.result["execution_guards"]["cleanup_path"]
         assert not Path(cleanup_path).exists()
+    finally:
+        if host is not None:
+            host.shutdown()
+        daemon.stop()
+
+
+@pytest.mark.parametrize("failure", ["oversized_input", "oversized_output", "scope", "estimate"])
+def test_registered_qwen_edit_failure_is_terminal_and_does_not_settle(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    pack = _registered_image_executor_fixture(
+        tmp_path,
+        manifest_name="generate_image_edit",
+        oversized_output=failure == "oversized_output",
+    )
+    daemon = RuntimeDaemon(
+        tmp_path / "realm",
+        support_root=tmp_path / "support",
+        production_worker_credentials=True,
+    ).start()
+    host = None
+    try:
+        owner = WorkspaceClient(daemon.endpoint, daemon.token)
+        owner.handshake(
+            "typed-image-qwen-failure-test",
+            "0.1.0",
+            [
+                "projects:read",
+                "projects:write",
+                "objects:read",
+                "objects:write",
+                "worker:execute",
+            ],
+        )
+        client = RuntimeProtocolClient(daemon.endpoint, daemon.token)
+        host = GenericPackHost(
+            pack_roots=[pack],
+            client=client,
+            executor_id="typed-image-qwen-failure-host",
+        )
+        record = host.discover()[0]
+        host.preflight()
+        host.register()
+        project = owner.create_project(
+            "Typed Qwen failure",
+            slug=f"typed-qwen-failure-{failure}",
+            idempotency_key=f"qwen-failure-project-{failure}",
+        )
+        source_bytes = (
+            b"x" * (512_000 + 1)
+            if failure == "oversized_input"
+            else base64.b64decode(_PNG)
+        )
+        source_row = owner.ingest_project_object(
+            project.project_id,
+            source_bytes,
+            media_type="image/png",
+            filename="source.png",
+            idempotency_key=f"qwen-failure-source-{failure}",
+        )
+        source_id = str(
+            getattr(source_row, "object_id", None)
+            or getattr(source_row, "digest")
+        )
+        params: dict[str, object] = {
+            "execution": "cloud",
+            "mode": "edit",
+            "model": "qwen-image-edit-2511",
+            "prompt": "qwen failure proof",
+            "count": 1,
+            "seed": 11,
+            "size": "1024x1024",
+            "image_ref": {
+                "digest": source_id,
+                "filename": "source.png",
+                "media_type": "image/png",
+            },
+        }
+        if failure == "scope":
+            params["model"] = "qwen-image-edit"
+        estimate = {
+            "scratch_bytes": record.estimated_scratch_bytes,
+            "output_bytes": record.estimated_output_bytes,
+        }
+        if failure == "estimate":
+            estimate["output_bytes"] += 1
+        task = owner.admit_task(
+            capability_id=record.id,
+            capability_digest=record.capability_digest,
+            input_object_ids=[source_id],
+            project_id=project.project_id,
+            idempotency_key=f"qwen-failure-task-{failure}",
+            spec={
+                "family": record.id,
+                "params": params,
+                "output_policy": {},
+            },
+            storage_estimate=estimate,
+        )
+        with pytest.raises(HostError):
+            host.run(once=True)
+        failed = owner.get_task(task.task_id)
+        assert failed.state == "failed"
+        assert not failed.result.get("outputs", [])
+        assert not getattr(host, "_active_processes", {})
     finally:
         if host is not None:
             host.shutdown()

@@ -225,6 +225,90 @@ def test_snapshot_validation_rejects_missing_registry_asset() -> None:
         validate_managed_render_snapshot(_snapshot(runtime))
 
 
+def _render_clock() -> dict[str, object]:
+    return {
+        "authored_duration_frames": 8910,
+        "render_duration_frames": 9000,
+        "tail": {
+            "policy": "unmapped_excess_rendered_region",
+            "source_asset": "tail",
+            "start_frame": 8910,
+            "end_frame": 9000,
+            "source_start_frame": 8910,
+            "source_end_frame": 9000,
+        },
+    }
+
+
+def _clock_runtime() -> _Runtime:
+    digest = "a" * 64
+    runtime = _Runtime(media=[{"media_id": "media-tail", "digest": digest}])
+    runtime.timeline["config"] = {
+        "tracks": [{"id": "visual", "kind": "visual", "label": "Visual"}],
+        "clips": [{
+            "id": "base", "track": "visual", "at": 0, "hold": 297,
+            "clipType": "media", "asset": "base",
+        }],
+        "app": {"astrid_render_clock": _render_clock()},
+        "output": {"resolution": "640x360", "fps": 30, "file": "fixture.mp4"},
+    }
+    runtime.timeline["registry"] = {
+        "assets": {
+            "base": {"media_id": "media-tail", "content_sha256": digest},
+            "tail": {"media_id": "media-tail", "content_sha256": digest},
+        }
+    }
+    return runtime
+
+
+def test_render_clock_keeps_authored_and_rendered_extents_distinct() -> None:
+    from astrid.core.timeline.duration import (
+        render_clock,
+        timeline_duration_frames,
+        timeline_render_duration_frames,
+    )
+
+    timeline = {
+        "clips": [{"at": 0, "hold": 297}],
+        "app": {"astrid_render_clock": _render_clock()},
+    }
+    assert timeline_duration_frames(timeline, 30) == 8910
+    assert timeline_render_duration_frames(timeline, 30) == 9000
+    assert render_clock(timeline, 30)["tail"]["source_asset"] == "tail"
+
+
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda clock: clock.update(render_duration_frames=8910), "longer than authored"),
+        (lambda clock: clock["tail"].update(end_frame=8999), "cover exactly"),
+        (lambda clock: clock["tail"].update(policy="hold"), "policy"),
+        (lambda clock: clock["tail"].update(source_asset=""), "source_asset"),
+    ],
+)
+def test_render_clock_rejects_ambiguous_or_short_tail(mutate, message) -> None:
+    from astrid.core.timeline.duration import timeline_render_duration_frames
+
+    clock = _render_clock()
+    mutate(clock)
+    with pytest.raises(ValueError, match=message):
+        timeline_render_duration_frames(
+            {"clips": [{"at": 0, "hold": 297}], "app": {"astrid_render_clock": clock}},
+            30,
+        )
+
+
+def test_managed_render_clock_requires_runtime_admitted_tail_identity() -> None:
+    runtime = _clock_runtime()
+    snapshot = _snapshot(runtime)
+    validate_managed_render_snapshot(snapshot)
+    assert snapshot.authority()["render_clock"]["render_duration_frames"] == 9000
+
+    runtime.timeline["registry"]["assets"].pop("tail")
+    with pytest.raises(ManagedRenderValidationError, match="tail source asset"):
+        validate_managed_render_snapshot(_snapshot(runtime))
+
+
 def test_snapshot_validation_rejects_incomplete_config_output() -> None:
     runtime = _Runtime()
     runtime.timeline["config"] = {"tracks": [], "clips": [], "output": {"resolution": [1920, 1080]}}

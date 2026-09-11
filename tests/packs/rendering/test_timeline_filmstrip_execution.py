@@ -58,6 +58,24 @@ def test_alignment_clamps_short_render_without_changing_identity(monkeypatch, tm
     assert snapshot['clips'][0]['end_frame'] == 72
 
 
+def test_alignment_preserves_declared_authored_clock_when_snapshot_duration_is_rendered(
+    monkeypatch, tmp_path
+):
+    snapshot = {
+        'fps_rational': [30, 1], 'duration_frames': 9000,
+        'clips': [{'id': 'clip', 'start_frame': 0, 'end_frame': 8910}],
+        'occurrences': [], 'scripts': [],
+        'metadata': {'authored_duration_frames': 8910},
+    }
+    monkeypatch.setattr(execution, '_rendered_timing', lambda video, fps: (9000, 300.0))
+
+    execution._align_snapshot_to_render(snapshot, tmp_path / 'render.mp4')
+
+    assert snapshot['duration_frames'] == 9000
+    assert snapshot['metadata']['authored_duration_frames'] == 8910
+    assert snapshot['metadata']['rendered_tail']['start_frame'] == 8910
+
+
 def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatch):
     video = tmp_path / 'video'
     video.write_bytes(b'actual video')

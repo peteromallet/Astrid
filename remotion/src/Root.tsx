@@ -1,5 +1,6 @@
 import type {ReactElement} from 'react';
-import {Composition} from 'remotion';
+import {Composition, Sequence, staticFile, useVideoConfig} from 'remotion';
+import {Video} from '@remotion/media';
 import {
   TimelineComposition,
   getTimelineDurationInFrames,
@@ -16,11 +17,64 @@ import {ReviewOverlay} from './ReviewOverlay';
 import type {ReviewContext} from './ReviewOverlay';
 
 type ReviewProps = TimelineCompositionProps & {review?: ReviewContext | null};
-const ReviewedTimeline = (props: ReviewProps): ReactElement => <>
-  <TimelineComposition {...props} /><ReviewOverlay review={props.review} />
+
+type RenderClock = {
+  authored_duration_frames: number;
+  render_duration_frames: number;
+  tail: {
+    policy: 'unmapped_excess_rendered_region';
+    source_asset: string;
+    start_frame: number;
+    end_frame: number;
+    source_start_frame: number;
+    source_end_frame: number;
+  };
+};
+
+const getRenderClock = (timeline: TimelineCompositionProps['timeline']): RenderClock | null => {
+  const app = (timeline as TimelineCompositionProps['timeline'] & {app?: Record<string, unknown>}).app;
+  const value = app?.astrid_render_clock;
+  return value && typeof value === 'object' ? value as RenderClock : null;
+};
+
+const RenderClockTail = ({props}: {props: TimelineCompositionProps}): ReactElement | null => {
+  const clock = getRenderClock(props.timeline);
+  const {fps} = useVideoConfig();
+  if (!clock || clock.tail.end_frame <= clock.tail.start_frame) {
+    return null;
+  }
+  const asset = props.assets.assets[clock.tail.source_asset];
+  if (!asset?.file) {
+    return null;
+  }
+  const authoredFrames = getTimelineDurationInFrames(props.timeline, fps);
+  const renderedFrames = clock.render_duration_frames;
+  return (
+    <Sequence
+      from={authoredFrames}
+      durationInFrames={renderedFrames - authoredFrames}
+    >
+      <Video
+        src={staticFile(asset.file)}
+        trimBefore={clock.tail.source_start_frame}
+        trimAfter={clock.tail.source_end_frame}
+        muted
+        style={{width: '100%', height: '100%', objectFit: 'cover'}}
+      />
+    </Sequence>
+  );
+};
+
+const ReviewedTimelineWithRenderTail = (props: ReviewProps): ReactElement => <>
+  <TimelineComposition {...props} />
+  <RenderClockTail props={props} />
+  <ReviewOverlay review={props.review} />
 </>;
-const ReviewedThreeTimeline = (props: ReviewProps): ReactElement => <>
-  <ThreeTimelineComposition {...props} /><ReviewOverlay review={props.review} />
+
+const ReviewedThreeTimelineWithRenderTail = (props: ReviewProps): ReactElement => <>
+  <ThreeTimelineComposition {...props} />
+  <RenderClockTail props={props} />
+  <ReviewOverlay review={props.review} />
 </>;
 
 const DEFAULT_PROPS: TimelineCompositionProps = {
@@ -71,14 +125,12 @@ const getMetadata = async ({
 }> => {
   const canvas = getCanvas(props);
   const fps = canvas.fps ?? 30;
+  const clock = getRenderClock(props.timeline);
   return {
     width: canvas.width ?? 1920,
     height: canvas.height ?? 1080,
     fps,
-    durationInFrames: Math.max(
-      1,
-      getTimelineDurationInFrames(props.timeline, fps),
-    ),
+    durationInFrames: Math.max(1, clock?.render_duration_frames ?? getTimelineDurationInFrames(props.timeline, fps)),
   };
 };
 
@@ -88,13 +140,13 @@ export const Root = (): ReactElement => {
       <FontProvider />
       <Composition
         id="TimelineComposition"
-        component={ReviewedTimeline}
+        component={ReviewedTimelineWithRenderTail}
         defaultProps={DEFAULT_PROPS}
         calculateMetadata={getMetadata}
       />
       <Composition
         id="ThreeTimelineComposition"
-        component={ReviewedThreeTimeline}
+        component={ReviewedThreeTimelineWithRenderTail}
         defaultProps={DEFAULT_PROPS}
         calculateMetadata={getMetadata}
       />

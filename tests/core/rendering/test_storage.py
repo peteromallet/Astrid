@@ -103,6 +103,33 @@ def test_h264_estimate_exposes_every_peak_storage_component() -> None:
     )
 
 
+def test_h264_estimate_uses_declared_render_tail_but_reports_authored_clock() -> None:
+    digest = "a" * 64
+    timeline = _timeline()
+    timeline["clips"][0].update(at=0, hold=297, asset="base", clipType="media")
+    timeline["app"] = {"astrid_render_clock": {
+        "authored_duration_frames": 8910,
+        "render_duration_frames": 9000,
+        "tail": {
+            "policy": "unmapped_excess_rendered_region",
+            "source_asset": "tail",
+            "start_frame": 8910,
+            "end_frame": 9000,
+            "source_start_frame": 8910,
+            "source_end_frame": 9000,
+        },
+    }}
+    registry = {"assets": {
+        "base": {"media_id": digest, "content_sha256": digest},
+        "tail": {"media_id": digest, "content_sha256": digest},
+    }}
+    estimate = estimate_managed_render_storage(
+        timeline=timeline, registry=registry, object_sizes={digest: 1000}
+    )
+    assert estimate["authored_duration_frames"] == 8910
+    assert estimate["duration_frames"] == 9000
+
+
 def test_alpha_estimate_counts_raw_frame_workspace() -> None:
     timeline = {
         "tracks": [{"id": "v", "kind": "visual", "label": "Video"}],

@@ -1612,6 +1612,49 @@ def _kernel_invoke(
     return run_id, task_id, attempt_id, None, raw_result, True, None
 
 
+def _read_task_managed_outputs(
+    client: Any,
+    task_id: str,
+) -> tuple[list[Any] | None, dict[str, Any] | None]:
+    """Read the Runtime-owned managed-output page for one completed task."""
+    tasks = getattr(client, "tasks", None)
+    reader = getattr(tasks, "list_managed_outputs", None)
+    if not callable(reader):
+        return None, {
+            "code": "managed_output_readback_unavailable",
+            "message": "runtime client does not expose task managed-output readback",
+            "details": {"task_id": task_id},
+        }
+    try:
+        value = reader(task_id)
+    except Exception as exc:
+        return None, {
+            "code": "managed_output_readback_unavailable",
+            "message": "managed outputs could not be read for the completed task",
+            "details": {"task_id": task_id, "error_type": type(exc).__name__},
+        }
+    if hasattr(value, "ok") and hasattr(value, "data"):
+        if not bool(value.ok):
+            error = getattr(value, "error", None)
+            if hasattr(error, "as_dict"):
+                error = error.as_dict()
+            return None, {
+                "code": "managed_output_readback_unavailable",
+                "message": "managed outputs could not be read for the completed task",
+                "details": _json_safe(error) if error is not None else {"task_id": task_id},
+            }
+        value = value.data
+    if isinstance(value, (list, tuple)) and len(value) == 2 and isinstance(value[0], list):
+        return list(value[0]), None
+    if isinstance(value, list):
+        return value, None
+    return None, {
+        "code": "managed_output_readback_invalid",
+        "message": "managed-output readback returned an invalid page",
+        "details": {"task_id": task_id},
+    }
+
+
 def _wait_for_kernel_task(
     client: Any,
     *,
@@ -1619,6 +1662,7 @@ def _wait_for_kernel_task(
     run_id: str,
     timeout_seconds: float,
     poll_seconds: float,
+    read_managed_outputs: bool = False,
 ) -> tuple[dict[str, Any], bool, str]:
     """Follow one admitted task to a terminal runtime-owned result."""
     if not math.isfinite(float(timeout_seconds)) or timeout_seconds <= 0:
@@ -1660,7 +1704,7 @@ def _wait_for_kernel_task(
             settled = task.get("result")
             settled = dict(settled) if isinstance(settled, Mapping) else {}
             output_rows = settled.get("outputs")
-            return {
+            completed = {
                 "ok": True,
                 "run_id": run_id,
                 "kernel_run_id": run_id,
@@ -1674,7 +1718,15 @@ def _wait_for_kernel_task(
                     if isinstance(output_rows, list)
                     else []
                 },
-            }, True, attempt_id
+            }
+            if read_managed_outputs:
+                managed_outputs, read_error = _read_task_managed_outputs(client, task_id)
+                if read_error is not None:
+                    completed["error"] = read_error
+                    completed["ok"] = False
+                    return completed, False, attempt_id
+                completed["managed_outputs"] = managed_outputs or []
+            return completed, True, attempt_id
         if state in {"failed", "cancelled"}:
             settled = task.get("result")
             settled = dict(settled) if isinstance(settled, Mapping) else {}
@@ -2005,6 +2057,10 @@ def invoke(
                 run_id=kr,
                 timeout_seconds=timeout_seconds,
                 poll_seconds=poll_seconds,
+                read_managed_outputs=(
+                    capability.capability_type == "executor"
+                    and capability.id.startswith("generation.generate_")
+                ),
             )
             if waited_attempt_id:
                 ka = waited_attempt_id

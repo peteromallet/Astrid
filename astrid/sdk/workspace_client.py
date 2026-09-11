@@ -624,6 +624,14 @@ class WorkspaceClient:
     def list_project_tasks(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_project_tasks", project_id, cursor=cursor, limit=limit)
 
+    def list_managed_outputs(self, task_id: str) -> Any:
+        """Read Runtime-owned managed output associations for one task."""
+        return self._call_generated("list_managed_outputs", task_id)
+
+    def get_managed_output(self, association_id: str) -> Any:
+        """Read one Runtime-owned managed output association by id."""
+        return self._call_generated("get_managed_output", association_id)
+
     def cancel_task(self, task_id: str, *, idempotency_key: str) -> Any:
         return self._call_generated("cancel_task", task_id, idempotency_key=idempotency_key)
 
@@ -655,12 +663,6 @@ class WorkspaceClient:
 
     def list_run_events(self, run_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_run_events", run_id, cursor=cursor, limit=limit)
-
-    def list_managed_outputs(self, task_id: str) -> Any:
-        return self._call_generated("list_managed_outputs", task_id)
-
-    def get_managed_output(self, association_id: str) -> Any:
-        return self._call_generated("get_managed_output", association_id)
 
     def list_generations(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_generations", project_id, cursor=cursor, limit=limit)

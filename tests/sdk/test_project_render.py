@@ -145,7 +145,15 @@ def test_open_default_timeline_uses_only_runs_with_explicit_provenance(monkeypat
     runtime.get_project = lambda ref: {"project_id": "P-1", "slug": ref, "metadata": {"default_timeline_id": "TL-main"}}
     runtime.list_timelines = lambda project_id, *, cursor=None, limit=50: [[{"timeline_id": "TL-main", "slug": "main"}, {"timeline_id": "TL-other", "slug": "other"}], None]
     original_get_task = runtime.get_task
-    runtime.get_task = lambda task_id: {**original_get_task(task_id), "spec": {"timeline_ref": "TL-main" if "main" in task_id else "TL-other"}}
+    # Preserve the producing task's bounded historical filename while this
+    # fixture overrides spec only to exercise timeline scope selection.
+    runtime.get_task = lambda task_id: {
+        **original_get_task(task_id),
+        "spec": {
+            "timeline_ref": "TL-main" if "main" in task_id else "TL-other",
+            "inputs": {"output_name": "review.mp4"},
+        },
+    }
     monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
     monkeypatch.setattr("astrid.sdk.project_render.subprocess.run", lambda argv, check: None)
 
@@ -217,7 +225,7 @@ def test_open_hydrates_lightweight_run_rows_for_provenance(monkeypatch, tmp_path
     }
     original_get_task = runtime.get_task
     runtime.get_task = lambda task_id: original_get_task(task_id) | {
-        "spec": {"timeline_ref": "TL-main"}
+        "spec": {"timeline_ref": "TL-main", "inputs": {"output_name": "review.mp4"}}
     }
     monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
     monkeypatch.setattr("astrid.sdk.project_render.subprocess.run", lambda argv, check: None)

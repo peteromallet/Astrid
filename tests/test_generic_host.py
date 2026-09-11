@@ -2125,10 +2125,11 @@ def test_command_host_harvests_result_manifest_media(tmp_path: Path) -> None:
     assert all(
         set(item)
         <= {
-            "name", "kind", "digest", "media_type", "size", "data_base64",
+            "name", "kind", "filename", "digest", "media_type", "size", "data_base64",
         }
         for item in settled
     )
+    assert [item["filename"] for item in settled] == ["a.mp4", "b.mp4"]
     assert all("path" not in item and "artifact_type" not in item for item in settled)
 
 

@@ -38,6 +38,7 @@ _EXPORTS = {
     "RenderContext": ("rendering", "RenderContext"),
     "renderer_main": ("rendering", "renderer_main"),
     "support": ("rendering", "support"),
+    "open_render": ("project_render", "open_render"),
     "GenerationFacade": ("generation", "GenerationFacade"),
     "generate": ("generation", "generate"),
     "discover": ("invocation", "discover"),

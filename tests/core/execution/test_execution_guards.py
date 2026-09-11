@@ -72,6 +72,44 @@ def test_generated_evidence_scan_tolerates_a_file_vanishing_during_render(
     assert policy.evidence_bytes(tmp_path) == len(b"kept")
 
 
+def test_generated_evidence_scan_tolerates_a_file_vanishing_during_input_hash(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"input")
+    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    baseline = policy.immutable_input_baseline(tmp_path)
+
+    original_read_bytes = Path.read_bytes
+
+    def read_without_source(path):
+        if path == source:
+            source.unlink(missing_ok=True)
+            raise FileNotFoundError(path)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_without_source)
+    assert policy.evidence_bytes(tmp_path, immutable_inputs=baseline) == 0
+
+
+def test_generated_evidence_scan_still_fails_closed_on_other_os_errors(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = tmp_path / "evidence.bin"
+    evidence.write_bytes(b"evidence")
+    original_stat = Path.stat
+
+    def stat_with_permission_error(path, *args, **kwargs):
+        if path == evidence:
+            raise PermissionError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_with_permission_error)
+    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    with pytest.raises(EvidenceCapError, match="cannot measure generated evidence"):
+        policy.evidence_bytes(tmp_path)
+
+
 def test_generated_budget_accumulates_and_excludes_immutable_inputs(tmp_path) -> None:
     inputs = tmp_path / "inputs"
     inputs.mkdir()

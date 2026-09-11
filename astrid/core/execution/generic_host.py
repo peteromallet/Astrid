@@ -100,12 +100,34 @@ def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> st
     matches = [
         output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
         if getattr(output, "name", None) == expected
+        and getattr(output, "type", None) == "file"
         and not str(getattr(output, "name", "")).endswith("_manifest")
         and getattr(output, "artifact_type", None)
     ]
     if matches != [expected]:
         raise HostError(f"generation capability must declare exactly one primary {expected!r} output")
     return expected
+
+
+def _generation_selector_declarations(
+    record: Any,
+    intent: Mapping[str, Any] | None,
+) -> tuple[str | None, tuple[dict[str, Any], ...]]:
+    """Flatten admitted selector declarations without changing their order."""
+    output_port = _generation_output_port(record, intent)
+    if output_port is None:
+        return None, ()
+    declarations: list[dict[str, Any]] = []
+    for group in intent["groups"]:
+        for selector in group["selectors"]:
+            declarations.append({
+                "group_key": group["group_key"],
+                "selector": selector["selector"],
+                "ordinal": selector["ordinal"],
+                "variant_key": selector["variant_key"],
+                "output_port": output_port,
+            })
+    return output_port, tuple(declarations)
 
 
 def _cleanup_ephemeral_attempt(root: Path) -> None:
@@ -2666,6 +2688,10 @@ class GenericPackHost:
         """Bind validated harvest descriptors to their declared output ports."""
         outputs: list[dict[str, Any]] = []
         by_name = {output.name: output for output in record.definition.outputs}
+        generation_port, declarations = _generation_selector_declarations(
+            record, generation_intent
+        )
+        matched_declarations: set[tuple[str, str, int, str]] = set()
         seen_identities: set[tuple[str, int]] = set()
         for index, harvested in enumerate(descriptors):
             if not isinstance(harvested, Mapping):
@@ -2675,13 +2701,28 @@ class GenericPackHost:
                 raise HostError(
                     f"harvested output {index} names undeclared port {name!r}"
                 )
+            role = harvested.get("role", "result")
+            if role not in {"result", "auxiliary"}:
+                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
+            is_generation_result = (
+                generation_port is not None
+                and name == generation_port
+                and role == "result"
+            )
+            if is_generation_result and (
+                "ordinal" not in harvested
+                or harvested.get("ordinal_explicit") is False
+            ):
+                raise HostError(
+                    f"generation output {name!r} must declare its original ordinal"
+                )
             ordinal = harvested.get("ordinal", index)
             if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
                 raise HostError(
                     f"harvested output {name!r} has invalid ordinal {ordinal!r}"
                 )
             identity = (name, ordinal)
-            if identity in seen_identities:
+            if identity in seen_identities and not is_generation_result:
                 raise HostError(
                     f"harvested output {name!r} repeats ordinal {ordinal}"
                 )
@@ -2705,10 +2746,6 @@ class GenericPackHost:
             size = path.stat().st_size
             if harvested.get("bytes") != size:
                 raise HostError(f"harvested output {name!r} byte count does not match")
-            role = harvested.get("role", "result")
-            if role not in {"result", "auxiliary"}:
-                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
-            output_port = _generation_output_port(record, generation_intent)
             output = {
                 "name": name,
                 "ordinal": ordinal,
@@ -2719,20 +2756,93 @@ class GenericPackHost:
                 "filename": path.name,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
-                # These are producer-declared publication bindings. Runtime
-                # validates them against the admitted effect and derives all
-                # durable IDs; the host only carries them through intact.
                 **{
                     field: harvested[field]
                     for field in (
-                        "output_port", "group_key", "variant_key", "selector",
+                        "producer", "provenance", "durability", "regeneration", "coverage",
                     )
                     if field in harvested
                 },
             }
-            if output_port is not None and name == output_port:
-                output["output_port"] = output_port
+
+            if is_generation_result:
+                ordinal_matches = [
+                    declaration
+                    for declaration in declarations
+                    if declaration["ordinal"] == ordinal
+                ]
+                explicit_fields = (
+                    "output_port", "group_key", "variant_key", "selector"
+                )
+                for field in explicit_fields:
+                    if field not in harvested:
+                        continue
+                    supplied = harvested[field]
+                    if field == "selector":
+                        if not isinstance(supplied, Mapping) or set(supplied) != {"group_key", "variant_key"}:
+                            raise HostError(
+                                f"generation output {name!r} selector metadata must be an object"
+                            )
+                        ordinal_matches = [
+                            declaration
+                            for declaration in ordinal_matches
+                            if declaration["group_key"] == supplied["group_key"]
+                            and declaration["variant_key"] == supplied["variant_key"]
+                        ]
+                    else:
+                        ordinal_matches = [
+                            declaration
+                            for declaration in ordinal_matches
+                            if declaration[field] == supplied
+                        ]
+                if len(ordinal_matches) != 1:
+                    reason = "ambiguous" if len(ordinal_matches) > 1 else "mismatch"
+                    raise HostError(
+                        f"generation output {name!r} ordinal {ordinal} has an unauthorized {reason} binding"
+                    )
+                declaration = ordinal_matches[0]
+                for field in explicit_fields:
+                    if field in harvested and field != "selector" and harvested[field] != declaration[field]:
+                        raise HostError(
+                            f"generation output {name!r} metadata {field!r} disagrees with admitted intent"
+                        )
+                binding_key = (
+                    declaration["group_key"], declaration["selector"],
+                    declaration["ordinal"], declaration["variant_key"],
+                )
+                if binding_key in matched_declarations:
+                    raise HostError(
+                        f"generation output repeats admitted selector {binding_key!r}"
+                    )
+                matched_declarations.add(binding_key)
+                # Runtime validates these values again against the predeclared
+                # effect and derives all generation/variant IDs.
+                output["output_port"] = declaration["output_port"]
+                output["group_key"] = declaration["group_key"]
+                output["variant_key"] = declaration["variant_key"]
+                output["selector"] = {
+                    "group_key": declaration["group_key"],
+                    "variant_key": declaration["variant_key"],
+                }
             outputs.append(output)
+
+        if declarations:
+            missing = [
+                declaration for declaration in declarations
+                if (
+                    declaration["group_key"], declaration["selector"],
+                    declaration["ordinal"], declaration["variant_key"],
+                ) not in matched_declarations
+            ]
+            policy = generation_intent.get("partial_success_policy")
+            if policy == "reject" and missing:
+                raise HostError(
+                    "generation.publish_v1 reject policy is missing declared selectors"
+                )
+            if not matched_declarations:
+                raise HostError(
+                    "generation.publish_v1 produced no successful declared outputs"
+                )
         return outputs
 
     def _child_environment(

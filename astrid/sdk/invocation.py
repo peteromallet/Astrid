@@ -1583,13 +1583,26 @@ def _generation_publish_effect(
         "video": "generated_videos",
         "audio": "generated_audio",
     }[modality]
-    declared_outputs = getattr(getattr(capability, "definition", None), "outputs", ())
+    declared_outputs = getattr(capability, "outputs", None)
+    if not declared_outputs:
+        definition = getattr(capability, "definition", None)
+        if isinstance(definition, Mapping):
+            declared_outputs = definition.get("outputs", ())
+        else:
+            declared_outputs = getattr(definition, "outputs", ())
+
+    def output_field(output: Any, field: str) -> Any:
+        if isinstance(output, Mapping):
+            return output.get(field)
+        return getattr(output, field, None)
+
     matching_ports = [
-        output.name
+        output_field(output, "name")
         for output in declared_outputs
-        if getattr(output, "name", None) == expected_port
-        and not str(getattr(output, "name", "")).endswith("_manifest")
-        and getattr(output, "artifact_type", None)
+        if output_field(output, "name") == expected_port
+        and output_field(output, "type") == "file"
+        and not str(output_field(output, "name") or "").endswith("_manifest")
+        and output_field(output, "artifact_type")
     ]
     if matching_ports != [expected_port]:
         raise CapabilityValidationError(

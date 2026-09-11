@@ -544,6 +544,35 @@ def test_validate_result_manifest_rejects_duplicate_ordinals(tmp_path: Path) -> 
         validate_result_manifest(manifest, staging_root=staging)
 
 
+def test_validate_result_manifest_keeps_global_duplicate_ordinal_guard_with_generation_metadata(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    first = _write_file(staging, "first.mp4", b"first")
+    second = _write_file(staging, "second.mp4", b"second")
+    manifest = _base_manifest(
+        staging,
+        [
+            {
+                **first,
+                "name": "generated_videos",
+                "ordinal": 3,
+                "group_key": "left",
+                "variant_key": "left-v",
+            },
+            {
+                **second,
+                "name": "generated_videos",
+                "ordinal": 3,
+                "group_key": "right",
+                "variant_key": "right-v",
+            },
+        ],
+    )
+
+    with pytest.raises(ResultManifestError, match="duplicate output ordinal 3"):
+        validate_result_manifest(manifest, staging_root=staging)
+
+
 def test_validate_result_manifest_rejects_multiple_primary_outputs(tmp_path: Path) -> None:
     staging = tmp_path / "staging"
     staging.mkdir()

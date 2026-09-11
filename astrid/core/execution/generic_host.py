@@ -2709,7 +2709,12 @@ class GenericPackHost:
                 and name == generation_port
                 and role == "result"
             )
-            if is_generation_result and not harvested.get("ordinal_explicit", False):
+            # ``harvest_staged_outputs`` always supplies a positional ordinal
+            # when the manifest omits one.  That fallback is valid for the
+            # universal generic manifest contract, but it is not an identity
+            # for an admitted generation selector.  Require the provenance
+            # marker so generation publication can never bind by list order.
+            if is_generation_result and harvested.get("ordinal_explicit") is not True:
                 raise HostError(
                     f"generation output {name!r} must declare its original ordinal"
                 )

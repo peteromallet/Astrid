@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from astrid.core._shared.result_manifest import harvest_staged_outputs
 from astrid.core.execution.generic_host import GenericPackHost, HostError
 from astrid.sdk.invocation import _generation_publish_effect, _kernel_invoke
 
@@ -199,6 +200,48 @@ def test_host_rejects_positional_ordinal_injected_by_manifest_harvest(tmp_path) 
     )
     with pytest.raises(HostError, match="original ordinal"):
         host._typed_outputs(_host_record(), [positional], tmp_path, generation_intent=_intent("allow"))
+
+
+def test_host_rejects_manifest_ordinal_omission_after_harvest(tmp_path) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    data = b"manifest-derived generation output"
+    (spool / "clip.mp4").write_bytes(data)
+    import hashlib
+    import json
+
+    (spool / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "video",
+                "inputs": {},
+                "outputs": [
+                    {
+                        "path": "clip.mp4",
+                        "name": "generated_videos",
+                        "content_hash": "sha256:" + hashlib.sha256(data).hexdigest(),
+                        "bytes": len(data),
+                        "role": "result",
+                        "is_primary": True,
+                    }
+                ],
+                "created": "2026-09-11T00:00:00Z",
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    harvested = harvest_staged_outputs(spool, require=True)
+    assert harvested[0]["ordinal"] == 0
+    assert harvested[0]["ordinal_explicit"] is False
+
+    host = GenericPackHost.__new__(GenericPackHost)
+    with pytest.raises(HostError, match="original ordinal"):
+        host._typed_outputs(
+            _host_record(), harvested, spool, generation_intent=_intent("allow")
+        )
 
 
 def test_host_upload_keeps_runtime_selector_object_wire_safe(tmp_path) -> None:

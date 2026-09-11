@@ -197,6 +197,12 @@
       "description": "Filmstrip static page card count, default 50."
     },
     {
+      "name": "resolution",
+      "type": "string",
+      "required": false,
+      "description": "Optional exact filmstrip frame resolution WIDTHxHEIGHT; recorded separately and applied by the frame extractor."
+    },
+    {
       "name": "filmstrip_authority",
       "type": "string",
       "required": false,
@@ -383,6 +389,11 @@
       {
         "input": "page_size",
         "flag": "--page-size",
+        "optional": true
+      },
+      {
+        "input": "resolution",
+        "flag": "--resolution",
         "optional": true
       },
       {

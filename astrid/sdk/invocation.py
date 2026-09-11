@@ -527,7 +527,7 @@ def _validate_timeline_visualize_inputs(
             raise CapabilityValidationError(str(exc)) from exc
         return prepare_filmstrip(values, project=project, client=_client)
     if any(values.get(key) is not None for key in (
-        "render_run", "sample", "every", "every_frames", "columns", "page_size", "include_media"
+        "render_run", "sample", "every", "every_frames", "columns", "page_size", "include_media", "resolution"
     )):
         raise CapabilityValidationError("filmstrip controls require view=filmstrip")
 

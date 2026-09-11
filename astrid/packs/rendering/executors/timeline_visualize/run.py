@@ -375,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--render-run")
     parser.add_argument("--columns", type=int)
     parser.add_argument("--page-size", type=int)
+    parser.add_argument("--resolution", metavar="WIDTHxHEIGHT")
     parser.add_argument("--filmstrip-authority", help=argparse.SUPPRESS)
     parser.add_argument("--timeline-slug")
     parser.add_argument("--all", action="store_true", dest="select_all")

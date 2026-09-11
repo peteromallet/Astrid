@@ -10,6 +10,54 @@ import pytest
 from astrid.packs.rendering.executors.timeline_visualize import filmstrip_execution as execution
 
 
+def test_alignment_uses_decoded_eof_and_marks_excess_tail_unmapped(monkeypatch, tmp_path):
+    snapshot = {
+        'fps_rational': [24, 1], 'duration_frames': 72,
+        'clips': [
+            {'id': 'authored', 'at': 0, 'duration': 3, 'start_frame': 0, 'end_frame': 72,
+             'shot_id': 'unproven', 'shot_name': 'must not reach tail'},
+        ],
+        'occurrences': [{'occurrence_id': 'shot-occ', 'shot_id': 'shot',
+                         'shot_name': 'Shot', 'start': 0, 'end': 3,
+                         'start_frame': 0, 'end_frame': 72}],
+        'scripts': [{'start': 0, 'end': 3, 'text': 'line'}],
+        'metadata': {},
+    }
+    monkeypatch.setattr(execution, '_rendered_timing', lambda video, fps: (120, 5.0))
+
+    execution._align_snapshot_to_render(snapshot, tmp_path / 'render.mp4')
+
+    assert snapshot['duration_frames'] == 120
+    assert snapshot['metadata']['duration_basis'] == 'rendered_video'
+    assert snapshot['metadata']['rendered_duration_seconds'] == 5.0
+    assert snapshot['metadata']['authored_duration_seconds'] == 3.0
+    tail = snapshot['metadata']['rendered_tail']
+    assert tail == snapshot['unmapped_regions'][0]
+    assert tail['status'] == tail['mapping_status'] == 'unmapped'
+    assert (tail['start_frame'], tail['end_frame']) == (72, 120)
+    tail_clip = snapshot['clips'][-1]
+    assert tail_clip['render_tail'] is True
+    assert tail_clip['mapping_status'] == 'unmapped'
+    assert tail_clip['end_frame'] == 120
+    assert 'shot_id' not in tail_clip and 'shot_name' not in tail_clip
+    assert snapshot['occurrences'][0]['end_frame'] == 72
+
+
+def test_alignment_clamps_short_render_without_changing_identity(monkeypatch, tmp_path):
+    snapshot = {'fps_rational': [24, 1], 'duration_frames': 120,
+                'clips': [{'id': 'clip', 'at': 0, 'duration': 5,
+                           'start_frame': 0, 'end_frame': 120}],
+                'occurrences': [], 'scripts': [], 'metadata': {}}
+    monkeypatch.setattr(execution, '_rendered_timing', lambda video, fps: (72, 3.0))
+
+    execution._align_snapshot_to_render(snapshot, tmp_path / 'render.mp4')
+
+    assert snapshot['duration_frames'] == 72
+    assert snapshot['unmapped_regions'] == []
+    assert snapshot['metadata']['rendered_tail'] is None
+    assert snapshot['clips'][0]['end_frame'] == 72
+
+
 def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatch):
     video = tmp_path / 'video'
     video.write_bytes(b'actual video')
@@ -38,6 +86,21 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
     }
     assert all('content_hash' in entry and 'bytes' in entry for entry in host_manifest['outputs'])
     assert next(entry for entry in host_manifest['outputs'] if entry['name'] == 'filmstrip_bundle')['path'] == 'filmstrip-bundle.zip'
+    assert result['identity']['render'] == {
+        'render_run_id': 'run', 'timeline_id': 'main',
+        'video_digest': snapshot['video_digest'],
+    }
+    assert result['cas']['rendered_video'] == snapshot['video_digest']
+    assert result['identity']['manifest']['content_hash'] == (
+        'sha256:' + hashlib.sha256(Path(result['manifest_path']).read_bytes()).hexdigest()
+    )
+    assert result['entrypoints'] == {
+        'manifest': 'filmstrip-view/manifest.json',
+        'html': 'filmstrip-view/filmstrip.html',
+        'frame_index': 'filmstrip-view/frame-index.json',
+        'bundle': 'filmstrip-bundle.zip',
+    }
+    assert not any(key in host_manifest for key in ('mutation', 'mutation_receipt', 'events'))
     assert called[0]['snapshot'] == snapshot
     video.write_bytes(b'changed')
     with pytest.raises(ValueError, match='digest'):

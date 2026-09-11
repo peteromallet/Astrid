@@ -45,6 +45,11 @@ class FakeClient:
 
 def test_exact_old_render_uses_frozen_script_without_current_binding_reads():
     client = FakeClient(); client.current_version = 9; client.current_head = 7
+    value = envelope()
+    value['authority_context']['expansion']['occurrences'] = [
+        {'shot_occurrence_id': 'shot-occ-0000-sh', 'shot_id': 'sh', 'at': 0, 'hold': 3}
+    ]
+    client.get_task = lambda ref: {'state': 'succeeded', 'capability_id': 'rendering.render', 'spec': {'spec': value}, 'result': {'outputs': [{'name': 'video', 'digest': VIDEO}]}}
     result = prepare_filmstrip({'render_run': 'run'}, project='p', client=client)
     snapshot = result['filmstrip_snapshot']
     assert snapshot['duration_frames'] == 72
@@ -57,6 +62,9 @@ def test_exact_old_render_uses_frozen_script_without_current_binding_reads():
 
 def test_filmstrip_exposes_spoken_text_only_not_generation_prompts():
     value = envelope()
+    value['authority_context']['expansion']['occurrences'] = [
+        {'shot_occurrence_id': 'shot-occ-0000-sh', 'shot_id': 'sh', 'at': 0, 'hold': 3}
+    ]
     bindings = value['authority_context']['expansion']['shots'][0]['text_bindings']
     bindings.extend([
         {'binding_id': 'positive', 'head': 1, 'media_id': DIGEST,
@@ -71,6 +79,57 @@ def test_filmstrip_exposes_spoken_text_only_not_generation_prompts():
     result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
     assert [script['kind'] for script in result['scripts']] == ['voiceover_script', 'transcript']
     assert [script['binding_id'] for script in result['scripts']] == ['binding', 'spoken-transcript']
+
+
+def test_shotless_verified_speech_is_available_without_shot_identity():
+    value = envelope()
+    value['inputs']['speech_annotations'] = [{
+        'id': 'speech-line', 'start': 0, 'end': 1,
+        'text': 'Shotless spoken line', 'source_type': 'verified_speech',
+    }]
+    value['inputs']['speech_occurrences'] = [{
+        'id': 'speech-occurrence', 'from': 0, 'to': 1, 'placement': 10,
+    }]
+
+    result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
+    phrases = result['audio']['speech']['phrases']
+
+    assert len(phrases) == 1
+    assert phrases[0]['canonical_text'] == 'Shotless spoken line'
+    assert phrases[0]['status'] == 'projected'
+    assert phrases[0]['occurrence_id'] == 'speech-occurrence'
+    assert 'shot_id' not in phrases[0]
+    assert phrases[0]['render_interval']['start'] == [10, 1]
+    assert phrases[0]['render_interval']['end'] == [11, 1]
+
+
+def test_speech_annotation_allowlist_excludes_prompt_and_unmarked_transcript():
+    value = envelope()
+    value['inputs']['speech_annotations'] = [
+        {'id': 'prompt', 'start': 0, 'end': 1, 'text': 'PROMPT_TRAP', 'source_type': 'generation_prompt'},
+        {'id': 'unmarked', 'start': 0, 'end': 1, 'text': 'UNMARKED_TRAP', 'source_type': 'transcript'},
+        {'id': 'spoken', 'start': 0, 'end': 1, 'text': 'Verified speech', 'source_type': 'verified_speech'},
+    ]
+    value['inputs']['speech_occurrences'] = [{'id': 'speech-occurrence', 'from': 0, 'to': 1, 'placement': 2}]
+
+    result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
+    texts = [phrase['canonical_text'] for phrase in result['audio']['speech']['phrases']]
+
+    assert texts == ['Verified speech']
+
+
+def test_shotless_speech_without_explicit_render_occurrence_does_not_guess_timing():
+    value = envelope()
+    value['inputs']['speech_annotations'] = [{
+        'id': 'source-only', 'start': 4, 'end': 5, 'text': 'Source-only line',
+        'source_type': 'verified_speech',
+    }]
+    value['inputs']['speech_occurrences'] = []
+
+    result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
+
+    assert result['audio']['speech']['status'] == 'no_occurrences'
+    assert result['audio']['speech']['phrases'] == []
 
 
 @pytest.mark.parametrize('field', ['current_version', 'current_head'])
@@ -88,6 +147,7 @@ def test_refuses_changed_script_bytes():
 
 def test_missing_placement_does_not_guess_script_from_clip_name():
     value = envelope(); del value['inputs']['review_context']
+    value['authority_context']['expansion']['occurrences'] = []
     result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
     assert result['scripts'] == []
     assert not result['metadata']['script_mapping_available']
@@ -125,14 +185,29 @@ def test_rejects_foreign_output_and_arbitrary_path():
 
 def test_repeated_shots_keep_distinct_occurrences_and_canonical_duration():
     value = envelope()
-    value['inputs']['review_context']['shots'].append({'shot_id': 'sh', 'at': 4.01, 'hold': 1.01})
+    value['authority_context']['expansion']['occurrences'] = [
+        {'shot_occurrence_id': 'one', 'shot_id': 'sh', 'at': 0, 'hold': 3},
+        {'shot_occurrence_id': 'two', 'shot_id': 'sh', 'at': 4.01, 'hold': 1.01},
+    ]
     value['inputs']['timeline_snapshot']['config']['clips'].append(
-        {'id': 'repeat', 'track': 'picture', 'at': 4.01, 'hold': 1.01})
+        {'id': 'repeat', 'track': 'picture', 'at': 4.01, 'hold': 1.01,
+         'shot_occurrence_id': 'two'})
     result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
     assert len({s['occurrence_id'] for s in result['scripts']}) == 2
     assert result['clips'][-1]['occurrence_id'] == result['scripts'][-1]['occurrence_id']
     assert result['clips'][-1]['start_frame'] == 96
     assert result['duration_frames'] == 120  # rounded start + rounded duration, not ceil(5.02*24)
+
+
+def test_authored_review_context_never_infers_shot_labels():
+    value = envelope()
+    value['inputs']['timeline_snapshot']['config']['clips'][0].update(
+        shot_id='forged', shot_name='Authored-only label'
+    )
+    result = build_filmstrip_snapshot(value, client=FakeClient(), project='p', run_id='run', video_digest=VIDEO)
+    assert result['occurrences'] == []
+    assert result['scripts'] == []
+    assert not any(key in result['clips'][0] for key in ('shot_id', 'shot_name', 'occurrence_id', 'occurrence_ids'))
 
 
 def test_legacy_output_fps_hint_is_not_treated_as_render_evidence():

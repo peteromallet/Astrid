@@ -180,7 +180,7 @@ astrid timelines visualize --project desert --asset plant-frame-3
 # presentation
 --layout time-scaled|linear|both            # default both
 --format png --format svg --format md       # repeatable; default all
---filmstrip auto|off|assets|rendered        # rendered requires --rendered-video PATH
+--view filmstrip --render-run latest       # managed rendered evidence; use an exact run id to pin provenance
 
 # drill-down (the only navigation form)
 astrid timelines visualize --project desert --from-view <root>/agent-view/manifest.json --focus TL01.CL03 --context 2

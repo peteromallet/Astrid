@@ -16,32 +16,48 @@ from .filmstrip_cards import build_filmstrip_pack
 from .filmstrip_options import filmstrip_options
 
 
-def _rendered_frame_count(video: Path, fps) -> int:
-    """Return the actual video-frame count, not the authored timeline length.
+def _rendered_timing(video: Path, fps) -> tuple[int, float]:
+    """Return decoded frame extent and duration, not authored timeline length.
 
-    A managed render can contain an explicit tail (for example the current
-    intro has a long black hold) that is absent from the authored picture
-    timeline.  Filmstrip sampling must follow the bytes being reviewed.
+    A managed render can contain an explicit tail that is absent from the
+    authored picture timeline. Filmstrip sampling must follow the bytes being
+    reviewed.
     """
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=nb_frames,duration,r_frame_rate",
+        ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames,nb_frames,duration,r_frame_rate",
          "-of", "json", str(video)],
         capture_output=True, text=True, check=False,
     )
     if probe.returncode:
         raise ValueError("Unable to probe rendered video duration: " + probe.stderr[-1000:])
     try:
-        stream = json.loads(probe.stdout)["streams"][0]
-        frames = int(stream.get("nb_frames") or 0)
-        if frames > 0:
-            return frames
-        duration = float(stream.get("duration") or 0)
+        payload = json.loads(probe.stdout)
+        stream = payload["streams"][0]
+        try:
+            frames = int(stream.get("nb_read_frames") or stream.get("nb_frames") or 0)
+        except (TypeError, ValueError):
+            frames = 0
+        format_info = payload.get("format") or {}
+        duration_value = stream.get("duration") or format_info.get("duration") or 0
+        try:
+            duration = float(duration_value)
+        except (TypeError, ValueError):
+            duration = 0.0
     except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
         raise ValueError("Rendered video duration probe was invalid.") from exc
-    if duration <= 0:
+    if frames <= 0 and duration <= 0:
         raise ValueError("Rendered video has no usable duration.")
-    return max(1, math.ceil(duration * float(fps)))
+    if frames <= 0:
+        frames = max(1, math.ceil(duration * float(fps)))
+    if duration <= 0:
+        duration = frames / float(fps)
+    return frames, duration
+
+
+def _rendered_frame_count(video: Path, fps) -> int:
+    """Return the decoded video-frame count for compatibility with callers."""
+    return _rendered_timing(video, fps)[0]
 
 
 def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
@@ -54,38 +70,65 @@ def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
     from fractions import Fraction
 
     fps = Fraction(*snapshot["fps_rational"])
-    rendered_frames = _rendered_frame_count(video, fps)
+    rendered_frames, decoded_duration = _rendered_timing(video, fps)
     authored_frames = int(snapshot.get("duration_frames") or 0)
     snapshot["duration_frames"] = rendered_frames
     snapshot.setdefault("metadata", {})["rendered_duration_frames"] = rendered_frames
-    snapshot["metadata"]["rendered_duration_seconds"] = rendered_frames / float(fps)
+    snapshot["metadata"]["rendered_duration_seconds"] = decoded_duration
     snapshot["metadata"]["authored_duration_frames"] = authored_frames
+    snapshot["metadata"]["authored_duration_seconds"] = authored_frames / float(fps)
     snapshot["metadata"]["duration_basis"] = "rendered_video"
-    if rendered_frames > authored_frames:
-        # Some media clips already encode the rendered black hold as a source
-        # duration beginning at a later `at`.  Do not add a duplicate tail when
-        # the normalized clip already reaches the video EOF.
-        covered_until = max(
-            (int(c.get("end_frame", 0)) for c in snapshot.get("clips", [])
-             if c.get("kind") not in {"audio", "voiceover", "music", "sound"}),
-            default=authored_frames,
-        )
-        tail_start = max(authored_frames, covered_until)
-        tail_id = "__rendered_tail_black__"
-        if tail_start < rendered_frames and not any(c.get("id") == tail_id for c in snapshot.get("clips", [])):
-            snapshot.setdefault("clips", []).append({
-                "id": tail_id, "asset": "black_frame", "at": tail_start / float(fps),
-                "from": 0.0, "to": (rendered_frames - tail_start) / float(fps),
-                "duration": (rendered_frames - tail_start) / float(fps),
-                "start_frame": tail_start, "end_frame": rendered_frames,
-                "track": "picture", "kind": "visual", "clipType": "media",
-                "render_tail": True,
-            })
+    # Authored clips and proven shot occurrences cannot own frames beyond the
+    # authored clock. Clamp both clocks to the decoded render EOF so no label
+    # leaks into the excess region or points past a shorter materialization.
+    for clip in snapshot.get("clips", []):
+        start = min(max(int(clip.get("start_frame", 0)), 0), authored_frames, rendered_frames)
+        end = min(max(int(clip.get("end_frame", rendered_frames)), 0), authored_frames, rendered_frames)
+        clip["start_frame"], clip["end_frame"] = start, max(start, end)
+        if clip.get("duration") is not None:
+            clip["duration"] = max(0.0, (clip["end_frame"] - start) / float(fps))
+    clamped_occurrences = []
+    for occurrence in snapshot.get("occurrences", []):
+        start = min(max(int(occurrence.get("start_frame", 0)), 0), authored_frames, rendered_frames)
+        end = min(max(int(occurrence.get("end_frame", 0)), 0), authored_frames, rendered_frames)
+        if end <= start:
+            continue
+        item = dict(occurrence, start_frame=start, end_frame=end,
+                    start=start / float(fps), end=end / float(fps))
+        clamped_occurrences.append(item)
+    snapshot["occurrences"] = clamped_occurrences
+    clamped_scripts = []
+    for script in snapshot.get("scripts", []):
+        start = min(max(float(script.get("start", 0)), 0.0), rendered_frames / float(fps))
+        end = min(max(float(script.get("end", 0)), 0.0), rendered_frames / float(fps))
+        if end > start:
+            clamped_scripts.append(dict(script, start=start, end=end))
+    snapshot["scripts"] = clamped_scripts
+    tail_start = min(max(authored_frames, 0), rendered_frames)
+    tail = None
+    if tail_start < rendered_frames:
+        tail = {
+            "id": "__rendered_tail__",
+            "label": "Unmapped rendered tail",
+            "status": "unmapped",
+            "mapping_status": "unmapped",
+            "start_frame": tail_start,
+            "end_frame": rendered_frames,
+            "start_seconds": tail_start / float(fps),
+            "end_seconds": rendered_frames / float(fps),
+        }
+        snapshot["unmapped_regions"] = [tail]
+        snapshot.setdefault("clips", []).append({
+            "id": tail["id"], "label": tail["label"], "status": tail["status"],
+            "mapping_status": tail["mapping_status"], "at": tail["start_seconds"],
+            "duration": tail["end_seconds"] - tail["start_seconds"],
+            "start_frame": tail_start, "end_frame": rendered_frames,
+            "track": "picture", "kind": "render_tail", "clipType": "render_tail",
+            "render_tail": True,
+        })
     else:
-        # A shorter output must not cause cards to point past EOF.
-        for clip in snapshot.get("clips", []):
-            clip["start_frame"] = min(int(clip.get("start_frame", 0)), rendered_frames)
-            clip["end_frame"] = min(int(clip.get("end_frame", rendered_frames)), rendered_frames)
+        snapshot["unmapped_regions"] = []
+    snapshot["metadata"]["rendered_tail"] = tail
 
 
 def _audio_cache_path(parent: Path, render_digest: str, settings: object) -> Path:
@@ -178,6 +221,7 @@ def execute_filmstrip(args, *, authority=None):
         kind='timeline_filmstrip', created='1970-01-01T00:00:00Z',
         inputs={'render_run_id': snapshot['render_run_id'], 'video_digest': digest,
                 'timeline_id': snapshot['timeline_id'], 'options': options,
+                'request': options.get('request'),
                 'analysis_identity': analysis.get('analysis_identity'),
                 'media': result.get('frame_index', {}).get('media'),
                 'audio_sidecar': result.get('frame_index', {}).get('audio_sidecar')},
@@ -186,6 +230,7 @@ def execute_filmstrip(args, *, authority=None):
                   'label': p.relative_to(pack_root).as_posix()} for p in files],
         entrypoints={'html': 'filmstrip.html', 'frames': 'frame-index.json'},
         timeline_ids=[snapshot['timeline_id']],
+        request=options.get('request'),
     )
     manifest_path = pack_root / 'manifest.json'
     write_manifest(manifest_path, manifest)
@@ -226,15 +271,57 @@ def execute_filmstrip(args, *, authority=None):
                 "render_run_id": snapshot["render_run_id"],
                 "timeline_id": snapshot["timeline_id"],
                 "video_digest": digest,
+                "request": options.get("request"),
             },
+            request=options.get("request"),
             outputs=[
                 _receipt_entry("filmstrip_manifest", pack_root / "manifest.json"),
                 _receipt_entry("filmstrip_bundle", bundle, role="result", primary=True),
             ],
         ),
     )
+    # Keep the read-only result envelope explicit about the identities that
+    # the host can publish to CAS.  These are content locators, not local-path
+    # authority and not a mutation receipt.  Entrypoints stay relative to the
+    # assigned result root so both the disposable attempt and a rehydrated
+    # bundle can resolve them without guessing from filenames.
+    host_manifest = out_root / "manifest.json"
+    manifest_digest = "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    bundle_digest = "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
+    host_manifest_digest = "sha256:" + hashlib.sha256(host_manifest.read_bytes()).hexdigest()
+    identity = {
+        "render": {
+            "render_run_id": snapshot["render_run_id"],
+            "timeline_id": snapshot["timeline_id"],
+            "video_digest": digest,
+        },
+        "manifest": {
+            "kind": "timeline_filmstrip",
+            "content_hash": manifest_digest,
+        },
+        "host_receipt": {
+            "kind": "timeline_filmstrip_result",
+            "content_hash": host_manifest_digest,
+        },
+        "bundle": {"content_hash": bundle_digest},
+    }
+    cas = {
+        "rendered_video": digest,
+        "filmstrip_manifest": manifest_digest,
+        "filmstrip_bundle": bundle_digest,
+    }
+    entrypoints = {
+        "manifest": "filmstrip-view/manifest.json",
+        "html": "filmstrip-view/filmstrip.html",
+        "frame_index": "filmstrip-view/frame-index.json",
+        "bundle": "filmstrip-bundle.zip",
+    }
     return {'returncode': 0, 'run_root': str(out_root),
             'manifest_path': str(manifest_path), 'timeline_ids': [snapshot['timeline_id']],
+            'identity': identity, 'cas': cas, 'entrypoints': entrypoints,
+            'request': options.get('request'),
             'outputs': {'pack_root': str(pack_root), 'manifest_path': str(manifest_path),
+                        'identity': identity, 'cas': cas, 'entrypoints': entrypoints,
+                        'request': options.get('request'),
                         **result['paths'], 'pages': result['paths']['png'],
                         'filmstrip_bundle': str(bundle)}}

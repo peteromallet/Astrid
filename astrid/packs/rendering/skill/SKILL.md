@@ -90,9 +90,11 @@ python3 -m astrid timelines visualize <slug-or-id> --project <project> \
   --view structure --format md,png,svg --layout both --filmstrip off --json
 ```
 
-Structural views support `--all`, a prior manifest with `--from-view`/`--focus`,
-and the legacy `--filmstrip rendered --rendered-video` thumbnail policy. The
-structural `--from-view`/`--focus` grammar addresses frozen object manifests;
+Structural views support `--all` and a prior manifest with
+`--from-view`/`--focus`. For rendered continuity, use the managed filmstrip
+commands above with `--render-run`; do not supply a caller-owned
+`--rendered-video` path to that public route. The structural
+`--from-view`/`--focus` grammar addresses frozen object manifests;
 the filmstrip inspector's render-scoped frame/clip/track targets are separate
 until an explicit adapter exists. Use the frame index's pinned focus command to
 navigate a rendered inspector.

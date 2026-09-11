@@ -264,6 +264,11 @@ class ExecutionGuardPolicy:
                     # evidence guard is taking its point-in-time sample.
                     vanished_files += 1
                     continue
+        except FileNotFoundError:
+            # The render service may remove a private staging directory while
+            # rglob() is advancing between directory entries. Treat that
+            # transient outer-walk race the same as an entry disappearing.
+            vanished_files += 1
         except OSError as exc:
             raise EvidenceCapError(
                 f"cannot measure generated evidence: {directory}",

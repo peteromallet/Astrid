@@ -261,17 +261,10 @@ def _managed_generation_output_rows(
 
 def _normalize_generation_payload(
     payload: Mapping[str, Any],
-    *,
-    managed_outputs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Normalize explicit D1 rows carried by or read back beside a result."""
+    """Normalize explicit D1 rows already carried by a result manifest."""
     normalized = dict(payload)
     manifest = payload.get("manifest")
-    if managed_outputs:
-        normalized_manifest = dict(manifest) if isinstance(manifest, Mapping) else {}
-        normalized_manifest["outputs"] = list(managed_outputs)
-        normalized["manifest"] = normalized_manifest
-        return normalized
     if not isinstance(manifest, Mapping):
         return normalized
     outputs = manifest.get("outputs")
@@ -282,6 +275,21 @@ def _normalize_generation_payload(
         return normalized
     normalized_manifest = dict(manifest)
     normalized_manifest["outputs"] = mapped
+    normalized["manifest"] = normalized_manifest
+    return normalized
+
+
+def _join_managed_generation_outputs(
+    payload: Mapping[str, Any],
+    managed_outputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Append joined D1 rows without dropping generic manifest outputs."""
+    normalized = _normalize_generation_payload(payload)
+    manifest = normalized.get("manifest")
+    normalized_manifest = dict(manifest) if isinstance(manifest, Mapping) else {}
+    outputs = normalized_manifest.get("outputs")
+    existing_outputs = list(outputs) if isinstance(outputs, list) else []
+    normalized_manifest["outputs"] = [*existing_outputs, *managed_outputs]
     normalized["manifest"] = normalized_manifest
     return normalized
 
@@ -343,11 +351,20 @@ def _reconstruct_generation_result(result: InvocationResult) -> Any:
             payload_candidates.append(settled_payload)
     generation_payload: Any = None
     generation_payload_found = False
+    explicit_generation_payload = False
     for candidate in payload_candidates:
         if generation_result_key in candidate:
             generation_payload = candidate[generation_result_key]
             generation_payload_found = True
+            explicit_generation_payload = True
             break
+    if not generation_payload_found:
+        for candidate in payload_candidates:
+            manifest = candidate.get("manifest")
+            if isinstance(manifest, Mapping):
+                generation_payload = {"manifest": manifest}
+                generation_payload_found = True
+                break
     if not generation_payload_found and managed_outputs:
         generation_payload = {"manifest": {"outputs": managed_outputs}}
         generation_payload_found = True
@@ -366,10 +383,13 @@ def _reconstruct_generation_result(result: InvocationResult) -> Any:
         raise CapabilityRuntimeError(
             f"generation executor payload {generation_result_key!r} must be a mapping or GenerationResult"
         )
-    generation_payload = _normalize_generation_payload(
-        generation_payload,
-        managed_outputs=managed_outputs,
-    )
+    if explicit_generation_payload and managed_outputs:
+        generation_payload = _join_managed_generation_outputs(
+            generation_payload,
+            managed_outputs,
+        )
+    else:
+        generation_payload = _normalize_generation_payload(generation_payload)
     from_dict = getattr(generation_result_type, "from_dict", None)
     if not callable(from_dict):
         raise CapabilityRuntimeError("GenerationResult.from_dict is unavailable")

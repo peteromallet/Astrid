@@ -52,13 +52,7 @@ class _RemoteFamily:
             # let a caller turn an arbitrary string into an attribute lookup
             # on the generated client.
             if operation == "add_shot_item": value = self._client.add_shot_item(*args, **kwargs)
-            elif operation == "admit_task":
-                if "generation_intent" in kwargs and callable(
-                    getattr(self._client, "_call_generated", None)
-                ):
-                    value = self._client._call_generated("admit_task", *args, **kwargs)
-                else:
-                    value = self._client.admit_task(*args, **kwargs)
+            elif operation == "admit_task": value = self._client.admit_task(*args, **kwargs)
             elif operation == "archive_project_reference": value = self._client.archive_project_reference(*args, **kwargs)
             elif operation == "archive_project_shot": value = self._client.archive_project_shot(*args, **kwargs)
             elif operation == "archive_timeline": value = self._client.archive_timeline(*args, **kwargs)

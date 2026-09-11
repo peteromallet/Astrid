@@ -601,6 +601,7 @@ class WorkspaceClient:
         settlement_effect: Mapping[str, Any] | None = None,
         project_id: str | None = None,
         spec: Mapping[str, Any] | None = None,
+        generation_intent: Mapping[str, Any] | None = None,
         storage_estimate: Mapping[str, int] | None = None,
     ) -> Any:
         return self._call_generated(
@@ -613,6 +614,7 @@ class WorkspaceClient:
             settlement_effect=settlement_effect,
             project_id=project_id,
             spec=spec,
+            generation_intent=generation_intent,
             storage_estimate=storage_estimate,
         )
 

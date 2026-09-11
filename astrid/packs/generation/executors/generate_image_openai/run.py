@@ -259,21 +259,35 @@ def _build_openai_manifest(
     manifest with ``schema_version``, ``kind``, ``inputs``, ``outputs``,
     ``created``, ``warnings``, and ``jobs`` fields.  Output paths are
     resolved relative to the manifest directory and enriched through the
-    shared result-manifest contract.
+    shared result-manifest contract.  The executor writes images below
+    ``out_dir`` but the GenericHost harvests from the manifest's run root.
     """
     all_output_paths: list[str] = []
     for job in jobs:
         all_output_paths.extend(job.get("outputs") or [])
 
-    out_dir = args.out_dir
+    out_dir = args.out_dir.expanduser().resolve()
+    manifest_root = manifest_path.expanduser().resolve().parent
     outputs: list[dict[str, Any]] = []
-    for path_str in all_output_paths:
-        p = Path(path_str)
+    for ordinal, path_str in enumerate(all_output_paths):
+        p = Path(path_str).expanduser().resolve()
         try:
-            rel = str(p.relative_to(out_dir))
+            rel = p.relative_to(manifest_root).as_posix()
         except ValueError:
-            rel = p.name
-        outputs.append({"path": rel})
+            raise ValueError(
+                f"OpenAI output is outside its manifest root: {p}"
+            ) from None
+        outputs.append(
+            {
+                "name": "generated_images",
+                "path": rel,
+                "type": "file",
+                "artifact_type": "image",
+                "ordinal": ordinal,
+                "role": "result",
+                "is_primary": ordinal == 0,
+            }
+        )
 
     inputs: dict[str, Any] = {
         "model": args.model,
@@ -298,11 +312,10 @@ def _build_openai_manifest(
         "jobs": jobs,
     }
 
-    # Route output metadata through the shared contract (M1).
-    # Output paths are relative to out_dir (where images are written),
-    # which may differ from manifest_path.parent in tests/non-default configs.
+    # Route output metadata through the shared contract (M1), rooted at the
+    # manifest directory used by GenericHost for harvesting.
     manifest["outputs"] = complete_output_metadata(
-        manifest["outputs"], root_dir=out_dir,
+        manifest["outputs"], root_dir=manifest_root,
     )
     return manifest
 

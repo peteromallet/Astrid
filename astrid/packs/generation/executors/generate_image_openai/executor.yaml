@@ -72,6 +72,13 @@
   "name": "Generate Image (OpenAI)",
   "outputs": [
     {
+      "description": "Generated image files identified by typed receipt entries.",
+      "mode": "create_or_replace",
+      "name": "generated_images",
+      "type": "file",
+      "artifact_type": "image"
+    },
+    {
       "description": "JSON manifest of the generation run (v2 universal manifest object).",
       "mode": "create_or_replace",
       "name": "image_manifest",

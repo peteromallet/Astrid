@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from astrid.core.contracts.errors import AstridError
+from astrid.core.execution.executor.schema import load_executor_manifest
 from astrid.core.util.secrets import load_api_key
-from astrid.packs.generation.executors.generate_image_openai.run import main
+from astrid.packs.generation.executors.generate_image_openai.run import (
+    _build_openai_manifest,
+    main,
+)
 from astrid.packs.rendering.executors.sprite_sheet.run import load_fal_key
 from astrid.packs.editorial.executors.transcribe.run import load_api_key as load_transcribe_api_key
 from astrid.core.util.llm_clients import _load_api_key
@@ -47,6 +54,75 @@ def test_generate_image_dry_run_multiple_variants(capsys, tmp_path):
 
 def test_generate_image_rejects_invalid_gpt_image_2_size():
     assert main(["--prompt", "bad size", "--size", "1000x1000", "--dry-run"]) == 2
+
+
+def test_openai_manifest_maps_typed_images_from_run_root(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    image_dir = run_root / "images"
+    image_dir.mkdir(parents=True)
+    first = image_dir / "first.png"
+    second = image_dir / "second.webp"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    args = argparse.Namespace(
+        out_dir=image_dir,
+        model="gpt-image-2",
+        n=1,
+        size="1024x1024",
+        quality="medium",
+        output_format="png",
+        dry_run=False,
+        output_compression=None,
+        background=None,
+        moderation=None,
+    )
+
+    manifest = _build_openai_manifest(
+        args=args,
+        jobs=[
+            {"prompt": "first", "outputs": [str(first)]},
+            {"prompt": "second", "outputs": [str(second)]},
+        ],
+        manifest_path=run_root / "manifest.json",
+    )
+
+    assert manifest["outputs"] == [
+        {
+            "name": "generated_images",
+            "path": "images/first.png",
+            "type": "file",
+            "artifact_type": "image",
+            "ordinal": 0,
+            "role": "result",
+            "is_primary": True,
+            "bytes": 5,
+            "content_hash": "sha256:"
+            + hashlib.sha256(b"first").hexdigest(),
+        },
+        {
+            "name": "generated_images",
+            "path": "images/second.webp",
+            "type": "file",
+            "artifact_type": "image",
+            "ordinal": 1,
+            "role": "result",
+            "is_primary": False,
+            "bytes": 6,
+            "content_hash": "sha256:"
+            + hashlib.sha256(b"second").hexdigest(),
+        },
+    ]
+
+    declared = load_executor_manifest(
+        str(
+            Path(__file__).resolve().parents[2]
+            / "astrid/packs/generation/executors/generate_image_openai/executor.yaml"
+        )
+    )
+    assert [(output.name, output.artifact_type) for output in declared.outputs] == [
+        ("generated_images", "image"),
+        ("image_manifest", None),
+    ]
 
 
 def test_load_api_key_reads_process_env_by_default(monkeypatch, tmp_path):

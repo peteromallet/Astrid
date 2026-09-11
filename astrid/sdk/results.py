@@ -165,6 +165,100 @@ class InvocationResult:
         )
 
 
+_MANAGED_OUTPUT_FIELDS = (
+    "association_id",
+    "project_id",
+    "run_id",
+    "task_id",
+    "attempt_id",
+    "output_port",
+    "group_key",
+    "variant_key",
+    "selector",
+    "object_id",
+    "digest",
+    "manifest_ref",
+    "size",
+    "filename",
+    "media_type",
+    "ordinal",
+    "role",
+    "producer",
+    "provenance",
+    "durability",
+    "state",
+    "version",
+    "lifecycle",
+    "generation_id",
+    "regeneration",
+    "coverage",
+    "expires_at",
+    "pinned_at",
+    "lease_id",
+    "lease_owner",
+    "lease_expires_at",
+    "lifecycle_updated_at",
+)
+_MANAGED_OUTPUT_IDENTITY_FIELDS = (
+    "association_id",
+    "run_id",
+    "task_id",
+    "attempt_id",
+    "output_port",
+    "selector",
+    "ordinal",
+    "role",
+    "filename",
+    "media_type",
+    "size",
+    "digest",
+    "durability",
+)
+
+
+def _managed_output_source(value: Any) -> Mapping[str, Any] | None:
+    """Return an explicit D1 managed-output row, never a generic output."""
+    if isinstance(value, Mapping):
+        source = value
+    elif is_dataclass(value):
+        source = {field.name: getattr(value, field.name) for field in fields(value)}
+    else:
+        return None
+    if not all(field in source for field in _MANAGED_OUTPUT_IDENTITY_FIELDS):
+        return None
+    return source
+
+
+def _managed_output_to_result_output(value: Any) -> Any:
+    """Map one typed D1 row into the existing manifest output entry shape."""
+    source = _managed_output_source(value)
+    if source is None:
+        return value
+    return {
+        field: _json_safe(source[field])
+        for field in _MANAGED_OUTPUT_FIELDS
+        if field in source
+    }
+
+
+def _normalize_generation_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize explicit D1 rows already carried by the result manifest."""
+    normalized = dict(payload)
+    manifest = payload.get("manifest")
+    if not isinstance(manifest, Mapping):
+        return normalized
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, list):
+        return normalized
+    mapped = [_managed_output_to_result_output(output) for output in outputs]
+    if all(mapped_output is output for mapped_output, output in zip(mapped, outputs)):
+        return normalized
+    normalized_manifest = dict(manifest)
+    normalized_manifest["outputs"] = mapped
+    normalized["manifest"] = normalized_manifest
+    return normalized
+
+
 def _sdk_exception_from_payload(error: Mapping[str, Any] | None) -> AstridSDKError:
     message = "generation invocation failed"
     if error:
@@ -225,6 +319,7 @@ def _reconstruct_generation_result(result: InvocationResult) -> Any:
         raise CapabilityRuntimeError(
             f"generation executor payload {generation_result_key!r} must be a mapping or GenerationResult"
         )
+    generation_payload = _normalize_generation_payload(generation_payload)
 
     from_dict = getattr(generation_result_type, "from_dict", None)
     if not callable(from_dict):

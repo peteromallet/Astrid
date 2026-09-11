@@ -125,6 +125,7 @@ def _descriptor(root, name: str, value: bytes, ordinal: int, **metadata):
         "bytes": len(value),
         "role": "result",
         "is_primary": ordinal == 0,
+        "ordinal_explicit": True,
         **metadata,
     }
 
@@ -184,6 +185,20 @@ def test_host_generation_policy_zero_and_ambiguous_binding_fail_closed(tmp_path)
     string_selector = _descriptor(tmp_path, "generated_videos", b"string", 0, selector="left-0")
     with pytest.raises(HostError, match="must be an object"):
         host._typed_outputs(_host_record(), [string_selector], tmp_path, generation_intent=_intent("allow"))
+
+
+def test_host_rejects_positional_ordinal_injected_by_manifest_harvest(tmp_path) -> None:
+    host = GenericPackHost.__new__(GenericPackHost)
+    positional = _descriptor(
+        tmp_path,
+        "generated_videos",
+        b"positional",
+        0,
+        selector={"group_key": "left", "variant_key": "left-v"},
+        ordinal_explicit=False,
+    )
+    with pytest.raises(HostError, match="original ordinal"):
+        host._typed_outputs(_host_record(), [positional], tmp_path, generation_intent=_intent("allow"))
 
 
 def test_host_upload_keeps_runtime_selector_object_wire_safe(tmp_path) -> None:

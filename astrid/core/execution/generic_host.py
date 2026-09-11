@@ -2709,10 +2709,7 @@ class GenericPackHost:
                 and name == generation_port
                 and role == "result"
             )
-            if is_generation_result and (
-                "ordinal" not in harvested
-                or harvested.get("ordinal_explicit") is False
-            ):
+            if is_generation_result and not harvested.get("ordinal_explicit", False):
                 raise HostError(
                     f"generation output {name!r} must declare its original ordinal"
                 )

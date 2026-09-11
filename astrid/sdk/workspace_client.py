@@ -209,7 +209,8 @@ class WorkspaceClient:
                 "list_project_objects", "create_media_relation", "list_media_relations",
                 "get_object", "head_object", "admit_task", "get_task", "list_project_tasks",
                 "cancel_task", "retry_task", "cancel_run", "retry_run", "get_run",
-                "list_project_runs", "list_events", "list_run_events", "list_generations",
+                "list_project_runs", "list_events", "list_run_events", "list_managed_outputs",
+                "get_managed_output", "list_generations",
                 "get_generation", "list_variants", "create_generation", "create_variant",
                 "list_capabilities", "register_capability", "claim_task", "register_executor",
                 "settle_attempt", "publish_timeline_render",
@@ -600,6 +601,7 @@ class WorkspaceClient:
         settlement_effect: Mapping[str, Any] | None = None,
         project_id: str | None = None,
         spec: Mapping[str, Any] | None = None,
+        generation_intent: Mapping[str, Any] | None = None,
         storage_estimate: Mapping[str, int] | None = None,
     ) -> Any:
         return self._call_generated(
@@ -612,6 +614,7 @@ class WorkspaceClient:
             settlement_effect=settlement_effect,
             project_id=project_id,
             spec=spec,
+            generation_intent=generation_intent,
             storage_estimate=storage_estimate,
         )
 
@@ -652,6 +655,12 @@ class WorkspaceClient:
 
     def list_run_events(self, run_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_run_events", run_id, cursor=cursor, limit=limit)
+
+    def list_managed_outputs(self, task_id: str) -> Any:
+        return self._call_generated("list_managed_outputs", task_id)
+
+    def get_managed_output(self, association_id: str) -> Any:
+        return self._call_generated("get_managed_output", association_id)
 
     def list_generations(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_generations", project_id, cursor=cursor, limit=limit)

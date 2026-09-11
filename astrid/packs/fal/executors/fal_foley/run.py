@@ -11,9 +11,11 @@ guard_canonical_entrypoint('fal.fal_foley')
 import argparse
 import base64
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from astrid.core._shared.result_manifest import build_manifest, write_manifest
 from astrid.core.util.credentials_scope import CredentialsScope
 from astrid.core.util.http import (
     FAL_QUEUE_URL,
@@ -125,6 +127,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     saved = _save_audio(client, result, out)
 
+    manifest = build_manifest(
+        kind="fal.fal_foley",
+        inputs={"clip": str(clip), "prompt": args.prompt},
+        outputs=[
+            {
+                "name": "audio",
+                "path": out.name,
+                "type": "file",
+                "artifact_type": "audio",
+                "media_type": saved.get("content_type") or "audio/wav",
+                "ordinal": 0,
+                "role": "result",
+                "is_primary": True,
+            }
+        ],
+        created=datetime.now(timezone.utc).isoformat(),
+        warnings=[],
+        provider_extension={
+            "model_id": FAL_MODEL_ID,
+            "request_id": result.get("request_id"),
+            "source_url": saved.get("source_url"),
+            "source_file_name": saved.get("file_name"),
+        },
+    )
+    write_manifest(out.parent / "manifest.json", manifest)
+
     sidecar = out.with_suffix(out.suffix + ".fal.json")
     sidecar.write_text(
         json.dumps(
@@ -139,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     print(f"wrote_audio={saved['path']}")
+    print(f"wrote_manifest={out.parent / 'manifest.json'}")
     print(f"wrote_sidecar={sidecar}")
     return 0
 

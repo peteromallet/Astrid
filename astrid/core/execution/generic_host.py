@@ -89,6 +89,47 @@ class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
 
 
+def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> str | None:
+    """Resolve the primary generated output port from the admitted schema."""
+    if not isinstance(intent, Mapping):
+        return None
+    modality = intent.get("modality")
+    expected = {"image": "generated_images", "video": "generated_videos", "audio": "generated_audio"}.get(modality)
+    if expected is None:
+        return None
+    matches = [
+        output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
+        if getattr(output, "name", None) == expected
+        and getattr(output, "type", None) == "file"
+        and not str(getattr(output, "name", "")).endswith("_manifest")
+        and getattr(output, "artifact_type", None)
+    ]
+    if matches != [expected]:
+        raise HostError(f"generation capability must declare exactly one primary {expected!r} output")
+    return expected
+
+
+def _generation_selector_declarations(
+    record: Any,
+    intent: Mapping[str, Any] | None,
+) -> tuple[str | None, tuple[dict[str, Any], ...]]:
+    """Flatten admitted selector declarations without changing their order."""
+    output_port = _generation_output_port(record, intent)
+    if output_port is None:
+        return None, ()
+    declarations: list[dict[str, Any]] = []
+    for group in intent["groups"]:
+        for selector in group["selectors"]:
+            declarations.append({
+                "group_key": group["group_key"],
+                "selector": selector["selector"],
+                "ordinal": selector["ordinal"],
+                "variant_key": selector["variant_key"],
+                "output_port": output_port,
+            })
+    return output_port, tuple(declarations)
+
+
 def _cleanup_ephemeral_attempt(root: Path) -> None:
     """Remove an owned attempt root and verify that no residue remains."""
     try:
@@ -2654,10 +2695,15 @@ class GenericPackHost:
         record: CapabilityRecord,
         descriptors: Sequence[Mapping[str, Any]],
         attempt: Path,
+        generation_intent: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Bind validated harvest descriptors to their declared output ports."""
         outputs: list[dict[str, Any]] = []
         by_name = {output.name: output for output in record.definition.outputs}
+        generation_port, declarations = _generation_selector_declarations(
+            record, generation_intent
+        )
+        matched_declarations: set[tuple[str, str, int, str]] = set()
         seen_identities: set[tuple[str, int]] = set()
         for index, harvested in enumerate(descriptors):
             if not isinstance(harvested, Mapping):
@@ -2667,13 +2713,30 @@ class GenericPackHost:
                 raise HostError(
                     f"harvested output {index} names undeclared port {name!r}"
                 )
+            role = harvested.get("role", "result")
+            if role not in {"result", "auxiliary"}:
+                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
+            is_generation_result = (
+                generation_port is not None
+                and name == generation_port
+                and role == "result"
+            )
+            # ``harvest_staged_outputs`` always supplies a positional ordinal
+            # when the manifest omits one.  That fallback is valid for the
+            # universal generic manifest contract, but it is not an identity
+            # for an admitted generation selector.  Require the provenance
+            # marker so generation publication can never bind by list order.
+            if is_generation_result and harvested.get("ordinal_explicit") is not True:
+                raise HostError(
+                    f"generation output {name!r} must declare its original ordinal"
+                )
             ordinal = harvested.get("ordinal", index)
             if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
                 raise HostError(
                     f"harvested output {name!r} has invalid ordinal {ordinal!r}"
                 )
             identity = (name, ordinal)
-            if identity in seen_identities:
+            if identity in seen_identities and not is_generation_result:
                 raise HostError(
                     f"harvested output {name!r} repeats ordinal {ordinal}"
                 )
@@ -2697,19 +2760,103 @@ class GenericPackHost:
             size = path.stat().st_size
             if harvested.get("bytes") != size:
                 raise HostError(f"harvested output {name!r} byte count does not match")
-            role = harvested.get("role", "result")
-            if role not in {"result", "auxiliary"}:
-                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
-            outputs.append({
+            output = {
                 "name": name,
                 "ordinal": ordinal,
                 "artifact_type": getattr(output, "artifact_type", None),
                 "digest": f"sha256:{digest}",
                 "size": size,
                 "path": str(path),
+                "filename": path.name,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
-            })
+                **{
+                    field: harvested[field]
+                    for field in (
+                        "producer", "provenance", "durability", "regeneration", "coverage",
+                    )
+                    if field in harvested
+                },
+            }
+
+            if is_generation_result:
+                ordinal_matches = [
+                    declaration
+                    for declaration in declarations
+                    if declaration["ordinal"] == ordinal
+                ]
+                explicit_fields = (
+                    "output_port", "group_key", "variant_key", "selector"
+                )
+                for field in explicit_fields:
+                    if field not in harvested:
+                        continue
+                    supplied = harvested[field]
+                    if field == "selector":
+                        if not isinstance(supplied, Mapping) or set(supplied) != {"group_key", "variant_key"}:
+                            raise HostError(
+                                f"generation output {name!r} selector metadata must be an object"
+                            )
+                        ordinal_matches = [
+                            declaration
+                            for declaration in ordinal_matches
+                            if declaration["group_key"] == supplied["group_key"]
+                            and declaration["variant_key"] == supplied["variant_key"]
+                        ]
+                    else:
+                        ordinal_matches = [
+                            declaration
+                            for declaration in ordinal_matches
+                            if declaration[field] == supplied
+                        ]
+                if len(ordinal_matches) != 1:
+                    reason = "ambiguous" if len(ordinal_matches) > 1 else "mismatch"
+                    raise HostError(
+                        f"generation output {name!r} ordinal {ordinal} has an unauthorized {reason} binding"
+                    )
+                declaration = ordinal_matches[0]
+                for field in explicit_fields:
+                    if field in harvested and field != "selector" and harvested[field] != declaration[field]:
+                        raise HostError(
+                            f"generation output {name!r} metadata {field!r} disagrees with admitted intent"
+                        )
+                binding_key = (
+                    declaration["group_key"], declaration["selector"],
+                    declaration["ordinal"], declaration["variant_key"],
+                )
+                if binding_key in matched_declarations:
+                    raise HostError(
+                        f"generation output repeats admitted selector {binding_key!r}"
+                    )
+                matched_declarations.add(binding_key)
+                # Runtime validates these values again against the predeclared
+                # effect and derives all generation/variant IDs.
+                output["output_port"] = declaration["output_port"]
+                output["group_key"] = declaration["group_key"]
+                output["variant_key"] = declaration["variant_key"]
+                output["selector"] = {
+                    "group_key": declaration["group_key"],
+                    "variant_key": declaration["variant_key"],
+                }
+            outputs.append(output)
+
+        if declarations:
+            missing = [
+                declaration for declaration in declarations
+                if (
+                    declaration["group_key"], declaration["selector"],
+                    declaration["ordinal"], declaration["variant_key"],
+                ) not in matched_declarations
+            ]
+            policy = generation_intent.get("partial_success_policy")
+            if policy == "reject" and missing:
+                raise HostError(
+                    "generation.publish_v1 reject policy is missing declared selectors"
+                )
+            if not matched_declarations:
+                raise HostError(
+                    "generation.publish_v1 produced no successful declared outputs"
+                )
         return outputs
 
     def _child_environment(
@@ -2906,6 +3053,7 @@ class GenericPackHost:
             if not raw_path:
                 raise HostError("generated output is missing its staged path")
             path = Path(str(raw_path))
+            filename = descriptor.get("filename") or path.name
             media_type = str(descriptor.get("artifact_type") or "application/octet-stream")
             if inline:
                 data = path.read_bytes()
@@ -2922,6 +3070,7 @@ class GenericPackHost:
                     for key in (
                         "name",
                         "kind",
+                        "filename",
                         "media_type",
                         "digest",
                         "size",
@@ -2929,12 +3078,15 @@ class GenericPackHost:
                     )
                     if key in descriptor
                 })
+                for field in ("output_port", "group_key", "variant_key", "selector", "ordinal"):
+                    if field in descriptor:
+                        uploaded[-1][field] = descriptor[field]
                 continue
             object_row = upload_object(
                 path,
                 project_id=project_id,
                 media_type=media_type,
-                filename=path.name,
+                filename=filename,
             )
             digest = getattr(object_row, "digest", None)
             if not digest:
@@ -2942,9 +3094,17 @@ class GenericPackHost:
             uploaded.append({
                 "name": descriptor.get("name"),
                 "kind": "object",
+                "filename": filename,
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
+                **{
+                    field: descriptor[field]
+                    for field in (
+                        "output_port", "group_key", "variant_key", "selector", "ordinal",
+                    )
+                    if field in descriptor
+                },
             })
         return uploaded
 
@@ -3935,7 +4095,16 @@ class GenericPackHost:
                 )
             except HarvestError as exc:
                 raise HostError(f"capability {record.id!r}: {exc}") from exc
-            typed_outputs = self._typed_outputs(record, harvested, root)
+            typed_outputs = self._typed_outputs(
+                record,
+                harvested,
+                root,
+                generation_intent=(
+                    task_data.get("generation_intent")
+                    if isinstance(task_data.get("generation_intent"), Mapping)
+                    else None
+                ),
+            )
             publication_result: Mapping[str, Any] | None = None
             if capability_id == "rendering.assemble_timeline":
                 publication_result = self._publish_assembled_timeline(
@@ -4277,6 +4446,7 @@ class GenericPackHost:
             "spec": getattr(claim, "spec", None),
             "project_id": getattr(claim, "project_id", None),
             "expected_effect": getattr(claim, "expected_effect", None),
+            "generation_intent": getattr(claim, "generation_intent", None),
         }
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
@@ -4310,6 +4480,8 @@ class GenericPackHost:
             task_data["spec"] = claim_data["spec"]
         if claim_data.get("expected_effect") is not None:
             task_data["expected_effect"] = claim_data["expected_effect"]
+        if claim_data.get("generation_intent") is not None:
+            task_data["generation_intent"] = claim_data["generation_intent"]
         return self.run_task(
             {"task": task_data},
             lease_token=str(claim_data.get("lease_id") or ""),

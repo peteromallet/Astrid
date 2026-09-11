@@ -288,9 +288,14 @@ def execute(
         downloader(client, _video_url(result), output_path, args.timeout_seconds)
         outputs = [
             {
+                "name": "generated_videos",
                 "path": output_path.relative_to(out).as_posix(),
                 "type": "file",
+                "artifact_type": "video/clip",
                 "media_type": "video/mp4",
+                "ordinal": 0,
+                "role": "result",
+                "is_primary": True,
             }
         ]
         manifest = _write_run_manifest(

@@ -544,6 +544,35 @@ def test_validate_result_manifest_rejects_duplicate_ordinals(tmp_path: Path) -> 
         validate_result_manifest(manifest, staging_root=staging)
 
 
+def test_validate_result_manifest_keeps_global_duplicate_ordinal_guard_with_generation_metadata(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    first = _write_file(staging, "first.mp4", b"first")
+    second = _write_file(staging, "second.mp4", b"second")
+    manifest = _base_manifest(
+        staging,
+        [
+            {
+                **first,
+                "name": "generated_videos",
+                "ordinal": 3,
+                "group_key": "left",
+                "variant_key": "left-v",
+            },
+            {
+                **second,
+                "name": "generated_videos",
+                "ordinal": 3,
+                "group_key": "right",
+                "variant_key": "right-v",
+            },
+        ],
+    )
+
+    with pytest.raises(ResultManifestError, match="duplicate output ordinal 3"):
+        validate_result_manifest(manifest, staging_root=staging)
+
+
 def test_validate_result_manifest_rejects_multiple_primary_outputs(tmp_path: Path) -> None:
     staging = tmp_path / "staging"
     staging.mkdir()
@@ -802,6 +831,44 @@ def test_harvest_preserves_collection_name_and_distinct_ordinals(tmp_path: Path)
     ]
     assert [item["ordinal"] for item in harvested] == [0, 1]
     assert [item["is_primary"] for item in harvested] == [True, False]
+
+
+def test_harvest_rejects_global_duplicate_ordinals_across_generation_groups(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    first = _write_file(spool, "first.mp4", b"first")
+    second = _write_file(spool, "second.mp4", b"second")
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(
+            kind="video",
+            inputs={},
+            outputs=[
+                {
+                    **first,
+                    "name": "generated_videos",
+                    "ordinal": 4,
+                    "group_key": "left",
+                    "variant_key": "left-v",
+                    "role": "result",
+                },
+                {
+                    **second,
+                    "name": "generated_videos",
+                    "ordinal": 4,
+                    "group_key": "right",
+                    "variant_key": "right-v",
+                    "role": "result",
+                },
+            ],
+            created="2026-09-08T00:00:00Z",
+        ),
+    )
+
+    with pytest.raises(HarvestError, match="duplicate output ordinal 4"):
+        harvest_staged_outputs(spool, require=True)
 
 
 def test_harvest_empty_receipt_is_exclusive_and_required_fails(tmp_path: Path) -> None:

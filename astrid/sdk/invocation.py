@@ -1434,6 +1434,208 @@ def _project_scope(capability: Any) -> str:
     return str(scope)
 
 
+def _validate_generation_intent(
+    value: Any,
+    *,
+    modality: str,
+) -> dict[str, Any]:
+    """Validate and copy the opaque D1 generation intent envelope."""
+    if not isinstance(value, Mapping):
+        raise CapabilityValidationError("generation_intent must be an object")
+    if set(value) != {"version", "modality", "partial_success_policy", "groups"}:
+        raise CapabilityValidationError(
+            "generation_intent must contain exactly version, modality, "
+            "partial_success_policy, and groups"
+        )
+    version = value["version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise CapabilityValidationError("generation_intent.version must be 1")
+    if value["modality"] != modality:
+        raise CapabilityValidationError(
+            f"generation_intent.modality must match generation modality {modality!r}"
+        )
+    partial_success_policy = value["partial_success_policy"]
+    if not isinstance(partial_success_policy, str) or partial_success_policy not in {
+        "reject", "allow"
+    }:
+        raise CapabilityValidationError(
+            "generation_intent.partial_success_policy must be 'reject' or 'allow'"
+        )
+    groups = value["groups"]
+    if not isinstance(groups, list):
+        raise CapabilityValidationError("generation_intent.groups must be a list")
+    if not groups:
+        raise CapabilityValidationError(
+            "generation_intent.groups must contain at least one group"
+        )
+
+    copied_groups: list[dict[str, Any]] = []
+    seen_group_keys: set[str] = set()
+    for group_index, group in enumerate(groups):
+        if not isinstance(group, Mapping) or set(group) != {"group_key", "selectors"}:
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}] must contain exactly "
+                "group_key and selectors"
+            )
+        group_key = group["group_key"]
+        if not isinstance(group_key, str) or not group_key.strip():
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].group_key must be non-empty"
+            )
+        if group_key in seen_group_keys:
+            raise CapabilityValidationError(
+                f"generation_intent has duplicate group_key {group_key!r}"
+            )
+        seen_group_keys.add(group_key)
+
+        selectors = group["selectors"]
+        if not isinstance(selectors, list):
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].selectors must be a list"
+            )
+        if not selectors:
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].selectors must contain "
+                "at least one selector"
+            )
+        copied_selectors: list[dict[str, Any]] = []
+        seen_ordinals: set[int] = set()
+        seen_variant_keys: set[str] = set()
+        for selector_index, selector in enumerate(selectors):
+            if not isinstance(selector, Mapping) or set(selector) != {
+                "selector", "ordinal", "variant_key"
+            }:
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "must contain exactly selector, ordinal, and variant_key"
+                )
+            selector_name = selector["selector"]
+            ordinal = selector["ordinal"]
+            variant_key = selector["variant_key"]
+            if not isinstance(selector_name, str) or not selector_name.strip():
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "selector must be non-empty"
+                )
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "ordinal must be a non-negative integer"
+                )
+            if not isinstance(variant_key, str) or not variant_key.strip():
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "variant_key must be non-empty"
+                )
+            if ordinal in seen_ordinals:
+                raise CapabilityValidationError(
+                    f"generation_intent group {group_key!r} has duplicate ordinal {ordinal}"
+                )
+            if variant_key in seen_variant_keys:
+                raise CapabilityValidationError(
+                    f"generation_intent group {group_key!r} has duplicate variant_key "
+                    f"{variant_key!r}"
+                )
+            seen_ordinals.add(ordinal)
+            seen_variant_keys.add(variant_key)
+            copied_selectors.append(
+                {
+                    "selector": selector_name,
+                    "ordinal": ordinal,
+                    "variant_key": variant_key,
+                }
+            )
+        copied_groups.append({"group_key": group_key, "selectors": copied_selectors})
+
+    return {
+        "version": 1,
+        "modality": modality,
+        "partial_success_policy": partial_success_policy,
+        "groups": copied_groups,
+    }
+
+
+def _generation_capability_modality(capability_id: str) -> str | None:
+    """Resolve the modality for every shipped generation executor family."""
+    if capability_id.startswith("generation.generate_image"):
+        return "image"
+    if capability_id.startswith("generation.generate_video"):
+        return "video"
+    if capability_id.startswith("generation.generate_audio"):
+        return "audio"
+    return None
+
+
+def _generation_publish_effect(
+    capability: Any,
+    *,
+    project: str | None,
+    generation_intent: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compose the sole typed publication effect from validated GEN intent."""
+    if not isinstance(project, str) or not project.strip():
+        raise CapabilityValidationError(
+            "generation publication requires a project-scoped task"
+        )
+    modality = generation_intent["modality"]
+    expected_port = {
+        "image": "generated_images",
+        "video": "generated_videos",
+        "audio": "generated_audio",
+    }[modality]
+    declared_outputs = getattr(capability, "outputs", None)
+    if not declared_outputs:
+        definition = getattr(capability, "definition", None)
+        if isinstance(definition, Mapping):
+            declared_outputs = definition.get("outputs", ())
+        else:
+            declared_outputs = getattr(definition, "outputs", ())
+
+    def output_field(output: Any, field: str) -> Any:
+        if isinstance(output, Mapping):
+            return output.get(field)
+        return getattr(output, field, None)
+
+    matching_ports = [
+        output_field(output, "name")
+        for output in declared_outputs
+        if output_field(output, "name") == expected_port
+        and output_field(output, "type") == "file"
+        and not str(output_field(output, "name") or "").endswith("_manifest")
+        and output_field(output, "artifact_type")
+    ]
+    if matching_ports != [expected_port]:
+        raise CapabilityValidationError(
+            f"generation capability must declare exactly one primary {expected_port!r} output"
+        )
+    groups = []
+    for group in generation_intent["groups"]:
+        groups.append({
+            "group_key": group["group_key"],
+            "selectors": [
+                {
+                    "selector": selector["selector"],
+                    "ordinal": selector["ordinal"],
+                    "variant_key": selector["variant_key"],
+                    "output_port": expected_port,
+                }
+                for selector in group["selectors"]
+            ],
+        })
+    return {
+        "effect_type": "generation.publish_v1",
+        "target_id": project,
+        "payload": {
+            "version": 1,
+            "modality": modality,
+            "generation_type": str(capability.id),
+            "metadata": {},
+            "partial_success_policy": generation_intent["partial_success_policy"],
+            "groups": groups,
+        },
+    }
+
+
 def _kernel_invoke(
     capability: Any,
     *,
@@ -1444,6 +1646,7 @@ def _kernel_invoke(
     extra_pack_roots: tuple[str, ...] = (),
     idempotency_context: Mapping[str, Any] | None = None,
     admission_metadata: Mapping[str, Any] | None = None,
+    generation_intent: Mapping[str, Any] | None = None,
     storage_estimate: Mapping[str, int] | None = None,
     registry: Any | None = None,
     _client: Any | None = None,
@@ -1544,13 +1747,18 @@ def _kernel_invoke(
             raise CapabilityValidationError("filmstrip video admission identity mismatch")
         input_manifest.append(video_id)
 
+    idempotency_material: dict[str, Any] = {
+        "spec": spec,
+        "input_object_ids": sorted(input_manifest),
+        "storage_estimate": dict(storage_estimate or {}),
+    }
+    if generation_intent is not None:
+        idempotency_material["generation_intent"] = _json_safe_mapping(
+            dict(generation_intent)
+        )
     idempotency_key = hashlib.sha256(
         json.dumps(
-            {
-                "spec": spec,
-                "input_object_ids": sorted(input_manifest),
-                "storage_estimate": dict(storage_estimate or {}),
-            },
+            idempotency_material,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -1568,14 +1776,20 @@ def _kernel_invoke(
         raise CapabilityInvocationError(
             "runtime client does not expose generated task admission"
         )
-    result = create_task(
-        project_id=project,
-        capability=str(capability.id),
-        spec=spec,
-        input_manifest=input_manifest,
-        idempotency_key=idempotency_key,
-        storage_estimate=dict(storage_estimate) if storage_estimate is not None else None,
-    )
+    admission = {
+        "project_id": project,
+        "capability": str(capability.id),
+        "spec": spec,
+        "input_manifest": input_manifest,
+        "idempotency_key": idempotency_key,
+        "storage_estimate": dict(storage_estimate) if storage_estimate is not None else None,
+    }
+    if generation_intent is not None:
+        admission["generation_intent"] = generation_intent
+        admission["settlement_effect"] = _generation_publish_effect(
+            capability, project=project, generation_intent=generation_intent
+        )
+    result = create_task(**admission)
     result_ok = bool(getattr(result, "ok", isinstance(result, Mapping)))
     data = getattr(result, "data", result if isinstance(result, Mapping) else None)
     if not result_ok:
@@ -1612,6 +1826,49 @@ def _kernel_invoke(
     return run_id, task_id, attempt_id, None, raw_result, True, None
 
 
+def _read_task_managed_outputs(
+    client: Any,
+    task_id: str,
+) -> tuple[list[Any] | None, dict[str, Any] | None]:
+    """Read the Runtime-owned managed-output page for one completed task."""
+    tasks = getattr(client, "tasks", None)
+    reader = getattr(tasks, "list_managed_outputs", None)
+    if not callable(reader):
+        return None, {
+            "code": "managed_output_readback_unavailable",
+            "message": "runtime client does not expose task managed-output readback",
+            "details": {"task_id": task_id},
+        }
+    try:
+        value = reader(task_id)
+    except Exception as exc:
+        return None, {
+            "code": "managed_output_readback_unavailable",
+            "message": "managed outputs could not be read for the completed task",
+            "details": {"task_id": task_id, "error_type": type(exc).__name__},
+        }
+    if hasattr(value, "ok") and hasattr(value, "data"):
+        if not bool(value.ok):
+            error = getattr(value, "error", None)
+            if hasattr(error, "as_dict"):
+                error = error.as_dict()
+            return None, {
+                "code": "managed_output_readback_unavailable",
+                "message": "managed outputs could not be read for the completed task",
+                "details": _json_safe(error) if error is not None else {"task_id": task_id},
+            }
+        value = value.data
+    if isinstance(value, (list, tuple)) and len(value) == 2 and isinstance(value[0], list):
+        return list(value[0]), None
+    if isinstance(value, list):
+        return value, None
+    return None, {
+        "code": "managed_output_readback_invalid",
+        "message": "managed-output readback returned an invalid page",
+        "details": {"task_id": task_id},
+    }
+
+
 def _wait_for_kernel_task(
     client: Any,
     *,
@@ -1619,6 +1876,7 @@ def _wait_for_kernel_task(
     run_id: str,
     timeout_seconds: float,
     poll_seconds: float,
+    read_managed_outputs: bool = False,
 ) -> tuple[dict[str, Any], bool, str]:
     """Follow one admitted task to a terminal runtime-owned result."""
     if not math.isfinite(float(timeout_seconds)) or timeout_seconds <= 0:
@@ -1660,7 +1918,7 @@ def _wait_for_kernel_task(
             settled = task.get("result")
             settled = dict(settled) if isinstance(settled, Mapping) else {}
             output_rows = settled.get("outputs")
-            return {
+            completed = {
                 "ok": True,
                 "run_id": run_id,
                 "kernel_run_id": run_id,
@@ -1674,7 +1932,15 @@ def _wait_for_kernel_task(
                     if isinstance(output_rows, list)
                     else []
                 },
-            }, True, attempt_id
+            }
+            if read_managed_outputs:
+                managed_outputs, read_error = _read_task_managed_outputs(client, task_id)
+                if read_error is not None:
+                    completed["error"] = read_error
+                    completed["ok"] = False
+                    return completed, False, attempt_id
+                completed["managed_outputs"] = managed_outputs or []
+            return completed, True, attempt_id
         if state in {"failed", "cancelled"}:
             settled = task.get("result")
             settled = dict(settled) if isinstance(settled, Mapping) else {}
@@ -1767,6 +2033,27 @@ def invoke(
     )
     if capability.capability_type == "element":
         raise UnsupportedCapabilityError(f"elements are not invokable via the SDK: {capability.id}")
+
+    generation_modalities = {
+        "generation.generate_image": "image",
+        "generation.generate_video": "video",
+        "generation.generate_audio": "audio",
+    }
+    modality = generation_modalities.get(capability.id)
+    intent_modality = _generation_capability_modality(str(capability.id))
+    request_inputs = dict(inputs or {})
+    generation_intent: dict[str, Any] | None = None
+    if "generation_intent" in request_inputs:
+        if intent_modality is None:
+            raise CapabilityValidationError(
+                "generation_intent is only accepted for generation capabilities"
+            )
+        generation_intent = _validate_generation_intent(
+            request_inputs["generation_intent"],
+            modality=intent_modality,
+        )
+        # Intent is admission metadata, not an executor-facing input port.
+        request_inputs.pop("generation_intent")
 
     if isinstance(project, str) and not project.strip():
         project = None
@@ -1865,14 +2152,7 @@ def invoke(
     # and live invocation.  This keeps generic ``sdk.invoke`` from accepting
     # an impossible model/mode/backend cell (or FLF request missing its end
     # frame) and discovering the problem only after kernel admission.
-    generation_modalities = {
-        "generation.generate_image": "image",
-        "generation.generate_video": "video",
-        "generation.generate_audio": "audio",
-    }
-    modality = generation_modalities.get(capability.id)
     if modality is not None:
-        request_inputs = dict(inputs or {})
         model_registry = sdk_module._load_model_registry(
             project_root=project_root,
             extra_pack_roots=extra_pack_roots,
@@ -1923,7 +2203,7 @@ def invoke(
         try:
             raw_result, preview_ok = _manifest_dry_run_result(
                 capability,
-                inputs=inputs,
+                inputs=request_inputs,
                 outputs=outputs,
                 brief=brief,
                 python_exec=python_exec,
@@ -1984,13 +2264,15 @@ def invoke(
         kernel_kwargs: dict[str, Any] = {
             "kind": kind,
             "project": project,
-            "inputs": inputs,
+            "inputs": request_inputs,
             "outputs": outputs,
             "extra_pack_roots": extra_pack_roots,
             "idempotency_context": invocation_authority_context,
             "admission_metadata": invocation_admission_metadata,
             "storage_estimate": invocation_storage_estimate,
         }
+        if generation_intent is not None:
+            kernel_kwargs["generation_intent"] = generation_intent
         if registry is not None:
             kernel_kwargs["registry"] = registry
         kr, kt, ka, mpath, raw_result, ok, _ = _kernel_invoke(
@@ -2005,6 +2287,10 @@ def invoke(
                 run_id=kr,
                 timeout_seconds=timeout_seconds,
                 poll_seconds=poll_seconds,
+                read_managed_outputs=(
+                    capability.capability_type == "executor"
+                    and capability.id.startswith("generation.generate_")
+                ),
             )
             if waited_attempt_id:
                 ka = waited_attempt_id

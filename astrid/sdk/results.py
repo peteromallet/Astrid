@@ -165,6 +165,127 @@ class InvocationResult:
         )
 
 
+_MANAGED_OUTPUT_FIELDS = (
+    "association_id",
+    "project_id",
+    "run_id",
+    "task_id",
+    "attempt_id",
+    "output_port",
+    "group_key",
+    "variant_key",
+    "selector",
+    "object_id",
+    "digest",
+    "manifest_ref",
+    "size",
+    "filename",
+    "media_type",
+    "ordinal",
+    "role",
+    "producer",
+    "provenance",
+    "durability",
+    "state",
+    "version",
+    "lifecycle",
+    "generation_id",
+    "regeneration",
+    "coverage",
+    "expires_at",
+    "pinned_at",
+    "lease_id",
+    "lease_owner",
+    "lease_expires_at",
+    "lifecycle_updated_at",
+)
+_MANAGED_OUTPUT_IDENTITY_FIELDS = (
+    "association_id",
+    "run_id",
+    "task_id",
+    "attempt_id",
+    "output_port",
+    "selector",
+    "ordinal",
+    "role",
+    "filename",
+    "media_type",
+    "size",
+    "digest",
+    "durability",
+)
+
+
+def _managed_output_source(value: Any) -> Mapping[str, Any] | None:
+    """Return an explicit D1 managed-output row, never a generic output."""
+    if isinstance(value, Mapping):
+        source = value
+    elif is_dataclass(value):
+        source = {field.name: getattr(value, field.name) for field in fields(value)}
+    else:
+        return None
+    if not all(field in source for field in _MANAGED_OUTPUT_IDENTITY_FIELDS):
+        return None
+    return source
+
+
+def _managed_output_to_result_output(value: Any) -> Any:
+    """Map one typed D1 row into the existing manifest output entry shape."""
+    source = _managed_output_source(value)
+    if source is None:
+        return value
+    return {
+        field: _json_safe(source[field])
+        for field in _MANAGED_OUTPUT_FIELDS
+        if field in source
+    }
+
+
+def _managed_generation_output_rows(
+    raw_result: Mapping[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Select only managed rows explicitly joined to a generation."""
+    raw_outputs = raw_result.get("managed_outputs")
+    if not isinstance(raw_outputs, list):
+        return None
+    mapped: list[dict[str, Any]] = []
+    for output in raw_outputs:
+        source = _managed_output_source(output)
+        if source is None or source.get("generation_id") is None:
+            continue
+        result_output = _managed_output_to_result_output(output)
+        if isinstance(result_output, dict):
+            mapped.append(result_output)
+    return mapped
+
+
+def _normalize_generation_payload(
+    payload: Mapping[str, Any],
+    *,
+    managed_outputs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Normalize explicit D1 rows carried by or read back beside a result."""
+    normalized = dict(payload)
+    manifest = payload.get("manifest")
+    if managed_outputs:
+        normalized_manifest = dict(manifest) if isinstance(manifest, Mapping) else {}
+        normalized_manifest["outputs"] = list(managed_outputs)
+        normalized["manifest"] = normalized_manifest
+        return normalized
+    if not isinstance(manifest, Mapping):
+        return normalized
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, list):
+        return normalized
+    mapped = [_managed_output_to_result_output(output) for output in outputs]
+    if all(mapped_output is output for mapped_output, output in zip(mapped, outputs)):
+        return normalized
+    normalized_manifest = dict(manifest)
+    normalized_manifest["outputs"] = mapped
+    normalized["manifest"] = normalized_manifest
+    return normalized
+
+
 def _sdk_exception_from_payload(error: Mapping[str, Any] | None) -> AstridSDKError:
     message = "generation invocation failed"
     if error:
@@ -209,23 +330,46 @@ def _reconstruct_generation_result(result: InvocationResult) -> Any:
     if not isinstance(raw_result, Mapping):
         raise CapabilityRuntimeError("generation executor returned a non-mapping raw_result")
 
+    managed_outputs = _managed_generation_output_rows(raw_result)
+    payload_candidates: list[Mapping[str, Any]] = []
     payload = raw_result.get("payload")
-    if not isinstance(payload, Mapping):
-        raise CapabilityRuntimeError("generation executor returned a non-mapping payload")
-
-    if generation_result_key not in payload:
+    if isinstance(payload, Mapping):
+        payload_candidates.append(payload)
+    settled = raw_result.get("result")
+    if isinstance(settled, Mapping):
+        payload_candidates.append(settled)
+        settled_payload = settled.get("payload")
+        if isinstance(settled_payload, Mapping):
+            payload_candidates.append(settled_payload)
+    generation_payload: Any = None
+    generation_payload_found = False
+    for candidate in payload_candidates:
+        if generation_result_key in candidate:
+            generation_payload = candidate[generation_result_key]
+            generation_payload_found = True
+            break
+    if not generation_payload_found and managed_outputs:
+        generation_payload = {"manifest": {"outputs": managed_outputs}}
+        generation_payload_found = True
+    if not generation_payload_found:
+        if not payload_candidates:
+            raise CapabilityRuntimeError("generation executor returned a non-mapping payload")
         raise CapabilityRuntimeError(
             f"generation executor payload is missing {generation_result_key!r}"
         )
-
-    generation_payload = payload[generation_result_key]
     if isinstance(generation_payload, generation_result_type):
-        return generation_payload
+        if managed_outputs:
+            generation_payload = generation_payload.to_dict()
+        else:
+            return generation_payload
     if not isinstance(generation_payload, Mapping):
         raise CapabilityRuntimeError(
             f"generation executor payload {generation_result_key!r} must be a mapping or GenerationResult"
         )
-
+    generation_payload = _normalize_generation_payload(
+        generation_payload,
+        managed_outputs=managed_outputs,
+    )
     from_dict = getattr(generation_result_type, "from_dict", None)
     if not callable(from_dict):
         raise CapabilityRuntimeError("GenerationResult.from_dict is unavailable")

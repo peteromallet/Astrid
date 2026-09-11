@@ -4,14 +4,39 @@ from __future__ import annotations
 
 import mimetypes
 import uuid
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from astrid.core.receipts.contract import CommandReceipt
 
 from .contracts import DomainResult, ErrorObject
-from .pagination import paged_rows
+from .pagination import page_pair, paged_rows
 from .workspace_client import WorkspaceClient, WorkspaceClientError
+
+
+def _full_mapping(value: Any) -> dict[str, Any] | None:
+    """Copy a generated resource without narrowing its explicit fields."""
+    if isinstance(value, Mapping):
+        return dict(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    return None
+
+
+def _source_task_id(value: Any) -> str | None:
+    resource = _full_mapping(value)
+    if resource is None:
+        return None
+    direct = resource.get("source_task_id")
+    if isinstance(direct, str) and direct:
+        return direct
+    metadata = resource.get("metadata")
+    if isinstance(metadata, Mapping):
+        nested = metadata.get("source_task_id")
+        if isinstance(nested, str) and nested:
+            return nested
+    return None
 
 
 class _RemoteFamily:
@@ -19,7 +44,7 @@ class _RemoteFamily:
         self._client = client
 
     def _typed(self, operation: str, *args: Any, key: str | None = None, **kwargs: Any) -> DomainResult[Any]:
-        reads = {"get_project", "list_projects", "current_project", "get_timeline", "list_timelines", "list_timeline_history", "diff_timeline", "get_shot", "list_project_shots", "get_reference", "list_project_references", "get_object", "head_object", "list_project_objects", "list_media_relations", "get_task", "list_project_tasks", "get_run", "list_project_runs", "list_events", "list_run_events", "list_generations", "get_generation", "list_variants", "get_document", "list_documents", "list_project_shot_text_bindings", "get_project_shot_text_binding"}
+        reads = {"get_project", "list_projects", "current_project", "get_timeline", "list_timelines", "list_timeline_history", "diff_timeline", "get_shot", "list_project_shots", "get_reference", "list_project_references", "get_object", "head_object", "list_project_objects", "list_media_relations", "get_task", "list_project_tasks", "list_managed_outputs", "get_managed_output", "get_run", "list_project_runs", "list_events", "list_run_events", "list_generations", "get_generation", "list_variants", "get_document", "list_documents", "list_project_shot_text_bindings", "get_project_shot_text_binding"}
         if key is None and operation not in reads:
             key = uuid.uuid4().hex
         try:
@@ -50,6 +75,7 @@ class _RemoteFamily:
             elif operation == "get_project_reference": value = self._client.get_project_reference(*args, **kwargs)
             elif operation == "get_project_shot": value = self._client.get_project_shot(*args, **kwargs)
             elif operation == "get_project_shot_text_binding": value = self._client.get_project_shot_text_binding(*args, **kwargs)
+            elif operation == "get_managed_output": value = self._client.get_managed_output(*args, **kwargs)
             elif operation == "get_run": value = self._client.get_run(*args, **kwargs)
             elif operation == "get_task": value = self._client.get_task(*args, **kwargs)
             elif operation == "get_timeline": value = self._client.get_timeline(*args, **kwargs)
@@ -65,6 +91,7 @@ class _RemoteFamily:
             elif operation == "list_project_shots": value = self._client.list_project_shots(*args, **kwargs)
             elif operation == "list_project_shot_text_bindings": value = self._client.list_project_shot_text_bindings(*args, **kwargs)
             elif operation == "list_project_tasks": value = self._client.list_project_tasks(*args, **kwargs)
+            elif operation == "list_managed_outputs": value = self._client.list_managed_outputs(*args, **kwargs)
             elif operation == "list_projects": value = self._client.list_projects(*args, **kwargs)
             elif operation == "list_run_events": value = self._client.list_run_events(*args, **kwargs)
             elif operation == "list_timeline_history": value = self._client.list_timeline_history(*args, **kwargs)
@@ -348,7 +375,7 @@ class RemoteTasks(_RemoteFamily):
         return self._typed("register_executor", {"executor_id": executor_id, "capabilities": capabilities}, key=idempotency_key, idempotency_key=idempotency_key)
     def register_capability(self, capability_id: str, definition_digest: str, *, idempotency_key=None):
         return self._typed("register_capability", capability_id, definition_digest, key=idempotency_key, idempotency_key=idempotency_key)
-    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, capability_digest: str | None = None):
+    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, capability_digest: str | None = None, generation_intent: Mapping[str, Any] | None = None):
         key = idempotency_key or uuid.uuid4().hex
         capabilities = paged_rows(self._client.list_capabilities, limit=50)
         if capabilities is None:
@@ -362,7 +389,20 @@ class RemoteTasks(_RemoteFamily):
             )
         match = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability), None)
         if match is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability}), idempotency_key=key)
-        return self._typed("admit_task", key=key, capability_id=capability, capability_digest=str(match["definition_digest"]), input_object_ids=input_manifest or [], idempotency_key=key, project_id=project_id, spec=spec, settlement_effect=settlement_effect, storage_estimate=storage_estimate)
+        admission = {
+            "key": key,
+            "capability_id": capability,
+            "capability_digest": str(match["definition_digest"]),
+            "input_object_ids": input_manifest or [],
+            "idempotency_key": key,
+            "project_id": project_id,
+            "spec": spec,
+            "settlement_effect": settlement_effect,
+            "storage_estimate": storage_estimate,
+        }
+        if generation_intent is not None:
+            admission["generation_intent"] = generation_intent
+        return self._typed("admit_task", **admission)
     def claim(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
         return self._typed("claim_task", key=idempotency_key, executor_id=executor_id, capability_ids=capability_ids, idempotency_key=idempotency_key)
     def settle(
@@ -414,6 +454,12 @@ class RemoteTasks(_RemoteFamily):
     def list(self, project_id, *, cursor=None, limit=50):
         return self._typed("list_project_tasks", project_id, cursor=cursor, limit=limit)
     def show(self, task_id): return self._typed("get_task", task_id)
+    def list_managed_outputs(self, task_id):
+        """Read Runtime-owned managed outputs for one admitted task."""
+        return self._typed("list_managed_outputs", task_id)
+    def get_managed_output(self, association_id):
+        """Read one Runtime-owned managed-output association."""
+        return self._typed("get_managed_output", association_id)
     def cancel(self, task_id, *, idempotency_key=None): return self._typed("cancel_task", task_id, key=idempotency_key, idempotency_key=idempotency_key or uuid.uuid4().hex)
     def retry(self, task_id, *, idempotency_key=None): return self._typed("retry_task", task_id, key=idempotency_key, idempotency_key=idempotency_key or uuid.uuid4().hex)
     def events(self, task_id, *, cursor=None, limit=50):
@@ -650,6 +696,86 @@ class RemoteShots(_RemoteFamily):
 
 
 class RemoteGenerations(_RemoteFamily):
+    def _managed_outputs(self, task_id: str) -> DomainResult[list[dict[str, Any]]]:
+        result = self._typed("list_managed_outputs", task_id)
+        if not result.ok:
+            return result
+        page = page_pair(result.data)
+        if page is None:
+            return DomainResult.failure(
+                ErrorObject(
+                    "protocol_error",
+                    "managed-output listing returned an invalid page",
+                    {"task_id": task_id},
+                ),
+                idempotency_key=result.idempotency_key,
+            )
+        rows, _ = page
+        mapped: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            normalized = _full_mapping(row)
+            if normalized is None:
+                return DomainResult.failure(
+                    ErrorObject(
+                        "protocol_error",
+                        "managed-output listing returned an invalid row",
+                        {"task_id": task_id, "index": index},
+                    ),
+                    idempotency_key=result.idempotency_key,
+                )
+            mapped.append(normalized)
+        return DomainResult.success(mapped, idempotency_key=result.idempotency_key)
+
+    def _managed_outputs_for_generation(
+        self,
+        task_id: str,
+        generation_id: str,
+    ) -> DomainResult[list[dict[str, Any]]]:
+        result = self._managed_outputs(task_id)
+        if not result.ok:
+            return result
+        return DomainResult.success(
+            [
+                row
+                for row in result.data or []
+                if row.get("generation_id") is not None
+                and row.get("generation_id") == generation_id
+            ],
+            idempotency_key=result.idempotency_key,
+        )
+
+    @staticmethod
+    def _with_data(result: DomainResult[Any], data: Any) -> DomainResult[Any]:
+        return DomainResult.success(
+            data,
+            receipt=result.receipt,
+            idempotency_key=result.idempotency_key,
+        )
+
+    def _enrich_generation(self, result: DomainResult[Any]) -> DomainResult[Any]:
+        if not result.ok:
+            return result
+        resource = _full_mapping(result.data)
+        if resource is None:
+            return result
+        task_id = _source_task_id(resource)
+        generation_id = resource.get("generation_id")
+        if task_id is None or not isinstance(generation_id, str) or not generation_id:
+            return result
+        managed = self._managed_outputs_for_generation(task_id, generation_id)
+        if not managed.ok:
+            return managed
+        return self._with_data(
+            result,
+            {**resource, "managed_outputs": managed.data or []},
+        )
+
+    def _generation_source_task_id(self, generation_id: str) -> str | None:
+        result = self._typed("get_generation", generation_id)
+        if not result.ok:
+            return None
+        return _source_task_id(result.data)
+
     def create(self, *, project: str, generation_id: str, metadata=None, type="image", source_task_id=None, idempotency_key=None):
         key = idempotency_key or uuid.uuid4().hex
         return self._typed(
@@ -663,10 +789,87 @@ class RemoteGenerations(_RemoteFamily):
             idempotency_key=key,
         )
     def list(self, project, *, cursor=None, limit=50):
-        return self._typed("list_generations", project, cursor=cursor, limit=limit)
-    def show(self, project, generation_id): return self._typed("get_generation", generation_id)
+        result = self._typed("list_generations", project, cursor=cursor, limit=limit)
+        if not result.ok:
+            return result
+        page = page_pair(result.data)
+        if page is None:
+            return result
+        rows, next_cursor = page
+        cached: dict[str, list[dict[str, Any]]] = {}
+        enriched: list[Any] = []
+        for row in rows:
+            resource = _full_mapping(row)
+            task_id = _source_task_id(resource)
+            generation_id = resource.get("generation_id") if resource is not None else None
+            if (
+                resource is None
+                or task_id is None
+                or not isinstance(generation_id, str)
+                or not generation_id
+            ):
+                enriched.append(row)
+                continue
+            if task_id not in cached:
+                managed = self._managed_outputs(task_id)
+                if not managed.ok:
+                    return managed
+                cached[task_id] = managed.data or []
+            enriched.append(
+                {
+                    **resource,
+                    "managed_outputs": [
+                        managed_row
+                        for managed_row in cached[task_id]
+                        if managed_row.get("generation_id") is not None
+                        and managed_row.get("generation_id") == generation_id
+                    ],
+                }
+            )
+        return self._with_data(result, [enriched, next_cursor])
+
+    def show(self, project, generation_id):
+        return self._enrich_generation(self._typed("get_generation", generation_id))
+
     def variants(self, project, generation_id, *, cursor=None, limit=50):
-        return self._typed("list_variants", generation_id, cursor=cursor, limit=limit)
+        result = self._typed("list_variants", generation_id, cursor=cursor, limit=limit)
+        if not result.ok:
+            return result
+        page = page_pair(result.data)
+        if page is None:
+            return result
+        rows, next_cursor = page
+        task_id = self._generation_source_task_id(generation_id)
+        if task_id is None:
+            return result
+        managed = self._managed_outputs_for_generation(task_id, generation_id)
+        if not managed.ok:
+            return managed
+        enriched: list[Any] = []
+        for row in rows:
+            resource = _full_mapping(row)
+            if resource is None:
+                enriched.append(row)
+                continue
+            if resource.get("generation_id") != generation_id:
+                enriched.append(row)
+                continue
+            variant_id = resource.get("variant_id")
+            object_id = resource.get("object_id")
+            matches = [
+                managed_row
+                for managed_row in managed.data or []
+                if (
+                    isinstance(variant_id, str)
+                    and managed_row.get("variant_key") == variant_id
+                )
+                or (
+                    object_id is not None
+                    and managed_row.get("object_id") == object_id
+                )
+            ]
+            enriched.append({**resource, "managed_outputs": matches})
+        return self._with_data(result, [enriched, next_cursor])
     def create_variant(self, generation_id: str, *, variant_id: str, object_id: str | None = None, variant_type="original", metadata=None, idempotency_key=None):
         key = idempotency_key or uuid.uuid4().hex
         return self._typed(

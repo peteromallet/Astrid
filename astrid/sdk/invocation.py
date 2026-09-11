@@ -1464,6 +1464,10 @@ def _validate_generation_intent(
     groups = value["groups"]
     if not isinstance(groups, list):
         raise CapabilityValidationError("generation_intent.groups must be a list")
+    if not groups:
+        raise CapabilityValidationError(
+            "generation_intent.groups must contain at least one group"
+        )
 
     copied_groups: list[dict[str, Any]] = []
     seen_group_keys: set[str] = set()
@@ -1488,6 +1492,11 @@ def _validate_generation_intent(
         if not isinstance(selectors, list):
             raise CapabilityValidationError(
                 f"generation_intent.groups[{group_index}].selectors must be a list"
+            )
+        if not selectors:
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].selectors must contain "
+                "at least one selector"
             )
         copied_selectors: list[dict[str, Any]] = []
         seen_ordinals: set[int] = set()

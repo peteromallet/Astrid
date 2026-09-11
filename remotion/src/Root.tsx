@@ -1,5 +1,5 @@
 import type {ReactElement} from 'react';
-import {Composition, Sequence, staticFile, useVideoConfig} from 'remotion';
+import {Composition, Sequence, useVideoConfig} from 'remotion';
 import {Video} from '@remotion/media';
 import {
   TimelineComposition,
@@ -15,6 +15,7 @@ import type {
 import {FontProvider} from './fonts';
 import {ReviewOverlay} from './ReviewOverlay';
 import type {ReviewContext} from './ReviewOverlay';
+import {resolveInvocationAsset} from './asset-source';
 
 type ReviewProps = TimelineCompositionProps & {review?: ReviewContext | null};
 
@@ -55,7 +56,7 @@ const RenderClockTail = ({props}: {props: TimelineCompositionProps}): ReactEleme
       durationInFrames={renderedFrames - authoredFrames}
     >
       <Video
-        src={staticFile(asset.file)}
+        src={resolveInvocationAsset(asset.file)}
         trimBefore={clock.tail.source_start_frame}
         trimAfter={clock.tail.source_end_frame}
         muted

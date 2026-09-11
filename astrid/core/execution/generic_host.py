@@ -3739,7 +3739,8 @@ class GenericPackHost:
         template_id = "vibecomfy.run"
 
         def cancelled():
-            nonlocal deadline_exceeded, evidence_cap_exceeded, scratch_floor_breached
+            nonlocal deadline_exceeded, evidence_cap_exceeded
+            nonlocal evidence_failure_receipt, scratch_floor_breached
             if self.execution_policy.deadline_expired(execution_deadline):
                 deadline_exceeded = True
                 cancel_signal.set()

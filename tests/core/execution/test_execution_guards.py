@@ -93,6 +93,23 @@ def test_generated_evidence_scan_tolerates_a_file_vanishing_during_render(
     assert policy.evidence_bytes(tmp_path) == len(b"kept")
 
 
+def test_generated_evidence_scan_tolerates_outer_walk_directory_vanishing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rglob = Path.rglob
+
+    def rglob_with_vanished_directory(path, pattern):
+        if path == tmp_path:
+            raise FileNotFoundError(path / "render-service")
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", rglob_with_vanished_directory)
+    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    measurement = policy.evidence_measurement(tmp_path)
+    assert measurement["observed_bytes"] == 0
+    assert measurement["vanished_file_count"] == 1
+
+
 def test_generated_evidence_scan_tolerates_a_file_vanishing_during_input_hash(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

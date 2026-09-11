@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from astrid.core.execution import process_group
+from astrid.core.execution.guards import ExecutionGuardPolicy
 from astrid.core.execution.generic_host import (
     AdapterRegistry,
     GenericPackHost,
@@ -1582,6 +1583,54 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert result["process_evidence"]["child_boundary"] == "subprocess"
     assert result["process_evidence"]["returncode"] == 0
     assert isinstance(result["process_evidence"]["process_id"], int)
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_mid_render_evidence_abort_keeps_measurement_on_runtime_failure(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["command"]["argv"] = [
+        "{python_exec}",
+        "-c",
+        "from pathlib import Path; import time; Path('{out}/answer.txt').write_text('ok'); time.sleep(2)",
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(
+        pack_roots=[tmp_path],
+        client=runtime,
+        execution_policy=ExecutionGuardPolicy(
+            scratch_floor_bytes=1,
+            evidence_cap_bytes=1,
+            deadline_seconds=5,
+        ),
+    )
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-evidence-abort",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-evidence-abort",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-evidence-abort"] = task
+
+    with pytest.raises(HostError, match="generated evidence cap exceeded"):
+        host.run_task(task, lease_token="lease-evidence-abort")
+
+    assert runtime.settlements == []
+    assert len(runtime.failures) == 1
+    diagnostic = runtime.failures[0][3]["failure_diagnostic"]
+    assert diagnostic["category"] == "run_budget_exceeded"
+    assert diagnostic["observed_bytes"] == 2
+    assert diagnostic["configured_cap_bytes"] == 1
+    assert diagnostic["largest_paths"] == [
+        {"path": "outputs/answer.txt", "bytes": 2, "classification": "generated"}
+    ]
+    assert diagnostic["source_digest"] == host.capabilities["test.echo"].source_digest
     assert not list(tmp_path.glob("astrid-attempt-*"))
 
 

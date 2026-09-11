@@ -21,7 +21,9 @@ from astrid.core.execution.generic_host import (
     HostRegistrationError,
     RuntimeProtocolClient,
     _assert_live_storage_envelope,
+    _attempt_tree_bytes,
     _completed_process_evidence,
+    _storage_tree_bytes,
     _task_storage_envelope,
     _terminate_process_group,
 )
@@ -1583,6 +1585,45 @@ def test_live_storage_envelope_charges_atomic_temps_to_scratch(tmp_path):
         attempt,
         output,
     )
+
+
+def test_live_storage_envelope_charges_render_workspace_to_scratch(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    render_workspace = attempt / ".video.mp4.render-service-fixture"
+    output.mkdir(parents=True)
+    (render_workspace / "outputs").mkdir(parents=True)
+    (output / "video.mp4").write_bytes(b"12345")
+    (render_workspace / "outputs" / "element-0001.jpeg").write_bytes(b"x" * 80)
+
+    _assert_live_storage_envelope(
+        {"scratch_bytes": 80, "output_bytes": 5},
+        attempt,
+        output,
+    )
+
+
+@pytest.mark.parametrize("counter", (_attempt_tree_bytes, _storage_tree_bytes))
+def test_live_storage_counters_tolerate_a_file_vanishing_during_scan(
+    tmp_path, monkeypatch, counter
+):
+    root = tmp_path / "attempt"
+    root.mkdir()
+    vanished = root / "element-2744.jpeg"
+    retained = root / "element-2745.jpeg"
+    vanished.write_bytes(b"gone")
+    retained.write_bytes(b"kept")
+
+    original_stat = Path.stat
+
+    def stat_without_vanished(path, *args, **kwargs):
+        if path == vanished:
+            vanished.unlink(missing_ok=True)
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_without_vanished)
+    assert counter(root) == len(b"kept")
 
 
 def test_final_storage_envelope_counts_published_temps_and_rejects_escape(tmp_path):

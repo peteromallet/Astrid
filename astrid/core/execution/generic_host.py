@@ -870,9 +870,15 @@ def _attempt_tree_bytes(root: Path) -> int:
     """Count owned attempt bytes without following symlink escapes."""
     total = 0
     for path in root.rglob("*"):
-        if path.is_symlink() or not path.is_file():
+        # Renderers may remove completed frame files while the live guard is
+        # walking the attempt. ``is_file()`` and ``stat()`` are not atomic; a
+        # vanished file is a normal scan race, not a renderer failure.
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            total += int(path.stat().st_size)
+        except FileNotFoundError:
             continue
-        total += int(path.stat().st_size)
     return total
 
 
@@ -885,9 +891,15 @@ def _storage_tree_bytes(root: Path) -> int:
         # Atomic writers use sibling ``*.tmp`` files.  Those bytes are
         # scratch during the write and must not be charged to the final-output
         # bucket while the child is still running.
-        if path.is_symlink() or not path.is_file() or path.name.endswith(".tmp"):
+        # The output tree can also contain renderer-owned intermediates for
+        # legacy/direct callers. Treat a file removed between discovery and
+        # stat as absent from this point-in-time accounting sample.
+        try:
+            if path.is_symlink() or not path.is_file() or path.name.endswith(".tmp"):
+                continue
+            total += int(path.stat().st_size)
+        except FileNotFoundError:
             continue
-        total += int(path.stat().st_size)
     return total
 
 

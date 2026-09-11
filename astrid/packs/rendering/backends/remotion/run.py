@@ -928,7 +928,15 @@ def _settings_from_request(request: RenderRequest, workspace: Path) -> _RenderSe
     config = dict(request.backend_config.get(BACKEND_ID, {}))
     _reject_unknown_config(config, _CONFIG_KEYS, BACKEND_ID)
 
-    project_value = config.get("project_dir", REPO_ROOT / "remotion")
+    # The managed task adapter supplies this deployment value both as the
+    # selected backend namespace and as the server-owned environment.  Keep
+    # the namespace authoritative when present, but retain the environment
+    # fallback across the generic-host worker hop; callers cannot set this
+    # environment through the public render request.
+    project_value = config.get(
+        "project_dir",
+        os.environ.get("ASTRID_REMOTION_PROJECT_DIR") or (REPO_ROOT / "remotion"),
+    )
     if not isinstance(project_value, (str, os.PathLike)):
         raise TypeError("project_dir must be a path string")
     project_dir = _input_path(os.fspath(project_value), workspace)

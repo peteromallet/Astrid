@@ -145,6 +145,21 @@ _REPLAY_VERBS = frozenset({"render", "finalize", "plan", "support"})
 _CANONICAL_RENDERER_IDS = ("rendering.ffmpeg", "rendering.remotion", "rendering.threejs")
 
 
+def _render_workspace_parent(output: Path) -> Path:
+    """Keep managed render scratch outside the host output subtree.
+
+    Generic-pack attempts expose an attempt/outputs directory as the declared
+    output root. Intermediate frame/audio files belong to the attempt scratch
+    budget, so managed output places its temporary workspace beside that
+    directory. Direct callers retain historical output-parent placement.
+    """
+
+    output_parent = output.resolve(strict=False).parent
+    if output_parent.name == "outputs" and output_parent.parent != output_parent:
+        return output_parent.parent
+    return output_parent
+
+
 def _select_capability(
     selector: str | None,
     registries: tuple[Any, Any, Any] | None = None,
@@ -352,7 +367,7 @@ class RenderService:
                         self._capture_failure_bundle(exc, request=localized)
                         raise
 
-            workspace_parent = output.resolve(strict=False).parent
+            workspace_parent = _render_workspace_parent(output)
             workspace_parent.mkdir(parents=True, exist_ok=True)
             with TemporaryDirectory(
                 prefix=f".{output.name}.render-service-",

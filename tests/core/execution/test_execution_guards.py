@@ -44,8 +44,29 @@ def test_scratch_floor_fails_closed_and_accepts_measured_space(
 def test_generated_evidence_cap_is_enforced(tmp_path) -> None:
     (tmp_path / "evidence.bin").write_bytes(b"12345")
     policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=4)
-    with pytest.raises(EvidenceCapError, match="exceeds cap"):
+    with pytest.raises(EvidenceCapError, match="exceeds cap") as failure:
         policy.assert_evidence_cap(tmp_path)
+    assert failure.value.diagnostic == {
+        "category": "run_budget_exceeded",
+        "attempt_observed_bytes": 5,
+        "attempt_previous_bytes": 0,
+        "attempt_delta_bytes": 5,
+        "run_observed_bytes": 5,
+        "cap_bytes": 4,
+        "observed_bytes": 5,
+        "generated_file_count": 1,
+        "immutable_file_count": 0,
+        "immutable_input_bytes": 0,
+        "immutable_input_manifest_digest": (
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ),
+        "vanished_file_count": 0,
+        "path_classes": {"evidence.bin": {"files": 1, "bytes": 5}},
+        "largest_paths": [
+            {"path": "evidence.bin", "bytes": 5, "classification": "generated"}
+        ],
+        "largest_paths_truncated": False,
+    }
 
     policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=5)
     assert policy.assert_evidence_cap(tmp_path)["observed_bytes"] == 5
@@ -110,6 +131,28 @@ def test_generated_evidence_scan_still_fails_closed_on_other_os_errors(
         policy.evidence_bytes(tmp_path)
 
 
+def test_generated_evidence_scan_error_has_distinct_diagnostic(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = tmp_path / "evidence.bin"
+    evidence.write_bytes(b"evidence")
+    original_stat = Path.stat
+
+    def stat_with_permission_error(path, *args, **kwargs):
+        if path == evidence:
+            raise PermissionError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_with_permission_error)
+    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    with pytest.raises(EvidenceCapError) as failure:
+        policy.evidence_measurement(tmp_path)
+    assert failure.value.diagnostic == {
+        "category": "scan_error",
+        "error_type": "PermissionError",
+    }
+
+
 def test_generated_budget_accumulates_and_excludes_immutable_inputs(tmp_path) -> None:
     inputs = tmp_path / "inputs"
     inputs.mkdir()
@@ -140,8 +183,10 @@ def test_budget_latches_after_cross_attempt_breach(tmp_path) -> None:
     (second / "out").write_bytes(b"456")
     (third / "out").write_bytes(b"7")
     policy.assert_evidence_cap(first)
-    with pytest.raises(EvidenceCapError, match="run budget"):
+    with pytest.raises(EvidenceCapError, match="run budget") as failure:
         policy.assert_evidence_cap(second)
+    assert failure.value.diagnostic["category"] == "run_budget_exceeded"
+    assert failure.value.diagnostic["path_classes"] == {"out": {"files": 1, "bytes": 3}}
     with pytest.raises(EvidenceCapError, match="exhausted"):
         policy.assert_evidence_cap(third)
     assert policy.evidence_budget.exhausted is True

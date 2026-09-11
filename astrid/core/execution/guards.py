@@ -172,16 +172,21 @@ class ExecutionGuardPolicy:
         total = 0
         try:
             for path in directory.rglob("*"):
-                if path.is_symlink() or not path.is_file():
-                    continue
-                size = int(path.stat().st_size)
-                identity = baseline.get(str(path.resolve()))
-                if identity is not None:
-                    expected_size, expected_digest = identity
-                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                    if size == expected_size and actual_digest == expected_digest:
+                try:
+                    if path.is_symlink() or not path.is_file():
                         continue
-                total += size
+                    size = int(path.stat().st_size)
+                    identity = baseline.get(str(path.resolve()))
+                    if identity is not None:
+                        expected_size, expected_digest = identity
+                        actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                        if size == expected_size and actual_digest == expected_digest:
+                            continue
+                    total += size
+                except FileNotFoundError:
+                    # Renderers may delete completed frame files while the
+                    # evidence guard is taking its point-in-time sample.
+                    continue
         except OSError as exc:
             raise EvidenceCapError(f"cannot measure generated evidence: {directory}") from exc
         return total

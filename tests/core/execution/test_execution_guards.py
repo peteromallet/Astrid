@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,27 @@ def test_generated_evidence_cap_is_enforced(tmp_path) -> None:
 
     policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=5)
     assert policy.assert_evidence_cap(tmp_path)["observed_bytes"] == 5
+
+
+def test_generated_evidence_scan_tolerates_a_file_vanishing_during_render(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vanished = tmp_path / "element-2744.jpeg"
+    retained = tmp_path / "element-2745.jpeg"
+    vanished.write_bytes(b"gone")
+    retained.write_bytes(b"kept")
+
+    original_stat = Path.stat
+
+    def stat_without_vanished(path, *args, **kwargs):
+        if path == vanished:
+            vanished.unlink(missing_ok=True)
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_without_vanished)
+    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    assert policy.evidence_bytes(tmp_path) == len(b"kept")
 
 
 def test_generated_budget_accumulates_and_excludes_immutable_inputs(tmp_path) -> None:

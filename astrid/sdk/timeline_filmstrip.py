@@ -104,8 +104,10 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         clip_end_frame,
         clip_start_frame,
         timeline_duration_frames,
+        timeline_render_duration_frames,
     )
     authored_duration_frames = timeline_duration_frames(config, float(fps))
+    rendered_duration_frames = timeline_render_duration_frames(config, float(fps))
     clips = []
     for raw in config['clips']:
         clip = deepcopy(dict(raw))
@@ -218,10 +220,12 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         'timeline_name': authority.get('timeline_slug', authority['timeline_id']),
         'render_run_id': run_id, 'video_digest': video_digest,
         'fps_rational': [fps.numerator, fps.denominator],
-        'duration_frames': authored_duration_frames,
+        'duration_frames': rendered_duration_frames,
         'clips': clips, 'scripts': scripts, 'occurrences': shot_occurrences,
         'tracks': deepcopy(config.get('tracks', [])),
         'metadata': {'canonical_timeline': deepcopy(authority),
+            'authored_duration_frames': authored_duration_frames,
+            'rendered_duration_frames': rendered_duration_frames,
             'script_timing': 'shot_script',
             'script_mapping_available': bool(occurrences and frozen_shots),
             'script_mapping_note': 'Frozen shot script; no word alignment.' if occurrences and frozen_shots else 'Render did not pin shot placements and scripts; rerender for script labels.'}}

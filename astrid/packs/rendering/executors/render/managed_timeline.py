@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from astrid.core import timeline
 from astrid.core._shared.jsonio import write_json_atomic
 from astrid.core.foundation.hash import validate_digest
+from astrid.core.timeline.duration import render_clock
 from astrid.sdk.pagination import paged_rows
 
 
@@ -123,6 +124,66 @@ def _validate_render_element_clip_types(
             reason=reason,
             recovery=recovery,
             validator="registered_element_reference",
+        )
+
+
+def _timeline_fps(config: Mapping[str, Any]) -> float:
+    output = config.get("output")
+    if isinstance(output, Mapping) and isinstance(output.get("fps"), (int, float)):
+        return float(output["fps"])
+    overrides = config.get("theme_overrides")
+    if isinstance(overrides, Mapping):
+        visual = overrides.get("visual")
+        if isinstance(visual, Mapping):
+            canvas = visual.get("canvas")
+            if isinstance(canvas, Mapping) and isinstance(canvas.get("fps"), (int, float)):
+                return float(canvas["fps"])
+    return 30.0
+
+
+def _validate_render_clock_binding(
+    config: Mapping[str, Any], registry: Mapping[str, Any]
+) -> None:
+    """Validate the managed render-only tail against the canonical registry."""
+
+    clock = render_clock(config, _timeline_fps(config))
+    if clock is None:
+        return
+    tail = clock["tail"]
+    assets = registry.get("assets", {})
+    if not isinstance(assets, Mapping):
+        raise ManagedRenderValidationError(
+            "render clock tail requires a canonical asset registry",
+            path="$.app.astrid_render_clock.tail.source_asset",
+            reason="tail source binding cannot be resolved",
+            recovery="Register the frozen tail source as a runtime-managed asset, then retry.",
+            validator="managed_render_clock_binding",
+        )
+    asset_key = tail["source_asset"]
+    entry = assets.get(asset_key)
+    if not isinstance(entry, Mapping):
+        raise ManagedRenderValidationError(
+            f"render clock tail source asset {asset_key!r} is not in the canonical registry",
+            path="$.app.astrid_render_clock.tail.source_asset",
+            reason="tail source binding is not a registered asset",
+            recovery="Register the frozen tail source in the same managed timeline snapshot, then retry.",
+            validator="managed_render_clock_binding",
+        )
+    if not isinstance(entry.get("media_id"), str) or not entry["media_id"].strip():
+        raise ManagedRenderValidationError(
+            f"render clock tail source asset {asset_key!r} has no runtime media identity",
+            path=f"$.assets[{json.dumps(str(asset_key))}].media_id",
+            reason="tail source is not runtime-admitted",
+            recovery="Import the frozen tail source into the project and refresh the canonical registry.",
+            validator="managed_render_clock_binding",
+        )
+    if not isinstance(entry.get("content_sha256"), str) or not entry["content_sha256"].strip():
+        raise ManagedRenderValidationError(
+            f"render clock tail source asset {asset_key!r} has no content digest",
+            path=f"$.assets[{json.dumps(str(asset_key))}].content_sha256",
+            reason="tail source provenance is incomplete",
+            recovery="Refresh the canonical registry with the runtime-admitted content digest, then retry.",
+            validator="managed_render_clock_binding",
         )
 
 
@@ -342,6 +403,9 @@ class ManagedRenderSnapshot:
         }
         if self.expansion is not None:
             result["expansion"] = dict(self.expansion)
+        clock = render_clock(self.config, _timeline_fps(self.config))
+        if clock is not None:
+            result["render_clock"] = dict(clock)
         admissions: dict[str, str] = {}
         assets = self.registry.get("assets", {})
         if isinstance(assets, Mapping):
@@ -415,6 +479,18 @@ def validate_managed_render_snapshot(snapshot: ManagedRenderSnapshot) -> None:
             f"canonical timeline {snapshot.timeline_slug!r} is not renderable: "
             "clips reference missing registry asset id(s): " + ", ".join(missing_assets)
         )
+    try:
+        _validate_render_clock_binding(config, registry)
+    except ValueError as exc:
+        if isinstance(exc, ManagedRenderValidationError):
+            raise
+        raise ManagedRenderValidationError(
+            f"canonical timeline {snapshot.timeline_slug!r} has an invalid render clock: {exc}",
+            path="$.app.astrid_render_clock",
+            reason=str(exc),
+            recovery="Provide a valid authored/render clock and runtime-admitted tail source, then retry.",
+            validator="managed_render_clock",
+        ) from exc
 
 
 def resolve_managed_render_snapshot(

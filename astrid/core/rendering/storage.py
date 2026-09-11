@@ -14,7 +14,11 @@ from typing import Any
 
 from astrid.core.rendering.contracts import RenderProfile
 from astrid.core.rendering.profile import resolve_render_profile
-from astrid.core.timeline.duration import clip_timeline_duration, timeline_duration_frames
+from astrid.core.timeline.duration import (
+    clip_timeline_duration,
+    timeline_duration_frames,
+    timeline_render_duration_frames,
+)
 
 _MIB = 1024**2
 
@@ -277,7 +281,8 @@ def estimate_managed_render_storage(
 
     profile = _render_profile(timeline, registry, requested_profile)
     fps = Fraction(*profile.fps_rational)
-    frames = timeline_duration_frames(timeline, float(fps))
+    authored_frames = timeline_duration_frames(timeline, float(fps))
+    frames = timeline_render_duration_frames(timeline, float(fps))
     duration = Fraction(frames, 1) / fps
     pixel_rate = Fraction(profile.width * profile.height, 1) * fps
     alpha = _is_alpha_timeline(timeline)
@@ -389,6 +394,7 @@ def estimate_managed_render_storage(
         "width": profile.width,
         "height": profile.height,
         "fps_rational": list(profile.fps_rational),
+        "authored_duration_frames": authored_frames,
         "duration_frames": frames,
         "duration_seconds_rational": [duration.numerator, duration.denominator],
         "managed_object_count": len(normalized_sizes),

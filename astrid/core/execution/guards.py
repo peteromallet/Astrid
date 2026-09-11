@@ -8,8 +8,9 @@ expectation is a typed policy field and never depends on a listener port.
 
 from __future__ import annotations
 
-import shutil
 import hashlib
+import heapq
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -26,7 +27,13 @@ class ScratchFloorError(ExecutionGuardError):
 
 
 class EvidenceCapError(ExecutionGuardError):
-    """Generated attempt evidence exceeds its declared cap."""
+    """Generated attempt evidence cannot be proven within its declared cap."""
+
+    def __init__(self, message: str, *, diagnostic: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        # Diagnostics are deliberately metadata-only.  They are attached to a
+        # terminal failure before an ephemeral attempt root is removed.
+        self.diagnostic = dict(diagnostic or {})
 
 
 class ExecutionDeadlineError(ExecutionGuardError):
@@ -70,7 +77,13 @@ class EvidenceBudget:
     def assert_available(self) -> None:
         with self._lock:
             if self._exhausted:
-                raise EvidenceCapError("generated evidence run budget is exhausted")
+                raise EvidenceCapError(
+                    "generated evidence run budget is exhausted",
+                    diagnostic={
+                        "category": "run_budget_exhausted",
+                        **(self._breach or {}),
+                    },
+                )
 
     def account(self, key: str, observed_bytes: int, cap_bytes: int) -> dict[str, int]:
         with self._lock:
@@ -86,7 +99,15 @@ class EvidenceBudget:
                 }
                 raise EvidenceCapError(
                     f"generated evidence run budget "
-                    f"{self._charged_bytes + delta} exceeds cap {cap_bytes}"
+                    f"{self._charged_bytes + delta} exceeds cap {cap_bytes}",
+                    diagnostic={
+                        "category": "run_budget_exceeded",
+                        "attempt_observed_bytes": int(observed_bytes),
+                        "attempt_previous_bytes": int(previous),
+                        "attempt_delta_bytes": int(delta),
+                        "run_observed_bytes": self._charged_bytes + delta,
+                        "cap_bytes": int(cap_bytes),
+                    },
                 )
             self._attempt_bytes[key] = max(previous, int(observed_bytes))
             self._charged_bytes += delta
@@ -165,31 +186,112 @@ class ExecutionGuardPolicy:
         Bytes present in the immutable input baseline are excluded; growth of
         an input file after the baseline is still charged as generated data.
         """
+        return int(
+            self.evidence_measurement(
+                root,
+                immutable_inputs=immutable_inputs,
+            )["observed_bytes"]
+        )
+
+    def evidence_measurement(
+        self,
+        root: str | Path,
+        *,
+        immutable_inputs: Mapping[str, tuple[int, str]] | None = None,
+        path_sample_limit: int = 64,
+    ) -> dict[str, Any]:
+        """Return bounded, metadata-only evidence accounting for one sample.
+
+        The exact content of generated files is never read into the receipt.
+        A small largest-file sample plus top-level path classes is enough to
+        distinguish a real cap breach from a scan failure after the root is
+        deleted.
+        """
         directory = Path(root)
         if not directory.exists():
-            raise EvidenceCapError(f"evidence root does not exist: {directory}")
+            raise EvidenceCapError(
+                f"evidence root does not exist: {directory}",
+                diagnostic={"category": "root_missing"},
+            )
+        if path_sample_limit < 0:
+            raise ValueError("path_sample_limit must not be negative")
+        path_sample_limit = min(int(path_sample_limit), 64)
         baseline = immutable_inputs or {}
         total = 0
+        generated_files = 0
+        immutable_files = 0
+        immutable_bytes = 0
+        vanished_files = 0
+        classes: dict[str, dict[str, int]] = {}
+        # Keep only the largest paths while scanning; a render may create
+        # millions of short-lived frame/evidence files.
+        entries: list[tuple[int, str, str]] = []
         try:
             for path in directory.rglob("*"):
                 try:
                     if path.is_symlink() or not path.is_file():
                         continue
                     size = int(path.stat().st_size)
+                    relative = path.relative_to(directory).as_posix()
+                    path_class = relative.split("/", 1)[0] if relative else "."
                     identity = baseline.get(str(path.resolve()))
+                    unchanged = False
                     if identity is not None:
                         expected_size, expected_digest = identity
                         actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                        if size == expected_size and actual_digest == expected_digest:
-                            continue
+                        unchanged = size == expected_size and actual_digest == expected_digest
+                    if unchanged:
+                        immutable_files += 1
+                        immutable_bytes += size
+                        continue
+                    generated_files += 1
                     total += size
+                    bucket = classes.setdefault(path_class, {"files": 0, "bytes": 0})
+                    bucket["files"] += 1
+                    bucket["bytes"] += size
+                    if path_sample_limit:
+                        candidate = (
+                            size,
+                            relative,
+                            "modified_input" if identity is not None else "generated",
+                        )
+                        if len(entries) < path_sample_limit:
+                            heapq.heappush(entries, candidate)
+                        elif candidate > entries[0]:
+                            heapq.heapreplace(entries, candidate)
                 except FileNotFoundError:
                     # Renderers may delete completed frame files while the
                     # evidence guard is taking its point-in-time sample.
+                    vanished_files += 1
                     continue
         except OSError as exc:
-            raise EvidenceCapError(f"cannot measure generated evidence: {directory}") from exc
-        return total
+            raise EvidenceCapError(
+                f"cannot measure generated evidence: {directory}",
+                diagnostic={"category": "scan_error", "error_type": type(exc).__name__},
+            ) from exc
+        entries.sort(key=lambda item: (-item[0], item[1], item[2]))
+        baseline_digest = hashlib.sha256(
+            "\n".join(
+                f"{path}\0{size}\0{digest}"
+                for path, (size, digest) in sorted(baseline.items())
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "observed_bytes": total,
+            "generated_file_count": generated_files,
+            "immutable_file_count": immutable_files,
+            "immutable_input_bytes": immutable_bytes,
+            "immutable_input_manifest_digest": baseline_digest,
+            "vanished_file_count": vanished_files,
+            "path_classes": {
+                key: classes[key] for key in sorted(classes)
+            },
+            "largest_paths": [
+                {"path": path, "bytes": size, "classification": classification}
+                for size, path, classification in entries[:path_sample_limit]
+            ],
+            "largest_paths_truncated": generated_files > path_sample_limit,
+        }
 
     def assert_evidence_cap(
         self,
@@ -198,15 +300,20 @@ class ExecutionGuardPolicy:
         immutable_inputs: Mapping[str, tuple[int, str]] | None = None,
     ) -> dict[str, Any]:
         """Reject generated evidence beyond the cumulative run-wide cap."""
-        observed_bytes = self.evidence_bytes(root, immutable_inputs=immutable_inputs)
-        accounting = self.evidence_budget.account(
-            str(Path(root).resolve()),
-            observed_bytes,
-            self.evidence_cap_bytes,
-        )
+        measurement = self.evidence_measurement(root, immutable_inputs=immutable_inputs)
+        observed_bytes = int(measurement["observed_bytes"])
+        try:
+            accounting = self.evidence_budget.account(
+                str(Path(root).resolve()),
+                observed_bytes,
+                self.evidence_cap_bytes,
+            )
+        except EvidenceCapError as exc:
+            exc.diagnostic.update(measurement)
+            raise
         return {
             "root": str(Path(root)),
-            "observed_bytes": observed_bytes,
+            **measurement,
             "cap_bytes": self.evidence_cap_bytes,
             **accounting,
         }

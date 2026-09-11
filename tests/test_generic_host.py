@@ -92,6 +92,42 @@ class FakeRuntime:
         )
 
 
+def test_runtime_failure_preserves_structured_guard_diagnostic() -> None:
+    class Generated:
+        def health(self):
+            return {"runtime_epoch": 7}
+
+        def fail_attempt(self, attempt_id, **kwargs):
+            self.failure = (attempt_id, kwargs)
+            return {"status": "failed"}
+
+    generated = Generated()
+    client = object.__new__(RuntimeProtocolClient)
+    client.generated = generated
+    client._runtime_epoch = None
+
+    client.fail(
+        "task-1",
+        "lease-1",
+        "generated evidence cap exceeded",
+        attempt_id="attempt-1",
+        fence=3,
+        failure_diagnostic={
+            "guard": "generated_evidence",
+            "category": "run_budget_exceeded",
+            "capability_id": "rendering.render",
+            "source_digest": "source-digest",
+            "observed_bytes": 12,
+            "configured_cap_bytes": 10,
+        },
+    )
+
+    attempt_id, kwargs = generated.failure
+    assert attempt_id == "attempt-1"
+    assert kwargs["error"]["diagnostic"]["category"] == "run_budget_exceeded"
+    assert kwargs["error"]["diagnostic"]["source_digest"] == "source-digest"
+
+
 def _write_manifest(
     root: Path,
     *,

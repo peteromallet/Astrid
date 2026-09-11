@@ -1513,10 +1513,22 @@ class RuntimeProtocolClient:
             idempotency_key=f"settle-{attempt_id}-{fence}",
         )
 
-    def fail(self, task_id: str, lease_token: str, error: str, *, retryable: bool = False, attempt_id: str | None = None, fence: int | None = None):
+    def fail(
+        self,
+        task_id: str,
+        lease_token: str,
+        error: str,
+        *,
+        retryable: bool = False,
+        attempt_id: str | None = None,
+        fence: int | None = None,
+        failure_diagnostic: Mapping[str, Any] | None = None,
+    ):
         if not attempt_id or fence is None:
             raise HostError("generated failure requires attempt_id and fence")
         payload: Any = {"message": str(error), "retryable": bool(retryable)}
+        if failure_diagnostic:
+            payload["diagnostic"] = dict(failure_diagnostic)
         return self.generated.fail_attempt(
             attempt_id,
             lease_id=lease_token,
@@ -3532,6 +3544,24 @@ class GenericPackHost:
         if record is None:
             raise HostError(f"capability not discovered: {capability_id}")
 
+        def evidence_failure_diagnostic(error: BaseException) -> dict[str, Any] | None:
+            if not isinstance(error, EvidenceCapError):
+                return None
+            raw = getattr(error, "diagnostic", {})
+            diagnostic = dict(raw) if isinstance(raw, Mapping) else {}
+            diagnostic.update(
+                {
+                    "guard": "generated_evidence",
+                    "attempt_id": attempt_id,
+                    "capability_id": capability_id,
+                    "capability_digest": record.capability_digest,
+                    "source_digest": record.source_digest,
+                    "dependency_digest": record.dependency_digest,
+                    "configured_cap_bytes": self.execution_policy.evidence_cap_bytes,
+                }
+            )
+            return diagnostic
+
         def fail_admission(error: Exception) -> None:
             """Fence deterministic admission failures as terminal attempts."""
             try:
@@ -3591,6 +3621,7 @@ class GenericPackHost:
                 retryable=False,
                 attempt_id=attempt_id,
                 fence=fence,
+                failure_diagnostic=evidence_failure_diagnostic(exc),
             )
             raise HostError(str(exc)) from exc
         spec = task_data.get("spec", {})
@@ -3631,6 +3662,7 @@ class GenericPackHost:
         evidence_root: Path | None = None
         immutable_input_baseline: dict[str, tuple[int, str]] = {}
         evidence_cap_exceeded = False
+        evidence_failure_receipt: dict[str, Any] | None = None
         scratch_floor_breached = False
         deadline_failed = False
         storage_receipt: dict[str, int] | None = None
@@ -3726,8 +3758,9 @@ class GenericPackHost:
                         evidence_root,
                         immutable_inputs=immutable_input_baseline,
                     )
-                except EvidenceCapError:
+                except EvidenceCapError as exc:
                     evidence_cap_exceeded = True
+                    evidence_failure_receipt = evidence_failure_diagnostic(exc)
                     cancel_signal.set()
                     return True
             try:
@@ -3783,6 +3816,7 @@ class GenericPackHost:
                     retryable=False,
                     attempt_id=attempt_id,
                     fence=fence,
+                    failure_diagnostic=evidence_failure_receipt,
                 )
                 raise HostError("generated evidence cap exceeded")
             if deadline_exceeded:
@@ -4084,6 +4118,8 @@ class GenericPackHost:
                 )
                 self.execution_policy.assert_deadline(execution_deadline)
             except ExecutionGuardError as exc:
+                if isinstance(exc, EvidenceCapError):
+                    evidence_failure_receipt = evidence_failure_diagnostic(exc)
                 raise HostError(str(exc)) from exc
             try:
                 harvested = harvest_staged_outputs(
@@ -4267,6 +4303,7 @@ class GenericPackHost:
                 retryable=False,
                 attempt_id=attempt_id,
                 fence=fence,
+                failure_diagnostic=evidence_failure_receipt,
             )
             raise
         finally:

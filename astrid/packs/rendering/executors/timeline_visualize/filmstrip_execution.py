@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import zipfile
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 
@@ -71,7 +72,12 @@ def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
 
     fps = Fraction(*snapshot["fps_rational"])
     rendered_frames, decoded_duration = _rendered_timing(video, fps)
-    authored_frames = int(snapshot.get("duration_frames") or 0)
+    metadata = snapshot.get("metadata")
+    authored_frames = int(
+        metadata.get("authored_duration_frames")
+        if isinstance(metadata, Mapping) and metadata.get("authored_duration_frames") is not None
+        else snapshot.get("duration_frames") or 0
+    )
     snapshot["duration_frames"] = rendered_frames
     snapshot.setdefault("metadata", {})["rendered_duration_frames"] = rendered_frames
     snapshot["metadata"]["rendered_duration_seconds"] = decoded_duration

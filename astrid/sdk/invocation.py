@@ -1434,6 +1434,129 @@ def _project_scope(capability: Any) -> str:
     return str(scope)
 
 
+def _validate_generation_intent(
+    value: Any,
+    *,
+    modality: str,
+) -> dict[str, Any]:
+    """Validate and copy the opaque D1 generation intent envelope."""
+    if not isinstance(value, Mapping):
+        raise CapabilityValidationError("generation_intent must be an object")
+    if set(value) != {"version", "modality", "partial_success_policy", "groups"}:
+        raise CapabilityValidationError(
+            "generation_intent must contain exactly version, modality, "
+            "partial_success_policy, and groups"
+        )
+    version = value["version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise CapabilityValidationError("generation_intent.version must be 1")
+    if value["modality"] != modality:
+        raise CapabilityValidationError(
+            f"generation_intent.modality must match generation modality {modality!r}"
+        )
+    partial_success_policy = value["partial_success_policy"]
+    if not isinstance(partial_success_policy, str) or partial_success_policy not in {
+        "reject", "allow"
+    }:
+        raise CapabilityValidationError(
+            "generation_intent.partial_success_policy must be 'reject' or 'allow'"
+        )
+    groups = value["groups"]
+    if not isinstance(groups, list):
+        raise CapabilityValidationError("generation_intent.groups must be a list")
+
+    copied_groups: list[dict[str, Any]] = []
+    seen_group_keys: set[str] = set()
+    for group_index, group in enumerate(groups):
+        if not isinstance(group, Mapping) or set(group) != {"group_key", "selectors"}:
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}] must contain exactly "
+                "group_key and selectors"
+            )
+        group_key = group["group_key"]
+        if not isinstance(group_key, str) or not group_key.strip():
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].group_key must be non-empty"
+            )
+        if group_key in seen_group_keys:
+            raise CapabilityValidationError(
+                f"generation_intent has duplicate group_key {group_key!r}"
+            )
+        seen_group_keys.add(group_key)
+
+        selectors = group["selectors"]
+        if not isinstance(selectors, list):
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].selectors must be a list"
+            )
+        copied_selectors: list[dict[str, Any]] = []
+        seen_ordinals: set[int] = set()
+        seen_variant_keys: set[str] = set()
+        for selector_index, selector in enumerate(selectors):
+            if not isinstance(selector, Mapping) or set(selector) != {
+                "selector", "ordinal", "variant_key"
+            }:
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "must contain exactly selector, ordinal, and variant_key"
+                )
+            selector_name = selector["selector"]
+            ordinal = selector["ordinal"]
+            variant_key = selector["variant_key"]
+            if not isinstance(selector_name, str) or not selector_name.strip():
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "selector must be non-empty"
+                )
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "ordinal must be a non-negative integer"
+                )
+            if not isinstance(variant_key, str) or not variant_key.strip():
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "variant_key must be non-empty"
+                )
+            if ordinal in seen_ordinals:
+                raise CapabilityValidationError(
+                    f"generation_intent group {group_key!r} has duplicate ordinal {ordinal}"
+                )
+            if variant_key in seen_variant_keys:
+                raise CapabilityValidationError(
+                    f"generation_intent group {group_key!r} has duplicate variant_key "
+                    f"{variant_key!r}"
+                )
+            seen_ordinals.add(ordinal)
+            seen_variant_keys.add(variant_key)
+            copied_selectors.append(
+                {
+                    "selector": selector_name,
+                    "ordinal": ordinal,
+                    "variant_key": variant_key,
+                }
+            )
+        copied_groups.append({"group_key": group_key, "selectors": copied_selectors})
+
+    return {
+        "version": 1,
+        "modality": modality,
+        "partial_success_policy": partial_success_policy,
+        "groups": copied_groups,
+    }
+
+
+def _generation_capability_modality(capability_id: str) -> str | None:
+    """Resolve the modality for every shipped generation executor family."""
+    if capability_id.startswith("generation.generate_image"):
+        return "image"
+    if capability_id.startswith("generation.generate_video"):
+        return "video"
+    if capability_id.startswith("generation.generate_audio"):
+        return "audio"
+    return None
+
+
 def _kernel_invoke(
     capability: Any,
     *,
@@ -1444,6 +1567,7 @@ def _kernel_invoke(
     extra_pack_roots: tuple[str, ...] = (),
     idempotency_context: Mapping[str, Any] | None = None,
     admission_metadata: Mapping[str, Any] | None = None,
+    generation_intent: Mapping[str, Any] | None = None,
     storage_estimate: Mapping[str, int] | None = None,
     registry: Any | None = None,
     _client: Any | None = None,
@@ -1486,6 +1610,8 @@ def _kernel_invoke(
         # Keep the transparent estimate out of capability inputs: it is task
         # admission evidence, not an executor-authored input.
         spec["admission_metadata"] = _json_safe_mapping(dict(admission_metadata))
+    if generation_intent is not None:
+        spec["generation_intent"] = _json_safe_mapping(dict(generation_intent))
     # Managed renders authorize their snapshot registry media at admission:
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
@@ -1820,6 +1946,27 @@ def invoke(
     if capability.capability_type == "element":
         raise UnsupportedCapabilityError(f"elements are not invokable via the SDK: {capability.id}")
 
+    generation_modalities = {
+        "generation.generate_image": "image",
+        "generation.generate_video": "video",
+        "generation.generate_audio": "audio",
+    }
+    modality = generation_modalities.get(capability.id)
+    intent_modality = _generation_capability_modality(str(capability.id))
+    request_inputs = dict(inputs or {})
+    generation_intent: dict[str, Any] | None = None
+    if "generation_intent" in request_inputs:
+        if intent_modality is None:
+            raise CapabilityValidationError(
+                "generation_intent is only accepted for generation capabilities"
+            )
+        generation_intent = _validate_generation_intent(
+            request_inputs["generation_intent"],
+            modality=intent_modality,
+        )
+        # Intent is admission metadata, not an executor-facing input port.
+        request_inputs.pop("generation_intent")
+
     if isinstance(project, str) and not project.strip():
         project = None
     project_scope = _project_scope(capability)
@@ -1917,14 +2064,7 @@ def invoke(
     # and live invocation.  This keeps generic ``sdk.invoke`` from accepting
     # an impossible model/mode/backend cell (or FLF request missing its end
     # frame) and discovering the problem only after kernel admission.
-    generation_modalities = {
-        "generation.generate_image": "image",
-        "generation.generate_video": "video",
-        "generation.generate_audio": "audio",
-    }
-    modality = generation_modalities.get(capability.id)
     if modality is not None:
-        request_inputs = dict(inputs or {})
         model_registry = sdk_module._load_model_registry(
             project_root=project_root,
             extra_pack_roots=extra_pack_roots,
@@ -1975,7 +2115,7 @@ def invoke(
         try:
             raw_result, preview_ok = _manifest_dry_run_result(
                 capability,
-                inputs=inputs,
+                inputs=request_inputs,
                 outputs=outputs,
                 brief=brief,
                 python_exec=python_exec,
@@ -2036,13 +2176,15 @@ def invoke(
         kernel_kwargs: dict[str, Any] = {
             "kind": kind,
             "project": project,
-            "inputs": inputs,
+            "inputs": request_inputs,
             "outputs": outputs,
             "extra_pack_roots": extra_pack_roots,
             "idempotency_context": invocation_authority_context,
             "admission_metadata": invocation_admission_metadata,
             "storage_estimate": invocation_storage_estimate,
         }
+        if generation_intent is not None:
+            kernel_kwargs["generation_intent"] = generation_intent
         if registry is not None:
             kernel_kwargs["registry"] = registry
         kr, kt, ka, mpath, raw_result, ok, _ = _kernel_invoke(

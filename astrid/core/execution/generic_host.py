@@ -2695,6 +2695,7 @@ class GenericPackHost:
                 "digest": f"sha256:{digest}",
                 "size": size,
                 "path": str(path),
+                "filename": path.name,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
             })
@@ -2894,6 +2895,7 @@ class GenericPackHost:
             if not raw_path:
                 raise HostError("generated output is missing its staged path")
             path = Path(str(raw_path))
+            filename = descriptor.get("filename") or path.name
             media_type = str(descriptor.get("artifact_type") or "application/octet-stream")
             if inline:
                 data = path.read_bytes()
@@ -2910,6 +2912,7 @@ class GenericPackHost:
                     for key in (
                         "name",
                         "kind",
+                        "filename",
                         "media_type",
                         "digest",
                         "size",
@@ -2922,7 +2925,7 @@ class GenericPackHost:
                 path,
                 project_id=project_id,
                 media_type=media_type,
-                filename=path.name,
+                filename=filename,
             )
             digest = getattr(object_row, "digest", None)
             if not digest:
@@ -2930,6 +2933,7 @@ class GenericPackHost:
             uploaded.append({
                 "name": descriptor.get("name"),
                 "kind": "object",
+                "filename": filename,
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),

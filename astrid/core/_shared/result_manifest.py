@@ -732,10 +732,7 @@ def _collect_manifest_files(
             flattened.append((index, concrete))
 
     collected: list[HarvestedOutput] = []
-    # Harvested publication ordinals are scoped by declared output identity
-    # and explicit group metadata. A generic result manifest validator above
-    # retains its historical global ordinal rule.
-    seen_ordinals: set[tuple[str, str | None, int]] = set()
+    seen_ordinals: set[int] = set()
     primary_count = 0
     for flat_index, (source_index, entry) in enumerate(flattened):
         raw_path = entry.get("path")
@@ -793,19 +790,9 @@ def _collect_manifest_files(
             raise HarvestError(
                 f"output {raw_path!r} ordinal must be a non-negative integer"
             )
-        selector_metadata = entry.get("selector")
-        selector_group = (
-            selector_metadata.get("group_key")
-            if isinstance(selector_metadata, Mapping)
-            else None
-        )
-        group_key = entry.get("group_key", selector_group)
-        if not isinstance(group_key, str):
-            group_key = None
-        ordinal_identity = (identity, group_key, ordinal)
-        if ordinal_identity in seen_ordinals:
+        if ordinal in seen_ordinals:
             raise HarvestError(f"duplicate output ordinal {ordinal} for {raw_path!r}")
-        seen_ordinals.add(ordinal_identity)
+        seen_ordinals.add(ordinal)
 
         role = entry.get("role", "result")
         if role not in ("result", "auxiliary"):

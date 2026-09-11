@@ -833,6 +833,44 @@ def test_harvest_preserves_collection_name_and_distinct_ordinals(tmp_path: Path)
     assert [item["is_primary"] for item in harvested] == [True, False]
 
 
+def test_harvest_rejects_global_duplicate_ordinals_across_generation_groups(
+    tmp_path: Path,
+) -> None:
+    spool = tmp_path / "outputs"
+    spool.mkdir()
+    first = _write_file(spool, "first.mp4", b"first")
+    second = _write_file(spool, "second.mp4", b"second")
+    write_manifest(
+        spool / "manifest.json",
+        build_manifest(
+            kind="video",
+            inputs={},
+            outputs=[
+                {
+                    **first,
+                    "name": "generated_videos",
+                    "ordinal": 4,
+                    "group_key": "left",
+                    "variant_key": "left-v",
+                    "role": "result",
+                },
+                {
+                    **second,
+                    "name": "generated_videos",
+                    "ordinal": 4,
+                    "group_key": "right",
+                    "variant_key": "right-v",
+                    "role": "result",
+                },
+            ],
+            created="2026-09-08T00:00:00Z",
+        ),
+    )
+
+    with pytest.raises(HarvestError, match="duplicate output ordinal 4"):
+        harvest_staged_outputs(spool, require=True)
+
+
 def test_harvest_empty_receipt_is_exclusive_and_required_fails(tmp_path: Path) -> None:
     spool = tmp_path / "outputs"
     spool.mkdir()

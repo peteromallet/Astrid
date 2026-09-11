@@ -1566,6 +1566,63 @@ def _generation_capability_modality(capability_id: str) -> str | None:
     return None
 
 
+def _generation_publish_effect(
+    capability: Any,
+    *,
+    project: str | None,
+    generation_intent: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compose the sole typed publication effect from validated GEN intent."""
+    if not isinstance(project, str) or not project.strip():
+        raise CapabilityValidationError(
+            "generation publication requires a project-scoped task"
+        )
+    modality = generation_intent["modality"]
+    expected_port = {
+        "image": "generated_images",
+        "video": "generated_videos",
+        "audio": "generated_audio",
+    }[modality]
+    declared_outputs = getattr(getattr(capability, "definition", None), "outputs", ())
+    matching_ports = [
+        output.name
+        for output in declared_outputs
+        if getattr(output, "name", None) == expected_port
+        and not str(getattr(output, "name", "")).endswith("_manifest")
+        and getattr(output, "artifact_type", None)
+    ]
+    if matching_ports != [expected_port]:
+        raise CapabilityValidationError(
+            f"generation capability must declare exactly one primary {expected_port!r} output"
+        )
+    groups = []
+    for group in generation_intent["groups"]:
+        groups.append({
+            "group_key": group["group_key"],
+            "selectors": [
+                {
+                    "selector": selector["selector"],
+                    "ordinal": selector["ordinal"],
+                    "variant_key": selector["variant_key"],
+                    "output_port": expected_port,
+                }
+                for selector in group["selectors"]
+            ],
+        })
+    return {
+        "effect_type": "generation.publish_v1",
+        "target_id": project,
+        "payload": {
+            "version": 1,
+            "modality": modality,
+            "generation_type": str(capability.id),
+            "metadata": {},
+            "partial_success_policy": generation_intent["partial_success_policy"],
+            "groups": groups,
+        },
+    }
+
+
 def _kernel_invoke(
     capability: Any,
     *,
@@ -1716,6 +1773,9 @@ def _kernel_invoke(
     }
     if generation_intent is not None:
         admission["generation_intent"] = generation_intent
+        admission["settlement_effect"] = _generation_publish_effect(
+            capability, project=project, generation_intent=generation_intent
+        )
     result = create_task(**admission)
     result_ok = bool(getattr(result, "ok", isinstance(result, Mapping)))
     data = getattr(result, "data", result if isinstance(result, Mapping) else None)

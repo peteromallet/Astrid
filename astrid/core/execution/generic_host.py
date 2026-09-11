@@ -89,6 +89,25 @@ class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
 
 
+def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> str | None:
+    """Resolve the primary generated output port from the admitted schema."""
+    if not isinstance(intent, Mapping):
+        return None
+    modality = intent.get("modality")
+    expected = {"image": "generated_images", "video": "generated_videos", "audio": "generated_audio"}.get(modality)
+    if expected is None:
+        return None
+    matches = [
+        output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
+        if getattr(output, "name", None) == expected
+        and not str(getattr(output, "name", "")).endswith("_manifest")
+        and getattr(output, "artifact_type", None)
+    ]
+    if matches != [expected]:
+        raise HostError(f"generation capability must declare exactly one primary {expected!r} output")
+    return expected
+
+
 def _cleanup_ephemeral_attempt(root: Path) -> None:
     """Remove an owned attempt root and verify that no residue remains."""
     try:
@@ -2642,6 +2661,7 @@ class GenericPackHost:
         record: CapabilityRecord,
         descriptors: Sequence[Mapping[str, Any]],
         attempt: Path,
+        generation_intent: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Bind validated harvest descriptors to their declared output ports."""
         outputs: list[dict[str, Any]] = []
@@ -2688,7 +2708,8 @@ class GenericPackHost:
             role = harvested.get("role", "result")
             if role not in {"result", "auxiliary"}:
                 raise HostError(f"harvested output {name!r} has invalid role {role!r}")
-            outputs.append({
+            output_port = _generation_output_port(record, generation_intent)
+            output = {
                 "name": name,
                 "ordinal": ordinal,
                 "artifact_type": getattr(output, "artifact_type", None),
@@ -2698,7 +2719,20 @@ class GenericPackHost:
                 "filename": path.name,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
-            })
+                # These are producer-declared publication bindings. Runtime
+                # validates them against the admitted effect and derives all
+                # durable IDs; the host only carries them through intact.
+                **{
+                    field: harvested[field]
+                    for field in (
+                        "output_port", "group_key", "variant_key", "selector",
+                    )
+                    if field in harvested
+                },
+            }
+            if output_port is not None and name == output_port:
+                output["output_port"] = output_port
+            outputs.append(output)
         return outputs
 
     def _child_environment(
@@ -2920,6 +2954,9 @@ class GenericPackHost:
                     )
                     if key in descriptor
                 })
+                for field in ("output_port", "group_key", "variant_key", "selector", "ordinal"):
+                    if field in descriptor:
+                        uploaded[-1][field] = descriptor[field]
                 continue
             object_row = upload_object(
                 path,
@@ -2937,6 +2974,13 @@ class GenericPackHost:
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
+                **{
+                    field: descriptor[field]
+                    for field in (
+                        "output_port", "group_key", "variant_key", "selector", "ordinal",
+                    )
+                    if field in descriptor
+                },
             })
         return uploaded
 
@@ -3927,7 +3971,16 @@ class GenericPackHost:
                 )
             except HarvestError as exc:
                 raise HostError(f"capability {record.id!r}: {exc}") from exc
-            typed_outputs = self._typed_outputs(record, harvested, root)
+            typed_outputs = self._typed_outputs(
+                record,
+                harvested,
+                root,
+                generation_intent=(
+                    task_data.get("generation_intent")
+                    if isinstance(task_data.get("generation_intent"), Mapping)
+                    else None
+                ),
+            )
             publication_result: Mapping[str, Any] | None = None
             if capability_id == "rendering.assemble_timeline":
                 publication_result = self._publish_assembled_timeline(
@@ -4269,6 +4322,7 @@ class GenericPackHost:
             "spec": getattr(claim, "spec", None),
             "project_id": getattr(claim, "project_id", None),
             "expected_effect": getattr(claim, "expected_effect", None),
+            "generation_intent": getattr(claim, "generation_intent", None),
         }
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
@@ -4302,6 +4356,8 @@ class GenericPackHost:
             task_data["spec"] = claim_data["spec"]
         if claim_data.get("expected_effect") is not None:
             task_data["expected_effect"] = claim_data["expected_effect"]
+        if claim_data.get("generation_intent") is not None:
+            task_data["generation_intent"] = claim_data["generation_intent"]
         return self.run_task(
             {"task": task_data},
             lease_token=str(claim_data.get("lease_id") or ""),

@@ -123,6 +123,155 @@ def _mapping_value(container: Mapping[str, Any], *names: str) -> Any:
     return None
 
 
+_MANAGED_OUTPUT_FIELDS = (
+    "association_id", "project_id", "run_id", "task_id", "attempt_id",
+    "output_port", "group_key", "variant_key", "selector", "object_id",
+    "digest", "manifest_ref", "size", "filename", "media_type", "ordinal",
+    "role", "producer", "provenance", "durability", "state", "version",
+    "lifecycle", "generation_id", "regeneration", "coverage", "expires_at",
+    "pinned_at", "lease_id", "lease_owner", "lease_expires_at",
+    "lifecycle_updated_at",
+)
+
+
+def _record_mapping(value: Any) -> dict[str, Any] | None:
+    """Make generated dataclasses and wire mappings equally readable."""
+
+    if isinstance(value, Mapping):
+        return dict(value)
+    fields = {
+        name: getattr(value, name)
+        for name in _MANAGED_OUTPUT_FIELDS
+        if hasattr(value, name)
+    }
+    return fields or None
+
+
+def _managed_output_association(value: Any) -> Mapping[str, Any] | None:
+    """Adapt one exact DB ManagedOutput into the existing publication shape."""
+
+    record = _record_mapping(value)
+    if record is None:
+        return None
+    association = dict(record)
+    # object_id is the Runtime managed byte reference accepted by get_object;
+    # manifest_ref is a distinct path-independent publication identity.
+    association.update(
+        {
+            "output_port": record.get("output_port"),
+            "managed_object_reference": record.get("object_id"),
+            "actual_filename": record.get("filename"),
+            "media_type": record.get("media_type"),
+        }
+    )
+    return association
+
+
+def _association_needs_managed_lookup(association: Mapping[str, Any]) -> bool:
+    """Return whether a task association is absent or incomplete."""
+
+    return any(
+        value in (None, "")
+        for value in (
+            _identifier(association, "output_port", "port", "name"),
+            _nested_reference(association),
+            _mapping_value(association, "digest", "content_sha256", "sha256"),
+            _mapping_value(association, "actual_filename", "filename", "output_filename"),
+            _mapping_value(association, "media_type", "mime_type", "content_type"),
+            _mapping_value(association, "size", "byte_size", "bytes"),
+            _mapping_value(association, "ordinal", "output_ordinal"),
+            _identifier(association, "role", "semantic_role"),
+        )
+    )
+
+
+def _managed_output_matches(
+    record: Mapping[str, Any],
+    *,
+    project_id: str,
+    run_id: str,
+    task_id: str,
+    output: Mapping[str, Any],
+    association: Mapping[str, Any] | None,
+) -> bool:
+    """Keep managed association selection inside the explicit render scope."""
+
+    if _identifier(record, "project_id") != project_id:
+        return False
+    if _identifier(record, "run_id", "id") != run_id:
+        return False
+    if _identifier(record, "task_id") != task_id:
+        return False
+    if _identifier(record, "output_port", "port", "name") != "video":
+        return False
+    if association is not None:
+        expected_id = _identifier(association, "association_id", "managed_output_id")
+        if expected_id and _identifier(record, "association_id") != expected_id:
+            return False
+    for names in (
+        ("digest", "content_sha256", "sha256"),
+        ("size", "byte_size", "bytes"),
+        ("ordinal", "output_ordinal"),
+        ("role", "semantic_role"),
+    ):
+        expected = _mapping_value(output, *names)
+        actual = _mapping_value(record, *names)
+        if expected is not None and actual is not None:
+            if names[0] == "digest":
+                if _normalize_digest(expected) != _normalize_digest(actual):
+                    return False
+            elif expected != actual:
+                return False
+    return True
+
+
+def _managed_output_rows(value: Any) -> list[Any]:
+    if isinstance(value, Mapping):
+        items = value.get("items")
+        return list(items) if isinstance(items, list) else []
+    if isinstance(value, (list, tuple)):
+        if len(value) == 2 and isinstance(value[0], list):
+            return value[0]
+        return list(value)
+    return []
+
+
+def _lookup_managed_output(
+    *,
+    client: Any,
+    project_id: str,
+    run_id: str,
+    task_id: str,
+    output: Mapping[str, Any],
+    association: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Read only list/get managed associations when task output is incomplete."""
+
+    list_outputs = getattr(client, "list_managed_outputs", None)
+    get_output = getattr(client, "get_managed_output", None)
+    if not callable(list_outputs):
+        return None
+    expected_id = _identifier(association or {}, "association_id", "managed_output_id")
+    values: list[Any]
+    if expected_id and callable(get_output):
+        values = [get_output(expected_id)]
+    else:
+        values = _managed_output_rows(list_outputs(task_id))
+    matches: list[Mapping[str, Any]] = []
+    for value in values:
+        normalized = _managed_output_association(value)
+        if normalized is not None and _managed_output_matches(
+            normalized,
+            project_id=project_id,
+            run_id=run_id,
+            task_id=task_id,
+            output=output,
+            association=association,
+        ):
+            matches.append(normalized)
+    return matches[0] if len(matches) == 1 else None
+
+
 def _association_candidates(value: Any) -> list[Mapping[str, Any]]:
     """Find publication-association mappings without inventing a new store."""
 
@@ -179,6 +328,8 @@ def _find_publication_association(
                 "object_reference",
                 "object_ref",
                 "managed_object",
+                "association_id",
+                "object_id",
                 "actual_filename",
                 "filename",
                 "media_type",
@@ -283,6 +434,9 @@ def _publication_metadata(
     duplicate_digest = _mapping_value(output, "digest", "content_sha256", "sha256")
     if duplicate_digest is not None and _normalize_digest(duplicate_digest) != digest:
         return {}, "publication association conflicts with output digest"
+    object_digest = _normalize_digest(association.get("object_id"))
+    if object_digest is not None and object_digest != digest:
+        return {}, "publication association conflicts with managed object digest"
     duplicate_size = _mapping_value(output, "size", "byte_size", "bytes")
     if duplicate_size is not None and duplicate_size != raw_size:
         return {}, "publication association conflicts with output size"
@@ -309,6 +463,13 @@ def _publication_metadata(
         "task_id": task_id,
         "run_id": run_id,
     }
+    for field in (
+        "association_id", "object_id", "manifest_ref", "selector", "group_key",
+        "variant_key", "producer", "provenance", "durability", "state", "version",
+        "lifecycle", "generation_id", "regeneration", "coverage",
+    ):
+        if field in association:
+            metadata[field] = association[field]
     if producer_id:
         metadata["producer_id"] = producer_id
     if attempt_id:
@@ -619,11 +780,28 @@ def open_render(
             if isinstance(item, Mapping)
             and _identifier(item, "output_port", "port", "name") == "video"
         ]
-        if len(video_outputs) != 1:
+        if len(video_outputs) > 1:
             return _failure("validation_error", "render task must publish exactly one video output association", run_id=selected_run_id, count=len(video_outputs))
-        output = video_outputs[0]
+        output = video_outputs[0] if video_outputs else {}
         association = _find_publication_association(task=task, run=run, output=output)
-        if association is None:
+        managed_association = None
+        if association is None or _association_needs_managed_lookup(association):
+            managed_association = _lookup_managed_output(
+                client=client,
+                project_id=resolved_project_id,
+                run_id=selected_run_id,
+                task_id=_identifier(task, "task_id", "id"),
+                output=output,
+                association=association,
+            )
+        if managed_association is not None:
+            metadata, metadata_error = _publication_metadata(
+                association=managed_association,
+                output=output,
+                task=task,
+                run=run,
+            )
+        elif association is None and output:
             metadata, metadata_error = _legacy_publication_metadata(
                 client=client,
                 project_id=resolved_project_id,
@@ -639,8 +817,15 @@ def open_render(
                     run_id=selected_run_id,
                     **({"detail": metadata_error} if metadata_error else {}),
                 )
-        else:
+        elif association is not None:
             metadata, metadata_error = _publication_metadata(association=association, output=output, task=task, run=run)
+        else:
+            return _failure(
+                "unavailable",
+                "Runtime publication association is unavailable; Astrid cannot safely open this render",
+                dependency="runtime_publication_association",
+                run_id=selected_run_id,
+            )
         if metadata_error:
             return _failure("protocol_error", metadata_error, run_id=selected_run_id)
         digest = str(metadata["digest"])
@@ -677,6 +862,16 @@ def open_render(
                 "output_port": metadata["output_port"],
                 "ordinal": metadata["ordinal"],
                 "role": metadata["role"],
+                **{
+                    field: metadata[field]
+                    for field in (
+                        "association_id", "object_id", "manifest_ref", "selector",
+                        "group_key", "variant_key", "producer", "provenance",
+                        "durability", "state", "version", "lifecycle",
+                        "generation_id", "regeneration", "coverage",
+                    )
+                    if field in metadata
+                },
                 **({"producer_id": metadata["producer_id"]} if "producer_id" in metadata else {}),
                 **({"attempt_id": metadata["attempt_id"]} if "attempt_id" in metadata else {}),
                 "local_path": str(path),

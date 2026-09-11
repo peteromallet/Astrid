@@ -19,7 +19,7 @@ class _RemoteFamily:
         self._client = client
 
     def _typed(self, operation: str, *args: Any, key: str | None = None, **kwargs: Any) -> DomainResult[Any]:
-        reads = {"get_project", "list_projects", "current_project", "get_timeline", "list_timelines", "list_timeline_history", "diff_timeline", "get_shot", "list_project_shots", "get_reference", "list_project_references", "get_object", "head_object", "list_project_objects", "list_media_relations", "get_task", "list_project_tasks", "get_run", "list_project_runs", "list_events", "list_run_events", "list_generations", "get_generation", "list_variants", "get_document", "list_documents", "list_project_shot_text_bindings", "get_project_shot_text_binding"}
+        reads = {"get_project", "list_projects", "current_project", "get_timeline", "list_timelines", "list_timeline_history", "diff_timeline", "get_shot", "list_project_shots", "get_reference", "list_project_references", "get_object", "head_object", "list_project_objects", "list_media_relations", "get_task", "list_project_tasks", "list_managed_outputs", "get_managed_output", "get_run", "list_project_runs", "list_events", "list_run_events", "list_generations", "get_generation", "list_variants", "get_document", "list_documents", "list_project_shot_text_bindings", "get_project_shot_text_binding"}
         if key is None and operation not in reads:
             key = uuid.uuid4().hex
         try:
@@ -52,6 +52,7 @@ class _RemoteFamily:
             elif operation == "get_project_shot_text_binding": value = self._client.get_project_shot_text_binding(*args, **kwargs)
             elif operation == "get_run": value = self._client.get_run(*args, **kwargs)
             elif operation == "get_task": value = self._client.get_task(*args, **kwargs)
+            elif operation == "get_managed_output": value = self._client.get_managed_output(*args, **kwargs)
             elif operation == "get_timeline": value = self._client.get_timeline(*args, **kwargs)
             elif operation == "head_object": value = self._client.head_object(*args, **kwargs)
             elif operation == "ingest_project_object": value = self._client.ingest_project_object(*args, **kwargs)
@@ -65,6 +66,7 @@ class _RemoteFamily:
             elif operation == "list_project_shots": value = self._client.list_project_shots(*args, **kwargs)
             elif operation == "list_project_shot_text_bindings": value = self._client.list_project_shot_text_bindings(*args, **kwargs)
             elif operation == "list_project_tasks": value = self._client.list_project_tasks(*args, **kwargs)
+            elif operation == "list_managed_outputs": value = self._client.list_managed_outputs(*args, **kwargs)
             elif operation == "list_projects": value = self._client.list_projects(*args, **kwargs)
             elif operation == "list_run_events": value = self._client.list_run_events(*args, **kwargs)
             elif operation == "list_timeline_history": value = self._client.list_timeline_history(*args, **kwargs)
@@ -420,6 +422,10 @@ class RemoteTasks(_RemoteFamily):
         return self._typed(
             "list_events", cursor=cursor, limit=limit, aggregate_id=task_id
         )
+    def list_managed_outputs(self, task_id):
+        return self._typed("list_managed_outputs", task_id)
+    def get_managed_output(self, association_id):
+        return self._typed("get_managed_output", association_id)
 
 
 class RemoteRuns(_RemoteFamily):

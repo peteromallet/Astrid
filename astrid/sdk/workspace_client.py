@@ -208,7 +208,8 @@ class WorkspaceClient:
                 "update_document", "ingest_object", "ingest_project_object",
                 "list_project_objects", "create_media_relation", "list_media_relations",
                 "get_object", "head_object", "admit_task", "get_task", "list_project_tasks",
-                "cancel_task", "retry_task", "cancel_run", "retry_run", "get_run",
+                "cancel_task", "retry_task", "list_managed_outputs", "get_managed_output",
+                "cancel_run", "retry_run", "get_run",
                 "list_project_runs", "list_events", "list_run_events", "list_generations",
                 "get_generation", "list_variants", "create_generation", "create_variant",
                 "list_capabilities", "register_capability", "claim_task", "register_executor",
@@ -620,6 +621,14 @@ class WorkspaceClient:
 
     def list_project_tasks(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_project_tasks", project_id, cursor=cursor, limit=limit)
+
+    def list_managed_outputs(self, task_id: str) -> Any:
+        """Read Runtime-owned managed output associations for one task."""
+        return self._call_generated("list_managed_outputs", task_id)
+
+    def get_managed_output(self, association_id: str) -> Any:
+        """Read one Runtime-owned managed output association by id."""
+        return self._call_generated("get_managed_output", association_id)
 
     def cancel_task(self, task_id: str, *, idempotency_key: str) -> Any:
         return self._call_generated("cancel_task", task_id, idempotency_key=idempotency_key)

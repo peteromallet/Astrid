@@ -17,6 +17,7 @@ from pathlib import Path
 from banodoco_workspace_client import WorkspaceClient, generated
 from banodoco_workspace_client.contract_metadata import (
     GENERATED_CLIENT_SHA256,
+    GENERATED_SIGNATURE_SHA256,
     OPERATIONS,
     PROTOCOL,
     SCHEMA_DIGEST,
@@ -31,12 +32,12 @@ GENERATED_PATH = ROOT / "banodoco_workspace_client" / "generated.py"
 # future runtime contract refresh must update the source commit, digest, and
 # this test in one reviewed change; no ambient sibling checkout can silently
 # alter the shipped transport.
-PINNED_SOURCE_COMMIT = "16984bae4a35fd2ad00be768296b52c64a7673ed"
+PINNED_SOURCE_COMMIT = "baa70efe08d1c47b994f7fd2ffe4be45a31c2b69"
 PINNED_SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
 PINNED_PROTOCOL = "workspace.v1"
-PINNED_SCHEMA_DIGEST = "sha256:a55266ecc5ac7abc096b8c6addc781b2278030b3e668b2f466565b45a6e46e37"
-PINNED_GENERATED_CLIENT_SHA256 = "sha256:0cec23ab4d6ebb4a0775632f7ef18619ffcc1c3efed4b5e33cc9191d61d29fdf"
-PINNED_SIGNATURE_SHA256 = "sha256:1777df9695172844f6c27e7e09be69ba9a19851dd98a51017c86b699e4933428"
+PINNED_SCHEMA_DIGEST = "sha256:d521b5516556cc9b2848d152170196d99ae56c4532cfbc775b609009fea5e383"
+PINNED_GENERATED_CLIENT_SHA256 = "sha256:f4ab7e2f148a4e54b5bd624a111266c0697abb5f4a4414daa607a33279dae327"
+PINNED_SIGNATURE_SHA256 = "sha256:ff764d63b3abd4c8ef5f8bbc6b3b99a9c977861999e66d9ad3239fc799d651b0"
 
 
 def _signature_digest() -> str:
@@ -67,7 +68,8 @@ def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST
     assert GENERATED_CLIENT_SHA256 == PINNED_GENERATED_CLIENT_SHA256
     assert "sha256:" + hashlib.sha256(GENERATED_PATH.read_bytes()).hexdigest() == GENERATED_CLIENT_SHA256
-    assert _signature_digest() == PINNED_SIGNATURE_SHA256
+    assert GENERATED_SIGNATURE_SHA256 == PINNED_SIGNATURE_SHA256
+    assert _signature_digest() == GENERATED_SIGNATURE_SHA256
 
 
 def test_vendored_client_operation_catalog_matches_typed_methods() -> None:

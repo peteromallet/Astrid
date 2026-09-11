@@ -1619,8 +1619,6 @@ def _kernel_invoke(
         # Keep the transparent estimate out of capability inputs: it is task
         # admission evidence, not an executor-authored input.
         spec["admission_metadata"] = _json_safe_mapping(dict(admission_metadata))
-    if generation_intent is not None:
-        spec["generation_intent"] = _json_safe_mapping(dict(generation_intent))
     # Managed renders authorize their snapshot registry media at admission:
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
@@ -1679,13 +1677,18 @@ def _kernel_invoke(
             raise CapabilityValidationError("filmstrip video admission identity mismatch")
         input_manifest.append(video_id)
 
+    idempotency_material: dict[str, Any] = {
+        "spec": spec,
+        "input_object_ids": sorted(input_manifest),
+        "storage_estimate": dict(storage_estimate or {}),
+    }
+    if generation_intent is not None:
+        idempotency_material["generation_intent"] = _json_safe_mapping(
+            dict(generation_intent)
+        )
     idempotency_key = hashlib.sha256(
         json.dumps(
-            {
-                "spec": spec,
-                "input_object_ids": sorted(input_manifest),
-                "storage_estimate": dict(storage_estimate or {}),
-            },
+            idempotency_material,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -1703,14 +1706,17 @@ def _kernel_invoke(
         raise CapabilityInvocationError(
             "runtime client does not expose generated task admission"
         )
-    result = create_task(
-        project_id=project,
-        capability=str(capability.id),
-        spec=spec,
-        input_manifest=input_manifest,
-        idempotency_key=idempotency_key,
-        storage_estimate=dict(storage_estimate) if storage_estimate is not None else None,
-    )
+    admission = {
+        "project_id": project,
+        "capability": str(capability.id),
+        "spec": spec,
+        "input_manifest": input_manifest,
+        "idempotency_key": idempotency_key,
+        "storage_estimate": dict(storage_estimate) if storage_estimate is not None else None,
+    }
+    if generation_intent is not None:
+        admission["generation_intent"] = generation_intent
+    result = create_task(**admission)
     result_ok = bool(getattr(result, "ok", isinstance(result, Mapping)))
     data = getattr(result, "data", result if isinstance(result, Mapping) else None)
     if not result_ok:

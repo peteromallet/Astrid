@@ -52,7 +52,13 @@ class _RemoteFamily:
             # let a caller turn an arbitrary string into an attribute lookup
             # on the generated client.
             if operation == "add_shot_item": value = self._client.add_shot_item(*args, **kwargs)
-            elif operation == "admit_task": value = self._client.admit_task(*args, **kwargs)
+            elif operation == "admit_task":
+                if "generation_intent" in kwargs and callable(
+                    getattr(self._client, "_call_generated", None)
+                ):
+                    value = self._client._call_generated("admit_task", *args, **kwargs)
+                else:
+                    value = self._client.admit_task(*args, **kwargs)
             elif operation == "archive_project_reference": value = self._client.archive_project_reference(*args, **kwargs)
             elif operation == "archive_project_shot": value = self._client.archive_project_shot(*args, **kwargs)
             elif operation == "archive_timeline": value = self._client.archive_timeline(*args, **kwargs)
@@ -375,7 +381,7 @@ class RemoteTasks(_RemoteFamily):
         return self._typed("register_executor", {"executor_id": executor_id, "capabilities": capabilities}, key=idempotency_key, idempotency_key=idempotency_key)
     def register_capability(self, capability_id: str, definition_digest: str, *, idempotency_key=None):
         return self._typed("register_capability", capability_id, definition_digest, key=idempotency_key, idempotency_key=idempotency_key)
-    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, capability_digest: str | None = None):
+    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, capability_digest: str | None = None, generation_intent: Mapping[str, Any] | None = None):
         key = idempotency_key or uuid.uuid4().hex
         capabilities = paged_rows(self._client.list_capabilities, limit=50)
         if capabilities is None:
@@ -389,7 +395,20 @@ class RemoteTasks(_RemoteFamily):
             )
         match = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability), None)
         if match is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability}), idempotency_key=key)
-        return self._typed("admit_task", key=key, capability_id=capability, capability_digest=str(match["definition_digest"]), input_object_ids=input_manifest or [], idempotency_key=key, project_id=project_id, spec=spec, settlement_effect=settlement_effect, storage_estimate=storage_estimate)
+        admission = {
+            "key": key,
+            "capability_id": capability,
+            "capability_digest": str(match["definition_digest"]),
+            "input_object_ids": input_manifest or [],
+            "idempotency_key": key,
+            "project_id": project_id,
+            "spec": spec,
+            "settlement_effect": settlement_effect,
+            "storage_estimate": storage_estimate,
+        }
+        if generation_intent is not None:
+            admission["generation_intent"] = generation_intent
+        return self._typed("admit_task", **admission)
     def claim(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
         return self._typed("claim_task", key=idempotency_key, executor_id=executor_id, capability_ids=capability_ids, idempotency_key=idempotency_key)
     def settle(

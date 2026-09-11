@@ -1,14 +1,13 @@
 """Immutable release gates for Astrid's vendored workspace client.
 
-The runtime repository owns generation.  Astrid deliberately does not invoke
+The runtime repository owns generation. Astrid deliberately does not invoke
 that repository's generator at test time: this gate proves that the checked-in
-client is the exact, reviewed artifact identified by its source commit and
-that its declared operation/signature surface has not drifted in-place.
+client and metadata are the exact reviewed artifacts identified by their
+contract exports and immutable file hashes.
 """
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import inspect
 import re
@@ -16,44 +15,25 @@ from pathlib import Path
 
 from banodoco_workspace_client import WorkspaceClient, generated
 from banodoco_workspace_client.contract_metadata import (
-    GENERATED_CLIENT_SHA256,
-    GENERATED_SIGNATURE_SHA256,
+    COMPONENT_MANIFEST_SHA256,
     OPERATIONS,
     PROTOCOL,
     SCHEMA_DIGEST,
-    SOURCE_COMMIT,
-    SOURCE_REPOSITORY,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED_PATH = ROOT / "banodoco_workspace_client" / "generated.py"
+METADATA_PATH = ROOT / "banodoco_workspace_client" / "contract_metadata.py"
 
 # These values are intentionally duplicated in the immutable test gate. A
-# future runtime contract refresh must update the source commit, digest, and
-# this test in one reviewed change; no ambient sibling checkout can silently
-# alter the shipped transport.
-PINNED_SOURCE_COMMIT = "baa70efe08d1c47b994f7fd2ffe4be45a31c2b69"
-PINNED_SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
+# future runtime contract refresh must update the contract exports, file
+# hashes, and this test in one reviewed change; no ambient sibling checkout can
+# silently alter the shipped transport.
 PINNED_PROTOCOL = "workspace.v1"
-PINNED_SCHEMA_DIGEST = "sha256:d521b5516556cc9b2848d152170196d99ae56c4532cfbc775b609009fea5e383"
-PINNED_GENERATED_CLIENT_SHA256 = "sha256:f4ab7e2f148a4e54b5bd624a111266c0697abb5f4a4414daa607a33279dae327"
-PINNED_SIGNATURE_SHA256 = "sha256:ff764d63b3abd4c8ef5f8bbc6b3b99a9c977861999e66d9ad3239fc799d651b0"
-
-
-def _signature_digest() -> str:
-    tree = ast.parse(GENERATED_PATH.read_text(encoding="utf-8"))
-    client = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "WorkspaceClient"
-    )
-    signatures = [
-        f"{node.name}:{ast.unparse(node.args)}\n"
-        for node in client.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and not node.name.startswith("_")
-    ]
-    return "sha256:" + hashlib.sha256("".join(signatures).encode()).hexdigest()
+PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:dc91a45390f33582f0299f81285d165128e1885a9fd62b4ccffa7b8e465ed63a"
+PINNED_SCHEMA_DIGEST = "sha256:a1e4df7d66b61264db6fe6a28bf7022d7c24b09fbc1a6d268baac8c34ba666cc"
+PINNED_GENERATED_SHA256 = "9c4a49bb52b2d592d86dd8081ee1ef6d47fc2395480fc06d7a5a0971bd859cfc"
+PINNED_METADATA_SHA256 = "44182d6235df88635bfb9afd2a8fcb4d716bef06dbcaf6cf3d759f0270d39987"
 
 
 def _camel_to_snake(value: str) -> str:
@@ -62,14 +42,11 @@ def _camel_to_snake(value: str) -> str:
 
 
 def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
-    assert SOURCE_REPOSITORY == PINNED_SOURCE_REPOSITORY
-    assert SOURCE_COMMIT == PINNED_SOURCE_COMMIT
     assert PROTOCOL == PINNED_PROTOCOL == generated.PROTOCOL
+    assert COMPONENT_MANIFEST_SHA256 == PINNED_COMPONENT_MANIFEST_SHA256
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST
-    assert GENERATED_CLIENT_SHA256 == PINNED_GENERATED_CLIENT_SHA256
-    assert "sha256:" + hashlib.sha256(GENERATED_PATH.read_bytes()).hexdigest() == GENERATED_CLIENT_SHA256
-    assert GENERATED_SIGNATURE_SHA256 == PINNED_SIGNATURE_SHA256
-    assert _signature_digest() == GENERATED_SIGNATURE_SHA256
+    assert hashlib.sha256(GENERATED_PATH.read_bytes()).hexdigest() == PINNED_GENERATED_SHA256
+    assert hashlib.sha256(METADATA_PATH.read_bytes()).hexdigest() == PINNED_METADATA_SHA256
 
 
 def test_vendored_client_operation_catalog_matches_typed_methods() -> None:
@@ -84,8 +61,12 @@ def test_vendored_client_operation_catalog_matches_typed_methods() -> None:
     # operation ID: it composes updateDocument while retaining a convenient
     # resource-scoped method for product adapters.
     composed_helpers = {"update_timeline_document"}
+    wire_only_operations = {"adopt_managed_output", "update_managed_output_lifecycle"}
     assert methods - operation_methods == composed_helpers
-    assert operation_methods <= methods
+    assert wire_only_operations <= operation_methods
+    # Lifecycle operations remain generated wire parity only; Astrid's
+    # product-facing client need not expose them.
+    assert operation_methods - wire_only_operations <= methods
 
 
 def test_frozen_mutation_signatures_require_idempotency_keys() -> None:

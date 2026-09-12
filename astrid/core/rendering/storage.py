@@ -32,6 +32,8 @@ _H264_MAX_VIDEO_BITRATE = 80_000_000
 _PRORES_4444_BITS_PER_PIXEL_FRAME = Fraction(6, 1)
 _AAC_BITRATE = 320_000
 _PCM_S16LE_STEREO_BITRATE = 48_000 * 2 * 16
+_INLINE_AUDIO_WAV_BYTES_PER_SECOND = 48_000 * 2 * 2
+_INLINE_AUDIO_WAV_HEADER_BYTES = 44
 _MUX_OVERHEAD_PERCENT = 3
 _MUX_FIXED_OVERHEAD_BYTES = _MIB
 _MIN_OPERATIONAL_GUARD_BYTES = 256 * _MIB
@@ -350,6 +352,47 @@ def estimate_managed_render_storage(
         * 48_000
         * (effective_audio_duration + duration * merge_pcm_outputs)
     )
+    registry_assets = registry.get("assets", {})
+    visual_tracks = {
+        track.get("id"): track
+        for track in timeline.get("tracks", [])
+        if isinstance(track, Mapping)
+        and track.get("kind") == "visual"
+        and track.get("id") is not None
+    }
+    inline_audio_assets: set[str] = set()
+    for clip in timeline.get("clips", []):
+        if not isinstance(clip, Mapping):
+            continue
+        track = visual_tracks.get(clip.get("track"))
+        asset_name = clip.get("asset")
+        if not isinstance(track, Mapping) or not isinstance(asset_name, str):
+            continue
+        if clip.get("clipType") not in {None, "media", "video"}:
+            continue
+        asset_entry = registry_assets.get(asset_name)
+        if not isinstance(asset_entry, Mapping):
+            continue
+        asset_type = str(asset_entry.get("type") or asset_entry.get("media_type") or "")
+        if asset_type.startswith("image"):
+            continue
+        if track.get("muted") is True:
+            continue
+        track_volume = track.get("volume", 1)
+        clip_volume = clip.get("volume", 1)
+        if (
+            isinstance(track_volume, (int, float))
+            and track_volume <= 0
+        ) or (
+            isinstance(clip_volume, (int, float))
+            and clip_volume <= 0
+        ):
+            continue
+        inline_audio_assets.add(asset_name)
+    inline_audio_mix_working_bytes = len(inline_audio_assets) * (
+        math.ceil(duration * _INLINE_AUDIO_WAV_BYTES_PER_SECOND)
+        + _INLINE_AUDIO_WAV_HEADER_BYTES
+    )
     encoded_working_copy_bytes = estimated_output_bytes * _PARALLEL_ENCODE_WORKING_COPIES
     managed_renderer_copy_bytes = managed_entry_bytes * _MANAGED_RENDERER_COPY_PASSES
     alpha_frame_bytes_per_frame = (
@@ -372,6 +415,7 @@ def estimate_managed_render_storage(
             managed_entry_bytes
             + effect_asset_bytes
             + audio_pcm_working_bytes
+            + inline_audio_mix_working_bytes
             + alpha_frame_working_bytes
             + estimated_output_bytes
             + encoded_working_copy_bytes
@@ -384,6 +428,7 @@ def estimate_managed_render_storage(
             managed_entry_bytes
             + effect_asset_bytes
             + audio_pcm_working_bytes
+            + inline_audio_mix_working_bytes
             + estimated_output_bytes
             + encoded_working_copy_bytes
         )
@@ -427,6 +472,8 @@ def estimate_managed_render_storage(
         "audio_asset_count": audio_asset_count,
         "merge_pcm_outputs": merge_pcm_outputs,
         "audio_pcm_working_bytes": audio_pcm_working_bytes,
+        "inline_audio_asset_count": len(inline_audio_assets),
+        "inline_audio_mix_working_bytes": inline_audio_mix_working_bytes,
         "alpha_frame_bytes_per_frame": alpha_frame_bytes_per_frame,
         "alpha_frame_working_bytes": alpha_frame_working_bytes,
         "parallel_encode_working_copies": _PARALLEL_ENCODE_WORKING_COPIES,

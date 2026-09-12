@@ -170,9 +170,12 @@ def test_h264_estimate_charges_simultaneous_audio_and_output_work_for_rich_topol
     assert estimate["managed_entry_bytes"] == entry_size
     assert estimate["effective_audio_seconds_rational"] == [603, 2]
     assert estimate["audio_pcm_working_bytes"] == 115_488_000
+    assert estimate["inline_audio_asset_count"] == 1
+    assert estimate["inline_audio_mix_working_bytes"] == 57_600_044
     assert estimate["phase_working_bytes"] == (
         estimate["managed_entry_bytes"]
         + estimate["audio_pcm_working_bytes"]
+        + estimate["inline_audio_mix_working_bytes"]
         + estimate["estimated_output_bytes"]
         + estimate["encoded_working_copy_bytes"]
     )

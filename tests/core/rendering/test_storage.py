@@ -110,7 +110,7 @@ def test_h264_estimate_exposes_every_peak_storage_component() -> None:
 
 def test_h264_estimate_charges_simultaneous_audio_and_output_work_for_rich_topology() -> None:
     digest = "a" * 64
-    entry_size = 692_121
+    entry_size = 693_205
     registry = {
         "assets": {
             "render-source": {

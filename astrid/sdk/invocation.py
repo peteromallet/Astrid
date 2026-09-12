@@ -2220,6 +2220,11 @@ def invoke(
                 project=project,
                 _client=_client,
             )
+            # Managed render admission adds the frozen snapshot and authority
+            # after the initial request copy above. Keep the task payload in
+            # sync so the Runtime host can materialize the attempt-local
+            # timeline before expanding the renderer command.
+            request_inputs = dict(inputs)
             snapshot = (inputs or {}).get("timeline_snapshot")
             snapshot_config = snapshot.get("config") if isinstance(snapshot, Mapping) else None
             snapshot_registry = snapshot.get("registry") if isinstance(snapshot, Mapping) else None

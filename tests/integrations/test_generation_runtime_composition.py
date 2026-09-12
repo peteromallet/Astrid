@@ -37,6 +37,7 @@ sys.path.insert(0, str(RUNTIME_ROOT))
 
 from banodoco_workspace_client import WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from runtime_protocol.store import RealmStore  # noqa: E402
 
 from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient  # noqa: E402
 from astrid.core.execution.network_broker import _BrokerHandler  # noqa: E402
@@ -516,8 +517,10 @@ def _character_animation_cpu_fixture(root: Path) -> Path:
 
 def test_typed_image_admission_crosses_runtime_host_and_cas(tmp_path: Path) -> None:
     pack = _fixture_pack(tmp_path)
+    realm_root = tmp_path / "realm"
+    RealmStore.initialize(realm_root).close()
     daemon = RuntimeDaemon(
-        tmp_path / "realm",
+        realm_root,
         support_root=tmp_path / "support",
         production_worker_credentials=True,
     ).start()

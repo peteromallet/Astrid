@@ -17,6 +17,7 @@ if RUNTIME.is_dir():
 runtime_protocol = pytest.importorskip("runtime_protocol")
 from banodoco_workspace_client import ApiError, WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from runtime_protocol.store import RealmStore  # noqa: E402
 
 from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
 
@@ -64,7 +65,9 @@ def test_generated_host_echo_claim_cas_settlement_and_restart(tmp_path: Path) ->
     probe = GenericPackHost(pack_roots=[pack])
     record = probe.discover()[0]
 
-    daemon = RuntimeDaemon(tmp_path / "realm", support_root=tmp_path / "support").start()
+    realm_root = tmp_path / "realm"
+    RealmStore.initialize(realm_root).close()
+    daemon = RuntimeDaemon(realm_root, support_root=tmp_path / "support").start()
     try:
         generated = WorkspaceClient(daemon.endpoint, daemon.token)
         generated.handshake("astrid-generic-host-test", "0.1.0", ["projects:read", "worker:execute"])

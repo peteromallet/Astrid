@@ -90,6 +90,29 @@ class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
 
 
+_VIDEO_SUFFIX_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+}
+
+
+def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
+    """Publish a MIME media type while retaining internal artifact semantics."""
+
+    explicit = descriptor.get("media_type")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    artifact_type = str(descriptor.get("artifact_type") or "")
+    filename = descriptor.get("filename")
+    if artifact_type == "clip/visual" and isinstance(filename, str):
+        media_type = _VIDEO_SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
+        if media_type is not None:
+            return media_type
+    return artifact_type or "application/octet-stream"
+
+
 def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> str | None:
     """Resolve the primary generated output port from the admitted schema."""
     if not isinstance(intent, Mapping):
@@ -3251,7 +3274,7 @@ class GenericPackHost:
             ):
                 raise HostError("generated output has an invalid managed filename")
             filename = relative_filename
-            media_type = str(descriptor.get("artifact_type") or "application/octet-stream")
+            media_type = _settlement_media_type(descriptor)
             if inline:
                 data = path.read_bytes()
                 descriptor["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()

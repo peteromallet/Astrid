@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import heapq
 import hmac
 import importlib.util
 import json
@@ -87,6 +88,14 @@ class HostError(RuntimeError):
 
 class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
+
+
+class StorageEnvelopeError(HostError):
+    """A live attempt exceeded its admitted scratch/output envelope."""
+
+    def __init__(self, message: str, *, diagnostic: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.diagnostic = dict(diagnostic)
 
 
 def _cleanup_ephemeral_attempt(root: Path) -> None:
@@ -903,6 +912,107 @@ def _storage_tree_bytes(root: Path) -> int:
     return total
 
 
+_STORAGE_DIAGNOSTIC_PATH_SAMPLE_LIMIT = 32
+_RENDERER_WORKSPACE_MARKERS = (
+    ".render-service",
+    ".render-inputs-",
+    ".remotion-runtime-",
+    "astrid-render-assets-",
+)
+
+
+def _storage_path_class(relative: str, *, output: bool) -> str:
+    """Classify a relative attempt path without exposing its absolute root."""
+    if output:
+        return "output"
+    parts = relative.split("/")
+    if parts[0] == "managed-objects":
+        return "managed_inputs"
+    if parts[0] == "inputs":
+        return "canonical_inputs"
+    if any(
+        marker in part
+        for part in parts
+        for marker in _RENDERER_WORKSPACE_MARKERS
+    ):
+        return "renderer_workspace"
+    if parts[0] == "outputs":
+        return "output_temporary"
+    return "other_scratch"
+
+
+def _storage_envelope_measurement(
+    root: Path,
+    output_root: Path,
+    *,
+    path_sample_limit: int = _STORAGE_DIAGNOSTIC_PATH_SAMPLE_LIMIT,
+) -> dict[str, Any]:
+    """Capture bounded, path-relative storage evidence for an overrun."""
+    root = Path(root)
+    output_root = Path(output_root)
+    output_resolved = output_root.resolve(strict=False)
+    total_bytes = 0
+    output_bytes = 0
+    scratch_bytes = 0
+    vanished_files = 0
+    files = 0
+    scratch_files = 0
+    classes: dict[str, dict[str, int]] = {}
+    largest: list[tuple[int, str, str]] = []
+    try:
+        for path in root.rglob("*"):
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                size = int(path.stat().st_size)
+                relative = path.relative_to(root).as_posix()
+                is_output = (
+                    not path.name.endswith(".tmp")
+                    and path.resolve(strict=False).is_relative_to(output_resolved)
+                )
+                path_class = _storage_path_class(relative, output=is_output)
+                total_bytes += size
+                files += 1
+                if is_output:
+                    output_bytes += size
+                else:
+                    scratch_bytes += size
+                    scratch_files += 1
+                bucket = classes.setdefault(path_class, {"files": 0, "bytes": 0})
+                bucket["files"] += 1
+                bucket["bytes"] += size
+                if not is_output and path_sample_limit:
+                    candidate = (size, relative, path_class)
+                    if len(largest) < path_sample_limit:
+                        heapq.heappush(largest, candidate)
+                    elif candidate > largest[0]:
+                        heapq.heapreplace(largest, candidate)
+            except FileNotFoundError:
+                vanished_files += 1
+                continue
+    except FileNotFoundError:
+        vanished_files += 1
+    except OSError as exc:
+        return {
+            "measurement_error": type(exc).__name__,
+            "vanished_file_count": vanished_files,
+        }
+    largest.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return {
+        "observed_total_bytes": total_bytes,
+        "observed_output_bytes": output_bytes,
+        "observed_scratch_bytes": scratch_bytes,
+        "file_count": files,
+        "vanished_file_count": vanished_files,
+        "path_classes": {key: classes[key] for key in sorted(classes)},
+        "largest_scratch_paths": [
+            {"path": path, "bytes": size, "classification": classification}
+            for size, path, classification in largest[:path_sample_limit]
+        ],
+        "largest_scratch_paths_truncated": scratch_files > path_sample_limit,
+    }
+
+
 def _fixed_request_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """Return a host-owned model/mode/execution scope, if declared."""
     raw = metadata.get("fixed_inputs")
@@ -999,12 +1109,28 @@ def _assert_live_storage_envelope(
     output_bytes = _storage_tree_bytes(output_root)
     scratch_bytes = max(0, total_bytes - output_bytes)
     if output_bytes > int(estimate["output_bytes"]):
-        raise HostError(
-            f"live output bytes {output_bytes} exceed task output limit {estimate['output_bytes']}"
+        diagnostic = {
+            "guard": "storage_envelope",
+            "category": "output_overrun",
+            "configured_scratch_bytes": int(estimate["scratch_bytes"]),
+            "configured_output_bytes": int(estimate["output_bytes"]),
+            **_storage_envelope_measurement(root, output_root),
+        }
+        raise StorageEnvelopeError(
+            f"live output bytes {output_bytes} exceed task output limit {estimate['output_bytes']}",
+            diagnostic=diagnostic,
         )
     if scratch_bytes > int(estimate["scratch_bytes"]):
-        raise HostError(
-            f"live scratch bytes {scratch_bytes} exceed task scratch limit {estimate['scratch_bytes']}"
+        diagnostic = {
+            "guard": "storage_envelope",
+            "category": "scratch_overrun",
+            "configured_scratch_bytes": int(estimate["scratch_bytes"]),
+            "configured_output_bytes": int(estimate["output_bytes"]),
+            **_storage_envelope_measurement(root, output_root),
+        }
+        raise StorageEnvelopeError(
+            f"live scratch bytes {scratch_bytes} exceed task scratch limit {estimate['scratch_bytes']}",
+            diagnostic=diagnostic,
         )
 
 
@@ -3503,6 +3629,7 @@ class GenericPackHost:
         immutable_input_baseline: dict[str, tuple[int, str]] = {}
         evidence_cap_exceeded = False
         evidence_failure_receipt: dict[str, Any] | None = None
+        storage_failure_receipt: dict[str, Any] | None = None
         scratch_floor_breached = False
         deadline_failed = False
         storage_receipt: dict[str, int] | None = None
@@ -4128,6 +4255,8 @@ class GenericPackHost:
                     return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+            if isinstance(exc, StorageEnvelopeError):
+                storage_failure_receipt = dict(exc.diagnostic)
             self.client.fail(
                 task_id,
                 lease_token,
@@ -4135,7 +4264,7 @@ class GenericPackHost:
                 retryable=False,
                 attempt_id=attempt_id,
                 fence=fence,
-                failure_diagnostic=evidence_failure_receipt,
+                failure_diagnostic=storage_failure_receipt or evidence_failure_receipt,
             )
             raise
         finally:

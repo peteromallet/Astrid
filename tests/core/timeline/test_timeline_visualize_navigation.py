@@ -39,6 +39,7 @@ FIXTURE_ROOT = TESTS_ROOT / "fixtures" / "timeline_visualize"
 SLICE_DIR = FIXTURE_ROOT / "desert_slice"
 TRUTH = json.loads((FIXTURE_ROOT / "desert_truth.json").read_text(encoding="utf-8"))
 PROJECT_SLUG = "desert-plant-growth"
+OPAQUE_TIMELINE_ID = "astrid-v1-timeline-full-20260912"
 
 
 @pytest.fixture
@@ -66,6 +67,22 @@ def _map(model: TimelineInspectionModel) -> IdentityMap:
         timeline_uuid=model.timeline_uuid,
         timeline_ulid=model.timeline_ulid,
     )
+
+
+def test_build_identity_map_preserves_opaque_runtime_timeline_id(
+    desert_model: TimelineInspectionModel,
+) -> None:
+    model = replace(desert_model, timeline_uuid=OPAQUE_TIMELINE_ID)
+
+    identity_map = build_identity_map(
+        model,
+        root_sns=model.snapshot_sns,
+        timeline_uuid=OPAQUE_TIMELINE_ID,
+        timeline_ulid=model.timeline_ulid,
+    )
+
+    assert identity_map.timeline_uuid == OPAQUE_TIMELINE_ID
+    assert identity_map.lookup_semantic("timeline", OPAQUE_TIMELINE_ID) == "TL01"
 
 
 def test_desert_slice_ordinals_follow_clip_asset_and_timeline_order(

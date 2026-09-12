@@ -160,6 +160,17 @@ def test_root_id_map_rejects_kind_and_timeline_allocation_conflicts() -> None:
         root.add((TIMELINE_UUID, "clip", "two"), "TL02.CL02")
 
 
+def test_root_id_map_preserves_opaque_runtime_timeline_id() -> None:
+    timeline_id = "astrid-v1-timeline-full-20260912"
+    root = RootIdMap()
+
+    root.add((timeline_id, "timeline", timeline_id), "TL01")
+    root.add((timeline_id, "clip", "clip-1"), "TL01.CL01")
+
+    assert root.lookup((timeline_id, "timeline", timeline_id)) == "TL01"
+    assert root.lookup((timeline_id, "clip", "clip-1")) == "TL01.CL01"
+
+
 def _snapshot(**overrides: object) -> dict[str, object]:
     snapshot: dict[str, object] = {
         "schema_version": 1,

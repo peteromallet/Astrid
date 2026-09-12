@@ -92,9 +92,12 @@ def test_h264_estimate_exposes_every_peak_storage_component() -> None:
         ((15_552_000 * 10 + 31_104_000) / 8 + 320_000 * 10 / 8) * 1.03
     ) + 1024**2
     assert estimate["estimated_output_bytes"] == expected_output
-    assert estimate["phase_working_bytes"] == max(
-        2000 + 2000 + estimate["audio_pcm_working_bytes"],
-        2 * expected_output,
+    assert estimate["phase_working_bytes"] == (
+        2000
+        + 2000
+        + estimate["audio_pcm_working_bytes"]
+        + expected_output
+        + estimate["encoded_working_copy_bytes"]
     )
     assert estimate["peak_before_guard_bytes"] == (
         estimate["base_bytes"] + estimate["phase_working_bytes"]
@@ -105,34 +108,73 @@ def test_h264_estimate_exposes_every_peak_storage_component() -> None:
     )
 
 
-def test_h264_estimate_charges_both_managed_registry_copy_passes_for_rich_topology() -> None:
+def test_h264_estimate_charges_simultaneous_audio_and_output_work_for_rich_topology() -> None:
     digest = "a" * 64
-    entry_count = 30
     entry_size = 692_121
     registry = {
         "assets": {
-            f"shot-{index:02d}-source": {
+            "render-source": {
                 "media_id": digest,
                 "content_sha256": digest,
             }
-            for index in range(entry_count)
         }
+    }
+    timeline = {
+        "tracks": [
+            {"id": "video", "kind": "visual", "label": "Video"},
+            {"id": "audio", "kind": "audio", "label": "Audio"},
+        ],
+        "clips": [
+            *[
+                {
+                    "id": f"shot-{index:02d}",
+                    "track": "video",
+                    "asset": "render-source",
+                    "clipType": "media",
+                    "at": index * 9.9,
+                    "from": index * 9.9,
+                    "to": (index + 1) * 9.9,
+                }
+                for index in range(30)
+            ],
+            {"id": "base-audio", "track": "audio", "at": 0, "hold": 297},
+            {"id": "speech", "track": "audio", "at": 248, "hold": 4.5},
+        ],
+        "theme_overrides": {
+            "visual": {"canvas": {"width": 640, "height": 360, "fps": 30}}
+        },
+        "app": {"astrid_render_clock": {
+            "authored_duration_frames": 8910,
+            "render_duration_frames": 9000,
+            "tail": {
+                "policy": "unmapped_excess_rendered_region",
+                "source_asset": "render-source",
+                "start_frame": 8910,
+                "end_frame": 9000,
+                "source_start_frame": 8910,
+                "source_end_frame": 9000,
+            },
+        }},
     }
 
     estimate = estimate_managed_render_storage(
-        timeline=_timeline(),
+        timeline=timeline,
         registry=registry,
         object_sizes={digest: entry_size},
     )
 
-    # The 30-shot expanded path has one adapter staging copy and one writable
-    # renderer-input copy for every registry entry, in addition to the single
-    # host materialization represented by managed_input_bytes.
+    # The rich path has one admitted media object referenced by 30 shot
+    # occurrences, while its expanded audio clips total 301.5 seconds. The
+    # PCM working set coexists with both encoded-output copies.
     assert estimate["managed_input_bytes"] == entry_size
-    assert estimate["managed_entry_bytes"] == entry_count * entry_size
-    assert estimate["managed_renderer_copy_bytes"] == 2 * entry_count * entry_size
-    assert estimate["base_bytes"] >= (
-        entry_size + 2 * entry_count * entry_size
+    assert estimate["managed_entry_bytes"] == entry_size
+    assert estimate["effective_audio_seconds_rational"] == [603, 2]
+    assert estimate["audio_pcm_working_bytes"] == 115_488_000
+    assert estimate["phase_working_bytes"] == (
+        estimate["managed_entry_bytes"]
+        + estimate["audio_pcm_working_bytes"]
+        + estimate["estimated_output_bytes"]
+        + estimate["encoded_working_copy_bytes"]
     )
 
 
@@ -182,11 +224,12 @@ def test_alpha_estimate_counts_raw_frame_workspace() -> None:
     assert estimate["alpha_frame_bytes_per_frame"] == bytes_per_frame
     assert estimate["alpha_frame_working_bytes"] == bytes_per_frame * 2
     assert estimate["audio_bitrate_bps"] == 48_000 * 2 * 16
-    assert estimate["phase_working_bytes"] == max(
-        estimate["audio_pcm_working_bytes"]
+    assert estimate["phase_working_bytes"] == (
+        estimate["managed_renderer_copy_bytes"]
+        + estimate["audio_pcm_working_bytes"]
         + estimate["alpha_frame_working_bytes"]
-        + estimate["estimated_output_bytes"],
-        2 * estimate["estimated_output_bytes"],
+        + estimate["estimated_output_bytes"]
+        + estimate["encoded_working_copy_bytes"]
     )
 
 

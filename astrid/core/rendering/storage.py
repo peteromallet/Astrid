@@ -373,13 +373,20 @@ def estimate_managed_render_storage(
             + effect_asset_bytes
             + audio_pcm_working_bytes
             + alpha_frame_working_bytes
-            + estimated_output_bytes,
+            + estimated_output_bytes
+            + encoded_working_copy_bytes,
             2 * estimated_output_bytes,
         )
     else:
-        phase_working_bytes = max(
-            managed_entry_bytes + effect_asset_bytes + audio_pcm_working_bytes,
-            2 * estimated_output_bytes,
+        # Audio PCM and the staged/working encoded outputs coexist during the
+        # rich multi-clip render. They are not alternative peaks, so using
+        # max(audio_pcm, 2 * output) underestimates the live attempt.
+        phase_working_bytes = (
+            managed_entry_bytes
+            + effect_asset_bytes
+            + audio_pcm_working_bytes
+            + estimated_output_bytes
+            + encoded_working_copy_bytes
         )
     peak_before_guard_bytes = base_bytes + phase_working_bytes
     operational_guard_bytes = max(

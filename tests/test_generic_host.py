@@ -1658,6 +1658,58 @@ def test_explicit_task_storage_envelope_rejects_output_overrun_and_cleans_up(tmp
     assert not list(tmp_path.glob("astrid-attempt-*"))
 
 
+def test_live_storage_overrun_preserves_bounded_scratch_diagnostic_before_cleanup(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["command"]["argv"] = [
+        "{python_exec}",
+        "-c",
+        (
+            "from pathlib import Path; import time; "
+            "root=Path('{out}').parent; "
+            "(root/'.remotion-runtime-fixture').mkdir(); "
+            "(root/'managed-objects'/'source.bin').write_bytes(b'x'*7); "
+            "(root/'.remotion-runtime-fixture'/'frame.bin').write_bytes(b'x'*80); "
+            "time.sleep(2)"
+        ),
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-storage-scratch-diagnostic",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-storage-scratch-diagnostic",
+            "fence": 1,
+            "storage_estimate": {"scratch_bytes": 10, "output_bytes": 1},
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-storage-scratch-diagnostic"] = task
+
+    with pytest.raises(HostError, match="scratch bytes"):
+        host.run_task(task, lease_token="lease-storage-scratch-diagnostic")
+
+    assert runtime.settlements == []
+    assert runtime.failures and "scratch bytes" in runtime.failures[0][2]
+    diagnostic = runtime.failures[0][3]["failure_diagnostic"]
+    assert diagnostic["guard"] == "storage_envelope"
+    assert diagnostic["category"] == "scratch_overrun"
+    assert diagnostic["configured_scratch_bytes"] == 10
+    assert diagnostic["observed_scratch_bytes"] >= 87
+    assert diagnostic["path_classes"]["managed_inputs"] == {"files": 1, "bytes": 7}
+    assert diagnostic["path_classes"]["renderer_workspace"] == {"files": 1, "bytes": 80}
+    assert diagnostic["largest_scratch_paths"][0] == {
+        "path": ".remotion-runtime-fixture/frame.bin",
+        "bytes": 80,
+        "classification": "renderer_workspace",
+    }
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
 def test_live_storage_envelope_charges_atomic_temps_to_scratch(tmp_path):
     attempt = tmp_path / "attempt"
     output = attempt / "outputs"

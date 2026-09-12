@@ -506,6 +506,10 @@ def _validate_timeline_visualize_inputs(
         )
     if "filmstrip_authority" in values:
         raise CapabilityValidationError("filmstrip_authority is host-owned and cannot be supplied")
+    if "transcript_file" in values or "transcript.json" in values:
+        raise CapabilityValidationError(
+            "transcript input is host-owned; config.app.transcript supplies the CAS object"
+        )
     view = values.get("view", "structure")
     if view not in {"structure", "filmstrip"}:
         raise CapabilityValidationError("view must be structure or filmstrip")
@@ -720,6 +724,27 @@ def _validate_timeline_visualize_inputs(
         detail = "; ".join(diagnostics) or "no eligible managed timeline was selected"
         raise CapabilityValidationError(f"timeline selection failed: {detail}")
 
+    transcript_input: dict[str, str] | None = None
+    if len(selected) == 1:
+        from .managed_transcript import transcript_input_from_snapshot
+
+        try:
+            transcript_input = transcript_input_from_snapshot(
+                selected[0].config,
+                selected[0].registry,
+            )
+        except ValueError as exc:
+            raise CapabilityValidationError(str(exc)) from exc
+    elif any(
+        isinstance(getattr(row, "config", None), Mapping)
+        and isinstance(row.config.get("app"), Mapping)
+        and "transcript" in row.config["app"]
+        for row in selected
+    ):
+        raise CapabilityValidationError(
+            "a multi-timeline visualization cannot stage multiple config.app.transcript files"
+        )
+
     return {
         "mode": "kernel",
         "timelines": [
@@ -731,6 +756,7 @@ def _validate_timeline_visualize_inputs(
             }
             for row in selected
         ],
+        "transcript_input": transcript_input,
         # The worker token used by the generic host is intentionally not
         # granted projects:read. Carry the already-authenticated admission
         # snapshot into the child so execution verifies the same rows without
@@ -894,6 +920,55 @@ def _validate_managed_profile_theme_compatibility(
             "use the default profile from timelines render --help or set "
             "theme_overrides.visual.canvas to the requested width, height, and fps, then retry"
         )
+
+
+def _validate_managed_speech_inputs(values: Mapping[str, Any]) -> None:
+    """Validate frozen speech metadata before managed-render admission.
+
+    Speech annotations and their render occurrences are an immutable render
+    input contract.  Keep the projector as the single semantic validator so
+    filmstrip preparation and render admission cannot disagree about digest,
+    timing, or occurrence shape.  This helper deliberately does not discover
+    transcript files or infer missing occurrences.
+    """
+
+    fields = (
+        "speech_annotations",
+        "transcript_annotations",
+        "speech_occurrences",
+        "source_audio_digest",
+        "transcript_digest",
+        "annotation_digest",
+        "correction_version",
+        "timing_method",
+        "speech_coverage",
+    )
+    if not any(key in values and values[key] is not None for key in fields):
+        return
+    annotations = values.get("speech_annotations", values.get("transcript_annotations"))
+    occurrences = values.get("speech_occurrences")
+    if annotations is not None and not isinstance(annotations, list):
+        raise CapabilityValidationError("speech_annotations must be a list of objects")
+    if occurrences is not None and not isinstance(occurrences, list):
+        raise CapabilityValidationError("speech_occurrences must be a list of objects")
+    from astrid.packs.rendering.executors.timeline_visualize.speech_projection import (
+        SpeechProjectionError,
+        project_speech_annotations,
+    )
+
+    try:
+        project_speech_annotations(
+            annotations or [],
+            occurrences or [],
+            source_audio_digest=values.get("source_audio_digest"),
+            transcript_digest=values.get("transcript_digest"),
+            annotation_digest=values.get("annotation_digest"),
+            correction_version=values.get("correction_version", 0),
+            timing_method=values.get("timing_method"),
+            coverage=values.get("speech_coverage"),
+        )
+    except SpeechProjectionError as exc:
+        raise CapabilityValidationError(f"invalid frozen speech metadata: {exc}") from exc
 
 
 def _prepare_managed_render_inputs(
@@ -1121,6 +1196,21 @@ def _prepare_managed_render_inputs(
         raise CapabilityValidationError(str(exc), details=exc.details) from exc
     except ValueError as exc:
         raise CapabilityValidationError(str(exc)) from exc
+    _validate_managed_speech_inputs(values)
+    from .managed_transcript import transcript_input_from_snapshot
+
+    try:
+        transcript_input = transcript_input_from_snapshot(snapshot.config, snapshot.registry)
+    except ValueError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
+    if transcript_input is not None and any(
+        values.get(key) is not None for key in ("speech_annotations", "transcript_annotations", "speech_occurrences")
+    ):
+        supplied_transcript_digest = values.get("transcript_digest")
+        if supplied_transcript_digest != transcript_input["digest"]:
+            raise CapabilityValidationError(
+                "frozen speech transcript_digest must match config.app.transcript.sha256"
+            )
     _validate_managed_profile_theme_compatibility(
         values.get("profile"),
         timeline=snapshot.config,
@@ -1747,6 +1837,21 @@ def _kernel_invoke(
             raise CapabilityValidationError("filmstrip video admission identity mismatch")
         input_manifest.append(video_id)
 
+    if str(capability.id) == "rendering.timeline_visualize":
+        transcript_input = request_inputs.get("transcript.json")
+        if transcript_input is not None:
+            if (
+                not isinstance(transcript_input, Mapping)
+                or not isinstance(transcript_input.get("digest"), str)
+                or not isinstance(transcript_input.get("object_id"), str)
+                or transcript_input["digest"] != transcript_input["object_id"]
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", transcript_input["digest"])
+            ):
+                raise CapabilityValidationError(
+                    "transcript_file admission identity must be a matching sha256 digest/object_id"
+                )
+            input_manifest.append(transcript_input["digest"])
+
     idempotency_material: dict[str, Any] = {
         "spec": spec,
         "input_object_ids": sorted(input_manifest),
@@ -2088,6 +2193,14 @@ def invoke(
                 out=out,
                 _client=_client,
             )
+            transcript_input = invocation_authority_context.get("transcript_input")
+            if transcript_input is not None:
+                inputs = dict(inputs or {})
+                if inputs.get("transcript.json") not in (None, ""):
+                    raise CapabilityValidationError(
+                        "transcript input is host-owned; config.app.transcript supplies the CAS object"
+                    )
+                inputs["transcript.json"] = transcript_input
             if invocation_authority_context.get("mode") == "filmstrip":
                 # Only preflight may turn a successful project-owned render
                 # into a file input. Public paths were rejected above.

@@ -90,7 +90,8 @@
     },
     "uuid": {
       "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      "minLength": 1,
+      "description": "Exact Runtime timeline_id; UUID values remain supported for compatibility."
     },
     "raw_sha256": {
       "type": "string",
@@ -222,7 +223,7 @@
       "additionalProperties": false
     },
     "canonical_timeline_identity": {
-      "description": "Comparison-safe user-facing projection of a frozen timeline identity. UUID and slug are unchanged; ULID uses the lowercase kernel spelling.",
+      "description": "Comparison-safe user-facing projection of a frozen timeline identity. The exact Runtime timeline ID and slug are unchanged; ULID uses the lowercase kernel spelling.",
       "type": "object",
       "required": ["stable_id", "qualified_ref", "uuid", "ulid", "slug"],
       "properties": {

@@ -3,7 +3,8 @@
 Display ordinals are allocated once for a root visualization snapshot.  A
 child view receives a sealed copy of that root mapping; it never allocates or
 renumbers IDs.  Semantic identity remains independent of those display
-ordinals and is always the tuple ``(timeline_uuid, kind, authored_id)``.
+ordinals and is always the tuple ``(timeline_id, kind, authored_id)``. Runtime
+timeline IDs are opaque strings; UUID values remain accepted canonically.
 """
 
 from __future__ import annotations
@@ -201,19 +202,19 @@ def format_qualified_ref(
 
 def _normalize_semantic_identity(identity: SemanticIdentity) -> SemanticIdentity:
     if not isinstance(identity, tuple) or len(identity) != 3:
-        raise TypeError("semantic identity must be (timeline_uuid, kind, authored_id)")
-    timeline_uuid, kind, authored_id = identity
+        raise TypeError("semantic identity must be (timeline_id, kind, authored_id)")
+    timeline_id, kind, authored_id = identity
     if not all(isinstance(value, str) and value for value in identity):
         raise ValueError("semantic identity components must be non-empty strings")
     try:
-        canonical_uuid = str(UUID(timeline_uuid))
-    except ValueError as exc:
-        raise ValueError(f"invalid timeline UUID: {timeline_uuid!r}") from exc
-    if canonical_uuid != timeline_uuid:
+        canonical_uuid = str(UUID(timeline_id))
+    except ValueError:
+        canonical_uuid = None
+    if canonical_uuid is not None and canonical_uuid != timeline_id:
         raise ValueError("timeline UUID must use canonical hyphenated form")
     if kind not in SEMANTIC_KIND_TO_CODE:
         raise ValueError(f"unsupported semantic identity kind: {kind!r}")
-    return (canonical_uuid, kind, authored_id)
+    return (timeline_id, kind, authored_id)
 
 
 @dataclass(slots=True)
@@ -261,19 +262,19 @@ class RootIdMap:
         if display_id in self._display_to_identity:
             raise ValueError(f"duplicate display id: {display_id!r}")
 
-        timeline_uuid = normalized[0]
-        allocated_timeline = self._timeline_ids.get(timeline_uuid)
+        timeline_id = normalized[0]
+        allocated_timeline = self._timeline_ids.get(timeline_id)
         if allocated_timeline is not None and allocated_timeline != parsed.timeline_id:
             raise ValueError(
-                f"timeline UUID {timeline_uuid!r} is already allocated as {allocated_timeline}"
+                f"timeline ID {timeline_id!r} is already allocated as {allocated_timeline}"
             )
-        for known_uuid, known_timeline_id in self._timeline_ids.items():
-            if known_uuid != timeline_uuid and known_timeline_id == parsed.timeline_id:
+        for known_timeline_id, known_display_id in self._timeline_ids.items():
+            if known_timeline_id != timeline_id and known_display_id == parsed.timeline_id:
                 raise ValueError(f"timeline display id {parsed.timeline_id!r} is already allocated")
 
         self._entries[normalized] = display_id
         self._display_to_identity[display_id] = normalized
-        self._timeline_ids[timeline_uuid] = parsed.timeline_id
+        self._timeline_ids[timeline_id] = parsed.timeline_id
 
     def lookup(self, identity: SemanticIdentity) -> str:
         """Return the allocated display ID, raising ``KeyError`` when absent."""

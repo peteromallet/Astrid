@@ -15,6 +15,8 @@ from typing import Any
 from astrid.core.rendering.contracts import RenderProfile
 from astrid.core.rendering.profile import resolve_render_profile
 from astrid.core.timeline.duration import (
+    clip_end_frame,
+    clip_start_frame,
     clip_timeline_duration,
     timeline_duration_frames,
     timeline_render_duration_frames,
@@ -32,11 +34,17 @@ _H264_MAX_VIDEO_BITRATE = 80_000_000
 _PRORES_4444_BITS_PER_PIXEL_FRAME = Fraction(6, 1)
 _AAC_BITRATE = 320_000
 _PCM_S16LE_STEREO_BITRATE = 48_000 * 2 * 16
+_INLINE_AUDIO_WAV_BYTES_PER_SECOND = 48_000 * 2 * 2
+_INLINE_AUDIO_WAV_HEADER_BYTES = 44
 _MUX_OVERHEAD_PERCENT = 3
 _MUX_FIXED_OVERHEAD_BYTES = _MIB
 _MIN_OPERATIONAL_GUARD_BYTES = 256 * _MIB
 _OPERATIONAL_GUARD_PERCENT = 20
 _PARALLEL_ENCODE_WORKING_COPIES = 1
+# The managed render-export adapter keeps one staged asset copy and then makes
+# a second writable copy for the renderer. Both live under the attempt while
+# the render is running and are charged by the generic-host envelope.
+_MANAGED_RENDERER_COPY_PASSES = 2
 
 
 class StorageEstimateError(ValueError):
@@ -346,7 +354,65 @@ def estimate_managed_render_storage(
         * 48_000
         * (effective_audio_duration + duration * merge_pcm_outputs)
     )
+    registry_assets = registry.get("assets", {})
+    visual_tracks = {
+        track.get("id"): track
+        for track in timeline.get("tracks", [])
+        if isinstance(track, Mapping)
+        and track.get("kind") == "visual"
+        and track.get("id") is not None
+    }
+    # ``@remotion/media`` gives each <Video> a render-asset ID made from its
+    # source and Sequence context (source, rounded start, rounded duration),
+    # rather than from the registry asset name alone.  The inline-audio
+    # mixer keeps one sparse WAV per such ID.  Each frame writes at its global
+    # output position, so a clip at 90s leaves a WAV whose logical extent is
+    # 90s + its duration.  These files coexist until createAudio() finishes.
+    inline_audio_assets: set[tuple[str, int, int]] = set()
+    for clip in timeline.get("clips", []):
+        if not isinstance(clip, Mapping):
+            continue
+        track = visual_tracks.get(clip.get("track"))
+        asset_name = clip.get("asset")
+        if not isinstance(track, Mapping) or not isinstance(asset_name, str):
+            continue
+        if clip.get("clipType") not in {None, "media", "video"}:
+            continue
+        asset_entry = registry_assets.get(asset_name)
+        if not isinstance(asset_entry, Mapping):
+            continue
+        asset_type = str(asset_entry.get("type") or asset_entry.get("media_type") or "")
+        if asset_type.startswith("image"):
+            continue
+        if track.get("muted") is True:
+            continue
+        track_volume = track.get("volume", 1)
+        clip_volume = clip.get("volume", 1)
+        if (
+            isinstance(track_volume, (int, float))
+            and track_volume <= 0
+        ) or (
+            isinstance(clip_volume, (int, float))
+            and clip_volume <= 0
+        ):
+            continue
+        source = asset_entry.get("file")
+        if not isinstance(source, str) or not source:
+            source = asset_name
+        start_frame = clip_start_frame(clip, float(fps))
+        duration_frames = max(1, clip_end_frame(clip, float(fps)) - start_frame)
+        inline_audio_assets.add((source, start_frame, duration_frames))
+    inline_audio_mix_working_bytes = sum(
+        math.ceil(
+            Fraction(start_frame + duration_frames, 1)
+            / fps
+            * _INLINE_AUDIO_WAV_BYTES_PER_SECOND
+        )
+        + _INLINE_AUDIO_WAV_HEADER_BYTES
+        for _, start_frame, duration_frames in inline_audio_assets
+    )
     encoded_working_copy_bytes = estimated_output_bytes * _PARALLEL_ENCODE_WORKING_COPIES
+    managed_renderer_copy_bytes = managed_entry_bytes * _MANAGED_RENDERER_COPY_PASSES
     alpha_frame_bytes_per_frame = (
         math.ceil(
             Fraction(profile.width * profile.height * 4 + profile.height, 1)
@@ -358,23 +424,31 @@ def estimate_managed_render_storage(
     alpha_frame_working_bytes = alpha_frame_bytes_per_frame * frames
     base_bytes = (
         managed_input_bytes
-        + managed_entry_bytes
+        + managed_renderer_copy_bytes
         + effect_asset_bytes
         + snapshot_bytes
     )
     if alpha:
-        phase_working_bytes = max(
+        phase_working_bytes = (
             managed_entry_bytes
             + effect_asset_bytes
             + audio_pcm_working_bytes
+            + inline_audio_mix_working_bytes
             + alpha_frame_working_bytes
-            + estimated_output_bytes,
-            2 * estimated_output_bytes,
+            + estimated_output_bytes
+            + encoded_working_copy_bytes
         )
     else:
-        phase_working_bytes = max(
-            managed_entry_bytes + effect_asset_bytes + audio_pcm_working_bytes,
-            2 * estimated_output_bytes,
+        # Audio PCM and the staged/working encoded outputs coexist during the
+        # rich multi-clip render. They are not alternative peaks, so using
+        # max(audio_pcm, 2 * output) underestimates the live attempt.
+        phase_working_bytes = (
+            managed_entry_bytes
+            + effect_asset_bytes
+            + audio_pcm_working_bytes
+            + inline_audio_mix_working_bytes
+            + estimated_output_bytes
+            + encoded_working_copy_bytes
         )
     peak_before_guard_bytes = base_bytes + phase_working_bytes
     operational_guard_bytes = max(
@@ -400,6 +474,8 @@ def estimate_managed_render_storage(
         "managed_object_count": len(normalized_sizes),
         "managed_input_bytes": managed_input_bytes,
         "managed_entry_bytes": managed_entry_bytes,
+        "managed_renderer_copy_passes": _MANAGED_RENDERER_COPY_PASSES,
+        "managed_renderer_copy_bytes": managed_renderer_copy_bytes,
         "effect_asset_bytes": effect_asset_bytes,
         "snapshot_bytes": snapshot_bytes,
         "video_bitrate_bps": video_bitrate,
@@ -414,6 +490,8 @@ def estimate_managed_render_storage(
         "audio_asset_count": audio_asset_count,
         "merge_pcm_outputs": merge_pcm_outputs,
         "audio_pcm_working_bytes": audio_pcm_working_bytes,
+        "inline_audio_asset_count": len(inline_audio_assets),
+        "inline_audio_mix_working_bytes": inline_audio_mix_working_bytes,
         "alpha_frame_bytes_per_frame": alpha_frame_bytes_per_frame,
         "alpha_frame_working_bytes": alpha_frame_working_bytes,
         "parallel_encode_working_copies": _PARALLEL_ENCODE_WORKING_COPIES,

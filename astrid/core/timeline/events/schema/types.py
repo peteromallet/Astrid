@@ -63,7 +63,6 @@ from .payloads._base import (
     _coerce_clip_position as _coerce_clip_position,
     _require_nonempty_str,
     _require_ulid_str,
-    _require_uuid_str,
     _validate_jsonable,
 )
 from .ulid import generate_event_ulid, is_event_ulid as is_event_ulid
@@ -319,7 +318,7 @@ class TimelineEvent:
 
     def __post_init__(self) -> None:
         _require_ulid_str(self.event_id, "event_id")
-        _require_uuid_str(self.timeline_id, "timeline_id")
+        _require_nonempty_str(self.timeline_id, "timeline_id")
         _require_nonempty_str(self.ts, "ts")
         if not isinstance(self.actor, TimelineActor):
             raise TimelineEventSchemaError("actor must be a TimelineActor")
@@ -348,7 +347,7 @@ class TimelineEvent:
         if self.source_backend is not None:
             _require_nonempty_str(self.source_backend, "source_backend")
         if self.source_timeline_id is not None:
-            _require_uuid_str(self.source_timeline_id, "source_timeline_id")
+            _require_nonempty_str(self.source_timeline_id, "source_timeline_id")
         if self.source_event_id is not None:
             _require_nonempty_str(self.source_event_id, "source_event_id")
         if self.source_version is not None:

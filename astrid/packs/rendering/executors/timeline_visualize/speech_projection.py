@@ -213,12 +213,32 @@ def project_speech_annotations(
     for occurrence_index, occurrence in enumerate(raw_occurrences):
         if not isinstance(occurrence, Mapping):
             raise SpeechProjectionError("occurrences must contain objects")
+        linked_key = _first(occurrence, "annotation_id", "segment_id", "annotation_ref")
+        linked_keys = occurrence.get("annotation_ids")
+        if linked_key is not None and not isinstance(linked_key, (str, int, float)):
+            raise SpeechProjectionError("occurrence annotation_id must be scalar")
+        if linked_keys is not None and (
+            isinstance(linked_keys, (str, bytes))
+            or not isinstance(linked_keys, Sequence)
+        ):
+            raise SpeechProjectionError("occurrence annotation_ids must be a list")
+        annotation_keys = {
+            str(_first(annotation, "annotation_id", "id", "segment_id", default=""))
+            for annotation in raw_annotations
+            if isinstance(annotation, Mapping)
+        }
+        if linked_key is not None and str(linked_key) not in annotation_keys:
+            raise SpeechProjectionError(
+                f"occurrence annotation link {linked_key!r} has no matching annotation"
+            )
+        if isinstance(linked_keys, Sequence) and not any(
+            str(value) in annotation_keys for value in linked_keys
+        ):
+            raise SpeechProjectionError("occurrence annotation_ids have no matching annotation")
         for annotation in raw_annotations:
             if not isinstance(annotation, Mapping):
                 raise SpeechProjectionError("annotations must contain objects")
             annotation_key = str(_first(annotation, "annotation_id", "id", "segment_id", default=""))
-            linked_key = _first(occurrence, "annotation_id", "segment_id", "annotation_ref")
-            linked_keys = occurrence.get("annotation_ids")
             if linked_key is not None and str(linked_key) != annotation_key:
                 continue
             if isinstance(linked_keys, Sequence) and not isinstance(linked_keys, (str, bytes)) and annotation_key not in {str(value) for value in linked_keys}:

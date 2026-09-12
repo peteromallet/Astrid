@@ -80,6 +80,8 @@ def test_h264_estimate_exposes_every_peak_storage_component() -> None:
     assert estimate["encoder_buffer_bps"] == 31_104_000
     assert estimate["managed_input_bytes"] == 1000
     assert estimate["managed_entry_bytes"] == 2000
+    assert estimate["managed_renderer_copy_passes"] == 2
+    assert estimate["managed_renderer_copy_bytes"] == 4000
     assert estimate["effect_asset_bytes"] == 2000
     assert estimate["audio_pcm_working_bytes"] == 3_840_000
     expected_payload = math.ceil(
@@ -100,6 +102,37 @@ def test_h264_estimate_exposes_every_peak_storage_component() -> None:
     assert estimate["operational_guard_bytes"] >= 256 * 1024**2
     assert estimate["estimated_total_bytes"] == (
         estimate["estimated_scratch_bytes"] + estimate["estimated_output_bytes"]
+    )
+
+
+def test_h264_estimate_charges_both_managed_registry_copy_passes_for_rich_topology() -> None:
+    digest = "a" * 64
+    entry_count = 30
+    entry_size = 692_121
+    registry = {
+        "assets": {
+            f"shot-{index:02d}-source": {
+                "media_id": digest,
+                "content_sha256": digest,
+            }
+            for index in range(entry_count)
+        }
+    }
+
+    estimate = estimate_managed_render_storage(
+        timeline=_timeline(),
+        registry=registry,
+        object_sizes={digest: entry_size},
+    )
+
+    # The 30-shot expanded path has one adapter staging copy and one writable
+    # renderer-input copy for every registry entry, in addition to the single
+    # host materialization represented by managed_input_bytes.
+    assert estimate["managed_input_bytes"] == entry_size
+    assert estimate["managed_entry_bytes"] == entry_count * entry_size
+    assert estimate["managed_renderer_copy_bytes"] == 2 * entry_count * entry_size
+    assert estimate["base_bytes"] >= (
+        entry_size + 2 * entry_count * entry_size
     )
 
 

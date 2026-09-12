@@ -37,6 +37,10 @@ _MUX_FIXED_OVERHEAD_BYTES = _MIB
 _MIN_OPERATIONAL_GUARD_BYTES = 256 * _MIB
 _OPERATIONAL_GUARD_PERCENT = 20
 _PARALLEL_ENCODE_WORKING_COPIES = 1
+# The managed render-export adapter keeps one staged asset copy and then makes
+# a second writable copy for the renderer. Both live under the attempt while
+# the render is running and are charged by the generic-host envelope.
+_MANAGED_RENDERER_COPY_PASSES = 2
 
 
 class StorageEstimateError(ValueError):
@@ -347,6 +351,7 @@ def estimate_managed_render_storage(
         * (effective_audio_duration + duration * merge_pcm_outputs)
     )
     encoded_working_copy_bytes = estimated_output_bytes * _PARALLEL_ENCODE_WORKING_COPIES
+    managed_renderer_copy_bytes = managed_entry_bytes * _MANAGED_RENDERER_COPY_PASSES
     alpha_frame_bytes_per_frame = (
         math.ceil(
             Fraction(profile.width * profile.height * 4 + profile.height, 1)
@@ -358,7 +363,7 @@ def estimate_managed_render_storage(
     alpha_frame_working_bytes = alpha_frame_bytes_per_frame * frames
     base_bytes = (
         managed_input_bytes
-        + managed_entry_bytes
+        + managed_renderer_copy_bytes
         + effect_asset_bytes
         + snapshot_bytes
     )
@@ -400,6 +405,8 @@ def estimate_managed_render_storage(
         "managed_object_count": len(normalized_sizes),
         "managed_input_bytes": managed_input_bytes,
         "managed_entry_bytes": managed_entry_bytes,
+        "managed_renderer_copy_passes": _MANAGED_RENDERER_COPY_PASSES,
+        "managed_renderer_copy_bytes": managed_renderer_copy_bytes,
         "effect_asset_bytes": effect_asset_bytes,
         "snapshot_bytes": snapshot_bytes,
         "video_bitrate_bps": video_bitrate,

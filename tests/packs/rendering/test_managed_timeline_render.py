@@ -215,6 +215,60 @@ def test_managed_preflight_requires_runtime_ref_and_rejects_file_mode(tmp_path: 
         )
 
 
+def test_managed_preflight_rejects_malformed_frozen_speech_before_admission() -> None:
+    runtime = _Runtime()
+    speech = {
+        "speech_annotations": [{
+            "annotation_id": "speech-shotless-01",
+            "start": 248.0,
+            "end": 252.5,
+            "text": "We stay with the ending.",
+            "source_type": "verified_speech",
+        }],
+        "speech_occurrences": [{
+            "occurrence_id": "speech-occurrence-speech-shotless-01",
+            "annotation_id": "speech-shotless-01",
+            "from": 0,
+            "to": 297,
+            "placement": 0,
+            "speed": 1,
+        }],
+        "source_audio_digest": "sha256:" + "a" * 64,
+        "annotation_digest": "sha256:" + "b" * 63,
+    }
+    with pytest.raises(CapabilityValidationError, match="annotation_digest must be a sha256 digest"):
+        _prepare_managed_render_inputs(
+            {"timeline_ref": "main", **speech}, project="demo", _client=runtime
+        )
+
+
+def test_managed_preflight_rejects_unmatched_speech_linkage() -> None:
+    runtime = _Runtime()
+    with pytest.raises(CapabilityValidationError, match="no matching annotation"):
+        _prepare_managed_render_inputs(
+            {
+                "timeline_ref": "main",
+                "speech_annotations": [{
+                    "annotation_id": "segment_id=speech-shotless-01",
+                    "start": 248.0,
+                    "end": 252.5,
+                    "text": "We stay with the ending.",
+                    "source_type": "verified_speech",
+                }],
+                "speech_occurrences": [{
+                    "occurrence_id": "speech-occurrence-speech-shotless-01",
+                    "annotation_id": "speech-shotless-01",
+                    "from": 0,
+                    "to": 297,
+                    "placement": 0,
+                    "speed": 1,
+                }],
+            },
+            project="demo",
+            _client=runtime,
+        )
+
+
 def test_snapshot_validation_rejects_missing_registry_asset() -> None:
     runtime = _Runtime()
     runtime.timeline["config"] = {

@@ -414,6 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--materialized-root", type=Path)
     parser.add_argument("--materialized-objects")
+    parser.add_argument("--transcript-file", type=Path)
     return parser
 
 
@@ -1259,20 +1260,33 @@ def _discover_snapshot_attachment(
     project_root: Path,
     timeline_dir: Path,
     snapshot: TimelineSnapshot,
+    transcript_file: Path | None = None,
 ) -> tuple[TranscriptAttachment | None, TimelineSnapshot]:
     pipeline_metadata, pipeline_base, pipeline_root = _pipeline_metadata_for_timeline(
         project_root,
         timeline_dir,
     )
     timeline_metadata = snapshot.assembly.get("app")
-    attachment = discover_attachment(
-        project_root,
-        timeline_dir=timeline_dir,
-        timeline_metadata=(timeline_metadata if isinstance(timeline_metadata, Mapping) else None),
-        pipeline_metadata=pipeline_metadata,
-        pipeline_metadata_base=pipeline_base,
-        pipeline_root=pipeline_root,
-    )
+    if transcript_file is not None:
+        # Runtime generic-host materializes this one digest-authorized input
+        # below the attempt.  It is the only file path override accepted here;
+        # declaration identity and bytes remain authoritative.
+        attachment_root = transcript_file.expanduser().resolve().parent
+        attachment = discover_attachment(
+            attachment_root,
+            timeline_dir=attachment_root,
+            timeline_metadata=(timeline_metadata if isinstance(timeline_metadata, Mapping) else None),
+            materialized_file=transcript_file,
+        )
+    else:
+        attachment = discover_attachment(
+            project_root,
+            timeline_dir=timeline_dir,
+            timeline_metadata=(timeline_metadata if isinstance(timeline_metadata, Mapping) else None),
+            pipeline_metadata=pipeline_metadata,
+            pipeline_metadata_base=pipeline_base,
+            pipeline_root=pipeline_root,
+        )
     if attachment is None or attachment.integrity != "uncontained":
         return attachment, snapshot
     diagnostic = "TRANSCRIPT_PATH_UNCONTAINED: declared transcript path escaped its owning root"
@@ -1325,6 +1339,7 @@ def _render_one(
         project_root=project_root,
         timeline_dir=project_root,
         snapshot=snapshot,
+        transcript_file=getattr(args, "transcript_file", None),
     )
     if attachment is not None and attachment.integrity == "ok":
         snapshot = replace(snapshot, transcript_sha256=attachment.transcript_sha256)
@@ -1434,6 +1449,7 @@ def refresh_root(
         project_root=project_root,
         timeline_dir=project_root,
         snapshot=snapshot,
+        transcript_file=getattr(args, "transcript_file", None),
     )
     if attachment is not None and attachment.integrity == "ok":
         snapshot = replace(snapshot, transcript_sha256=attachment.transcript_sha256)

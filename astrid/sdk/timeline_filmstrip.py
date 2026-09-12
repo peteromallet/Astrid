@@ -304,7 +304,16 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
     run_id = _identifier(run, 'id', 'run_id')
     snapshot = build_filmstrip_snapshot(envelope, client=client, project=canonical_project, run_id=run_id, video_digest=digest)
     snapshot['metadata']['selection'] = 'explicit_render' if exact else 'latest_current_render'
+    from .managed_transcript import transcript_input_from_snapshot
+    timeline_snapshot = envelope.get('inputs', {}).get('timeline_snapshot', {})
+    config = timeline_snapshot.get('config', {}) if isinstance(timeline_snapshot, Mapping) else {}
+    registry = timeline_snapshot.get('registry', {}) if isinstance(timeline_snapshot, Mapping) else {}
+    try:
+        transcript_input = transcript_input_from_snapshot(config, registry)
+    except ValueError as exc:
+        _fail(str(exc))
     return {'mode': 'filmstrip', 'filmstrip_snapshot': snapshot,
         'video_object_id': digest, 'video_digest': digest, 'render_run_id': run_id,
         'project_id': project_id, 'timeline_id': authority['timeline_id'],
-        'include_media': bool(inputs.get('include_media', False))}
+        'include_media': bool(inputs.get('include_media', False)),
+        'transcript_input': transcript_input}

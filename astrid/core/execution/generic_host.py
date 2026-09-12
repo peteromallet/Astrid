@@ -3274,7 +3274,7 @@ class GenericPackHost:
             ):
                 raise HostError("generated output has an invalid managed filename")
             filename = relative_filename
-            media_type = _settlement_media_type(descriptor)
+            media_type = _settlement_media_type({**descriptor, "filename": filename})
             if inline:
                 data = path.read_bytes()
                 descriptor["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()

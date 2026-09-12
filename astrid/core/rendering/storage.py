@@ -15,6 +15,8 @@ from typing import Any
 from astrid.core.rendering.contracts import RenderProfile
 from astrid.core.rendering.profile import resolve_render_profile
 from astrid.core.timeline.duration import (
+    clip_end_frame,
+    clip_start_frame,
     clip_timeline_duration,
     timeline_duration_frames,
     timeline_render_duration_frames,
@@ -360,7 +362,13 @@ def estimate_managed_render_storage(
         and track.get("kind") == "visual"
         and track.get("id") is not None
     }
-    inline_audio_assets: set[str] = set()
+    # ``@remotion/media`` gives each <Video> a render-asset ID made from its
+    # source and Sequence context (source, rounded start, rounded duration),
+    # rather than from the registry asset name alone.  The inline-audio
+    # mixer keeps one sparse WAV per such ID.  Each frame writes at its global
+    # output position, so a clip at 90s leaves a WAV whose logical extent is
+    # 90s + its duration.  These files coexist until createAudio() finishes.
+    inline_audio_assets: set[tuple[str, int, int]] = set()
     for clip in timeline.get("clips", []):
         if not isinstance(clip, Mapping):
             continue
@@ -388,10 +396,20 @@ def estimate_managed_render_storage(
             and clip_volume <= 0
         ):
             continue
-        inline_audio_assets.add(asset_name)
-    inline_audio_mix_working_bytes = len(inline_audio_assets) * (
-        math.ceil(duration * _INLINE_AUDIO_WAV_BYTES_PER_SECOND)
+        source = asset_entry.get("file")
+        if not isinstance(source, str) or not source:
+            source = asset_name
+        start_frame = clip_start_frame(clip, float(fps))
+        duration_frames = max(1, clip_end_frame(clip, float(fps)) - start_frame)
+        inline_audio_assets.add((source, start_frame, duration_frames))
+    inline_audio_mix_working_bytes = sum(
+        math.ceil(
+            Fraction(start_frame + duration_frames, 1)
+            / fps
+            * _INLINE_AUDIO_WAV_BYTES_PER_SECOND
+        )
         + _INLINE_AUDIO_WAV_HEADER_BYTES
+        for _, start_frame, duration_frames in inline_audio_assets
     )
     encoded_working_copy_bytes = estimated_output_bytes * _PARALLEL_ENCODE_WORKING_COPIES
     managed_renderer_copy_bytes = managed_entry_bytes * _MANAGED_RENDERER_COPY_PASSES

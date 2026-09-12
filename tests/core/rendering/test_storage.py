@@ -163,15 +163,15 @@ def test_h264_estimate_charges_simultaneous_audio_and_output_work_for_rich_topol
         object_sizes={digest: entry_size},
     )
 
-    # The rich path has one admitted media object referenced by 30 shot
-    # occurrences, while its expanded audio clips total 301.5 seconds. The
-    # PCM working set coexists with both encoded-output copies.
+    # Remotion creates one sparse inline-audio WAV per visual Sequence. The
+    # 30 shot WAVs coexist, and each file extends to that shot's global end
+    # frame because the mixer writes samples at global output positions.
     assert estimate["managed_input_bytes"] == entry_size
     assert estimate["managed_entry_bytes"] == entry_size
     assert estimate["effective_audio_seconds_rational"] == [603, 2]
     assert estimate["audio_pcm_working_bytes"] == 115_488_000
-    assert estimate["inline_audio_asset_count"] == 1
-    assert estimate["inline_audio_mix_working_bytes"] == 57_600_044
+    assert estimate["inline_audio_asset_count"] == 30
+    assert estimate["inline_audio_mix_working_bytes"] == 883_873_320
     assert estimate["phase_working_bytes"] == (
         estimate["managed_entry_bytes"]
         + estimate["audio_pcm_working_bytes"]

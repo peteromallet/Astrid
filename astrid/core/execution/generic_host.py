@@ -2843,6 +2843,7 @@ class GenericPackHost:
         )
         matched_declarations: set[tuple[str, str, int, str]] = set()
         seen_identities: set[tuple[str, int]] = set()
+        seen_paths: dict[Path, int] = {}
         for index, harvested in enumerate(descriptors):
             if not isinstance(harvested, Mapping):
                 raise HostError(f"harvested output {index} is not a descriptor")
@@ -2878,7 +2879,6 @@ class GenericPackHost:
                 raise HostError(
                     f"harvested output {name!r} repeats ordinal {ordinal}"
                 )
-            seen_identities.add(identity)
             raw_path = harvested.get("path")
             if not isinstance(raw_path, str) or not raw_path:
                 raise HostError(f"harvested output {name!r} has no concrete path")
@@ -2898,6 +2898,16 @@ class GenericPackHost:
             size = path.stat().st_size
             if harvested.get("bytes") != size:
                 raise HostError(f"harvested output {name!r} byte count does not match")
+            # Settlement output rows intentionally omit host-local paths, but
+            # managed visualization packs need a stable relative name to be
+            # reconstructed after this ephemeral attempt is cleaned up. Keep
+            # that name in the runtime's existing filename field rather than
+            # widening the settlement schema with a new path property.
+            output_root = (attempt / "outputs").resolve()
+            try:
+                relative_filename = path.relative_to(output_root).as_posix()
+            except ValueError:
+                relative_filename = path.name
             output = {
                 "name": name,
                 "ordinal": ordinal,
@@ -2905,7 +2915,7 @@ class GenericPackHost:
                 "digest": f"sha256:{digest}",
                 "size": size,
                 "path": str(path),
-                "filename": path.name,
+                "filename": relative_filename,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
                 **{
@@ -2916,6 +2926,42 @@ class GenericPackHost:
                     if field in harvested
                 },
             }
+
+            existing_index = seen_paths.get(path)
+            if existing_index is not None:
+                existing = outputs[existing_index]
+                existing_priority = (
+                    bool(existing.get("is_primary")),
+                    existing.get("role") == "result",
+                )
+                current_priority = (
+                    bool(output.get("is_primary")),
+                    output.get("role") == "result",
+                )
+                if current_priority == existing_priority:
+                    raise HostError(f"harvested outputs repeat concrete path {path}")
+                if current_priority < existing_priority:
+                    # A manifest directory inventory and an explicit
+                    # manifest_path may name the same concrete file. Publish
+                    # one managed object, retaining the result/primary alias.
+                    continue
+                seen_identities.discard(
+                    (str(existing["name"]), int(existing["ordinal"]))
+                )
+                if all(field in existing for field in ("group_key", "variant_key", "ordinal")):
+                    matched_declarations = {
+                        declaration
+                        for declaration in matched_declarations
+                        if not (
+                            declaration[0] == existing["group_key"]
+                            and declaration[2] == existing["ordinal"]
+                            and declaration[3] == existing["variant_key"]
+                        )
+                    }
+                outputs[existing_index] = output
+            else:
+                seen_paths[path] = len(outputs)
+            seen_identities.add(identity)
 
             if is_generation_result:
                 ordinal_matches = [
@@ -2976,7 +3022,8 @@ class GenericPackHost:
                     "group_key": declaration["group_key"],
                     "variant_key": declaration["variant_key"],
                 }
-            outputs.append(output)
+            if existing_index is None:
+                outputs.append(output)
 
         if declarations:
             missing = [
@@ -3188,10 +3235,22 @@ class GenericPackHost:
         for index, descriptor in enumerate(outputs):
             descriptor = dict(descriptor)
             raw_path = descriptor.pop("path", None)
+            relative_filename = descriptor.pop("filename", None)
             if not raw_path:
                 raise HostError("generated output is missing its staged path")
             path = Path(str(raw_path))
-            filename = descriptor.get("filename") or path.name
+            if relative_filename is None:
+                relative_filename = path.name
+            if (
+                not isinstance(relative_filename, str)
+                or not relative_filename
+                or "\\" in relative_filename
+                or Path(relative_filename).is_absolute()
+                or ".." in Path(relative_filename).parts
+                or Path(relative_filename).as_posix() != relative_filename
+            ):
+                raise HostError("generated output has an invalid managed filename")
+            filename = relative_filename
             media_type = str(descriptor.get("artifact_type") or "application/octet-stream")
             if inline:
                 data = path.read_bytes()
@@ -3203,7 +3262,7 @@ class GenericPackHost:
                 # Result-manifest metadata (ordinal/role/primary) is local
                 # harvest evidence.  Runtime 70872d03 accepts only the
                 # canonical settlement Output fields plus inline bytes.
-                uploaded.append({
+                uploaded_row = {
                     key: descriptor[key]
                     for key in (
                         "name",
@@ -3215,21 +3274,28 @@ class GenericPackHost:
                         "data_base64",
                     )
                     if key in descriptor
-                })
-                for field in ("output_port", "group_key", "variant_key", "selector", "ordinal"):
+                }
+                generation_metadata = (
+                    "output_port", "group_key", "variant_key", "selector"
+                )
+                for field in generation_metadata:
                     if field in descriptor:
-                        uploaded[-1][field] = descriptor[field]
+                        uploaded_row[field] = descriptor[field]
+                if any(field in descriptor for field in generation_metadata) and "ordinal" in descriptor:
+                    uploaded_row["ordinal"] = descriptor["ordinal"]
+                uploaded_row["filename"] = relative_filename
+                uploaded.append(uploaded_row)
                 continue
             object_row = upload_object(
                 path,
                 project_id=project_id,
                 media_type=media_type,
-                filename=filename,
+                filename=relative_filename,
             )
             digest = getattr(object_row, "digest", None)
             if not digest:
                 raise HostError("generated object upload returned no canonical digest")
-            uploaded.append({
+            uploaded_row = {
                 "name": descriptor.get("name"),
                 "kind": "object",
                 "filename": filename,
@@ -3239,11 +3305,17 @@ class GenericPackHost:
                 **{
                     field: descriptor[field]
                     for field in (
-                        "output_port", "group_key", "variant_key", "selector", "ordinal",
+                        "output_port", "group_key", "variant_key", "selector",
                     )
                     if field in descriptor
                 },
-            })
+            }
+            if any(
+                field in descriptor
+                for field in ("output_port", "group_key", "variant_key", "selector")
+            ) and "ordinal" in descriptor:
+                uploaded_row["ordinal"] = descriptor["ordinal"]
+            uploaded.append(uploaded_row)
         return uploaded
 
     def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, authority_context: Mapping[str, Any] | None = None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None, storage_estimate: Mapping[str, int] | None = None) -> Any:

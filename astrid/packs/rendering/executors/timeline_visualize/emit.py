@@ -1582,6 +1582,10 @@ def emit_asset_index(
                 "integrity_state": integrity.state,
                 "expected_sha256": integrity.expected_sha256,
                 "observed_sha256": integrity.observed_sha256,
+                # Runtime-managed media is not represented by a local source
+                # locator. Keep the schema-required provenance slot explicit
+                # and null rather than leaking an ambient filesystem path.
+                "contained_path": None,
             }
         )
     return {

@@ -314,7 +314,7 @@ def _verify_selected_execution_authority(
     if mode != "kernel" or not isinstance(expected_rows, list):
         raise ValueError("timeline visualization authority mode changed before execution")
     def comparable_timeline_id(value: Any) -> Any:
-        """Compare compact runtime UUIDs and canonical UUID text alike."""
+        """Compare compact runtime IDs and canonical UUID text alike."""
 
         try:
             return str(uuid.UUID(str(value)))
@@ -529,10 +529,8 @@ def _materialize_kernel_timeline(
 
     del project_root, project_slug, destination
     timeline_ulid = row.timeline_ulid.upper()
-    # The workspace DTO currently uses a compact 32-hex UUID, while the
-    # visualization snapshot digest contract requires canonical UUID text.
-    # Keep selector authority in the DTO form, and normalize only at the
-    # materialization boundary.
+    # Compact UUID DTOs retain their historical normalization; opaque Runtime
+    # IDs are preserved exactly through the materialization boundary.
     try:
         timeline_id = str(uuid.UUID(str(row.timeline_id)))
     except ValueError:

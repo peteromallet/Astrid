@@ -239,6 +239,14 @@ def test_sha256_bytes_is_bare_lowercase_hex() -> None:
     )
 
 
+def test_sns_digest_preserves_opaque_runtime_timeline_id() -> None:
+    fields = _snapshot(timeline_uuid="astrid-v1-timeline-full-20260912")
+    digest = sns_digest(fields)
+
+    assert digest.startswith("SNS:")
+    assert fields["timeline_uuid"] == "astrid-v1-timeline-full-20260912"
+
+
 def test_sns_rejects_unrecognized_identity_fields_instead_of_silently_omitting_them() -> None:
     with pytest.raises(ValueError, match="unexpected snapshot field"):
         sns_digest(_snapshot(new_identity_fact="must-not-be-ignored"))

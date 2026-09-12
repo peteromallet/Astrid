@@ -7,7 +7,6 @@ import json
 import re
 from collections.abc import Mapping
 from typing import Any, Final
-from uuid import UUID
 
 SNS_SCHEMA_VERSION: Final[int] = 1
 
@@ -89,13 +88,10 @@ def _snapshot_envelope(snapshot_fields: Mapping[str, Any]) -> dict[str, Any]:
     if _SLUG_RE.fullmatch(project_slug) is None:
         raise ValueError("project_slug must be a lowercase slug")
 
+    # Runtime's canonical timeline_id is an opaque non-empty string.  The
+    # historical SNS field remains named ``timeline_uuid`` for schema-v1
+    # compatibility, but carries the exact runtime identity without rewriting.
     timeline_uuid = _require_string(snapshot_fields["timeline_uuid"], "timeline_uuid")
-    try:
-        canonical_uuid = str(UUID(timeline_uuid))
-    except ValueError as exc:
-        raise ValueError("timeline_uuid must be a canonical UUID") from exc
-    if canonical_uuid != timeline_uuid:
-        raise ValueError("timeline_uuid must be a canonical UUID")
 
     timeline_ulid = _require_string(snapshot_fields["timeline_ulid"], "timeline_ulid")
     if _ULID_RE.fullmatch(timeline_ulid) is None:
@@ -130,7 +126,7 @@ def _snapshot_envelope(snapshot_fields: Mapping[str, Any]) -> dict[str, Any]:
     envelope: dict[str, Any] = {
         "schema_version": SNS_SCHEMA_VERSION,
         "project_slug": project_slug,
-        "timeline_uuid": canonical_uuid,
+        "timeline_uuid": timeline_uuid,
         "timeline_ulid": timeline_ulid,
         "head_version": head_version,
         "head_last_event_id": head_last_event_id,

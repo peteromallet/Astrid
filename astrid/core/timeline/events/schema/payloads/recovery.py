@@ -11,7 +11,6 @@ from astrid.core.timeline.banodoco_schema import validate_timeline_config_for_co
 from ._base import (
     TimelineEventSchemaError,
     _require_nonempty_str,
-    _require_uuid_str,
     _validate_jsonable,
 )
 
@@ -118,7 +117,7 @@ class TimelineBranchedFromPayload:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        _require_uuid_str(self.branch_timeline_id, "payload.branch_timeline_id")
+        _require_nonempty_str(self.branch_timeline_id, "payload.branch_timeline_id")
         _require_nonempty_str(self.anchor_event_id, "payload.anchor_event_id")
         if self.reason is not None:
             _require_nonempty_str(self.reason, "payload.reason")

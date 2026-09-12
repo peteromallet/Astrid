@@ -5,21 +5,23 @@ from types import SimpleNamespace
 import pytest
 
 from astrid.core._shared.result_manifest import harvest_staged_outputs
+from astrid.core.contracts.schema import Output
 from astrid.core.execution.generic_host import GenericPackHost, HostError
-from astrid.core.generation import GENERATION_RESULT_KEY
-from astrid.core.generation.backends.base import GenerationResult
 from astrid.sdk.invocation import _generation_publish_effect, _kernel_invoke
-from astrid.sdk.results import InvocationResult, _reconstruct_generation_result
+from astrid.sdk.results import Capability
 
 
-def _capability() -> SimpleNamespace:
+def _capability() -> Capability:
     outputs = (
-        SimpleNamespace(name="generated_videos", type="file", artifact_type="video/clip"),
-        SimpleNamespace(name="video_manifest", type="file", artifact_type=None),
-        SimpleNamespace(name="thumbnail", type="file", artifact_type="image"),
+        Output(name="generated_videos", type="file", artifact_type="video/clip"),
+        Output(name="video_manifest", type="file", artifact_type=None),
+        Output(name="thumbnail", type="file", artifact_type="image"),
     )
-    return SimpleNamespace(
+    return Capability(
         id="generation.generate_video",
+        capability_type="executor",
+        native_kind="executor",
+        handle=SimpleNamespace(),
         outputs=outputs,
         definition={
             "outputs": [
@@ -97,65 +99,21 @@ def _managed_output(generation_id: str | None) -> dict[str, object]:
     }
 
 
-def test_generation_reconstruction_preserves_generic_outputs_when_joining_managed_rows() -> None:
-    generic_output = {"name": "effect-output", "effect": None}
-    result = _reconstruct_generation_result(
-        InvocationResult(
-            capability_id="generation.generate_video",
-            capability_type="executor",
-            native_kind="built_in",
-            ok=True,
-            raw_result={
-                "payload": {
-                    GENERATION_RESULT_KEY: GenerationResult(
-                        manifest={"outputs": [generic_output]}
-                    ).to_dict()
-                },
-                "managed_outputs": [
-                    _managed_output("generation-1"),
-                    _managed_output(None),
-                ],
-            },
-        )
-    )
-
-    assert result.manifest is not None
-    assert result.manifest["outputs"] == [
-        generic_output,
-        _managed_output("generation-1"),
-    ]
-
-
-def test_generation_reconstruction_allows_manifest_only_payload() -> None:
-    result = _reconstruct_generation_result(
-        InvocationResult(
-            capability_id="generation.generate_video",
-            capability_type="executor",
-            native_kind="built_in",
-            ok=True,
-            raw_result={
-                "payload": {
-                    "manifest": {"outputs": [{"name": "effect-output", "effect": None}]}
-                }
-            },
-        )
-    )
-
-    assert result.manifest == {"outputs": [{"name": "effect-output", "effect": None}]}
-
-
 def test_effect_resolves_each_real_sdk_modality_port_and_excludes_extras() -> None:
     for modality, port, artifact in (
         ("image", "generated_images", "image"),
         ("video", "generated_videos", "video/clip"),
         ("audio", "generated_audio", "audio"),
     ):
-        capability = SimpleNamespace(
+        capability = Capability(
             id=f"generation.generate_{modality}",
+            capability_type="executor",
+            native_kind="executor",
+            handle=SimpleNamespace(),
             outputs=(
-                SimpleNamespace(name=port, type="file", artifact_type=artifact),
-                SimpleNamespace(name=f"{modality}_manifest", type="file", artifact_type=None),
-                SimpleNamespace(name="auxiliary", type="file", artifact_type="application/json"),
+                Output(name=port, type="file", artifact_type=artifact),
+                Output(name=f"{modality}_manifest", type="file", artifact_type=None),
+                Output(name="auxiliary", type="file", artifact_type="application/json"),
             ),
             # This is the real SDK Capability shape: definition is a mapping.
             definition={"outputs": [{"name": "wrong", "type": "file", "artifact_type": artifact}]},

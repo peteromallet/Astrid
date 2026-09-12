@@ -2797,6 +2797,7 @@ class GenericPackHost:
         outputs: list[dict[str, Any]] = []
         by_name = {output.name: output for output in record.definition.outputs}
         seen_identities: set[tuple[str, int]] = set()
+        seen_paths: dict[Path, int] = {}
         for index, harvested in enumerate(descriptors):
             if not isinstance(harvested, Mapping):
                 raise HostError(f"harvested output {index} is not a descriptor")
@@ -2815,7 +2816,6 @@ class GenericPackHost:
                 raise HostError(
                     f"harvested output {name!r} repeats ordinal {ordinal}"
                 )
-            seen_identities.add(identity)
             raw_path = harvested.get("path")
             if not isinstance(raw_path, str) or not raw_path:
                 raise HostError(f"harvested output {name!r} has no concrete path")
@@ -2838,16 +2838,56 @@ class GenericPackHost:
             role = harvested.get("role", "result")
             if role not in {"result", "auxiliary"}:
                 raise HostError(f"harvested output {name!r} has invalid role {role!r}")
-            outputs.append({
+            # Settlement output rows intentionally omit host-local paths, but
+            # managed visualization packs need a stable relative name to be
+            # reconstructed after this ephemeral attempt is cleaned up. Keep
+            # that name in the runtime's existing filename field rather than
+            # widening the settlement schema with a new path property.
+            output_root = (attempt / "outputs").resolve()
+            try:
+                relative_filename = path.relative_to(output_root).as_posix()
+            except ValueError:
+                relative_filename = path.name
+            output_descriptor = {
                 "name": name,
                 "ordinal": ordinal,
                 "artifact_type": getattr(output, "artifact_type", None),
                 "digest": f"sha256:{digest}",
                 "size": size,
                 "path": str(path),
+                "filename": relative_filename,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
-            })
+            }
+            existing_index = seen_paths.get(path)
+            if existing_index is not None:
+                existing = outputs[existing_index]
+                existing_priority = (
+                    bool(existing.get("is_primary")),
+                    existing.get("role") == "result",
+                )
+                current_priority = (
+                    bool(output_descriptor.get("is_primary")),
+                    output_descriptor.get("role") == "result",
+                )
+                if current_priority == existing_priority:
+                    raise HostError(
+                        f"harvested outputs repeat concrete path {path}"
+                    )
+                if current_priority < existing_priority:
+                    # A manifest directory inventory and an explicit
+                    # manifest_path may name the same concrete file. Publish
+                    # one managed object, retaining the result/primary alias.
+                    continue
+                seen_identities.discard(
+                    (str(existing["name"]), int(existing["ordinal"]))
+                )
+                outputs[existing_index] = output_descriptor
+                seen_identities.add(identity)
+                continue
+            seen_paths[path] = len(outputs)
+            seen_identities.add(identity)
+            outputs.append(output_descriptor)
         return outputs
 
     def _child_environment(
@@ -3041,9 +3081,22 @@ class GenericPackHost:
         for index, descriptor in enumerate(outputs):
             descriptor = dict(descriptor)
             raw_path = descriptor.pop("path", None)
+            relative_filename = descriptor.pop("filename", None)
+            has_explicit_filename = relative_filename is not None
             if not raw_path:
                 raise HostError("generated output is missing its staged path")
             path = Path(str(raw_path))
+            if relative_filename is None:
+                relative_filename = path.name
+            if (
+                not isinstance(relative_filename, str)
+                or not relative_filename
+                or "\\" in relative_filename
+                or Path(relative_filename).is_absolute()
+                or ".." in Path(relative_filename).parts
+                or Path(relative_filename).as_posix() != relative_filename
+            ):
+                raise HostError("generated output has an invalid managed filename")
             media_type = str(descriptor.get("artifact_type") or "application/octet-stream")
             if inline:
                 data = path.read_bytes()
@@ -3055,7 +3108,7 @@ class GenericPackHost:
                 # Result-manifest metadata (ordinal/role/primary) is local
                 # harvest evidence.  Runtime 70872d03 accepts only the
                 # canonical settlement Output fields plus inline bytes.
-                uploaded.append({
+                uploaded_row = {
                     key: descriptor[key]
                     for key in (
                         "name",
@@ -3066,24 +3119,33 @@ class GenericPackHost:
                         "data_base64",
                     )
                     if key in descriptor
-                })
+                }
+                if has_explicit_filename:
+                    uploaded_row["filename"] = relative_filename
+                uploaded.append(uploaded_row)
                 continue
             object_row = upload_object(
                 path,
                 project_id=project_id,
                 media_type=media_type,
-                filename=path.name,
+                filename=relative_filename,
             )
             digest = getattr(object_row, "digest", None)
             if not digest:
                 raise HostError("generated object upload returned no canonical digest")
-            uploaded.append({
+            uploaded_row = {
                 "name": descriptor.get("name"),
                 "kind": "object",
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
-            })
+            }
+            if has_explicit_filename:
+                # ``filename`` is an existing canonical settlement field. It
+                # carries the relative member name needed by frozen pack
+                # rehydration after the attempt-local path is cleaned up.
+                uploaded_row["filename"] = relative_filename
+            uploaded.append(uploaded_row)
         return uploaded
 
     def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, authority_context: Mapping[str, Any] | None = None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None, storage_estimate: Mapping[str, int] | None = None) -> Any:

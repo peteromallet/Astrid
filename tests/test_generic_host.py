@@ -36,6 +36,7 @@ class FakeRuntime:
     def __init__(self):
         self.registrations = []
         self.settlements = []
+        self.uploaded_objects = {}
         self.failures = []
         self.heartbeats = []
         self.capability_registrations = []
@@ -75,9 +76,16 @@ class FakeRuntime:
 
     def upload_object(self, path, *, project_id, media_type, filename=None):
         data = Path(path).read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        self.uploaded_objects[digest] = {
+            "data": data,
+            "filename": filename,
+            "project_id": project_id,
+            "media_type": media_type,
+        }
         return SimpleNamespace(
-            object_id=f"object-{hashlib.sha256(data).hexdigest()[:12]}",
-            digest=hashlib.sha256(data).hexdigest(),
+            object_id=f"object-{digest[:12]}",
+            digest=digest,
             size=len(data),
             media_type=media_type,
             filename=filename,
@@ -1569,7 +1577,7 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert isinstance(evidence["process_id"], int) and evidence["process_id"] > 0
     assert outputs[0]["name"] == "answer"
     assert set(outputs[0]) <= {
-        "name", "kind", "digest", "media_type", "size", "data_base64",
+        "name", "filename", "kind", "digest", "media_type", "size", "data_base64",
     }
     assert "path" not in outputs[0]
     assert "artifact_type" not in outputs[0]
@@ -1584,6 +1592,110 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert result["process_evidence"]["returncode"] == 0
     assert isinstance(result["process_evidence"]["process_id"], int)
     assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_structure_pack_members_survive_harvest_cleanup_and_reopen(tmp_path):
+    root = tmp_path / "timeline"
+    root.mkdir()
+    (root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "test.timeline",
+                "name": "Timeline",
+                "kind": "external",
+                "version": "1.0",
+                "command": {
+                    "argv": [
+                        "{python_exec}",
+                        "-c",
+                        (
+                            "from pathlib import Path; import json, hashlib; "
+                            "from astrid.core._shared.result_manifest import build_manifest, write_manifest; "
+                            "out=Path('{out}'); pack=out/'agent-view'; pack.mkdir(parents=True, exist_ok=True); "
+                            "md=pack/'structure.md'; md.write_text('# structure\\n', encoding='utf-8'); "
+                            "idx=pack/'transcript-index.json'; idx.write_text(json.dumps({'speech': [{'text': 'We stay with the ending.'}]}), encoding='utf-8'); "
+                            "png=pack/'PG001.png'; png.write_bytes(b'PNG fixture bytes'); "
+                            "inner=build_manifest(kind='timeline_visualization', inputs={}, created='t', outputs=["
+                            "{'name':'structure','path':'structure.md'},"
+                            "{'name':'transcript_index','path':'transcript-index.json'},"
+                            "{'name':'page','path':'PG001.png'}]); "
+                            "write_manifest(pack/'manifest.json', inner); "
+                            "write_manifest(out/'manifest.json', build_manifest(kind='timeline_visualization_result', inputs={}, created='t', outputs=["
+                            "{'name':'pack_root','path':'agent-view','role':'auxiliary'},"
+                            "{'name':'manifest_path','path':'agent-view/manifest.json','role':'result','is_primary':True}]))"
+                        ),
+                    ]
+                },
+                "outputs": [
+                    {
+                        "name": "pack_root",
+                        "type": "directory",
+                        "path_template": "{out}/agent-view",
+                        "artifact_type": "evidence/timeline-visualization",
+                    },
+                    {
+                        "name": "manifest_path",
+                        "type": "file",
+                        "path_template": "{out}/agent-view/manifest.json",
+                        "artifact_type": "metadata/result-manifest",
+                    },
+                ],
+                "metadata": {"output_result_manifest": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-timeline",
+            "capability": "test.timeline",
+            "project_id": "demo",
+            "attempt_id": "attempt-timeline",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-timeline"] = task
+
+    host.run_task(task, lease_token="lease-1")
+
+    settled = runtime.settlements[0][2]
+    outputs = settled["outputs"]
+    filenames = [
+        item["filename"]
+        for item in runtime.uploaded_objects.values()
+        if item["filename"] is not None
+    ]
+    assert "agent-view/structure.md" in filenames
+    assert "agent-view/transcript-index.json" in filenames
+    assert "agent-view/PG001.png" in filenames
+    assert any(
+        item["name"] == "manifest_path"
+        and item["filename"] == "agent-view/manifest.json"
+        for item in outputs
+    )
+    assert len({item["digest"] for item in outputs}) == len(outputs)
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+    # Reopen the returned managed product from its runtime-owned bytes. This
+    # is the post-cleanup path the frozen viewer uses; no attempt-local file is
+    # consulted.
+    reopened = tmp_path / "reopened"
+    for item in runtime.uploaded_objects.values():
+        filename = item["filename"]
+        assert isinstance(filename, str)
+        relative = Path(filename.removeprefix("agent-view/"))
+        assert not relative.is_absolute() and ".." not in relative.parts
+        destination = reopened / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(item["data"])
+    assert (reopened / "structure.md").read_text(encoding="utf-8") == "# structure\n"
+    assert json.loads((reopened / "transcript-index.json").read_text(encoding="utf-8"))["speech"][0]["text"] == "We stay with the ending."
+    assert (reopened / "PG001.png").read_bytes() == b"PNG fixture bytes"
 
 
 def test_mid_render_evidence_abort_keeps_measurement_on_runtime_failure(tmp_path):
@@ -2262,7 +2374,7 @@ def test_command_host_harvests_result_manifest_media(tmp_path: Path) -> None:
     assert all(
         set(item)
         <= {
-            "name", "kind", "digest", "media_type", "size", "data_base64",
+            "name", "filename", "kind", "digest", "media_type", "size", "data_base64",
         }
         for item in settled
     )

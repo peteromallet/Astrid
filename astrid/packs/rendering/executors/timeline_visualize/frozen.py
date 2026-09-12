@@ -286,7 +286,7 @@ def _rehydrate_managed_pack(
     try:
         requested_label = None
         for row in rows:
-            label = _runtime_output_field(row, "path", "name", "label")
+            label = _runtime_output_field(row, "path", "label", "filename", "name")
             digest = str(
                 _runtime_output_field(
                     row, "digest", "content_hash", "sha256", "object_id"
@@ -1215,7 +1215,7 @@ def _verify_runtime_output_binding(
     for index, raw in enumerate(runtime_outputs):
         if not isinstance(raw, Mapping):
             raise ContainmentError(f"runtime settlement output {index} is malformed")
-        raw_path = _runtime_output_field(raw, "path", "name", "label")
+        raw_path = _runtime_output_field(raw, "path", "label", "filename", "name")
         digest = _runtime_output_field(raw, "digest", "content_hash", "sha256", "object_id")
         size = _runtime_output_field(raw, "bytes", "size")
         if not isinstance(raw_path, str) or not raw_path or not isinstance(digest, str):

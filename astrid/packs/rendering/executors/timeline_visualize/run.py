@@ -1759,9 +1759,9 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
 
     # The generic host requires a receipt at the assigned output root even
     # though the domain evidence manifest intentionally lives under
-    # ``agent-view/``.  Keep the domain manifest authoritative and publish a
-    # tiny host receipt that points at it; without this boundary receipt the
-    # child succeeds but the admitted task is reported as missing outputs.
+    # ``agent-view/``. Keep the domain manifest authoritative, and publish the
+    # complete evidence directory as a declared output so its members survive
+    # the host's managed-object upload and attempt cleanup.
     write_manifest(
         out_root / "manifest.json",
         build_manifest(
@@ -1769,6 +1769,11 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
             created="1970-01-01T00:00:00Z",
             inputs={"timeline_ids": timeline_ids},
             outputs=[
+                {
+                    "name": "pack_root",
+                    "path": str(pack_root.relative_to(out_root)),
+                    "role": "auxiliary",
+                },
                 {
                     "name": "manifest_path",
                     "path": str(manifest_path.relative_to(out_root)),

@@ -17,6 +17,49 @@ from .filmstrip_cards import build_filmstrip_pack
 from .filmstrip_options import filmstrip_options
 
 
+_FILMSTRIP_CAPABILITY_ID = "rendering.timeline_visualize"
+
+
+def _filmstrip_output_contract(
+    snapshot: Mapping[str, object],
+    options: Mapping[str, object],
+    video_digest: str,
+) -> dict[str, object]:
+    """Return explicit lifecycle metadata for one derived filmstrip result."""
+
+    exact_inputs = {
+        "render_run_id": snapshot["render_run_id"],
+        "timeline_id": snapshot["timeline_id"],
+        "video_digest": video_digest,
+        "options": dict(options),
+    }
+    recipe = {
+        "capability_id": _FILMSTRIP_CAPABILITY_ID,
+        "view": "filmstrip",
+        "exact_inputs": exact_inputs,
+    }
+    recipe_digest = "sha256:" + hashlib.sha256(
+        json.dumps(recipe, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return {
+        "producer": {"capability_id": _FILMSTRIP_CAPABILITY_ID, "view": "filmstrip"},
+        "provenance": {
+            "render_run_id": snapshot["render_run_id"],
+            "timeline_id": snapshot["timeline_id"],
+            "video_digest": video_digest,
+        },
+        "regeneration": {
+            "available": True,
+            "capability_id": _FILMSTRIP_CAPABILITY_ID,
+            "source_refs": [video_digest],
+            "recipe_digest": recipe_digest,
+            "exact_inputs": exact_inputs,
+        },
+    }
+
+
 def _rendered_timing(video: Path, fps) -> tuple[int, float]:
     """Return decoded frame extent and duration, not authored timeline length.
 
@@ -252,6 +295,8 @@ def execute_filmstrip(args, *, authority=None):
     # (the host reports "missing result manifest receipt").  Publish a small
     # host receipt at the assigned output root and keep the domain manifest
     # nested and authoritative for offline evidence verification.
+    output_contract = _filmstrip_output_contract(snapshot, options, digest)
+
     def _receipt_entry(name: str, path: Path, *, role: str = "auxiliary", primary: bool = False) -> dict:
         relative = path.relative_to(out_root).as_posix()
         return {
@@ -261,6 +306,11 @@ def execute_filmstrip(args, *, authority=None):
             "bytes": path.stat().st_size,
             "role": role,
             "is_primary": primary,
+            # Runtime disallows temporary primary outputs.  Keep the existing
+            # bundle primary while the auxiliary nested manifest follows the
+            # derived-artifact temporary lifecycle.
+            "durability": "durable" if primary else "temporary",
+            **output_contract,
         }
 
     # Keep the host receipt small and self-contained.  The bundle is the

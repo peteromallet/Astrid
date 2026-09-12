@@ -103,7 +103,27 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
         'filmstrip_manifest', 'filmstrip_bundle'
     }
     assert all('content_hash' in entry and 'bytes' in entry for entry in host_manifest['outputs'])
-    assert next(entry for entry in host_manifest['outputs'] if entry['name'] == 'filmstrip_bundle')['path'] == 'filmstrip-bundle.zip'
+    bundle_entry = next(entry for entry in host_manifest['outputs'] if entry['name'] == 'filmstrip_bundle')
+    manifest_entry = next(entry for entry in host_manifest['outputs'] if entry['name'] == 'filmstrip_manifest')
+    assert bundle_entry['path'] == 'filmstrip-bundle.zip'
+    assert bundle_entry['is_primary'] is True
+    assert bundle_entry['durability'] == 'durable'
+    assert manifest_entry['is_primary'] is False
+    assert manifest_entry['durability'] == 'temporary'
+    for entry in host_manifest['outputs']:
+        assert entry['producer'] == {'capability_id': 'rendering.timeline_visualize', 'view': 'filmstrip'}
+        assert entry['provenance'] == {
+            'render_run_id': 'run', 'timeline_id': 'main',
+            'video_digest': snapshot['video_digest'],
+        }
+        regeneration = entry['regeneration']
+        assert regeneration['available'] is True
+        assert regeneration['capability_id'] == 'rendering.timeline_visualize'
+        assert regeneration['source_refs'] == [snapshot['video_digest']]
+        assert regeneration['exact_inputs']['render_run_id'] == 'run'
+        assert regeneration['exact_inputs']['timeline_id'] == 'main'
+        assert regeneration['exact_inputs']['video_digest'] == snapshot['video_digest']
+        assert regeneration['recipe_digest'].startswith('sha256:')
     assert result['identity']['render'] == {
         'render_run_id': 'run', 'timeline_id': 'main',
         'video_digest': snapshot['video_digest'],

@@ -97,6 +97,14 @@ _VIDEO_SUFFIX_MEDIA_TYPES = {
     ".mkv": "video/x-matroska",
 }
 
+_SETTLEMENT_OUTPUT_METADATA_FIELDS = (
+    "producer",
+    "provenance",
+    "durability",
+    "regeneration",
+    "coverage",
+)
+
 
 def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
     """Publish a MIME media type while retaining internal artifact semantics."""
@@ -3306,6 +3314,13 @@ class GenericPackHost:
                         uploaded_row[field] = descriptor[field]
                 if any(field in descriptor for field in generation_metadata) and "ordinal" in descriptor:
                     uploaded_row["ordinal"] = descriptor["ordinal"]
+                uploaded_row.update(
+                    {
+                        field: descriptor[field]
+                        for field in _SETTLEMENT_OUTPUT_METADATA_FIELDS
+                        if field in descriptor
+                    }
+                )
                 uploaded_row["filename"] = relative_filename
                 uploaded.append(uploaded_row)
                 continue
@@ -3333,6 +3348,13 @@ class GenericPackHost:
                     if field in descriptor
                 },
             }
+            uploaded_row.update(
+                {
+                    field: descriptor[field]
+                    for field in _SETTLEMENT_OUTPUT_METADATA_FIELDS
+                    if field in descriptor
+                }
+            )
             if any(
                 field in descriptor
                 for field in ("output_port", "group_key", "variant_key", "selector")

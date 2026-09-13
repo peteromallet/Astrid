@@ -18,6 +18,20 @@ from astrid.core.execution.guards import ExecutionGuardPolicy
 FIXTURE_FILENAME = "publication-contract-fixture.mp4"
 FIXTURE_BYTES = b"publication-contract-fixture-v1\n"
 CAPABILITY_ID = "publication_contract.render"
+SOURCE_COVERAGE = {
+    "sampling": {
+        "mode": "interval",
+        "range": {"start": 0, "end": 24},
+        "step_frames_rational": {"numerator": 12, "denominator": 1},
+        "every": 0.5,
+        "cards": [{
+            "frame": 0,
+            "time_seconds": 0.0,
+            "time_rational": {"numerator": 0, "denominator": 1},
+            "sample_reasons": ["interval"],
+        }],
+    },
+}
 
 
 def _write_pack(root: Path) -> Path:
@@ -48,7 +62,8 @@ def _write_pack(root: Path) -> Path:
         "'schema_version': 1, 'kind': 'publication-contract', 'inputs': {}, "
         "'outputs': [{'name': 'video', 'path': target.name, "
         "'content_hash': 'sha256:' + hashlib.sha256(data).hexdigest(), "
-        "'bytes': len(data), 'ordinal': 0, 'role': 'result', 'is_primary': True}], "
+        "'bytes': len(data), 'ordinal': 0, 'role': 'result', 'is_primary': True, "
+        f"'coverage': {SOURCE_COVERAGE!r}}}], "
         "'created': '2026-09-11T00:00:00Z', 'warnings': []}), encoding='utf-8')"
     )
     (executor_root / "executor.yaml").write_text(
@@ -179,6 +194,8 @@ def test_publication_contract_producer_upload_fenced_settlement_roundtrip(tmp_pa
         assert managed.provenance["task_id"] == task_id
         assert managed.provenance["attempt_id"] == managed.attempt_id
         assert isinstance(managed.provenance["fence"], int)
+        assert managed.coverage == SOURCE_COVERAGE
+        assert reread.coverage == SOURCE_COVERAGE
 
         generations = daemon.service.store.conn.execute(
             "SELECT COUNT(*) AS count FROM generations"

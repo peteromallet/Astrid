@@ -8,6 +8,33 @@ from pathlib import Path
 import pytest
 
 from astrid.packs.rendering.executors.timeline_visualize import filmstrip_execution as execution
+from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip
+from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
+
+
+def test_managed_coverage_projects_actual_overview_source_pack():
+    source = plan_filmstrip(
+        {
+            'fps_rational': [24, 1],
+            'duration_frames': 48,
+            'clips': [],
+            'occurrences': [],
+            'scripts': [],
+            'metadata': {},
+        },
+        filmstrip_options({}),
+    )
+
+    managed = execution._filmstrip_managed_coverage(source)
+
+    assert managed == {
+        'sampling': {
+            'mode': 'interval',
+            'range': {'start': 0, 'end': 48},
+            'step_frames_rational': {'numerator': 12, 'denominator': 1},
+            'every': 0.5,
+        },
+    }
 
 
 def test_alignment_uses_decoded_eof_and_marks_excess_tail_unmapped(monkeypatch, tmp_path):
@@ -80,7 +107,8 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
     video = tmp_path / 'video'
     video.write_bytes(b'actual video')
     snapshot = dict(project_slug='demo', timeline_id='main', render_run_id='run',
-                    video_digest='sha256:' + hashlib.sha256(video.read_bytes()).hexdigest())
+                    video_digest='sha256:' + hashlib.sha256(video.read_bytes()).hexdigest(),
+                    fps_rational=[24, 1])
     authority = dict(mode='filmstrip', filmstrip_snapshot=snapshot,
                      video_digest=snapshot['video_digest'])
     args = Namespace(filmstrip_authority=json.dumps(authority), project_slug='demo',
@@ -91,7 +119,26 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
         root = kwargs['out_root']
         root.mkdir(parents=True)
         (root / 'filmstrip.html').write_text('<html>Verified frame sheet</html>')
-        return {'paths': {'png': [], 'html': str(root / 'filmstrip.html')}}
+        return {
+            'frame_index': {
+                'provenance': {'fps_rational': [24, 1]},
+                'coverage': {'window_seconds': [0.0, 1.0]},
+                'sampling': {
+                    'mode': 'interval',
+                    'density': {'mode': 'every_seconds', 'value': 0.5},
+                    'step_frames_rational': [12, 1],
+                },
+                'cards': [
+                    {
+                        'frame': 0,
+                        'time_seconds': 0.0,
+                        'time_rational': [0, 1],
+                        'sample_reasons': ['interval'],
+                    },
+                ],
+            },
+            'paths': {'png': [], 'html': str(root / 'filmstrip.html')},
+        }
     monkeypatch.setattr(execution, 'build_filmstrip_pack', build)
     result = execution.execute_filmstrip(args)
     manifest = json.loads(open(result['manifest_path']).read())
@@ -110,6 +157,20 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
     assert bundle_entry['durability'] == 'durable'
     assert manifest_entry['is_primary'] is False
     assert manifest_entry['durability'] == 'temporary'
+    expected_coverage = {
+        'sampling': {
+            'mode': 'interval',
+            'range': {'start': 0, 'end': 24},
+            'step_frames_rational': {'numerator': 12, 'denominator': 1},
+            'every': 0.5,
+            'cards': [{
+                'frame': 0,
+                'time_seconds': 0.0,
+                'time_rational': {'numerator': 0, 'denominator': 1},
+                'sample_reasons': ['interval'],
+            }],
+        },
+    }
     for entry in host_manifest['outputs']:
         assert entry['producer'] == {'capability_id': 'rendering.timeline_visualize', 'view': 'filmstrip'}
         assert entry['provenance'] == {
@@ -124,6 +185,7 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
         assert regeneration['exact_inputs']['timeline_id'] == 'main'
         assert regeneration['exact_inputs']['video_digest'] == snapshot['video_digest']
         assert regeneration['recipe_digest'].startswith('sha256:')
+        assert entry['coverage'] == expected_coverage
     assert result['identity']['render'] == {
         'render_run_id': 'run', 'timeline_id': 'main',
         'video_digest': snapshot['video_digest'],

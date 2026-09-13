@@ -8,6 +8,7 @@ import subprocess
 import zipfile
 from collections.abc import Mapping
 from copy import deepcopy
+from fractions import Fraction
 from pathlib import Path
 
 from astrid.core._shared.result_manifest import build_manifest, write_manifest
@@ -18,12 +19,152 @@ from .filmstrip_options import filmstrip_options
 
 
 _FILMSTRIP_CAPABILITY_ID = "rendering.timeline_visualize"
+_MANAGED_COVERAGE_REASONS = frozenset(
+    {"interval", "before_cut", "after_cut", "clip_first", "shot_midpoint"}
+)
+
+
+def _filmstrip_managed_coverage(frame_index: Mapping[str, object]) -> dict[str, object]:
+    """Project the verified frame index into the managed-output V1 shape.
+
+    The frame index intentionally contains richer viewer-only coverage fields
+    (boundary counts, page layout, and overview reason labels). Runtime
+    managed outputs accept the stable sampling subset; retain exact frame
+    bounds, density, step, and cards whenever their reason vocabulary is
+    already part of that contract.
+    """
+    sampling = frame_index.get("sampling")
+    coverage = frame_index.get("coverage")
+    provenance = frame_index.get("provenance")
+    if not isinstance(sampling, Mapping) or not isinstance(coverage, Mapping):
+        raise ValueError("filmstrip frame index is missing canonical coverage")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("filmstrip frame index is missing timing provenance")
+    raw_fps = provenance.get("fps_rational")
+    if (
+        not isinstance(raw_fps, (list, tuple))
+        or len(raw_fps) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in raw_fps)
+    ):
+        raise ValueError("filmstrip frame index has invalid fps provenance")
+    fps = Fraction(raw_fps[0], raw_fps[1])
+    raw_window = coverage.get("window_seconds")
+    if (
+        not isinstance(raw_window, (list, tuple))
+        or len(raw_window) != 2
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_window)
+        or any(not math.isfinite(float(value)) for value in raw_window)
+    ):
+        raise ValueError("filmstrip coverage has an invalid rendered window")
+
+    def frame_boundary(seconds: int | float) -> int:
+        value = Fraction(str(seconds)) * fps
+        return (value.numerator + value.denominator - 1) // value.denominator
+
+    start, end = (frame_boundary(value) for value in raw_window)
+    if start < 0 or end <= start:
+        raise ValueError("filmstrip coverage has an empty rendered window")
+    mode = sampling.get("mode")
+    if mode == "overview":
+        mode = "interval"
+    if mode not in {"interval", "clips", "cuts", "shots"}:
+        raise ValueError("filmstrip sampling mode is not managed-output compatible")
+    managed_sampling: dict[str, object] = {
+        "mode": mode,
+        "range": {"start": start, "end": end},
+    }
+    raw_step = sampling.get("step_frames_rational")
+    if (
+        isinstance(raw_step, (list, tuple))
+        and len(raw_step) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) for value in raw_step)
+        and raw_step[0] >= 0
+        and raw_step[1] > 0
+    ):
+        managed_sampling["step_frames_rational"] = {
+            "numerator": raw_step[0], "denominator": raw_step[1]
+        }
+    density = sampling.get("density")
+    if isinstance(density, Mapping):
+        density_mode, density_value = density.get("mode"), density.get("value")
+        if (
+            mode == "interval"
+            and density_mode == "every_seconds"
+            and isinstance(density_value, (int, float))
+            and not isinstance(density_value, bool)
+            and math.isfinite(float(density_value))
+            and density_value > 0
+        ):
+            managed_sampling["every"] = density_value
+        elif (
+            mode == "interval"
+            and density_mode == "every_frames"
+            and isinstance(density_value, int)
+            and not isinstance(density_value, bool)
+            and density_value > 0
+        ):
+            managed_sampling["every_frames"] = density_value
+
+    cards = frame_index.get("cards")
+    if isinstance(cards, list):
+        normalized_cards = []
+        for card in cards:
+            if not isinstance(card, Mapping):
+                normalized_cards = []
+                break
+            reasons = card.get("sample_reasons")
+            if (
+                not isinstance(reasons, list)
+                or not reasons
+                or not all(isinstance(reason, str) for reason in reasons)
+                or not set(reasons).issubset(_MANAGED_COVERAGE_REASONS)
+            ):
+                normalized_cards = []
+                break
+            frame = card.get("frame")
+            time_seconds = card.get("time_seconds")
+            if (
+                isinstance(frame, bool)
+                or not isinstance(frame, int)
+                or frame < 0
+                or isinstance(time_seconds, bool)
+                or not isinstance(time_seconds, (int, float))
+                or not math.isfinite(float(time_seconds))
+                or time_seconds < 0
+            ):
+                normalized_cards = []
+                break
+            time_rational = card.get("time_rational")
+            if (
+                not isinstance(time_rational, (list, tuple))
+                or len(time_rational) != 2
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in time_rational)
+                or time_rational[0] < 0
+                or time_rational[1] <= 0
+            ):
+                normalized_cards = []
+                break
+            normalized_cards.append(
+                {
+                    "frame": frame,
+                    "time_seconds": time_seconds,
+                    "time_rational": {
+                        "numerator": time_rational[0],
+                        "denominator": time_rational[1],
+                    },
+                    "sample_reasons": list(reasons),
+                }
+            )
+        if normalized_cards:
+            managed_sampling["cards"] = normalized_cards
+    return {"sampling": managed_sampling}
 
 
 def _filmstrip_output_contract(
     snapshot: Mapping[str, object],
     options: Mapping[str, object],
     video_digest: str,
+    coverage: Mapping[str, object],
 ) -> dict[str, object]:
     """Return explicit lifecycle metadata for one derived filmstrip result."""
 
@@ -57,6 +198,7 @@ def _filmstrip_output_contract(
             "recipe_digest": recipe_digest,
             "exact_inputs": exact_inputs,
         },
+        "coverage": _filmstrip_managed_coverage(coverage),
     }
 
 
@@ -295,7 +437,12 @@ def execute_filmstrip(args, *, authority=None):
     # (the host reports "missing result manifest receipt").  Publish a small
     # host receipt at the assigned output root and keep the domain manifest
     # nested and authoritative for offline evidence verification.
-    output_contract = _filmstrip_output_contract(snapshot, options, digest)
+    output_contract = _filmstrip_output_contract(
+        snapshot,
+        options,
+        digest,
+        result["frame_index"],
+    )
 
     def _receipt_entry(name: str, path: Path, *, role: str = "auxiliary", primary: bool = False) -> dict:
         relative = path.relative_to(out_root).as_posix()

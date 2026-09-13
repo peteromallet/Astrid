@@ -656,33 +656,16 @@ def test_typed_video_enhance_admission_settles_variant_and_readback(tmp_path: Pa
             idempotency_key="typed-video-enhance-source",
         )
         source_id = source["object_id"]
-        generation_id = "generation-video-enhance"
-        source_variant_id = "variant-video-original"
-        owner.create_generation(
-            project.project_id,
-            generation_id,
-            idempotency_key="typed-video-enhance-generation",
-            type="video",
-        )
-        owner.create_variant(
-            generation_id,
-            source_variant_id,
-            idempotency_key="typed-video-enhance-variant",
-            object_id=source_id,
-            variant_type="original",
-            metadata={"is_primary": True},
-        )
         settlement_effect = {
-            "effect_type": "generation.variant.append",
-            "target_id": generation_id,
-            "expected_version": 1,
+            "effect_type": "generation.create_with_variant",
+            "target_id": project.project_id,
             "payload": {
-                "source_variant_id": source_variant_id,
-                "source_object_id": source_id,
+                "generation_type": "video",
                 "variant_type": "video_enhance",
                 "output_name": "enhanced_video",
                 "output_ordinal": 0,
                 "primary_policy": "preserve",
+                "metadata": {"tool_type": "video_enhance", "source_object_id": source_id},
             },
         }
         task = owner.admit_task(
@@ -724,15 +707,17 @@ def test_typed_video_enhance_admission_settles_variant_and_readback(tmp_path: Pa
         assert video.startswith(b"\x00\x00\x00\x18ftypisom")
         assert output["size"] == len(video)
 
+        generation_id = f"generation-task-{task.task_id}"
         generation = owner.get_generation(generation_id)
-        assert generation.version == 2
+        assert generation.type == "video"
+        assert generation.version == 1
         variants, cursor = owner.list_variants(generation_id)
         assert cursor is None
-        assert len(variants) == 2
-        appended = variants[1]
-        assert appended.variant_type == "video_enhance"
-        assert appended.object_id == output["digest"]
-        assert appended.metadata["source_task_id"] == task.task_id
+        assert len(variants) == 1
+        published = variants[0]
+        assert published.variant_type == "video_enhance"
+        assert published.object_id == output["digest"]
+        assert published.metadata["source_task_id"] == task.task_id
         assert not Path(completed.result["execution_guards"]["cleanup_path"]).exists()
     finally:
         _restore_cpu_readiness_environment(previous_readiness)
@@ -2255,34 +2240,16 @@ def test_production_unified_edit_profiles_settle_variant_and_readback(
             params["strength"] = 0.93
             params["mask_ref"] = {"digest": mask_id, "filename": "mask.png", "media_type": "image/png"}
 
-        generation_id = f"generation-{profile['id']}"
-        source_variant_id = f"source-variant-{profile['id']}"
-        owner.create_generation(
-            project.project_id,
-            generation_id,
-            idempotency_key=f"{profile['id']}-generation",
-            type="image",
-            metadata={"prompt": "source"},
-        )
-        owner.create_variant(
-            generation_id,
-            source_variant_id,
-            idempotency_key=f"{profile['id']}-variant",
-            object_id=source_id,
-            variant_type="original",
-            metadata={"role": "source"},
-        )
         settlement_effect = {
-            "effect_type": "generation.variant.append",
-            "target_id": generation_id,
-            "expected_version": 1,
+            "effect_type": "generation.create_with_variant",
+            "target_id": project.project_id,
             "payload": {
-                "source_variant_id": source_variant_id,
-                "source_object_id": source_id,
+                "generation_type": "image",
                 "variant_type": "inpaint" if profile["requires_mask"] else "magic_edit",
                 "output_name": "generated_images",
                 "output_ordinal": 0,
                 "primary_policy": "preserve",
+                "metadata": {"prompt": "source"},
             },
         }
         task = owner.admit_task(
@@ -2316,15 +2283,16 @@ def test_production_unified_edit_profiles_settle_variant_and_readback(
         )
         image_bytes = owner.get_object(image_output["digest"]).data
         assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        generation_id = f"generation-task-{task.task_id}"
         generation = owner.get_generation(generation_id)
-        assert generation.version == 2
+        assert generation.version == 1
         variants, cursor = owner.list_variants(generation_id)
         assert cursor is None
-        assert len(variants) == 2
-        appended = variants[1]
-        assert appended.variant_type == settlement_effect["payload"]["variant_type"]
-        assert appended.object_id == image_output["digest"]
-        assert appended.metadata["source_task_id"] == task.task_id
+        assert len(variants) == 1
+        published = variants[0]
+        assert published.variant_type == settlement_effect["payload"]["variant_type"]
+        assert published.object_id == image_output["digest"]
+        assert published.metadata["source_task_id"] == task.task_id
         routes = [
             event["detail"]
             for event in completed.result["network_evidence"]["events"]

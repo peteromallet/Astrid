@@ -108,6 +108,45 @@ def test_pack_uses_rendered_frames_and_escapes_html(tmp_path):
     assert 'Render run-exact · selection: explicit_render' in svg
 
 
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg required')
+def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
+    video = tmp_path / 'render.mp4'
+    subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=24:duration=4', '-c:v', 'libx264', '-y', str(video)], check=True)
+    raw_audio = {
+        'analysis_identity': 'sha256:' + 'b' * 64,
+        'status': 'analyzed',
+        'render_digest': 'sha256:video',
+        'stream': {'sample_rate': 10},
+        'presentation_origin': {'seconds': [0, 1]},
+        'waveform': {'levels': [{'id': 'level-2', 'bins': [
+            {'index': 0, 'start_sample': 0, 'end_sample': 5},
+        ]}]},
+        'quiet_gaps': [],
+        'speech': {'status': 'no_transcript', 'phrases': []},
+    }
+    result = build_filmstrip_pack(
+        out_root=tmp_path / 'pack',
+        video_path=video,
+        snapshot=snapshot(clips=[], scripts=[], audio=raw_audio),
+        options={'every_frames': 24},
+    )
+
+    index = json.loads(Path(result['paths']['json']).read_text())
+    sidecar = json.loads((tmp_path / 'pack' / 'audio-analysis.json').read_text())
+    assert len(index['cards']) == 4
+    assert index['audio'] == raw_audio
+    assert sidecar == raw_audio
+    assert 'waveform_targets' not in index['audio']
+
+    navigation = index['navigation']
+    assert navigation['audio']['waveform_targets']
+    target = navigation['waveforms'][0]
+    assert navigation['targets'][target['target']] == target
+    assert target['actions']['focus_command']
+    assert target['actions']['seek'] == {'start': [0, 1], 'end': [1, 2]}
+    assert target['target'] in navigation['frames'][0]['active_audio_targets']
+
+
 def test_float_arithmetic_noise_does_not_move_cut_boundary():
     clean = snapshot(clips=[dict(id='a', kind='video', at=0, duration=3)])
     noisy = snapshot(clips=[dict(id='a', kind='video', at=0, duration=3.000000000000005)])

@@ -303,7 +303,7 @@ def plan_filmstrip(snapshot: dict, options: dict) -> dict:
     coverage['selected_frame_ids'] = [card['id'] for card in cards]
     return {'navigation': navigation, 'schema': 'astrid.filmstrip.v1',
             'provenance': {k: snapshot.get(k) for k in ('project_slug', 'timeline_id', 'timeline_name', 'render_run_id', 'video_digest', 'fps_rational', 'duration_frames', 'metadata')},
-            'audio': navigation['audio'],
+            'audio': snapshot.get('audio') if isinstance(snapshot.get('audio'), dict) else navigation['audio'],
             'boundary_index': boundary_index,
             'coverage': coverage,
             'sampling': {'mode': 'overview' if is_full_overview else mode, 'overview': is_full_overview,

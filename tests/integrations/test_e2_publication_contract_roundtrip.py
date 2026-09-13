@@ -139,12 +139,19 @@ def test_publication_contract_producer_upload_fenced_settlement_roundtrip(tmp_pa
         assert len(settled_outputs) == 1
         settled = settled_outputs[0]
         expected_digest = "sha256:" + hashlib.sha256(FIXTURE_BYTES).hexdigest()
-        assert uploads == [
-            (
-                FIXTURE_FILENAME,
-                {"project_id": None, "media_type": "video/mp4", "filename": FIXTURE_FILENAME},
-            )
-        ]
+        assert len(uploads) == 1
+        upload_filename, upload_kwargs = uploads[0]
+        assert upload_filename == FIXTURE_FILENAME
+        assert upload_kwargs["project_id"] is None
+        assert upload_kwargs["media_type"] == "video/mp4"
+        assert upload_kwargs["filename"] == FIXTURE_FILENAME
+        assert upload_kwargs["run_id"] == completed.run_id
+        assert upload_kwargs["task_id"] == task_id
+        assert upload_kwargs["attempt_id"] == completed.attempt_id
+        assert upload_kwargs["output_key"] == "video"
+        assert upload_kwargs["output_port"] == "video"
+        assert upload_kwargs["fence"] >= 1
+        assert upload_kwargs["runtime_epoch"] == completed.runtime_epoch
         assert settled["digest"] == expected_digest
         assert settled["filename"] == FIXTURE_FILENAME
         assert settled["media_type"] == "video/mp4"

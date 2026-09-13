@@ -1497,6 +1497,7 @@ class RuntimeProtocolClient:
     # so they must not pre-publish an unscoped CAS object and then attempt a
     # forbidden project association.
     INLINE_SETTLEMENT_OUTPUTS = True
+    REQUIRES_OUTPUT_BINDING = True
 
     def __init__(self, endpoint: str, credential: str, *, timeout: float = 30.0):
         try:
@@ -1518,6 +1519,7 @@ class RuntimeProtocolClient:
             self.credential,
             timeout=self.timeout,
         )
+        self.executor_id: str | None = None
         self._runtime_epoch: int | None = None
         self._heartbeat_session = secrets_module.token_hex(8)
         self._heartbeat_sequence = 0
@@ -1564,13 +1566,15 @@ class RuntimeProtocolClient:
         }
         if verified_facts is not None:
             payload["verified_facts"] = dict(verified_facts)
-        return self.generated.register_executor(
+        registration = self.generated.register_executor(
             payload,
             idempotency_key=(
                 f"executor-{executor_id}-{_canonical_digest(payload)}-"
                 f"{self._registration_session}"
             ),
         )
+        self.executor_id = executor_id
+        return registration
 
     def renew_registration_session(self) -> None:
         """Rotate the host-session nonce before an intentional renewal."""
@@ -1746,9 +1750,10 @@ class RuntimeProtocolClient:
             raise HostError("output upload project_id must be a non-empty string or None")
         if runtime_epoch is None:
             runtime_epoch = self._current_runtime_epoch()
+        executor_id = self.executor_id
         if any(
             not isinstance(value, str) or not value
-            for value in (run_id, task_id, attempt_id, lease_id, output_key, output_port, filename)
+            for value in (executor_id, run_id, task_id, attempt_id, lease_id, output_key, output_port, filename)
         ):
             raise HostError("output upload provenance is incomplete")
         binding = {
@@ -1756,7 +1761,7 @@ class RuntimeProtocolClient:
             "run_id": run_id,
             "task_id": task_id,
             "attempt_id": attempt_id,
-            "executor_id": self.executor_id,
+            "executor_id": executor_id,
             "lease_id": lease_id,
             "fence": int(fence),
             "runtime_epoch": int(runtime_epoch),
@@ -4487,17 +4492,29 @@ class GenericPackHost:
             project_id = task_data.get("project_id")
             if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
                 raise HostError("runtime task project_id must be a non-empty string or None")
+            run_id = task_data.get("run_id")
+            runtime_epoch = task_data.get("runtime_epoch")
+            if typed_outputs and getattr(self.client, "REQUIRES_OUTPUT_BINDING", False) and (
+                not isinstance(run_id, str)
+                or not run_id
+                or isinstance(runtime_epoch, bool)
+                or not isinstance(runtime_epoch, int)
+                or runtime_epoch < 1
+            ):
+                raise HostError(
+                    "runtime task output publication requires run_id and runtime_epoch"
+                )
             outputs = self._upload_outputs(
                 typed_outputs,
                 project_id=project_id,
-                run_id=task_data.get("run_id"),
+                run_id=run_id,
                 task_id=task_id,
                 attempt_id=attempt_id,
                 lease_id=lease_token,
                 fence=fence,
                 runtime_epoch=(
-                    int(task_data["runtime_epoch"])
-                    if task_data.get("runtime_epoch") is not None
+                    runtime_epoch
+                    if runtime_epoch is not None
                     else None
                 ),
             ) if typed_outputs else []
@@ -4817,9 +4834,18 @@ class GenericPackHost:
         else:
             task_data = {
                 "id": getattr(task, "task_id", task_id),
+                "run_id": getattr(task, "run_id", None),
                 "capability": getattr(task, "capability_id", ""),
                 "project_id": getattr(task, "project_id", None),
-                "spec": {},
+                "runtime_epoch": getattr(task, "runtime_epoch", claim_data.get("runtime_epoch")),
+                "input_object_ids": list(
+                    getattr(task, "input_object_ids", claim_data.get("input_object_ids", ())) or ()
+                ),
+                "spec": getattr(task, "spec", claim_data.get("spec") or {}),
+                "expected_effect": getattr(task, "expected_effect", claim_data.get("expected_effect")),
+                "generation_intent": getattr(task, "generation_intent", claim_data.get("generation_intent")),
+                "storage_estimate": getattr(task, "storage_estimate", claim_data.get("storage_estimate")),
+                "required_facts": getattr(task, "required_facts", claim_data.get("required_facts")),
             }
         task_data.update(
             {
@@ -4830,6 +4856,8 @@ class GenericPackHost:
         )
         if claim_data.get("project_id") is not None:
             task_data["project_id"] = claim_data["project_id"]
+        if claim_data.get("runtime_epoch") is not None:
+            task_data["runtime_epoch"] = claim_data["runtime_epoch"]
         if claim_data.get("input_object_ids") is not None:
             task_data["input_object_ids"] = claim_data["input_object_ids"]
         # The claim response is the execution snapshot.  Preserve it over

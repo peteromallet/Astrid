@@ -1726,26 +1726,64 @@ class RuntimeProtocolClient:
         response = self.generated.get_object(digest)
         return response.data
 
-    def upload_object(self, path: Path, *, project_id: str | None, media_type: str, filename: str | None = None):
+    def upload_object(
+        self,
+        path: Path,
+        *,
+        project_id: str | None,
+        media_type: str,
+        filename: str | None = None,
+        run_id: str,
+        task_id: str,
+        attempt_id: str,
+        lease_id: str,
+        fence: int,
+        output_key: str,
+        output_port: str,
+        runtime_epoch: int | None = None,
+    ):
         if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
             raise HostError("output upload project_id must be a non-empty string or None")
-        # Worker credentials may publish CAS bytes but are deliberately not
-        # granted projects:write, which is required to mutate project
-        # associations.  Settlement owns that association transactionally;
-        # upload only the immutable object here and keep the project binding
-        # on the task/settlement path. Workspace tasks have no project binding
-        # and publish the same immutable CAS objects.
+        if runtime_epoch is None:
+            runtime_epoch = self._current_runtime_epoch()
+        if any(
+            not isinstance(value, str) or not value
+            for value in (run_id, task_id, attempt_id, lease_id, output_key, output_port, filename)
+        ):
+            raise HostError("output upload provenance is incomplete")
+        binding = {
+            "project_id": project_id,
+            "run_id": run_id,
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "executor_id": self.executor_id,
+            "lease_id": lease_id,
+            "fence": int(fence),
+            "runtime_epoch": int(runtime_epoch),
+            "output_key": output_key,
+            "output_port": output_port,
+            "filename": filename,
+        }
         with path.open("rb") as stream:
             data = stream.read()
-            return self.generated.ingest_object(
-                data,
-                media_type=media_type,
-                idempotency_key=(
-                    "output-"
-                    f"{hashlib.sha256(data).hexdigest()}"
-                ),
-                filename=filename,
-            )
+        binding.update({
+            "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "media_type": media_type,
+        })
+        idempotency_key = "output-" + _canonical_digest(binding)
+        # Worker credentials may publish CAS bytes but are deliberately not
+        # granted projects:write. Settlement owns that association
+        # transactionally; upload carries an explicit, collision-safe
+        # provenance binding and only publishes immutable object bytes.
+        # Workspace tasks have no project binding and publish the same bytes.
+        return self.generated.ingest_object(
+            data,
+            media_type=media_type,
+            idempotency_key=idempotency_key,
+            filename=filename,
+            upload_binding=binding,
+        )
 
     def publish_timeline_render(
         self,
@@ -3254,7 +3292,18 @@ class GenericPackHost:
             (attempt / "network-evidence.json").write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
             return value
 
-    def _upload_outputs(self, outputs: list[dict[str, Any]], *, project_id: str | None) -> list[dict[str, Any]]:
+    def _upload_outputs(
+        self,
+        outputs: list[dict[str, Any]],
+        *,
+        project_id: str | None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+        lease_id: str | None = None,
+        fence: int | None = None,
+        runtime_epoch: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Publish staged outputs and return settlement-safe object refs."""
         upload_object = getattr(self.client, "upload_object", None)
         if not callable(upload_object):
@@ -3324,12 +3373,26 @@ class GenericPackHost:
                 uploaded_row["filename"] = relative_filename
                 uploaded.append(uploaded_row)
                 continue
-            object_row = upload_object(
-                path,
-                project_id=project_id,
-                media_type=media_type,
-                filename=relative_filename,
-            )
+            upload_kwargs = {
+                "project_id": project_id,
+                "media_type": media_type,
+                "filename": relative_filename,
+            }
+            if all(value is not None for value in (run_id, task_id, attempt_id, lease_id, fence)):
+                upload_kwargs.update(
+                    {
+                        "run_id": run_id,
+                        "task_id": task_id,
+                        "attempt_id": attempt_id,
+                        "lease_id": lease_id,
+                        "fence": fence,
+                        "output_key": str(descriptor.get("name") or ""),
+                        "output_port": str(descriptor.get("output_port") or descriptor.get("name") or ""),
+                    }
+                )
+                if runtime_epoch is not None:
+                    upload_kwargs["runtime_epoch"] = runtime_epoch
+            object_row = upload_object(path, **upload_kwargs)
             digest = getattr(object_row, "digest", None)
             if not digest:
                 raise HostError("generated object upload returned no canonical digest")
@@ -4424,7 +4487,20 @@ class GenericPackHost:
             project_id = task_data.get("project_id")
             if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
                 raise HostError("runtime task project_id must be a non-empty string or None")
-            outputs = self._upload_outputs(typed_outputs, project_id=project_id) if typed_outputs else []
+            outputs = self._upload_outputs(
+                typed_outputs,
+                project_id=project_id,
+                run_id=task_data.get("run_id"),
+                task_id=task_id,
+                attempt_id=attempt_id,
+                lease_id=lease_token,
+                fence=fence,
+                runtime_epoch=(
+                    int(task_data["runtime_epoch"])
+                    if task_data.get("runtime_epoch") is not None
+                    else None
+                ),
+            ) if typed_outputs else []
             # Cancellation can arrive while staged outputs are being read or
             # uploaded. Never publish a completed settlement after that point.
             if cancelled():

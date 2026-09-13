@@ -537,8 +537,8 @@ class WorkspaceClient:
             kind=kind,
         )
 
-    def ingest_object(self, data: bytes, *, media_type: str, idempotency_key: str, filename: str | None = None) -> Any:
-        return self._call_generated("ingest_object", data, media_type=media_type, idempotency_key=idempotency_key, filename=filename)
+    def ingest_object(self, data: bytes, *, media_type: str, idempotency_key: str, filename: str | None = None, upload_binding: Mapping[str, Any] | None = None) -> Any:
+        return self._call_generated("ingest_object", data, media_type=media_type, idempotency_key=idempotency_key, filename=filename, upload_binding=upload_binding)
 
     def ingest_project_object(
         self,

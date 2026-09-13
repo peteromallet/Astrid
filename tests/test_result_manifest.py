@@ -285,6 +285,35 @@ def test_output_result_registry_conformance_covers_default_registry() -> None:
     listed_ids = non_exempt_ids | exempted_ids
     assert non_exempt_ids.isdisjoint(exempted_ids)
     assert registry_ids.issubset(listed_ids)
+
+    # The matrix is the explicit inventory for optional external routes; it
+    # must not be mistaken for bundled default-registry discovery.  Keep this
+    # exact set source-backed so a newly listed absent ID cannot silently turn
+    # into a blanket exemption.
+    matrix = json.loads(
+        Path("config/astrid-beta-capabilities.json").read_text(encoding="utf-8")
+    )
+    external_ids = {
+        str(entry["id"])
+        for entry in matrix["capabilities"]
+        if str(entry["id"]).startswith(("discord_local.", "hivemind.", "seedance_local."))
+    }
+    assert external_ids == {
+        "discord_local.command",
+        "hivemind.contribute",
+        "hivemind.get_item",
+        "hivemind.ingest_article",
+        "hivemind.ingest_workflow",
+        "hivemind.ingest_youtube",
+        "hivemind.refresh_media",
+        "hivemind.search",
+        "seedance_local.reference_video",
+    }
+    assert listed_ids - registry_ids == external_ids
+    assert external_ids.isdisjoint(registry_ids)
+    for executor_id in external_ids:
+        assert payload["exemptions"][executor_id]["reasons"] == ["external-escape-hatch"]
+
     assert payload["total_executors"] == len(listed_ids)
     assert payload["m1_adopters"] == len(non_exempt_ids)
     assert payload["exempted"] == len(exempted_ids)

@@ -15,7 +15,7 @@ def test_beta_matrix_covers_every_discovered_capability_and_declaration():
         for capability_id in host.matrix
         if capability_id.startswith(("discord_local.", "hivemind.", "seedance_local."))
     }
-    assert len(records) == 68
+    assert len(records) == 69
     assert {record.id for record in records} == set(host.matrix) - external_contracts
     assert {record.matrix["disposition"] for record in records} <= {"required", "optional", "unsupported", "retired"}
     for record in records:

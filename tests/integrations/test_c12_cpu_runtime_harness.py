@@ -24,7 +24,7 @@ import pytest
 
 RUNTIME_ROOT = Path(
     os.environ.get("BANODOCO_RUNTIME_CHECKOUT")
-    or "/Users/hannahomalley/Documents/Codex/2026-09-09/can-you-see-the-poms-skills/work/astrid-prep/repos/Runtime"
+    or "/Users/hannahomalley/Documents/Codex/2026-09-13/astrid-db-final-rework-20260913/work/runtime-export-candidate"
 ).resolve()
 WORKER_ROOT = Path(
     os.environ.get("REIGH_WORKER_CHECKOUT")
@@ -55,7 +55,7 @@ FIXTURE_PACK = Path(__file__).parents[1] / "fixtures" / "c12_cpu_pack"
 # These are the post-T7 composition pins.  Keeping them explicit makes the
 # CPU journey fail closed when a dependency checkout drifts from the reviewed
 # composition instead of silently testing another tree.
-PINNED_RUNTIME_COMMIT = "9b0a4432673e79b8acdcf7db1aee8db63c1c3621"
+PINNED_RUNTIME_COMMIT = "f804bf58a5783174e9e84d2762ec9b4d13d40acc"
 PINNED_WORKER_COMMIT = "e0c6a0765bee05f27155b335bbf67110c0df6103"
 
 

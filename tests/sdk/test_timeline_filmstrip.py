@@ -1,4 +1,5 @@
 import hashlib
+from copy import deepcopy
 
 import pytest
 
@@ -56,7 +57,12 @@ class DirectRenderClient(FakeClient):
         assert ref == DIRECT_RENDER_TASK
         frozen = envelope()
         authority = frozen.pop('authority_context')
-        authority['timeline_id'] = DIRECT_TIMELINE
+        authority.update({
+            'project_id': 'p', 'project_slug': 'p', 'timeline_id': DIRECT_TIMELINE,
+            'timeline_ulid': DIRECT_TIMELINE, 'head_event_id': '1',
+            'head_hash': 'head', 'config_hash': 'config',
+            'registry_hash': 'registry', 'materialized_registry_hash': 'registry',
+        })
         frozen['inputs']['timeline_authority'] = authority
         frozen['inputs']['timeline_ref'] = DIRECT_TIMELINE
         frozen['timeline_snapshot'] = frozen['inputs'].pop('timeline_snapshot')
@@ -93,6 +99,57 @@ def test_direct_render_uses_frozen_inputs_authority_and_exact_run():
 
     assert result['render_run_id'] == DIRECT_RENDER_RUN
     assert result['timeline_id'] == DIRECT_TIMELINE
+
+
+def test_identical_legacy_duplicates_remain_compatible():
+    client = DirectRenderClient()
+    original = client.get_task
+
+    def get_task(ref):
+        task = original(ref)
+        frozen = task['spec']['spec']
+        frozen['authority_context'] = deepcopy(frozen['inputs']['timeline_authority'])
+        frozen['inputs']['timeline_snapshot'] = deepcopy(frozen['timeline_snapshot'])
+        return task
+
+    client.get_task = get_task
+    result = prepare_filmstrip(
+        {'render_run': DIRECT_RENDER_RUN, 'timeline_ref': DIRECT_TIMELINE},
+        project='p', client=client,
+    )
+
+    assert result['render_run_id'] == DIRECT_RENDER_RUN
+
+
+@pytest.mark.parametrize('mutation, message', [
+    (lambda value: value.__setitem__('authority_context', dict(
+        value['inputs']['timeline_authority'], timeline_slug='other')),
+     'authority sources disagree'),
+    (lambda value: value.__setitem__('authority_context', dict(
+        value['inputs']['timeline_authority'], project_id='other')),
+     'authority sources disagree'),
+    (lambda value: value.__setitem__('authority_context', dict(
+        value['inputs']['timeline_authority'], head_hash='other')),
+     'authority sources disagree'),
+    (lambda value: value['inputs'].__setitem__('timeline_snapshot', dict(
+        value['timeline_snapshot'], config={'conflicting': True})),
+     'timeline snapshots disagree'),
+])
+def test_conflicting_duplicate_frozen_sources_are_rejected(mutation, message):
+    client = DirectRenderClient()
+    original = client.get_task
+
+    def get_task(ref):
+        task = original(ref)
+        mutation(task['spec']['spec'])
+        return task
+
+    client.get_task = get_task
+    with pytest.raises(CapabilityValidationError, match=message):
+        prepare_filmstrip(
+            {'render_run': DIRECT_RENDER_RUN, 'timeline_ref': DIRECT_TIMELINE},
+            project='p', client=client,
+        )
 
 
 @pytest.mark.parametrize('mutation, message', [

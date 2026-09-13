@@ -11,6 +11,12 @@ from .exceptions import CapabilityValidationError
 from .pagination import paged_rows
 from .project_render import _SUCCESS_STATES, _identifier, _render_capability, _state
 
+_AUTHORITY_IDENTITY_FIELDS = (
+    'project_id', 'project_slug', 'timeline_id', 'timeline_slug', 'timeline_ulid',
+    'config_version', 'head_event_id', 'head_hash', 'config_hash', 'registry_hash',
+    'materialized_registry_hash',
+)
+
 
 def _fail(message: str) -> None:
     raise CapabilityValidationError(message)
@@ -37,7 +43,7 @@ def _authority(envelope: Mapping) -> Mapping:
     if canonical is not None and not isinstance(canonical, Mapping):
         _fail('Render has malformed timeline authority; rerender the selected timeline.')
     if isinstance(legacy, Mapping) and isinstance(canonical, Mapping):
-        for field in ('timeline_id', 'config_version'):
+        for field in _AUTHORITY_IDENTITY_FIELDS:
             if (legacy.get(field) is not None and canonical.get(field) is not None
                     and legacy.get(field) != canonical.get(field)):
                 _fail('Render authority sources disagree; rerender the selected timeline.')
@@ -49,12 +55,17 @@ def _timeline_snapshot(envelope: Mapping) -> Mapping:
     inputs = envelope.get('inputs', {})
     if not isinstance(inputs, Mapping):
         _fail('Render has malformed frozen inputs; rerender the selected timeline.')
-    if 'timeline_snapshot' in inputs:
-        snapshot = inputs['timeline_snapshot']
-    else:
-        snapshot = envelope.get('timeline_snapshot', {})
-    if not isinstance(snapshot, Mapping):
+    nested_present = 'timeline_snapshot' in inputs
+    sibling_present = 'timeline_snapshot' in envelope
+    nested = inputs.get('timeline_snapshot')
+    sibling = envelope.get('timeline_snapshot')
+    if nested_present and not isinstance(nested, Mapping):
         _fail('Render has malformed frozen timeline snapshot; rerender the selected timeline.')
+    if sibling_present and not isinstance(sibling, Mapping):
+        _fail('Render has malformed frozen timeline snapshot; rerender the selected timeline.')
+    if nested_present and sibling_present and nested != sibling:
+        _fail('Render frozen timeline snapshots disagree; rerender the selected timeline.')
+    snapshot = nested if nested_present else sibling if sibling_present else {}
     return snapshot
 
 

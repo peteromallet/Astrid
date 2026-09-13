@@ -34,12 +34,21 @@ sys.path.insert(0, str(RUNTIME_ROOT))
 sys.path.insert(0, str(WORKER_ROOT))
 
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
 from source.runtime import supervisor  # noqa: E402
 from source.runtime.worker import preflight  # noqa: E402
 from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
 from astrid.core.execution.guards import ExecutionGuardPolicy  # noqa: E402
 from astrid.core.gateway.dispatch import compose_profile_handoff  # noqa: E402
 from astrid.sdk.workspace_client import WorkspaceClient  # noqa: E402
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 
 FIXTURE_PACK = Path(__file__).parents[1] / "fixtures" / "c12_cpu_pack"

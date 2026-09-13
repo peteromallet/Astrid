@@ -469,23 +469,8 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "boot_manifest_path": str(boot_manifest_path),
             "boot_manifest_hash": boot_manifest_hash,
         }
-        recorded_inventory_identity = str(current.get("source_inventory_identity") or "") if current else ""
-        ready_inventory_identity = str(ready.get("source_inventory_identity") or "") if ready else ""
-        legacy_empty_inventory = (
-            not inventory_identity
-            and not recorded_inventory_identity
-            and not ready_inventory_identity
-        )
-        if legacy_empty_inventory:
-            # Preserve reuse of hosts created before managed-source fencing
-            # only when both persisted records are also empty. A host that
-            # advertises a prior non-empty inventory must be restarted when
-            # the selected inventory is disabled.
-            expected.pop("source_inventory_identity")
         if (current and ready
                 and all(current.get(key) == expected_value for key, expected_value in expected.items())
-                and (legacy_empty_inventory or recorded_inventory_identity == inventory_identity)
-                and (legacy_empty_inventory or ready_inventory_identity == inventory_identity)
                 and _host_identity_matches(current)
                 and str(ready.get("status")) == "ready"
                 and all(ready.get(key) == expected_value for key, expected_value in expected.items())

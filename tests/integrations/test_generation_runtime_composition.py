@@ -38,9 +38,19 @@ sys.path.insert(0, str(RUNTIME_ROOT))
 from banodoco_workspace_client import WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
 from runtime_protocol.store import RealmStore  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
 
 from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient  # noqa: E402
 from astrid.core.execution.network_broker import _BrokerHandler  # noqa: E402
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    """Keep every CPU composition fixture on explicit canonical setup."""
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 
 _PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="

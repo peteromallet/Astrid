@@ -34,6 +34,15 @@ sys.path.insert(0, str(RUNTIME))
 
 pytest.importorskip("runtime_protocol.daemon")
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 from astrid.core.gateway import dispatch  # noqa: E402
 from astrid.core.gateway import main as gateway_main
@@ -574,6 +583,6 @@ def test_operational_gateway_uses_typed_runtime_backup_and_lifecycle(tmp_path, m
         restored_path = tmp_path / "restored"
         restored = client.restore_backup(str(backup_path), str(restored_path))
         assert restored["destination"] == str(restored_path)
-        assert restored["verification"]["realm_id"] == backup["manifest"]["realm_id"]
+        assert restored["verification"]["realm"]["id"] == backup["manifest"]["realm"]["id"]
     finally:
         daemon.stop()

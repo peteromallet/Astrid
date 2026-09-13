@@ -30,6 +30,15 @@ if RUNTIME.is_dir():
     sys.path.insert(0, str(RUNTIME))
 from banodoco_workspace_client import ApiError, WorkspaceClient
 from runtime_protocol.daemon import RuntimeDaemon
+from tests.helpers.runtime import initialize_runtime_realm
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 
 @pytest.mark.parametrize("project_id", [None, "existing-project"])

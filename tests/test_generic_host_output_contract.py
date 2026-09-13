@@ -13,6 +13,8 @@ from astrid.core.execution.generic_host import GenericPackHost
 
 
 _METADATA = {
+    "role": "auxiliary",
+    "is_primary": False,
     "durability": "temporary",
     "regeneration": {
         "available": True,

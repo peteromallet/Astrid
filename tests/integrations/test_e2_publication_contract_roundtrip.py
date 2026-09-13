@@ -16,7 +16,9 @@ from astrid.core.execution.guards import ExecutionGuardPolicy
 
 
 FIXTURE_FILENAME = "publication-contract-fixture.mp4"
+MANIFEST_FILENAME = "publication-contract-manifest.json"
 FIXTURE_BYTES = b"publication-contract-fixture-v1\n"
+MANIFEST_BYTES = b"publication-contract-manifest-v1\n"
 CAPABILITY_ID = "publication_contract.render"
 SOURCE_COVERAGE = {
     "sampling": {
@@ -55,15 +57,18 @@ def _write_pack(root: Path) -> Path:
     )
     command = (
         "from pathlib import Path; import hashlib, json; "
-        f"data={FIXTURE_BYTES!r}; "
-        f"root=Path('{{out}}'); target=root / '{FIXTURE_FILENAME}'; "
-        "target.write_bytes(data); "
+        f"data={FIXTURE_BYTES!r}; metadata={MANIFEST_BYTES!r}; "
+        f"root=Path('{{out}}'); target=root / '{FIXTURE_FILENAME}'; metadata_target=root / '{MANIFEST_FILENAME}'; "
+        "target.write_bytes(data); metadata_target.write_bytes(metadata); "
         "(root / 'manifest.json').write_text(json.dumps({"
         "'schema_version': 1, 'kind': 'publication-contract', 'inputs': {}, "
         "'outputs': [{'name': 'video', 'path': target.name, "
         "'content_hash': 'sha256:' + hashlib.sha256(data).hexdigest(), "
         "'bytes': len(data), 'ordinal': 0, 'role': 'result', 'is_primary': True, "
-        f"'coverage': {SOURCE_COVERAGE!r}}}], "
+        f"'coverage': {SOURCE_COVERAGE!r}}}, "
+        "{'name': 'manifest', 'path': metadata_target.name, "
+        "'content_hash': 'sha256:' + hashlib.sha256(metadata).hexdigest(), "
+        f"'bytes': len(metadata), 'ordinal': 1, 'role': 'auxiliary', 'is_primary': False, 'durability': 'temporary', 'coverage': {SOURCE_COVERAGE!r}}}], "
         "'created': '2026-09-11T00:00:00Z', 'warnings': []}), encoding='utf-8')"
     )
     (executor_root / "executor.yaml").write_text(
@@ -81,7 +86,13 @@ def _write_pack(root: Path) -> Path:
                         "type": "file",
                         "path_template": f"{{out}}/{FIXTURE_FILENAME}",
                         "artifact_type": "video/mp4",
-                    }
+                    },
+                    {
+                        "name": "manifest",
+                        "type": "file",
+                        "path_template": f"{{out}}/{MANIFEST_FILENAME}",
+                        "artifact_type": "metadata/result-manifest",
+                    },
                 ],
                 "metadata": {"resource_keys": ["cpu"]},
             }
@@ -151,51 +162,80 @@ def test_publication_contract_producer_upload_fenced_settlement_roundtrip(tmp_pa
         assert completed.state == "succeeded"
         assert completed.result is not None
         settled_outputs = completed.result["outputs"]
-        assert len(settled_outputs) == 1
-        settled = settled_outputs[0]
+        assert len(settled_outputs) == 2
+        settled_by_filename = {output["filename"]: output for output in settled_outputs}
         expected_digest = "sha256:" + hashlib.sha256(FIXTURE_BYTES).hexdigest()
-        assert len(uploads) == 1
-        upload_filename, upload_kwargs = uploads[0]
-        assert upload_filename == FIXTURE_FILENAME
-        assert upload_kwargs["project_id"] is None
-        assert upload_kwargs["media_type"] == "video/mp4"
-        assert upload_kwargs["filename"] == FIXTURE_FILENAME
-        assert upload_kwargs["run_id"] == completed.run_id
-        assert upload_kwargs["task_id"] == task_id
-        assert upload_kwargs["attempt_id"] == completed.attempt_id
-        assert upload_kwargs["output_key"] == "video"
-        assert upload_kwargs["output_port"] == "video"
-        assert upload_kwargs["fence"] >= 1
-        assert upload_kwargs["runtime_epoch"] == completed.runtime_epoch
+        expected_manifest_digest = "sha256:" + hashlib.sha256(MANIFEST_BYTES).hexdigest()
+        assert len(uploads) == 2
+        uploads_by_filename = {filename: kwargs for filename, kwargs in uploads}
+        assert set(uploads_by_filename) == {FIXTURE_FILENAME, MANIFEST_FILENAME}
+        for filename, media_type, output_port in (
+            (FIXTURE_FILENAME, "video/mp4", "video"),
+            (MANIFEST_FILENAME, "metadata/result-manifest", "manifest"),
+        ):
+            upload_kwargs = uploads_by_filename[filename]
+            assert upload_kwargs["project_id"] is None
+            assert upload_kwargs["media_type"] == media_type
+            assert upload_kwargs["filename"] == filename
+            assert upload_kwargs["run_id"] == completed.run_id
+            assert upload_kwargs["task_id"] == task_id
+            assert upload_kwargs["attempt_id"] == completed.attempt_id
+            assert upload_kwargs["output_key"] == output_port
+            assert upload_kwargs["output_port"] == output_port
+            assert upload_kwargs["fence"] >= 1
+            assert upload_kwargs["runtime_epoch"] == completed.runtime_epoch
+        settled = settled_by_filename[FIXTURE_FILENAME]
+        settled_manifest = settled_by_filename[MANIFEST_FILENAME]
         assert settled["digest"] == expected_digest
         assert settled["filename"] == FIXTURE_FILENAME
         assert settled["media_type"] == "video/mp4"
         assert settled["size"] == len(FIXTURE_BYTES)
+        assert settled["role"] == "result"
+        assert settled["is_primary"] is True
+        assert settled["durability"] == "durable"
+        assert settled["coverage"] == SOURCE_COVERAGE
+        assert settled_manifest["digest"] == expected_manifest_digest
+        assert settled_manifest["filename"] == MANIFEST_FILENAME
+        assert settled_manifest["media_type"] == "metadata/result-manifest"
+        assert settled_manifest["size"] == len(MANIFEST_BYTES)
+        assert settled_manifest["role"] == "auxiliary"
+        assert settled_manifest["is_primary"] is False
+        assert settled_manifest["durability"] == "temporary"
+        assert settled_manifest["coverage"] == SOURCE_COVERAGE
         assert owner.get_object(expected_digest).data == FIXTURE_BYTES
 
         managed_outputs, cursor = owner.list_managed_outputs(task_id)
         assert cursor is None
-        assert len(managed_outputs) == 1
-        managed = managed_outputs[0]
-        reread = owner.get_managed_output(managed.association_id)
-        assert reread == managed
-        assert managed.task_id == task_id
-        assert managed.project_id is None
-        assert managed.object_id == expected_digest
-        assert managed.digest == expected_digest
-        assert managed.filename == FIXTURE_FILENAME
-        assert "/" not in managed.filename
-        assert managed.media_type == "video/mp4"
-        assert managed.size == len(FIXTURE_BYTES)
-        assert managed.manifest_ref is None
-        assert managed.generation_id is None
-        assert managed.state == "available"
-        assert managed.producer["capability_id"] == CAPABILITY_ID
-        assert managed.provenance["task_id"] == task_id
-        assert managed.provenance["attempt_id"] == managed.attempt_id
-        assert isinstance(managed.provenance["fence"], int)
-        assert managed.coverage == SOURCE_COVERAGE
-        assert reread.coverage == SOURCE_COVERAGE
+        assert len(managed_outputs) == 2
+        managed_by_filename = {output.filename: output for output in managed_outputs}
+        assert set(managed_by_filename) == {FIXTURE_FILENAME, MANIFEST_FILENAME}
+        for filename, digest, media_type, role, primary, durability, size in (
+            (FIXTURE_FILENAME, expected_digest, "video/mp4", "result", True, "durable", len(FIXTURE_BYTES)),
+            (MANIFEST_FILENAME, expected_manifest_digest, "metadata/result-manifest", "auxiliary", False, "temporary", len(MANIFEST_BYTES)),
+        ):
+            managed = managed_by_filename[filename]
+            reread = owner.get_managed_output(managed.association_id)
+            assert reread == managed
+            assert managed.task_id == task_id
+            assert managed.project_id is None
+            assert managed.object_id == digest
+            assert managed.digest == digest
+            assert managed.filename == filename
+            assert "/" not in managed.filename
+            assert managed.media_type == media_type
+            assert managed.size == size
+            assert managed.manifest_ref is None
+            assert managed.generation_id is None
+            assert managed.role == role
+            assert managed.is_primary is primary
+            assert managed.durability == durability
+            assert managed.state == "available"
+            assert managed.producer["capability_id"] == CAPABILITY_ID
+            assert managed.provenance["task_id"] == task_id
+            assert managed.provenance["attempt_id"] == managed.attempt_id
+            assert isinstance(managed.provenance["fence"], int)
+            assert managed.coverage == SOURCE_COVERAGE
+            assert reread.coverage == SOURCE_COVERAGE
 
         generations = daemon.service.store.conn.execute(
             "SELECT COUNT(*) AS count FROM generations"

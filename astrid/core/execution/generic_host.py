@@ -98,6 +98,8 @@ _VIDEO_SUFFIX_MEDIA_TYPES = {
 }
 
 _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
+    "role",
+    "is_primary",
     "producer",
     "provenance",
     "durability",

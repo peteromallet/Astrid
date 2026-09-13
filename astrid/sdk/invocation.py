@@ -2214,6 +2214,10 @@ def invoke(
                     invocation_authority_context, sort_keys=True, separators=(",", ":"),
                     ensure_ascii=False,
                 )
+            # Preflight may add host-owned transcript/video bindings. Forward
+            # those enriched inputs to kernel admission; retaining the initial
+            # caller mapping would desynchronize the filmstrip identity guard.
+            request_inputs = dict(inputs or {})
         elif capability.id == "rendering.render":
             inputs, invocation_authority_context = _prepare_managed_render_inputs(
                 inputs,

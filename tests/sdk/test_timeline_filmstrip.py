@@ -8,6 +8,9 @@ from astrid.sdk.exceptions import CapabilityValidationError
 TEXT = b'Take the blue pill.'
 DIGEST = 'sha256:' + hashlib.sha256(TEXT).hexdigest()
 VIDEO = 'sha256:' + 'a' * 64
+DIRECT_RENDER_RUN = '084ba36177a5400f9c4e844444931d25'
+DIRECT_RENDER_TASK = '36e4f00dae80429b8f48630f702ea816'
+DIRECT_TIMELINE = 'c9c685ea84fe4f3c880d55e9e28b8f02'
 
 
 def envelope():
@@ -43,6 +46,28 @@ class FakeClient:
     def list_project_objects(self, project, **kwargs): return [[{'object_id': VIDEO}] if self.owned else [], None]
 
 
+class DirectRenderClient(FakeClient):
+    def get_run(self, ref):
+        assert ref == DIRECT_RENDER_RUN
+        return {'id': DIRECT_RENDER_RUN, 'project_id': 'p', 'capability': 'rendering.render',
+            'status': 'succeeded', 'task_ids': [DIRECT_RENDER_TASK]}
+
+    def get_task(self, ref):
+        assert ref == DIRECT_RENDER_TASK
+        frozen = envelope()
+        authority = frozen.pop('authority_context')
+        authority['timeline_id'] = DIRECT_TIMELINE
+        frozen['inputs']['timeline_authority'] = authority
+        frozen['inputs']['timeline_ref'] = DIRECT_TIMELINE
+        frozen['timeline_snapshot'] = frozen['inputs'].pop('timeline_snapshot')
+        return {'task_id': DIRECT_RENDER_TASK, 'state': 'succeeded',
+            'capability_id': 'rendering.render', 'spec': {'spec': frozen},
+            'result': {'outputs': [{'name': 'video', 'digest': VIDEO}]}}
+
+    def list_timelines(self, project, **kwargs):
+        return [[{'timeline_id': DIRECT_TIMELINE, 'slug': 'cut'}], None]
+
+
 def test_exact_old_render_uses_frozen_script_without_current_binding_reads():
     client = FakeClient(); client.current_version = 9; client.current_head = 7
     value = envelope()
@@ -58,6 +83,37 @@ def test_exact_old_render_uses_frozen_script_without_current_binding_reads():
     assert snapshot['scripts'][0]['timing_basis'] == 'shot_script'
     assert (snapshot['scripts'][0]['start'], snapshot['scripts'][0]['end']) == (0, 3)
     assert not client.read_binding
+
+
+def test_direct_render_uses_frozen_inputs_authority_and_exact_run():
+    result = prepare_filmstrip(
+        {'render_run': DIRECT_RENDER_RUN, 'timeline_ref': DIRECT_TIMELINE},
+        project='p', client=DirectRenderClient(),
+    )
+
+    assert result['render_run_id'] == DIRECT_RENDER_RUN
+    assert result['timeline_id'] == DIRECT_TIMELINE
+
+
+@pytest.mark.parametrize('mutation, message', [
+    (lambda value: value['inputs'].__setitem__('timeline_authority', 'malformed'), 'malformed'),
+    (lambda value: value['inputs']['timeline_authority'].__setitem__('timeline_id', 'other'), 'No successful render'),
+])
+def test_direct_render_refuses_malformed_or_mismatched_authority(mutation, message):
+    client = DirectRenderClient()
+    original = client.get_task
+
+    def get_task(ref):
+        task = original(ref)
+        mutation(task['spec']['spec'])
+        return task
+
+    client.get_task = get_task
+    with pytest.raises(CapabilityValidationError, match=message):
+        prepare_filmstrip(
+            {'render_run': DIRECT_RENDER_RUN, 'timeline_ref': DIRECT_TIMELINE},
+            project='p', client=client,
+        )
 
 
 def test_filmstrip_exposes_spoken_text_only_not_generation_prompts():

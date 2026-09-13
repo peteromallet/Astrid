@@ -25,6 +25,39 @@ def _envelope(task: Mapping) -> Mapping:
     _fail('Render has no immutable input snapshot; rerender the selected timeline.')
 
 
+def _authority(envelope: Mapping) -> Mapping:
+    """Resolve the renderer's frozen authority from both supported envelopes."""
+    inputs = envelope.get('inputs', {})
+    if not isinstance(inputs, Mapping):
+        _fail('Render has malformed frozen inputs; rerender the selected timeline.')
+    legacy = envelope.get('authority_context')
+    canonical = inputs.get('timeline_authority')
+    if legacy is not None and not isinstance(legacy, Mapping):
+        _fail('Render has malformed legacy authority; rerender the selected timeline.')
+    if canonical is not None and not isinstance(canonical, Mapping):
+        _fail('Render has malformed timeline authority; rerender the selected timeline.')
+    if isinstance(legacy, Mapping) and isinstance(canonical, Mapping):
+        for field in ('timeline_id', 'config_version'):
+            if (legacy.get(field) is not None and canonical.get(field) is not None
+                    and legacy.get(field) != canonical.get(field)):
+                _fail('Render authority sources disagree; rerender the selected timeline.')
+    return legacy or canonical or {}
+
+
+def _timeline_snapshot(envelope: Mapping) -> Mapping:
+    """Resolve the frozen snapshot in legacy and direct-render envelopes."""
+    inputs = envelope.get('inputs', {})
+    if not isinstance(inputs, Mapping):
+        _fail('Render has malformed frozen inputs; rerender the selected timeline.')
+    if 'timeline_snapshot' in inputs:
+        snapshot = inputs['timeline_snapshot']
+    else:
+        snapshot = envelope.get('timeline_snapshot', {})
+    if not isinstance(snapshot, Mapping):
+        _fail('Render has malformed frozen timeline snapshot; rerender the selected timeline.')
+    return snapshot
+
+
 def _digest(value: Any) -> str:
     raw = str(value or '').removeprefix('sha256:')
     if len(raw) != 64 or any(c not in '0123456789abcdef' for c in raw):
@@ -81,8 +114,8 @@ def _is_verified_speech_annotation(annotation: Mapping) -> bool:
 def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, run_id: str, video_digest: str) -> dict:
     """Pure snapshot mapping except verified reads of pinned immutable text objects."""
     inputs = envelope.get('inputs', {})
-    authority = envelope.get('authority_context') or inputs.get('timeline_authority', {})
-    timeline = inputs.get('timeline_snapshot', {})
+    authority = _authority(envelope)
+    timeline = _timeline_snapshot(envelope)
     config = timeline.get('config', {})
     if not isinstance(config.get('clips'), list) or not authority.get('timeline_id'):
         _fail('Render lacks a frozen canonical timeline; rerender it before visual review.')
@@ -272,7 +305,7 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
         if len(tasks) != 1:
             continue
         task = tasks[0]; envelope = _envelope(task)
-        authority = envelope.get('authority_context', {})
+        authority = _authority(envelope)
         if timeline_row and authority.get('timeline_id') != _identifier(timeline_row, 'timeline_id', 'id'):
             continue
         selected = (run, task, envelope, authority)
@@ -305,9 +338,9 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
     snapshot = build_filmstrip_snapshot(envelope, client=client, project=canonical_project, run_id=run_id, video_digest=digest)
     snapshot['metadata']['selection'] = 'explicit_render' if exact else 'latest_current_render'
     from .managed_transcript import transcript_input_from_snapshot
-    timeline_snapshot = envelope.get('inputs', {}).get('timeline_snapshot', {})
-    config = timeline_snapshot.get('config', {}) if isinstance(timeline_snapshot, Mapping) else {}
-    registry = timeline_snapshot.get('registry', {}) if isinstance(timeline_snapshot, Mapping) else {}
+    timeline_snapshot = _timeline_snapshot(envelope)
+    config = timeline_snapshot.get('config', {})
+    registry = timeline_snapshot.get('registry', {})
     try:
         transcript_input = transcript_input_from_snapshot(config, registry)
     except ValueError as exc:

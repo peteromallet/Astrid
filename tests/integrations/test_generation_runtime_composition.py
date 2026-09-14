@@ -42,6 +42,7 @@ from tests.helpers.runtime import initialize_runtime_realm
 
 from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient  # noqa: E402
 from astrid.core.execution.network_broker import _BrokerHandler  # noqa: E402
+from astrid.sdk.generation_publication import compose_image_publication_request  # noqa: E402
 
 
 _RuntimeDaemon = RuntimeDaemon
@@ -1213,14 +1214,10 @@ fal_module.default_client = lambda: HttpClient(transport=_transport)
             slug="production-t2i-command",
             idempotency_key="production-t2i-project",
         )
-        task = owner.admit_task(
-            capability_id=record.id,
-            capability_digest=record.capability_digest,
-            input_object_ids=[],
-            project_id=project.project_id,
-            idempotency_key="production-t2i-task",
-            spec={
-                "family": record.id,
+        composed = compose_image_publication_request(
+            {
+                "project": project.project_id,
+                "capability_digest": record.capability_digest,
                 "params": {
                     "execution": "cloud",
                     "mode": "t2i",
@@ -1231,12 +1228,20 @@ fal_module.default_client = lambda: HttpClient(transport=_transport)
                     "steps": 28,
                     "size": "1536x1024",
                 },
-                "output_policy": {},
-            },
-            storage_estimate={
-                "scratch_bytes": record.estimated_scratch_bytes,
-                "output_bytes": record.estimated_output_bytes,
-            },
+            }
+        )
+        assert composed["capability_digest"] == record.capability_digest
+        task = owner.admit_task(
+            capability_id=composed["capability_id"],
+            capability_digest=composed["capability_digest"],
+            input_object_ids=composed["input_object_ids"],
+            project_id=composed["project"],
+            idempotency_key="production-t2i-task",
+            schema_version=composed["schema_version"],
+            spec=composed["spec"],
+            generation_intent=composed["generation_intent"],
+            settlement_effect=composed["settlement_effect"],
+            storage_estimate=composed["storage_estimate"],
         )
         settled = host.run(once=True)
         assert len(settled) == 1 and settled[0].state == "succeeded"
@@ -1244,6 +1249,19 @@ fal_module.default_client = lambda: HttpClient(transport=_transport)
         assert completed.state == "succeeded"
         images = [output for output in completed.result["outputs"] if output["name"] == "generated_images"]
         assert len(images) == 2
+        assert [
+            (
+                output["output_port"],
+                output["group_key"],
+                output["variant_key"],
+                output["selector"],
+                output["ordinal"],
+            )
+            for output in images
+        ] == [
+            ("generated_images", "main", "original", {"group_key": "main", "variant_key": "original"}, 0),
+            ("generated_images", "main", "variant-1", {"group_key": "main", "variant_key": "variant-1"}, 1),
+        ]
         assert all(owner.get_object(output["digest"]).data.startswith(b"\x89PNG") for output in images)
         evidence = completed.result["network_evidence"]
         assert any(event["kind"] == "broker_route" and event["allowed"] for event in evidence["events"])

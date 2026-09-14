@@ -107,6 +107,8 @@ _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
     "coverage",
 )
 
+_GENERATION_OUTPUT_DIRS = frozenset(("images", "videos", "audio"))
+
 
 def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
     """Publish a MIME media type while retaining internal artifact semantics."""
@@ -121,6 +123,36 @@ def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
         if media_type is not None:
             return media_type
     return artifact_type or "application/octet-stream"
+
+
+def _runtime_output_filename(value: str) -> str:
+    """Map a safe staged output name to Runtime's direct-leaf wire name.
+
+    Generation executors keep modality-specific directories in their private
+    attempt spool (for example ``images/output_000.png``).  Runtime's managed
+    output contract carries only a direct filename, so strip exactly one of
+    those known producer directories at the upload boundary.  Arbitrary
+    nesting is not a filename mapping mechanism and remains rejected.
+    """
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 512
+        or any(ord(char) < 32 for char in value)
+        or "\\" in value
+        or Path(value).is_absolute()
+        or ".." in Path(value).parts
+        or Path(value).as_posix() != value
+    ):
+        raise HostError("generated output has an invalid managed filename")
+    parts = Path(value).parts
+    if not parts or parts[-1] in {".", ".."}:
+        raise HostError("generated output has an invalid managed filename")
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2 and parts[0] in _GENERATION_OUTPUT_DIRS:
+        return parts[1]
+    raise HostError("generated output has an invalid managed filename")
 
 
 def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> str | None:
@@ -3323,22 +3355,13 @@ class GenericPackHost:
         for index, descriptor in enumerate(outputs):
             descriptor = dict(descriptor)
             raw_path = descriptor.pop("path", None)
-            relative_filename = descriptor.pop("filename", None)
+            staged_filename = descriptor.pop("filename", None)
             if not raw_path:
                 raise HostError("generated output is missing its staged path")
             path = Path(str(raw_path))
-            if relative_filename is None:
-                relative_filename = path.name
-            if (
-                not isinstance(relative_filename, str)
-                or not relative_filename
-                or "\\" in relative_filename
-                or Path(relative_filename).is_absolute()
-                or ".." in Path(relative_filename).parts
-                or Path(relative_filename).as_posix() != relative_filename
-            ):
-                raise HostError("generated output has an invalid managed filename")
-            filename = relative_filename
+            if staged_filename is None:
+                staged_filename = path.name
+            filename = _runtime_output_filename(staged_filename)
             media_type = _settlement_media_type({**descriptor, "filename": filename})
             if inline:
                 data = path.read_bytes()
@@ -3378,13 +3401,13 @@ class GenericPackHost:
                         if field in descriptor
                     }
                 )
-                uploaded_row["filename"] = relative_filename
+                uploaded_row["filename"] = filename
                 uploaded.append(uploaded_row)
                 continue
             upload_kwargs = {
                 "project_id": project_id,
                 "media_type": media_type,
-                "filename": relative_filename,
+                "filename": filename,
             }
             if all(value is not None for value in (run_id, task_id, attempt_id, lease_id, fence)):
                 upload_kwargs.update(

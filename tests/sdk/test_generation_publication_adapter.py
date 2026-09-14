@@ -4,10 +4,11 @@ import json
 import subprocess
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 
-from astrid.core.foundation.hash import canonical_json_digest
+from astrid.core.execution.generic_host import GenericPackHost
 from astrid.sdk.exceptions import CapabilityValidationError
 from astrid.sdk.invocation import get_capability
 from astrid.sdk.generation_publication import (
@@ -23,10 +24,18 @@ def _actual_capability():
     return capability
 
 
+def _actual_host_record():
+    host = GenericPackHost(
+        pack_roots=[Path(__file__).resolve().parents[2] / "astrid/packs/generation"]
+    )
+    host.discover()
+    return host.capabilities[CAPABILITY_ID]
+
+
 def _request(capability, *, count: int = 3) -> dict[str, object]:
     return {
         "project": "project-ordinary-image",
-        "capability_digest": "sha256:" + canonical_json_digest(capability.definition),
+        "capability_digest": _actual_host_record().capability_digest,
         "params": {
             "model": "z-image",
             "mode": "t2i",
@@ -44,6 +53,7 @@ def _request(capability, *, count: int = 3) -> dict[str, object]:
 
 def test_compose_is_deterministic_and_uses_real_capability_outputs() -> None:
     capability = _actual_capability()
+    host_record = _actual_host_record()
     request = _request(capability)
 
     first = compose_image_publication_request(request)
@@ -53,6 +63,7 @@ def test_compose_is_deterministic_and_uses_real_capability_outputs() -> None:
     assert first["project"] == request["project"]
     assert first["capability_id"] == CAPABILITY_ID
     assert first["capability_digest"] == request["capability_digest"]
+    assert first["capability_digest"] == host_record.capability_digest
     assert first["input_object_ids"] == []
     assert first["storage_estimate"] == {
         "scratch_bytes": 69_206_016,
@@ -98,6 +109,14 @@ def test_compose_is_deterministic_and_uses_real_capability_outputs() -> None:
         },
     ]
     assert "image_manifest" not in json.dumps(effect)
+
+
+def test_compose_digest_matches_generic_pack_host_registration() -> None:
+    capability = _actual_capability()
+    host_record = _actual_host_record()
+    composed = compose_image_publication_request(_request(capability, count=1))
+
+    assert composed["capability_digest"] == host_record.capability_digest
 
 
 @pytest.mark.parametrize(

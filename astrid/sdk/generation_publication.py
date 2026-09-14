@@ -19,9 +19,9 @@ import math
 import re
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
-from astrid.core.foundation.hash import canonical_json_digest
 from astrid.core.generation.preflight import validate_generation_request
 from astrid.core.generation.storage_policy import (
     CLOUD_T2I_STORAGE_POLICY,
@@ -206,10 +206,41 @@ def _stable_generation_intent(count: int) -> dict[str, Any]:
 
 
 def _capability_digest(capability: Any) -> str:
+    """Return the exact digest emitted by GenericPackHost registration.
+
+    Public ``Capability.definition`` is an SDK projection.  The host registers
+    the manifest definition after folder/pack provenance is attached, so
+    hashing the projection directly produces a different identity.  Reuse the
+    host's loader, provenance attachment, and digest helper instead of
+    reconstructing that serialization in this compose-only boundary.
+    """
     definition = getattr(capability, "definition", None)
     if not isinstance(definition, Mapping):
         raise _fail("resolved image capability has no mapping definition")
-    return "sha256:" + canonical_json_digest(definition)
+    metadata = definition.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise _fail("resolved image capability has no host discovery metadata")
+    raw_executor_root = metadata.get("executor_root")
+    if not isinstance(raw_executor_root, str) or not raw_executor_root.strip():
+        raise _fail("resolved image capability has no executor root")
+
+    try:
+        from astrid.core.execution.executor.folder import load_folder_executor
+        from astrid.core.execution.generic_host import (
+            _attach_pack_metadata,
+            _capability_digest as host_capability_digest,
+        )
+
+        executor_root = Path(raw_executor_root).expanduser().resolve()
+        host_definition = _attach_pack_metadata(
+            load_folder_executor(executor_root), executor_root
+        )
+    except (ImportError, OSError, TypeError, ValueError) as exc:
+        raise _fail("could not resolve the host-registered image capability") from exc
+
+    if host_definition.id != CAPABILITY_ID:
+        raise _fail("resolved host capability does not match the ordinary image route")
+    return host_capability_digest(host_definition.to_dict())
 
 
 def compose_image_publication_request(request: Mapping[str, Any]) -> dict[str, Any]:

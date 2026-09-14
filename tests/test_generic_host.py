@@ -299,6 +299,27 @@ def test_hc04_params_bind_only_definition_declared_ports(tmp_path):
         )
 
 
+def test_input_materialization_preserves_exact_length_ordinary_path(tmp_path):
+    """A 64-character non-hex path is an executor value, not a CAS digest."""
+    marker = Path("/tmp") / ("control-marker-" + "x" * 44)
+    assert len(str(marker)) == 64
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            raise AssertionError(f"ordinary path was fetched as {object_digest!r}")
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [],
+            "spec": {"inputs": {"control_marker": str(marker)}},
+        },
+        tmp_path / "attempt-exact-marker",
+    )
+
+    assert values["control_marker"] == str(marker)
+
+
 def test_hc04_cas_param_materializes_authorized_image_reference(tmp_path):
     payload = b"source-image"
     digest = hashlib.sha256(payload).hexdigest()

@@ -2720,6 +2720,7 @@ class GenericPackHost:
                 }
                     and isinstance(value, str)
                     and len(value) == 64
+                    and all(character in "0123456789abcdef" for character in value)
                 )
                 else None
             )

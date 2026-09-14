@@ -194,6 +194,14 @@ still use their current path. Stream copy is disabled for this overlay path.
 
 ## Render and open
 
+For an editorial feedback cycle (including reference-frame and storyboard
+previews), render with `--review` by default and keep it enabled for subsequent
+revisions. Deliver and open that review render so the user can identify frames
+by shot name and timecode. Use meaningful registered shot names, and check that
+the labels are visible in the exported video. A filmstrip viewer is useful
+alongside the video, but does not replace its review overlay. Omit `--review`
+when the user requests a clean or final export.
+
 Render through the product command. The positional reference is a runtime slug,
 UUID, or ULID; it is never a file path. Rendering pins the current kernel
 snapshot. Add `--expected-version` when the observed version must remain
@@ -202,10 +210,25 @@ when admission without terminal completion is intended:
 
 ```bash
 python3 -m astrid timelines render <slug-or-id> --project <project> \
-  --expected-version <version> --output-name <name>.mp4 --json
+  --expected-version <version> --review --output-name <name>-review.mp4 --json
 ```
 
-For a review copy, add `--review`: `astrid timelines render <ref> --project <project> --review`. Remotion and Three.js show the registered shot name and running timeline time in the top-right corner, plus the pinned authored voiceover script as a readable bottom caption. Caption timing is the canonical shot interval and is explicitly marked non-word-aligned; no ASR timing is invented. Names and captions are pinned from canonical shot references and text bindings before expansion. Gaps show `No shot`; overlapping shots show all active names. The overlay exists only in this render; saved timeline documents are unchanged. FFmpeg rejects review mode explicitly. Omit the flag for a clean export. SDK inputs use `"review": true`.
+Review mode shows the registered shot name and running timeline time in the top-right corner in Remotion and Three.js, plus the pinned authored voiceover script as a readable bottom caption. Caption timing is the canonical shot interval and is explicitly marked non-word-aligned; no ASR timing is invented. Names and captions are pinned from canonical shot references and text bindings before expansion. Gaps show `No shot`; overlapping shots show all active names. The overlay exists only in this render; saved timeline documents are unchanged. FFmpeg rejects review mode explicitly; choose a review-capable backend for editorial previews rather than silently dropping the flag. SDK inputs use `"review": true`.
+
+Remotion review renders default to a backend-native low resolution that fits the
+authored canvas inside 640x360 while preserving its aspect ratio. The canonical
+canvas remains in the timeline props and all positions are evaluated there;
+Remotion's `--scale` performs the output scaling. The resulting artifact
+profile records the dimensions Remotion actually emits. Such renders carry the
+exact `Low Res Render` label at top left, while shot name and timecode remain at
+top right. A clean render, or a render with an explicit profile, keeps the
+existing full-resolution behavior.
+
+Review labels and subtitles are inspection overlays. Keep the authored
+creative composition centered in the full canvas; do not shift primary visual
+content or reserve a caption-safe band for review text unless the user
+explicitly requests a caption-safe design. Review typography scales with the
+authored canvas under `--scale`, while badge readability is handled separately.
 
 The default waits for completion and propagates terminal failure. A successful
 render records its run and provenance in the runtime. Review the newest

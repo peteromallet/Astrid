@@ -1,20 +1,8 @@
-"""API key resolution with the frozen m4 precedence.
+"""API key resolution from Astrid's shared local environment file.
 
-Resolution order (frozen in m4, plan Step 31):
-
-1. **Explicit option** — a non-empty caller-supplied value.
-2. **Process environment** — ``os.environ`` (or the injected environment
-   mapping).
-3. **Supported OS keychain (injectable boundary)** — consulted only when an
-   injected :class:`KeychainProvider` supplies a value; the default boundary
-   never touches an OS keychain and the ``keyring`` dependency is imported
-   lazily, so domain-only use and tests never access a keychain.
-4. **One explicitly named env file** — a lower-priority convenience, consulted
-   only when the caller names ``env_file`` explicitly.
-
-Broad cwd/repository/workspace/home env-file scavenging is **removed**: an env
-file is never discovered implicitly, and no placeholder/search profile adds
-paths.
+Local resolution has one deterministic policy: explicit value, shared
+``astrid.env``, process environment, then an explicitly named fallback file.
+Broad cwd/repository/workspace env-file scavenging remains disabled.
 """
 
 from __future__ import annotations
@@ -22,9 +10,12 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal
+
+from dotenv import dotenv_values
 
 from astrid.core.contracts.errors import AstridError
+from astrid.core.env_vars import ASTRID_ENV_FILE, ASTRID_HOME
 
 EnvSearchProfile = Literal["default"]
 
@@ -34,73 +25,80 @@ _RECOVERY_HINTS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# Injectable keychain boundary
-# ---------------------------------------------------------------------------
-
-
-class KeychainProvider(Protocol):
-    """Injectable OS-keychain boundary (tier 3 of the frozen precedence).
-
-    Implementations return the stored secret for *name* or ``None`` when the
-    keychain is unavailable or holds no value. Injection keeps the boundary
-    testable and keeps domain-only use and tests free of keychain access.
-    """
-
-    def get(self, name: str) -> str | None:
-        """Return the stored secret for *name*, or ``None`` when unavailable."""
-        ...
-
-
-class NullKeychainProvider:
-    """Default keychain boundary: never accesses an OS keychain."""
-
-    def get(self, name: str) -> str | None:
-        return None
-
-
-class OSKeychainProvider:
-    """Supported OS-keychain boundary backed by the ``keyring`` dependency.
-
-    ``keyring`` is imported **lazily** inside :meth:`get`, so importing this
-    module or resolving a credential that an earlier precedence tier satisfies
-    never accesses a keychain (no eager keychain access). Any keychain
-    unavailability is treated as "no value", letting resolution fall through to
-    the named env file tier.
-    """
-
-    def get(self, name: str) -> str | None:
-        try:
-            import keyring  # noqa: PLC0415 - lazy: no eager keychain access
-        except Exception:  # noqa: BLE001 - keychain absence degrades to "no value"
-            return None
-        try:
-            value = keyring.get_password("astrid", name)
-        except Exception:  # noqa: BLE001 - backend failure degrades to "no value"
-            return None
-        if not value:
-            return None
-        return value
-
-
-# ---------------------------------------------------------------------------
 # Env-file parsing and discovery
 # ---------------------------------------------------------------------------
 
 
 def read_env_value(env_path: Path | str, key: str) -> str:
-    env_path = Path(env_path)
+    """Read one value using the same dotenv parser as RunPod/VibeComfy."""
+
+    env_path = Path(env_path).expanduser()
     if not env_path.is_file():
         return ""
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        env_key, env_value = line.split("=", 1)
-        if env_key.strip() == key:
-            return env_value.strip().strip('"').strip("'")
-    return ""
+    # Values in the shared file are literal credentials; do not expand ${...}.
+    values = dotenv_values(env_path, encoding="utf-8", interpolate=False)
+    value = values.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def astrid_env_file_path(environ: Mapping[str, str] | None = None) -> Path:
+    """Return the shared per-user Astrid environment-file path.
+
+    ``ASTRID_ENV_FILE`` can point at a mounted file in containers or another
+    operating environment. Otherwise the file lives in Astrid's state home,
+    defaulting to ``~/.astrid/astrid.env``.
+    """
+
+    env = os.environ if environ is None else environ
+    astrid_home = env.get(ASTRID_HOME, "").strip()
+    root = (Path(astrid_home).expanduser() if astrid_home else Path.home() / ".astrid").resolve()
+    override = env.get(ASTRID_ENV_FILE, "").strip()
+    if override:
+        override_path = Path(override).expanduser()
+        return override_path if override_path.is_absolute() else root / override_path
+    return root / "astrid.env"
+
+
+def load_local_api_key_with_source(
+    name: str,
+    *,
+    explicit: str | None = None,
+    env_file: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str, str]:
+    """Resolve a local credential from Astrid's shared file first.
+
+    Precedence is explicit value, shared ``astrid.env``, process environment,
+    then an optional caller-named env file. The shared file therefore wins
+    over stale project-local dotenv copies while environment-only operation
+    remains available where no shared file exists.
+    """
+
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip(), "explicit"
+
+    env = os.environ if environ is None else environ
+    shared_file = astrid_env_file_path(env)
+    if value := read_env_value(shared_file, name).strip():
+        return value, "astrid_env_file"
+
+    if value := env.get(name, "").strip():
+        return value, "environment"
+
+    if env_file is not None and env_file.expanduser().resolve() != shared_file.expanduser().resolve():
+        if value := read_env_value(env_file, name).strip():
+            return value, "env_file"
+
+    recovery = (
+        f"run `astrid-credential set {name}` to store it in the shared astrid.env file, "
+        "or provide it through the process environment"
+    )
+    if hint := _RECOVERY_HINTS.get(name):
+        recovery = f"{recovery}. {hint}"
+    raise AstridError(
+        f"{name} not found. Tried: explicit option, shared astrid.env, environment, optional env file.",
+        recovery_command=recovery,
+    )
 
 
 def candidate_env_files(
@@ -130,21 +128,17 @@ def load_api_key(
     env_file: Path | None = None,
     *,
     explicit: str | None = None,
-    keychain: KeychainProvider | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve *name* in the frozen m4 precedence.
+    """Resolve *name* through Astrid's canonical credential policy.
 
     Args:
         name: The environment variable name (e.g. ``"FAL_KEY"``).
-        env_file: An explicitly named .env file, consulted as the **lowest**
-            priority convenience tier only.
+        env_file: An explicitly named .env file, consulted as the final
+            compatibility fallback.
         explicit: A caller-supplied explicit value (highest priority tier).
-        keychain: An injectable keychain boundary (tier 3). When ``None``, the
-            default :class:`NullKeychainProvider` is used and no OS keychain is
-            ever accessed.
-        environ: The process environment mapping to read for tier 2. Defaults
-            to ``os.environ``.
+        environ: The process environment mapping to read. Defaults to
+            ``os.environ``.
 
     Returns:
         The resolved key string.
@@ -153,28 +147,12 @@ def load_api_key(
         AstridError: If no tier yields a value. The message names the tiers
             tried and never contains a secret value, file contents, or paths.
     """
-    if explicit is not None and str(explicit).strip():
-        return str(explicit).strip()
-
-    env = os.environ if environ is None else environ
-    if value := env.get(name, "").strip():
-        return value
-
-    provider = keychain if keychain is not None else NullKeychainProvider()
-    if value := (provider.get(name) or "").strip():
-        return value
-
-    if env_file is not None:
-        if value := read_env_value(env_file, name).strip():
-            return value
-
-    recovery = f"set {name} in your environment or pass an explicit env file"
-    if hint := _RECOVERY_HINTS.get(name):
-        recovery = f"{recovery}. {hint}"
-    raise AstridError(
-        f"{name} not found. Tried: explicit option, environment, keychain, env file.",
-        recovery_command=recovery,
-    )
+    return load_local_api_key_with_source(
+        name,
+        env_file=env_file,
+        explicit=explicit,
+        environ=environ,
+    )[0]
 
 
 def scrub_secret(value: str, text: str) -> str:

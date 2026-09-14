@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None, *, urlopen: Urlopen = urllib.request.url
         env_file = args.env_file.expanduser().resolve() if args.env_file else None
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        api_key = CredentialsScope.get("giphy", env_file=env_file)
+        api_key = CredentialsScope.get_local("giphy", env_file=env_file)
         response = _load_json_url(_giphy_search_url(args, api_key), timeout=args.timeout, urlopen=urlopen)
         payload = normalize_giphy_response(response, query=args.query, media_kind=args.media_kind)
 

@@ -18,6 +18,15 @@ def test_host_hf_token_env_vars(monkeypatch) -> None:
     assert runpod_run._host_hf_token_env_vars() == {"HF_TOKEN": "hf_test_token"}
 
 
+def test_host_hf_token_env_vars_prefers_shared_file(monkeypatch, tmp_path: Path) -> None:
+    shared_file = tmp_path / "astrid.env"
+    shared_file.write_text("HF_TOKEN=shared-hf-token\n", encoding="utf-8")
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(shared_file))
+    monkeypatch.setenv("HF_TOKEN", "stale-hf-token")
+
+    assert runpod_run._host_hf_token_env_vars() == {"HF_TOKEN": "shared-hf-token"}
+
+
 def test_load_handle_and_config_rehydrates_hf_token(monkeypatch, tmp_path: Path) -> None:
     class FakeRunPodConfig:
         def __init__(self, **kwargs):
@@ -50,3 +59,38 @@ def test_load_handle_and_config_rehydrates_hf_token(monkeypatch, tmp_path: Path)
     assert handle["pod_id"] == "pod-test"
     assert config.env_vars == {"HF_TOKEN": "hf_test_token"}
     assert "hf_test_token" not in handle_path.read_text(encoding="utf-8")
+
+
+def test_load_handle_and_config_resolves_runpod_key_from_shared_file(monkeypatch, tmp_path: Path) -> None:
+    class FakeRunPodConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_module = types.ModuleType("runpod_lifecycle")
+    fake_module.RunPodConfig = FakeRunPodConfig
+    monkeypatch.setitem(sys.modules, "runpod_lifecycle", fake_module)
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(tmp_path / "astrid.env"))
+    monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    (tmp_path / "astrid.env").write_text("RUNPOD_API_KEY=shared-runpod-key\n", encoding="utf-8")
+
+    handle_path = tmp_path / "pod_handle.json"
+    handle_path.write_text(
+        json.dumps(
+            {
+                "pod_id": "pod-test",
+                "gpu_type": "NVIDIA A40",
+                "config_snapshot": {
+                    "api_key_ref": "RUNPOD_API_KEY",
+                    "container_disk_in_gb": 200,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    handle, config = runpod_run._load_handle_and_config(handle_path)
+
+    assert handle["pod_id"] == "pod-test"
+    assert config.kwargs["api_key"] == "shared-runpod-key"
+    assert "shared-runpod-key" not in handle_path.read_text(encoding="utf-8")

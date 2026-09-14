@@ -1,21 +1,38 @@
 """Host reuse must respect the caller's dependency environment."""
+import json
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote, urlparse
 
 import pytest
 
-from astrid.sdk import host_bootstrap as bootstrap
 from astrid.core.execution import generic_host
 from astrid.core.gateway.dispatch import compose_profile_handoff
 from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+from astrid.sdk import host_bootstrap as bootstrap
 
 
 @pytest.mark.parametrize("source_changed", [False, True])
 @pytest.mark.parametrize("active_children", [False, True])
-@pytest.mark.parametrize("previous_python", [None, "/other-venv/bin/python", "/selected-venv/bin/python"])
-def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, previous_python, active_children, source_changed):
+@pytest.mark.parametrize("previous_python", [None, "other", "selected"])
+@pytest.mark.parametrize("use_override", [False, True])
+def test_bootstrap_reuses_only_the_selected_interpreter(
+    tmp_path, monkeypatch, previous_python, active_children, source_changed, use_override
+):
     source = tmp_path / "source"
     (source / "astrid" / "packs").mkdir(parents=True)
+    selected_python = "/selected-venv/bin/python"
+    if use_override:
+        override_python = tmp_path / "override-venv" / "bin" / "python"
+        override_python.parent.mkdir(parents=True)
+        override_python.write_text("#!/bin/sh\nexit 0\n")
+        override_python.chmod(0o755)
+        selected_python = str(override_python.absolute())
+        monkeypatch.setenv(bootstrap.PACK_HOST_PYTHON_ENV, selected_python)
+    else:
+        monkeypatch.delenv(bootstrap.PACK_HOST_PYTHON_ENV, raising=False)
     worker = tmp_path / "support" / "credentials" / "worker"
     worker.parent.mkdir(parents=True)
     worker.write_text("test-token")
@@ -37,7 +54,9 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
     if source_changed:
         current["source_checkout_digest"] = "previous-source-digest"
     if previous_python is not None:
-        current["python_executable"] = previous_python
+        current["python_executable"] = (
+            selected_python if previous_python == "selected" else "/other-venv/bin/python"
+        )
     bootstrap._write_object(support / "generic-host.json", current)
     bootstrap._write_object(ready_path, {**current, "status": "ready"})
     monkeypatch.setattr(bootstrap.sys, "executable", "/selected-venv/bin/python")
@@ -73,7 +92,7 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
         "endpoint": current["endpoint"], "worker_actor": bootstrap.PACK_HOST_ACTOR,
         "worker_scopes": bootstrap.PACK_HOST_SCOPES, "runtime_instance_id": "instance",
     }
-    reusable = previous_python == "/selected-venv/bin/python" and not source_changed
+    reusable = previous_python == "selected" and not source_changed
     if active_children and not reusable:
         with pytest.raises(bootstrap.PackHostBootstrapError, match="busy with active child processes"):
             bootstrap.ensure_pack_host(handoff, reconfigure_action="reconfigure")
@@ -88,5 +107,56 @@ def test_bootstrap_reuses_only_the_selected_interpreter(tmp_path, monkeypatch, p
     else:
         assert result["host_pid"] == 202
         assert terminated == [101]
-        assert launched == ["/selected-venv/bin/python"]
+        assert launched == [selected_python]
         assert bootstrap._read_object(support / "generic-host.json")["python_executable"] == launched[0]
+
+
+def test_pack_host_python_override_must_be_absolute_and_executable(tmp_path, monkeypatch):
+    monkeypatch.setenv(bootstrap.PACK_HOST_PYTHON_ENV, "relative/python")
+    with pytest.raises(bootstrap.PackHostBootstrapError, match="absolute path"):
+        bootstrap._pack_host_python_executable()
+
+    monkeypatch.setenv(bootstrap.PACK_HOST_PYTHON_ENV, str(tmp_path / "missing-python"))
+    with pytest.raises(bootstrap.PackHostBootstrapError, match="executable file"):
+        bootstrap._pack_host_python_executable()
+
+    non_executable = tmp_path / "non-executable-python"
+    non_executable.write_text("not executable")
+    non_executable.chmod(0o644)
+    monkeypatch.setenv(bootstrap.PACK_HOST_PYTHON_ENV, str(non_executable))
+    with pytest.raises(bootstrap.PackHostBootstrapError, match="executable file"):
+        bootstrap._pack_host_python_executable()
+
+
+def test_selected_pack_host_python_uses_editable_vibecomfy_checkout(tmp_path):
+    expected_checkout = Path(__file__).resolve().parents[3] / "vibecomfy"
+    selected_python = bootstrap._pack_host_python_executable()
+    probe = (
+        "import importlib.metadata as metadata, json, vibecomfy; "
+        "distribution = metadata.distribution('vibecomfy'); "
+        "print(json.dumps({'module_file': vibecomfy.__file__, "
+        "'direct_url': json.loads(distribution.read_text('direct_url.json'))}))"
+    )
+    child_env = {**os.environ, "PYTHONPATH": ""}
+    result = subprocess.run(
+        [selected_python, "-c", probe],
+        cwd=tmp_path,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        if os.environ.get(bootstrap.PACK_HOST_PYTHON_ENV):
+            pytest.fail(
+                f"configured pack-host Python cannot import VibeComfy: {result.stderr.strip()}"
+            )
+        pytest.skip("the test interpreter has no installed VibeComfy distribution")
+
+    provenance = json.loads(result.stdout)
+    module_file = Path(provenance["module_file"]).resolve()
+    direct_url = provenance["direct_url"]
+    installed_checkout = Path(unquote(urlparse(direct_url["url"]).path)).resolve()
+    assert module_file == expected_checkout.resolve() / "vibecomfy" / "__init__.py"
+    assert installed_checkout == expected_checkout.resolve()
+    assert direct_url["dir_info"].get("editable") is True

@@ -23,6 +23,19 @@ python3 -m astrid --help
 python3 -m astrid projects list --json
 ```
 
+### Optional provider credentials
+
+If you use provider-backed tools, set each API key once with the hidden prompt:
+
+```bash
+astrid-credential set runpod
+```
+
+Astrid stores it in `~/.astrid/astrid.env`. This is one file on this computer
+for your current login, shared across your Astrid projects and checkouts. See
+[Credential setup](reference/credentials.md) for supported providers,
+overrides, and deployment guidance.
+
 ### Default Hivemind pack
 
 Astrid setup provisions the canonical Hivemind repository at an immutable

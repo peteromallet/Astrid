@@ -23,7 +23,7 @@ Usage::
 
 Environment:
   HETZNER_HOST, HETZNER_USER, HETZNER_PORT, BLENDER_RENDER_PORT (default 8778),
-  BLENDER_RENDER_TOKEN, RUNPOD_API_KEY (else read from ~/.runpod/config.toml),
+  BLENDER_RENDER_TOKEN, RUNPOD_API_KEY (or Astrid's shared astrid.env entry),
   RUNPOD_GPU_TYPE, RUNPOD_TEMPLATE_ID, RUNPOD_WORKER_IMAGE, etc.
 """
 
@@ -350,19 +350,9 @@ def health(url: str, token: str | None = None, timeout: int = 60) -> bool:
 
 
 def _load_runpod_api_key() -> str:
-    key = os.environ.get("RUNPOD_API_KEY", "").strip()
-    if key:
-        return key
-    cfg = Path.home() / ".runpod" / "config.toml"
-    if cfg.is_file():
-        text = cfg.read_text(encoding="utf-8")
-        m = re.search(r'apikey\s*=\s*"([^"]+)"', text)
-        if m:
-            return m.group(1)
-    raise SystemExit(
-        "RUNPOD_API_KEY not set and not found in ~/.runpod/config.toml; "
-        "set RUNPOD_API_KEY and retry."
-    )
+    from astrid.core.util.credentials_scope import CredentialsScope
+
+    return CredentialsScope.get_local("runpod")
 
 
 def _runpod_public_url(pod: Any, private_port: int) -> str | None:
@@ -401,7 +391,7 @@ def cmd_runpod(args: argparse.Namespace) -> int:
             "Install: pip install -e /Users/peteromalley/Documents/reigh-workspace/runpod-lifecycle"
         )
 
-    os.environ.setdefault("RUNPOD_API_KEY", _load_runpod_api_key())
+    api_key = _load_runpod_api_key()
     gpu = args.gpu or os.environ.get("RUNPOD_GPU_TYPE", "NVIDIA GeForce RTX 4090")
     port = args.port
     print(f"  launching RunPod pod (gpu={gpu}, ports=22/tcp,{port}/tcp) ...", flush=True)
@@ -411,7 +401,7 @@ def cmd_runpod(args: argparse.Namespace) -> int:
         cfg_kwargs["template_id"] = args.template
     if args.image:
         cfg_kwargs["worker_image"] = args.image
-    cfg = RunPodConfig.from_env(**cfg_kwargs)
+    cfg = RunPodConfig.from_env(api_key=api_key, **cfg_kwargs)
 
     pod = _arun(launch(cfg))
     print(f"  pod {pod.id} launched; waiting for SSH ...", flush=True)
@@ -567,7 +557,7 @@ def cmd_runpod_render(args: argparse.Namespace) -> int:
     """
     from runpod_lifecycle import RunPodConfig, launch  # type: ignore
 
-    os.environ.setdefault("RUNPOD_API_KEY", _load_runpod_api_key())
+    api_key = _load_runpod_api_key()
     gpu_raw = args.gpu or os.environ.get(
         "RUNPOD_GPU_TYPE",
         "NVIDIA GeForce RTX 4090,NVIDIA RTX A6000,NVIDIA L40S,NVIDIA GeForce RTX 3090",
@@ -586,7 +576,7 @@ def cmd_runpod_render(args: argparse.Namespace) -> int:
     cfg_kwargs: dict[str, Any] = {"gpu_type": gpu, "ports": f"22/tcp,{port}/tcp", "worker_image": image}
     if args.template:
         cfg_kwargs["template_id"] = args.template
-    cfg = RunPodConfig.from_env(**cfg_kwargs)
+    cfg = RunPodConfig.from_env(api_key=api_key, **cfg_kwargs)
     pod = _arun(launch(cfg))
     print(f"  pod {pod.id} launched; waiting for SSH ...", flush=True)
     _arun(pod.wait_ready(timeout=900))
@@ -622,14 +612,14 @@ def cmd_runpod_render(args: argparse.Namespace) -> int:
 def cmd_teardown_runpod(args: argparse.Namespace) -> int:
     from runpod_lifecycle import Pod, RunPodConfig  # type: ignore
 
-    os.environ.setdefault("RUNPOD_API_KEY", _load_runpod_api_key())
+    api_key = _load_runpod_api_key()
     if not args.pod_id:
         state = Path(".astrid-blender-runpod.json")
         if state.is_file():
             args.pod_id = json.loads(state.read_text()).get("pod_id", "")
     if not args.pod_id:
         raise SystemExit("no --pod-id given and no .astrid-blender-runpod.json found")
-    cfg = RunPodConfig.from_env()
+    cfg = RunPodConfig.from_env(api_key=api_key)
     pod = Pod(args.pod_id, "astrid-blender-teardown", cfg)
     _arun(pod.terminate())
     print(f"terminated pod {args.pod_id}")

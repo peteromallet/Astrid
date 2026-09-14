@@ -19,6 +19,9 @@ import os
 ASTRID_HOME = "ASTRID_HOME"
 """Root of the per-user Astrid state directory (~/.astrid). Set by the user."""
 
+ASTRID_ENV_FILE = "ASTRID_ENV_FILE"
+"""Optional path override for the shared per-user ``astrid.env`` file."""
+
 ASTRID_PROJECTS_ROOT = "ASTRID_PROJECTS_ROOT"
 """Override for the projects root directory. Set by tests and CI environments."""
 
@@ -146,6 +149,7 @@ __all__ = [
     "ASTRID_AUTHOR_TEST",
     "ASTRID_BANODOCO_CATALOG_URL",
     "ASTRID_HOME",
+    "ASTRID_ENV_FILE",
     "ASTRID_INTERNAL_INVOCATION",
     "ASTRID_LOG_MAX_BYTES",
     "ASTRID_NO_NUDGE",

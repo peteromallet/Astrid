@@ -467,6 +467,90 @@ def test_doctor_and_backup_never_open_local_storage(capsys, monkeypatch, tmp_pat
     assert "banodoco-local up --profile astrid" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("status", [401, 403])
+def test_doctor_reports_healthy_when_deep_check_lacks_admin_scope(capsys, monkeypatch, status):
+    """A product credential's admin boundary is not a runtime outage."""
+    from astrid.sdk.workspace_client import WorkspaceClientError
+
+    class ScopedClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return None
+
+        def doctor(self):
+            raise WorkspaceClientError(
+                status,
+                "forbidden",
+                "credential lacks required scope",
+                {"scope": "admin"},
+            )
+
+        def health(self):
+            return {
+                "status": "ok",
+                "protocol": "workspace.v1",
+                "schema_digest": "sha256:test",
+                "runtime_epoch": 4,
+            }
+
+    monkeypatch.setattr(
+        AstridClient,
+        "open_from_launcher",
+        classmethod(lambda cls, **_kwargs: ScopedClient()),
+    )
+
+    assert dispatch._dispatch_doctor(["--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["state"] == "ready"
+    assert report["health"]["status"] == "ok"
+    assert report["deep_diagnostics"] == {
+        "ok": False,
+        "state": "permission_limited",
+        "required_scope": "admin",
+        "error": "credential lacks required scope",
+    }
+
+
+@pytest.mark.parametrize("scope", ["projects:read", "objects:read"])
+def test_doctor_does_not_downgrade_non_admin_forbidden(capsys, monkeypatch, scope):
+    from astrid.sdk.workspace_client import WorkspaceClientError
+
+    class ScopedClient:
+        def __enter__(self): return self
+        def __exit__(self, *exc_info): return None
+        def doctor(self):
+            raise WorkspaceClientError(403, "forbidden", "credential lacks required scope", {"scope": scope})
+        def health(self):
+            raise AssertionError("health fallback is only for admin doctor denial")
+
+    monkeypatch.setattr(AstridClient, "open_from_launcher", classmethod(lambda cls, **_kwargs: ScopedClient()))
+    assert dispatch._dispatch_doctor(["--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"] == "credential lacks required scope"
+
+
+def test_doctor_does_not_claim_ready_when_health_is_degraded(capsys, monkeypatch):
+    from astrid.sdk.workspace_client import WorkspaceClientError
+
+    class ScopedClient:
+        def __enter__(self): return self
+        def __exit__(self, *exc_info): return None
+        def doctor(self):
+            raise WorkspaceClientError(403, "forbidden", "credential lacks required scope", {"scope": "admin"})
+        def health(self):
+            return {"status": "degraded"}
+
+    monkeypatch.setattr(AstridClient, "open_from_launcher", classmethod(lambda cls, **_kwargs: ScopedClient()))
+    assert dispatch._dispatch_doctor(["--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"] == "credential lacks required scope"
+
+
 def test_remote_domains_use_generated_runtime_and_reopen(tmp_path, monkeypatch):
     daemon = RuntimeDaemon(tmp_path / "realm", support_root=tmp_path / "support").start()
     _register_render_basic(daemon)

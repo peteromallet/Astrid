@@ -206,6 +206,164 @@ def test_support_is_request_sensitive_and_accepts_complete_timeline(
     assert report.features["audio_ownership"] == "rendered"
 
 
+def test_default_review_profile_fits_640x360_and_preserves_aspect_ratio() -> None:
+    profile = RenderProfile(
+        width=1920,
+        height=1080,
+        fps_rational=(30, 1),
+        time_base=(1, 15360),
+        container="mp4",
+        video_codec="h264",
+        video_profile=None,
+        video_level=None,
+        pixel_format="yuv420p",
+    )
+    output, scale = remotion._review_output_profile(profile)
+    assert scale == pytest.approx(1 / 3)
+    assert (output.width, output.height) == (640, 360)
+
+    portrait = RenderProfile(
+        width=1080,
+        height=1920,
+        fps_rational=(30, 1),
+        time_base=(1, 15360),
+        container="mp4",
+        video_codec="h264",
+        video_profile=None,
+        video_level=None,
+        pixel_format="yuv420p",
+    )
+    portrait_output, _ = remotion._review_output_profile(portrait)
+    assert portrait_output.height == 360
+    assert portrait_output.width <= 640
+    assert portrait_output.width / portrait_output.height == pytest.approx(1080 / 1920, abs=1 / 360)
+
+
+def test_review_scaling_applies_only_to_default_review_and_passes_backend_scale(
+    tmp_path: Path,
+) -> None:
+    timeline_path, assets_path = _write_inputs(tmp_path)
+    project = _write_project(tmp_path)
+    canonical = RenderProfile(
+        width=1920,
+        height=1080,
+        fps_rational=(30, 1),
+        time_base=(1, 15360),
+        container="mp4",
+        video_codec="h264",
+        video_profile=None,
+        video_level=None,
+        pixel_format="yuv420p",
+    )
+    support_report = SupportReport(
+        schema_version=1,
+        supported=True,
+        reasons=[],
+        features={},
+        alternatives=[],
+        backend=remotion.BACKEND_ID,
+        backend_version=remotion.BACKEND_VERSION,
+    )
+    calls: list[float | None] = []
+    review_props: list[object] = []
+
+    def fake_execute(*args: object, **kwargs: object) -> remotion._ExecutionDetails:
+        calls.append(kwargs["render_scale"])
+        review_props.append(kwargs["review"])
+        Path(args[2]).write_bytes(b"fake-remotion-video")
+        return remotion._ExecutionDetails(
+            active_theme={"id": "banodoco-default", "visual": {}},
+            registry_state={"version": 1, "hash": "registry-hash"},
+            stage_summary={"root": None, "effects": []},
+        )
+
+    explicit = canonical.to_dict()
+    requests = [
+        RenderRequest(
+            schema_version=SCHEMA_VERSION,
+            timeline_path=str(timeline_path),
+            assets_registry_path=str(assets_path),
+            output_name="result.mp4",
+            metadata={"review": '{"shots": []}'},
+            backend_config={remotion.BACKEND_ID: {"project_dir": str(project)}},
+        ),
+        RenderRequest(
+            schema_version=SCHEMA_VERSION,
+            timeline_path=str(timeline_path),
+            assets_registry_path=str(assets_path),
+            output_name="result.mp4",
+            backend_config={remotion.BACKEND_ID: {"project_dir": str(project)}},
+        ),
+        RenderRequest(
+            schema_version=SCHEMA_VERSION,
+            timeline_path=str(timeline_path),
+            assets_registry_path=str(assets_path),
+            output_name="result.mp4",
+            profile=explicit,
+            metadata={"review": '{"shots": []}'},
+            backend_config={remotion.BACKEND_ID: {"project_dir": str(project)}},
+        ),
+    ]
+    with (
+        mock.patch.object(remotion, "support", return_value=support_report),
+        mock.patch.object(remotion, "_canonical_profile", return_value=canonical),
+        mock.patch.object(remotion, "_execute_remotion", side_effect=fake_execute),
+        mock.patch.object(remotion, "_duration_frames", return_value=30),
+        mock.patch.object(remotion, "validate_render_result"),
+    ):
+        results = [remotion._protocol_render(request, workspace=tmp_path) for request in requests]
+
+    assert calls == [pytest.approx(1 / 3), None, None]
+    assert review_props[0]["render_dimensions"] == {"width": 640, "height": 360}
+    assert review_props[1] is None
+    assert review_props[2]["render_dimensions"] == {"width": 1920, "height": 1080}
+    assert [(result.video.profile.width, result.video.profile.height) for result in results] == [
+        (640, 360),
+        (1920, 1080),
+        (1920, 1080),
+    ]
+
+
+def test_remotion_review_uses_native_scale_flag(tmp_path: Path) -> None:
+    timeline_path, assets_path = _write_inputs(tmp_path)
+    project = _write_project(tmp_path)
+    output_path = tmp_path / "review.mp4"
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        normalized = [str(part) for part in command]
+        if _is_remotion_render_command(normalized):
+            commands.append(normalized)
+            _write_fake_remotion_output(normalized)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    with (
+        mock.patch.object(remotion, "_regenerate_element_registries"),
+        mock.patch.object(
+            remotion,
+            "_effective_registry_state",
+            return_value={"version": 1, "hash": "registry-hash"},
+        ),
+        mock.patch.object(remotion, "_available_remotion_port", return_value=3001),
+        mock.patch.object(remotion.subprocess, "run", side_effect=fake_run),
+    ):
+        remotion._execute_remotion(
+            timeline_path,
+            assets_path,
+            output_path,
+            provenance_out_path=output_path,
+            project_dir=project,
+            composition_id="TimelineComposition",
+            theme_path=None,
+            min_free_gb=None,
+            review={"shots": []},
+            render_scale=1 / 3,
+        )
+
+    assert len(commands) == 1
+    assert "--scale=0.333333333333333" in commands[0]
+
+
 def test_support_treats_timeline_output_hint_as_informational_without_profile(
     tmp_path: Path,
 ) -> None:

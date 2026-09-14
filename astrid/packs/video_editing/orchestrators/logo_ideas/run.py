@@ -420,7 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         concepts = _planned_concepts(args.ideas, args.count)
         concepts_payload = {"mode": "dry-run", "raw_response": None, "concepts": concepts}
     else:
-        fireworks_key = CredentialsScope.get("fireworks", env_file=args.env_file)
+        fireworks_key = CredentialsScope.get_local("fireworks", env_file=args.env_file)
         client.register_secret(fireworks_key)
         response = call_fireworks_concepts(
             ideas=args.ideas,
@@ -451,7 +451,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
     )
 
-    fal_key = None if args.dry_run else CredentialsScope.get("fal", env_file=args.env_file)
+    fal_key = None if args.dry_run else CredentialsScope.get_local("fal", env_file=args.env_file)
     if fal_key:
         client.register_secret(fal_key)
     grid_mode = args.provider in GRID_PROVIDERS

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from astrid.core.contracts.errors import AstridError
 from astrid.core.pack.entrypoint import guard_canonical_entrypoint
+from astrid.core.util.credentials_scope import CredentialsScope
+from astrid.core.util.secrets import load_local_api_key_with_source
 
 guard_canonical_entrypoint('training.search_loras')
 import argparse
@@ -25,7 +27,13 @@ PHOTOREAL_TERMS = ("photo", "photography", "photoreal", "photorealistic", "reali
 
 
 def _token_from_env() -> str | None:
-    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    try:
+        return CredentialsScope.get_local("huggingface")
+    except AstridError:
+        try:
+            return load_local_api_key_with_source("HUGGING_FACE_HUB_TOKEN")[0]
+        except AstridError:
+            return None
 
 
 def _normalize_terms(values: list[str] | tuple[str, ...] | None) -> list[str]:

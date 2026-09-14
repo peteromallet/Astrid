@@ -64,9 +64,9 @@ class WavespeedBackend(BackendAdapter):
         self._api_key: str | None = None
 
     def _resolve_api_key(self) -> str:
-        """Return ``WAVESPEED_API_KEY``, loading from environment / .env."""
+        """Return ``WAVESPEED_API_KEY`` from Astrid's shared credential resolver."""
         if self._api_key is None:
-            self._api_key = CredentialsScope.get("wavespeed", env_file=self._env_file)
+            self._api_key = CredentialsScope.get_local("wavespeed", env_file=self._env_file)
             self._client.register_secret(self._api_key)
         return self._api_key
 

@@ -128,7 +128,7 @@ def _die(message: str) -> None:
 
 
 def load_api_key(*, env_file: Path | None = None) -> str:
-    return CredentialsScope.get("openai", env_file=env_file)
+    return CredentialsScope.get_local("openai", env_file=env_file)
 
 
 def _parse_timestamp(value: str) -> float:

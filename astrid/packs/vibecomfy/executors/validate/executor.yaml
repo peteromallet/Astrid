@@ -9,19 +9,22 @@
       "-m",
       "astrid.packs.vibecomfy.executors.validate.run",
       "validate",
-      "{workflow}"
+      "{workflow}",
+      "--python",
+      "{python}",
+      "--companion",
+      "{companion}",
+      "--source",
+      "{source}"
     ]
   },
-  "conditions": [
-    {
-      "input": "workflow",
-      "kind": "requires_input"
-    }
-  ],
   "description": "Validate a VibeComfy workflow through the VibeComfy CLI.",
   "graph": {
     "consumes": [
-      "workflow"
+      "workflow",
+      "python",
+      "companion",
+      "source"
     ],
     "provides": [
       "vibecomfy_validation"
@@ -30,9 +33,31 @@
   "id": "vibecomfy.validate",
   "inputs": [
     {
-      "description": "VibeComfy workflow JSON file.",
+      "default": "",
+      "description": "Optional VibeComfy UI workflow JSON. Use this or all three canonical members.",
       "name": "workflow",
-      "required": true,
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional canonical workflow.py member.",
+      "name": "python",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional canonical workflow.vibe.json companion member.",
+      "name": "companion",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional byte-identical source.json member.",
+      "name": "source",
+      "required": false,
       "type": "file"
     }
   ],
@@ -75,10 +100,10 @@
     "runtime_module": "astrid.packs.vibecomfy.executors.validate.run",
     "vibecomfy_command": "validate",
     "workflow_input_contract": {
-      "description": "VibeComfy workflow JSON file.",
+      "description": "UI JSON or complete canonical Python/companion/source sibling bundle.",
       "format": "ComfyUI/VibeComfy workflow JSON",
       "name": "workflow",
-      "required": true,
+      "required": false,
       "type": "file"
     },
     "workflows": []

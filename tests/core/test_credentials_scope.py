@@ -1,27 +1,14 @@
-"""Tests for CredentialsScope — scoped API key resolution.
-
-Covers:
-- All 6 canonical providers resolve via CredentialsScope.get()
-- Missing key → AstridError
-- Unknown provider → AstridError
-- Secret scrubbing intact
-- SCOPE_REGISTRY integration
-"""
+"""Tests for the canonical Astrid credential source policy."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from astrid.core.contracts.errors import AstridError
 from astrid.core.contracts.scoped_config import SCOPE_REGISTRY, ScopeRequest
 from astrid.core.util.credentials_scope import CredentialsScope
-
-# ---------------------------------------------------------------------------
-# Provider → env-var mapping
-# ---------------------------------------------------------------------------
 
 PROVIDER_ENV = {
     "fal": "FAL_KEY",
@@ -30,86 +17,81 @@ PROVIDER_ENV = {
     "deepseek": "DEEPSEEK_API_KEY",
     "fireworks": "FIREWORKS_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "giphy": "GIPHY_API_KEY",
+    "huggingface": "HF_TOKEN",
+    "runpod": "RUNPOD_API_KEY",
+    "wavespeed": "WAVESPEED_API_KEY",
 }
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("provider,env_var", PROVIDER_ENV.items())
+def test_local_credentials_resolve_from_shared_file(
+    provider: str, env_var: str, monkeypatch, tmp_path: Path, caplog
+) -> None:
+    secret = f"local-test-{provider}-secret"
+    shared_file = tmp_path / "astrid.env"
+    shared_file.write_text(f"{env_var}={secret}\n", encoding="utf-8")
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(shared_file))
+    monkeypatch.setenv(env_var, f"stale-{provider}-key")
+    caplog.set_level("DEBUG", logger="astrid.credentials")
 
+    credential = CredentialsScope.resolve_local(provider)
 
-@pytest.fixture
-def env_file_with_key(tmp_path: Path) -> Path:
-    """Create a .env file with a known API key."""
-    env_path = tmp_path / ".env"
-    env_path.write_text("FAL_KEY=fal_test_value\n")
-    return env_path
-
-
-# ---------------------------------------------------------------------------
-# All 6 providers resolve via CredentialsScope.get()
-# ---------------------------------------------------------------------------
+    assert credential.provider == provider
+    assert credential.reference == env_var
+    assert credential.source == "astrid_env_file"
+    assert credential.value == secret
+    assert secret not in repr(credential)
+    assert env_var in caplog.text
+    assert "source=astrid_env_file" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.parametrize("provider,env_var", PROVIDER_ENV.items())
-def test_get_resolves_via_env_file(provider: str, env_var: str, tmp_path: Path, monkeypatch):
-    """Each provider resolves when its env var is in a .env file."""
-    # Hermetic: the process environment must not shadow the env-file tier
-    # (frozen precedence: explicit > process env > keychain > env file).
-    monkeypatch.delenv(env_var, raising=False)
-    env_path = tmp_path / ".env"
-    env_path.write_text(f"{env_var}=test_key_{provider}\n")
-    result = CredentialsScope.get(provider, env_file=env_path)
-    assert result == f"test_key_{provider}"
+def test_get_reads_the_same_shared_file(provider: str, env_var: str, monkeypatch, tmp_path: Path) -> None:
+    shared_file = tmp_path / "astrid.env"
+    shared_file.write_text(f"{env_var}=shared-{provider}\n", encoding="utf-8")
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(shared_file))
+    monkeypatch.setenv(env_var, f"stale-{provider}")
+
+    assert CredentialsScope.get(provider) == f"shared-{provider}"
 
 
-@pytest.mark.parametrize("provider,env_var", PROVIDER_ENV.items())
-def test_get_resolves_via_os_environ(provider: str, env_var: str):
-    """Each provider resolves via load_api_key delegation."""
-    with patch(
-        "astrid.core.util.credentials_scope.load_api_key",
-        return_value=f"os_{provider}_key",
-    ):
-        result = CredentialsScope.get(provider)
-        assert result == f"os_{provider}_key"
+def test_explicit_value_wins_over_shared_file(monkeypatch, tmp_path: Path) -> None:
+    shared_file = tmp_path / "astrid.env"
+    shared_file.write_text("FAL_KEY=from-shared-file\n", encoding="utf-8")
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(shared_file))
+
+    assert CredentialsScope.get("fal", explicit="from-explicit") == "from-explicit"
 
 
-# ---------------------------------------------------------------------------
-# Missing key → AstridError
-# ---------------------------------------------------------------------------
+def test_named_env_file_is_only_a_fallback(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(tmp_path / "absent-shared.env"))
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    fallback = tmp_path / "project.env"
+    fallback.write_text("FAL_KEY=from-project-file\n", encoding="utf-8")
+
+    assert CredentialsScope.get("fal", env_file=fallback) == "from-project-file"
 
 
-def test_missing_key_raises_astrid_error():
-    """CredentialsScope.get raises AstridError when load_api_key raises."""
-    with patch(
-        "astrid.core.util.credentials_scope.load_api_key",
-        side_effect=AstridError("FAL_KEY not found"),
-    ):
-        with pytest.raises(AstridError) as exc_info:
-            CredentialsScope.get("fal")
-        assert "FAL_KEY not found" in str(exc_info.value.cause)
+def test_missing_key_raises_actionable_astrid_error(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(tmp_path / "absent-shared.env"))
+    monkeypatch.delenv("FAL_KEY", raising=False)
+
+    with pytest.raises(AstridError) as exc_info:
+        CredentialsScope.get("fal")
+    assert "FAL_KEY not found" in str(exc_info.value.cause)
+    assert "shared astrid.env" in exc_info.value.recovery_command
 
 
-# ---------------------------------------------------------------------------
-# Unknown provider → AstridError
-# ---------------------------------------------------------------------------
-
-
-def test_unknown_provider_raises_astrid_error():
-    """Unknown provider raises AstridError with helpful valid-options."""
+def test_unknown_provider_raises_astrid_error() -> None:
     with pytest.raises(AstridError) as exc_info:
         CredentialsScope.get("nonexistent")
     assert "Unknown credentials provider" in str(exc_info.value.cause)
     assert "nonexistent" in str(exc_info.value.cause)
 
 
-# ---------------------------------------------------------------------------
-# Secret scrubbing intact (via load_api_key → scrub_secret)
-# ---------------------------------------------------------------------------
-
-
-def test_secret_scrubbing_still_works():
-    """Secret scrubbing via secrets.scrub_secret is unaffected."""
+def test_secret_scrubbing_still_works() -> None:
     from astrid.core.util.secrets import scrub_secret
 
     result = scrub_secret("secret123", "prefix secret123 suffix")
@@ -117,180 +99,42 @@ def test_secret_scrubbing_still_works():
     assert "***" in result
 
 
-# ---------------------------------------------------------------------------
-# All 6 providers registered in SCOPE_REGISTRY
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("provider", PROVIDER_ENV)
+def test_provider_registered_in_scope_registry(provider: str) -> None:
+    assert SCOPE_REGISTRY.is_registered(f"credentials.{provider}")
 
 
-@pytest.mark.parametrize("provider", PROVIDER_ENV.keys())
-def test_provider_registered_in_scope_registry(provider: str):
-    """Each credentials.<provider> key is registered."""
-    key = f"credentials.{provider}"
-    assert SCOPE_REGISTRY.is_registered(key)
-
-
-# ---------------------------------------------------------------------------
-# CredentialsScope is a ScopedConfig subclass
-# ---------------------------------------------------------------------------
-
-
-def test_credentials_scope_is_scoped_config():
-    """CredentialsScope is a subclass of ScopedConfig."""
+def test_credentials_scope_is_scoped_config_and_frozen() -> None:
     from astrid.core.contracts.scoped_config import ScopedConfig
 
     assert issubclass(CredentialsScope, ScopedConfig)
-
-
-# ---------------------------------------------------------------------------
-# CredentialsScope is frozen
-# ---------------------------------------------------------------------------
-
-
-def test_credentials_scope_is_frozen():
-    """CredentialsScope instances cannot be mutated."""
     scope = CredentialsScope(provider="fal", value="key123")
     with pytest.raises(Exception):
         scope.value = "hacked"  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
-# File-not-found .env fallback to os.environ
-# ---------------------------------------------------------------------------
-
-
-def test_fallback_to_os_environ_when_env_file_not_found():
-    """When explicit env_file doesn't exist, load_api_key still delegates."""
-    with patch(
-        "astrid.core.util.credentials_scope.load_api_key",
-        return_value="fallback_key",
-    ):
-        result = CredentialsScope.get("fal", env_file=Path("/nonexistent/.env"))
-        assert result == "fallback_key"
-
-
-# ---------------------------------------------------------------------------
-# Provide env_file but key is not in it → falls back to os.environ
-# ---------------------------------------------------------------------------
-
-
-def test_env_file_without_target_key_falls_back_to_os_environ(tmp_path: Path):
-    """When env_file exists but doesn't have the target key, delegates correctly."""
-    env_path = tmp_path / ".env"
-    env_path.write_text("OTHER_KEY=other_value\n")
-    with patch(
-        "astrid.core.util.credentials_scope.load_api_key",
-        return_value="os_value",
-    ) as mock_load:
-        result = CredentialsScope.get("fal", env_file=env_path)
-        assert result == "os_value"
-        mock_load.assert_called_once_with(
-            "FAL_KEY",
-            env_file=env_path,
-            explicit=None,
-            keychain=None,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Frozen precedence at the CredentialsScope boundary (m4 Step 31)
-# ---------------------------------------------------------------------------
-
-
-class _FakeKeychain:
-    """Injected keychain boundary returning a fixed value for one name."""
-
-    def __init__(self, name: str, value: str) -> None:
-        self._name = name
-        self._value = value
-        self.calls = 0
-
-    def get(self, name: str) -> str | None:
-        self.calls += 1
-        return self._value if name == self._name else None
-
-
-def test_get_precedence_explicit_over_environment_over_keychain_over_env_file(
-    monkeypatch, tmp_path: Path
-):
-    """explicit > process env > injected keychain > named env file."""
-    env_path = tmp_path / "keys.env"
-    env_path.write_text("FAL_KEY=from-env-file\n")
-    keychain = _FakeKeychain("FAL_KEY", "from-keychain")
-
-    monkeypatch.setenv("FAL_KEY", "from-environment")
-    assert (
-        CredentialsScope.get(
-            "fal", env_file=env_path, explicit="from-explicit", keychain=keychain
-        )
-        == "from-explicit"
-    )
-    assert keychain.calls == 0
-
-    assert (
-        CredentialsScope.get("fal", env_file=env_path, keychain=keychain)
-        == "from-environment"
-    )
-    assert keychain.calls == 0  # environment satisfied the request
-
-    monkeypatch.delenv("FAL_KEY", raising=False)
-    assert (
-        CredentialsScope.get("fal", env_file=env_path, keychain=keychain)
-        == "from-keychain"
-    )
-    assert keychain.calls == 1
-
-    # A keychain that has no value for this name falls through to the env file.
-    empty_keychain = _FakeKeychain("OTHER_KEY", "ignored")
-    assert (
-        CredentialsScope.get("fal", env_file=env_path, keychain=empty_keychain)
-        == "from-env-file"
-    )
-
-
-def test_get_without_keychain_never_touches_a_keychain(monkeypatch, tmp_path: Path):
-    monkeypatch.delenv("FAL_KEY", raising=False)
-    env_path = tmp_path / "keys.env"
-    env_path.write_text("FAL_KEY=from-env-file\n")
-
-    # The default boundary is a null provider: resolution succeeds without any
-    # keychain access.
-    assert CredentialsScope.get("fal", env_file=env_path) == "from-env-file"
-
-
-def test_registry_resolver_explicit_wins_and_env_is_read_from_request():
-    """SCOPE_REGISTRY resolution honors explicit first, then request env."""
+def test_registry_explicit_and_request_environment(monkeypatch, tmp_path: Path) -> None:
+    isolated_file = tmp_path / "missing.env"
     scope = SCOPE_REGISTRY.resolve(
         "credentials.fal",
-        ScopeRequest(explicit={"credentials.fal": "from-explicit"}),
+        ScopeRequest(
+            explicit={"credentials.fal": "from-explicit"},
+            env={"ASTRID_ENV_FILE": str(isolated_file)},
+        ),
     )
     assert scope is not None and scope.value == "from-explicit"
 
     scope = SCOPE_REGISTRY.resolve(
         "credentials.fal",
-        ScopeRequest(env={"FAL_KEY": "from-request-env"}),
+        ScopeRequest(env={"FAL_KEY": "from-request-env", "ASTRID_ENV_FILE": str(isolated_file)}),
     )
     assert scope is not None and scope.value == "from-request-env"
 
-    # The request env mapping is authoritative: a key missing from it is not
-    # resolved from os.environ, so resolution fails closed.
+    # The request's environment mapping is authoritative: process env is not
+    # consulted when the supplied mapping misses a reference.
+    monkeypatch.setenv("FAL_KEY", "ambient-process-value")
     with pytest.raises(AstridError):
         SCOPE_REGISTRY.resolve(
             "credentials.fal",
-            ScopeRequest(env={"OTHER": "x"}),
+            ScopeRequest(env={"OTHER": "x", "ASTRID_ENV_FILE": str(isolated_file)}),
         )
-
-    # With no request env, the process environment is the tier-2 source.
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setenv("FAL_KEY", "from-os-environ")
-    try:
-        scope = SCOPE_REGISTRY.resolve("credentials.fal", ScopeRequest())
-        assert scope is not None and scope.value == "from-os-environ"
-    finally:
-        monkeypatch.undo()
-
-
-def test_registry_resolver_never_accesses_a_keychain(monkeypatch):
-    """Domain-only registry resolution performs no keychain access."""
-    monkeypatch.delenv("FAL_KEY", raising=False)
-    with pytest.raises(AstridError):
-        SCOPE_REGISTRY.resolve("credentials.fal", ScopeRequest())

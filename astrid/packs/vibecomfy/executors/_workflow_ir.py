@@ -83,6 +83,64 @@ def inspect_workflow(workflow_path: Path, out_dir: Path) -> dict[str, Path]:
     return {"projection": projection_path, "inspection": inspection_path}
 
 
+def inspect_canonical_bundle(
+    python_path: Path,
+    companion_path: Path,
+    source_path: Path,
+    out_dir: Path,
+) -> dict[str, Path]:
+    """Read a canonical sibling bundle and project it without publishing edits."""
+    from ._bundle_inputs import staged_workflow_path
+
+    with staged_workflow_path(
+        workflow=None,
+        python=python_path,
+        companion=companion_path,
+        source=source_path,
+    ) as (staged_python, _authority):
+        from vibecomfy.porting.render import render
+        from vibecomfy.workflow_bundle import load_bundle
+
+        bundle = load_bundle(staged_python)
+        rendered = render(bundle.workflow, lenses=("census", "surface", "topology"))
+        if not isinstance(rendered, Mapping):
+            raise WorkflowIrBridgeError("VibeComfy returned an invalid IR projection")
+        python_bytes = python_path.read_bytes()
+        companion_bytes = companion_path.read_bytes()
+        source_bytes = source_path.read_bytes()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    projection_path = out_dir / "workflow-ir.py"
+    projection_path.write_text(str(rendered["surface"]), encoding="utf-8")
+    inspection_path = out_dir / "inspection.json"
+    _write_json(
+        inspection_path,
+        {
+            "schema_version": 1,
+            "authority": "canonical_workflow_bundle",
+            "workflow_identity": bundle.workflow_identity,
+            "revision_id": bundle.revision_id,
+            "parent_revision": bundle.parent_revision or None,
+            "semantic_digest": bundle.semantic_digest,
+            "ui_digest": bundle.ui_digest,
+            "source_sha256": _sha256(source_bytes),
+            "members": {
+                "workflow.py": _sha256(python_bytes),
+                "workflow.vibe.json": _sha256(companion_bytes),
+                "source.json": _sha256(source_bytes),
+            },
+            "projection": "read_only_python_like_ir",
+            "lenses": {
+                "census": rendered["census"],
+                "surface": rendered["surface"],
+                "topology": rendered["topology"],
+                "topology_source": rendered.get("topology_source", "computed"),
+            },
+        },
+    )
+    return {"projection": projection_path, "inspection": inspection_path}
+
+
 def _parse_edit_document(path: Path) -> tuple[list[dict[str, Any]], int]:
     document, _ = _read_json_object(path, label="operations")
     allowed_keys = {"schema_version", "expected_revision", "ops"}

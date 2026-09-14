@@ -6,7 +6,7 @@ const source = fs.readFileSync(require.resolve('../src/ReviewOverlay.tsx'), 'utf
 const compiled = ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText;
 const exportsObject = {};
 vm.runInNewContext(compiled, {exports: exportsObject, require});
-const {reviewLabel, reviewCaption} = exportsObject;
+const {reviewLabel, reviewCaption, isLowResRender, reviewCaptionFontSize} = exportsObject;
 const review = {shots: [
   {shot_id: 'a', name: '01 Opening', at: 0, hold: 1},
   {shot_id: 'b', name: '02 Detail', at: 1, hold: 2},
@@ -27,4 +27,8 @@ assert.equal(reviewCaption(speechReview, 0, 30), 'Opening caption');
 assert.equal(reviewCaption(speechReview, 15, 30), 'Second caption');
 assert.equal(reviewCaption(speechReview, 60, 30), null);
 assert.equal(reviewCaption({shots: [], speech: {status: 'no_transcript', phrases: []}}, 0, 30), null);
+assert.equal(isLowResRender(640, 360), true);
+assert.equal(isLowResRender(1920, 1080), false);
+assert.equal(reviewCaptionFontSize(1920), 40);
+assert.equal(reviewCaptionFontSize(640), 640 / 48);
 console.log('Review overlay boundaries, clock, overlaps, gaps, and speech captions passed');

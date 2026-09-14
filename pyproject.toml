@@ -17,14 +17,10 @@ dependencies = [
     "jsonschema>=4.0",
     "referencing>=0.30",
     "pillow>=12.2,<13",
+    "python-dotenv>=1.0",
     "fal-client>=0.7.0",
     "xxhash>=3.4",
     "PyJWT[crypto]>=2.8",
-    # Supported OS-keychain boundary for the frozen credential precedence
-    # (explicit > process env > injectable keychain > named env file). Imported
-    # lazily by astrid.core.util.secrets.OSKeychainProvider: domain-only use
-    # and tests never access a keychain (no eager keychain access).
-    "keyring>=25.0",
     # pyannote.audio is intentionally excluded from core metadata.
     # It is an optional/heavy dependency; install separately if needed.
     # "pyannote.audio==3.3.2",
@@ -41,6 +37,8 @@ dependencies = [
 # named Astrid OMP agent (see ``astrid.omp_agent``).
 astrid-tools = "astrid.core.gateway:main"
 astrid = "astrid.omp_agent:main"
+astrid-credential = "astrid.core.util.credential_store:main"
+astrid-with-credential = "astrid.core.util.credential_exec:main"
 
 [project.optional-dependencies]
 dev = [

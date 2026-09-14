@@ -12,6 +12,7 @@ guard_canonical_entrypoint("vibecomfy.inspect")
 
 from astrid.packs.vibecomfy.executors._workflow_ir import (  # noqa: E402
     WorkflowIrBridgeError,
+    inspect_canonical_bundle,
     inspect_workflow,
 )
 
@@ -20,7 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Project a ComfyUI UI graph through VibeComfy's readable IR."
     )
-    parser.add_argument("--workflow", type=Path, required=True)
+    parser.add_argument("--workflow", default="")
+    parser.add_argument("--python", default="")
+    parser.add_argument("--companion", default="")
+    parser.add_argument("--source", default="")
     parser.add_argument("--out", type=Path, required=True)
     return parser
 
@@ -28,7 +32,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        inspect_workflow(args.workflow, args.out)
+        if args.python or args.companion or args.source:
+            inspect_canonical_bundle(
+                Path(args.python),
+                Path(args.companion),
+                Path(args.source),
+                args.out,
+            )
+        elif args.workflow:
+            inspect_workflow(Path(args.workflow), args.out)
+        else:
+            raise WorkflowIrBridgeError(
+                "provide workflow JSON or python, companion, and source bundle members"
+            )
     except WorkflowIrBridgeError as exc:
         print(f"vibecomfy.inspect: {exc}", file=sys.stderr)
         return 1

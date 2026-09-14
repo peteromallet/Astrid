@@ -36,7 +36,7 @@ _client = default_client()
 
 def _load_env_var(name: str, *, env_file: Path | None = None) -> str:
     scope = name.lower().removesuffix("_api_key").removesuffix("_key")
-    return CredentialsScope.get(scope, env_file=env_file)
+    return CredentialsScope.get_local(scope, env_file=env_file)
 
 
 
@@ -509,7 +509,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         concepts_payload = {"mode": "dry-run", "concepts": concepts, "raw_response": None}
         grid_prompt = build_grid_prompt(args.ideas, concepts, len(refs))
     else:
-        fireworks_key = CredentialsScope.get("fireworks", env_file=args.env_file)
+        fireworks_key = CredentialsScope.get_local("fireworks", env_file=args.env_file)
         response = call_kimi_variations(
             ideas=args.ideas,
             count=args.count,
@@ -547,7 +547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         generated = _placeholder_image(grid_path, "vary-grid (dry-run)")
     else:
-        fal_key = CredentialsScope.get("fal", env_file=args.env_file)
+        fal_key = CredentialsScope.get_local("fal", env_file=args.env_file)
         ref_paths = [Path(r["path"]) for r in refs]
         submission, result = call_fal_edit(
             prompt=grid_prompt,

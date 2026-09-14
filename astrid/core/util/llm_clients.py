@@ -197,7 +197,7 @@ class GeminiClient(Protocol):
 def _load_api_key(env_file: Path | None, key: str) -> str:
     """Resolve *key* via the canonical scoped credentials resolver.
 
-    Thin backward-compatible wrapper around ``CredentialsScope.get``.
+    Thin backward-compatible wrapper around ``CredentialsScope.get_local``.
     Maps env-var *key* → canonical provider name → scope key.
     """
     _ENV_TO_PROVIDER: dict[str, str] = {
@@ -214,7 +214,7 @@ def _load_api_key(env_file: Path | None, key: str) -> str:
             f"Unknown API key env var: {key!r}",
             recovery_command=f"use one of: {', '.join(sorted(_ENV_TO_PROVIDER))}",
         )
-    return CredentialsScope.get(provider, env_file=env_file)
+    return CredentialsScope.get_local(provider, env_file=env_file)
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -226,7 +226,7 @@ def _is_transient_error(exc: Exception) -> bool:
 def build_claude_client(env_file: Path | None = None) -> ClaudeClient:
     from anthropic import Anthropic
 
-    sdk_client = Anthropic(api_key=CredentialsScope.get("anthropic", env_file=env_file))
+    sdk_client = Anthropic(api_key=CredentialsScope.get_local("anthropic", env_file=env_file))
 
     class _ClaudeJSONClient:
         def complete_json(
@@ -318,7 +318,7 @@ def build_gemini_client(env_file: Path | None = None) -> GeminiClient:
     from google import genai
     from google.genai import types
 
-    sdk_client = genai.Client(api_key=CredentialsScope.get("gemini", env_file=env_file))
+    sdk_client = genai.Client(api_key=CredentialsScope.get_local("gemini", env_file=env_file))
 
     class _GeminiVideoClient:
         def describe_video(

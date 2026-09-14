@@ -7,6 +7,7 @@ import re
 from collections.abc import Iterable, Mapping
 
 from astrid.core.env_vars import (
+    ASTRID_ENV_FILE,
     ASTRID_ACTOR,
     ASTRID_AUTHOR_TEST,
     ASTRID_INTERNAL_INVOCATION,
@@ -71,6 +72,7 @@ _SAFE_BASE_ENV = frozenset(
 _ASTRID_PROPAGATED_ENV = frozenset(
     {
         ASTRID_HOME_ENV,
+        ASTRID_ENV_FILE,
         TIMELINE_SCHEMA_PYTHONPATH_ENV,
         PROJECTS_ROOT_ENV,
         PROJECT_RUN_ENV,

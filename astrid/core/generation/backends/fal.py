@@ -200,7 +200,7 @@ class FalBackend(BackendAdapter):
     def _resolve_api_key(self) -> str:
         """Return ``FAL_KEY``, loading from environment / .env on first call."""
         if self._api_key is None:
-            self._api_key = CredentialsScope.get("fal", env_file=self._env_file)
+            self._api_key = CredentialsScope.get_local("fal", env_file=self._env_file)
             self._client.register_secret(self._api_key)
         return self._api_key
 

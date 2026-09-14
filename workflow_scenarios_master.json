@@ -26,7 +26,8 @@
       }
     },
     "vibecomfy_assessment": "10-agent swarm; GOLD/GOOD/WEAK/UNUSABLE vs 64 ready templates",
-    "deep_assessment": "25-agent swarm; 215 scenarios assessed with 13 fields (difficulty, answer-confidence, age, freshness, clarity, specificity, generalizability, model family, failure class, grade-ability, modality, nodes-type, notes)"
+    "deep_assessment": "26-agent swarm total; 261 scenarios assessed with 13 fields",
+    "sense_check_v2": "complete 100/100 coverage: 33 update-traps, 17 high-value; strict 43/rubric 56/multi-sample 1"
   },
   "github_issues": [
     {
@@ -1995,7 +1996,22 @@
       "problem_summary": "Non-English (Chinese) step-by-step guide, no clear error in body: how to build/install SageAttention 2.2.0 from source on Windows for ComfyUI embedded Python (CUDA Toolkit 13.0, copying include/libs into python_embeded, setup.py patches).",
       "solution_found": "yes",
       "solution": "OP Dao28's own worked recipe: install CUDA 13.0 toolkit + matching Python, copy full Python's include/ and libs/ into python_embeded, clone thu-ml/SageAttention, clean build dirs, apply documented setup.py/env patches, then build \u2014 OP reports success.",
-      "difficulty_guess": "HARD"
+      "difficulty_guess": "HARD",
+      "assessment": {
+        "difficulty_1to10": 6,
+        "answer_confidence_1to10": 8,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 9,
+        "generalizability": "common",
+        "model_family": "Infra",
+        "failure_class": "request",
+        "judge_grade_able": "weak",
+        "modality": "infra",
+        "nodes_type": "custom-nodes",
+        "notes": "Build guide, not a bug: OP-confirmed recipe for SageAttention 2.2.0 on Windows embedded Python w/ CUDA 13.0."
+      }
     },
     {
       "repo": "kijai/ComfyUI-KJNodes",
@@ -2007,7 +2023,22 @@
       "problem_summary": "OOM on 3090/V100 with LTX 2.3 after a KJNodes update; OP rolled back to commit 8ba02bd as workaround.",
       "solution_found": "partially",
       "solution": "Maintainer kijai (2026-03-19): the memory-relevant nodes were disabled in the posted workflow and 'it has nothing to do with KJNodes if you have them disabled'; suggested enabling the chunk feedforward node to reduce VRAM. OP's rollback not validated as the true cause.",
-      "difficulty_guess": "MEDIUM"
+      "difficulty_guess": "MEDIUM",
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 6,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 7,
+        "solution_specificity_1to10": 6,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "wrong-setting",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "OOM after KJNodes update; maintainer says memory nodes were disabled in workflow, rollback not validated as cause."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2031,7 +2062,22 @@
       "problem_summary": "LTX IC Lora Loader (Model Only) shows as unknown/missing because the whole ComfyUI-LTXVideo pack fails to import: kornia 0.8.x no longer re-exports `pad` from kornia.geometry.transform.pyramid, killing pyramid_blending.py at import time.",
       "solution_found": "yes",
       "solution": "Community fix (posted by OP Magenta-6 from Gemini diagnosis, referencing #494): remove `pad` from the kornia import block in pyramid_blending.py and add `from torch.nn.functional import pad`. OP confirmed 'THIS FIXED THE PROBLEM', and two later commenters confirm; caveat: re-appears after node updates until PR merges.",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 9,
+        "age_months": 15,
+        "tech_freshness": "aging",
+        "problem_clarity_1to10": 9,
+        "solution_specificity_1to10": 9,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "kornia 0.8.x dropped 'pad' re-export, pack import fails; F.pad fix OP+2 confirmed; recurs on updates until PR lands."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2055,7 +2101,22 @@
       "problem_summary": "LTX 2.5 CLIP Text Encode (negative prompt) crashes with 'not enough values to unpack (expected 4, got 1)' inside comfy/sd1_clip.py \u2014 ComfyUI core too old for the LTX 2.5 text encoder.",
       "solution_found": "partially",
       "solution": "Commenters say updating ComfyUI to 0.32.0 fixes it ('update ComfyUI version: 0.32.0' by Seung-Do, echoed by Joker2020-cmd); no explicit OP confirmation.",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 7,
+        "age_months": 3,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 8,
+        "solution_specificity_1to10": 7,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "LTX 2.5 text encoder vs old ComfyUI sd1_clip unpack error; community fix = update ComfyUI 0.32.0, no OP confirmation."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2079,7 +2140,22 @@
       "problem_summary": "Several LTX nodes error after install \u2014 pack import failure after a ComfyUI update (same class as #538 interleaved_freqs_cis break), so nodes fail to register.",
       "solution_found": "yes",
       "solution": "Danny-707 links the #538 fix (remove/reinstall or git pull the node pack) and peterducan-hub confirms it worked; OP separately confirmed a clean 'ComfyUI easy install' fixed it.",
-      "difficulty_guess": "MEDIUM"
+      "difficulty_guess": "MEDIUM",
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 9,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 7,
+        "solution_specificity_1to10": 7,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "Pack import failure after ComfyUI update (freqs_cis class); clean reinstall/git pull confirmed by multiple users."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2091,7 +2167,22 @@
       "problem_summary": "kornia 0.8.3 removed the accidental re-export of torch's `pad` from kornia.geometry.transform.pyramid, so the whole node pack fails to import and every dependent workflow breaks.",
       "solution_found": "yes",
       "solution": "kornia maintainer (ducha-aiki) confirmed cause and that the fix belongs in this repo (PRs #498/#506/#516): drop `pad` from the kornia import and use `pad = F.pad` (confirmed by MartinT23); alternative confirmed workaround: pin kornia==0.8.2 (dadleo).",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 9,
+        "age_months": 15,
+        "tech_freshness": "aging",
+        "problem_clarity_1to10": 9,
+        "solution_specificity_1to10": 9,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "Canonical kornia 0.8.3 pad-reexport break; kornia maintainer confirmed cause, PRs #498/#506/#516; pin 0.8.2 works."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2103,7 +2194,22 @@
       "problem_summary": "Fix proposal for the kornia>=0.8.x ImportError: `from kornia.geometry.transform.pyramid import pad` no longer resolves, preventing the entire package from loading.",
       "solution_found": "yes",
       "solution": "OP's diff (remove `pad` from kornia import, add `pad = F.pad`) confirmed working by charlyarias65 in comments.",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 9,
+        "age_months": 15,
+        "tech_freshness": "aging",
+        "problem_clarity_1to10": 8,
+        "solution_specificity_1to10": 8,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "Fix proposal for kornia pad ImportError; pad = F.pad diff confirmed working in comments."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2127,7 +2233,22 @@
       "problem_summary": "After a ComfyUI update, the pack fails to import: `cannot import name 'interleaved_freqs_cis' from 'comfy.ldm.lightricks.model'` \u2014 ComfyUI refactored RoPE helpers (merged into freqs_cis_matrix) and older node-pack code no longer imports.",
       "solution_found": "yes",
       "solution": "Fixed by updating ComfyUI-LTXVideo via git pull to get the compatibility fix (PR #532) \u2014 GlamoramaAttack confirms 'everything should work again'; interim: clean manual reinstall (Dunc4n1dah0) or hand-edit embeddings_connector.py to use freqs_cis_matrix (screwballl).",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 9,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 9,
+        "solution_specificity_1to10": 8,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "ComfyUI RoPE refactor removed interleaved_freqs_cis; git pull PR #532 fix confirmed."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2139,7 +2260,22 @@
       "problem_summary": "On ComfyUI 0.28.0 the node pack fails to load with `cannot import name 'interleaved_freqs_cis'` \u2014 core RoPE refactor removed the function the pack imports.",
       "solution_found": "yes",
       "solution": "GlamoramaAttack (twice in related threads): `git pull` the custom node and it works again \u2014 the repo landed the 0.28 compatibility fix (PR #532); the suggested kornia==0.6.12 downgrade in-thread is unrelated to this error.",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 9,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 9,
+        "solution_specificity_1to10": 8,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "Same interleaved_freqs_cis break on ComfyUI 0.28.0; git pull of node pack resolves; kornia downgrade red herring."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -2178,7 +2314,22 @@
       "problem_summary": "After updating ComfyUI to 0.28, import fails with `cannot import name 'interleaved_freqs_cis'` \u2014 same core RoPE refactor break as #531/#537.",
       "solution_found": "yes",
       "solution": "GlamoramaAttack: either pin ComfyUI '0.28.2' (actually a newer build where it's fixed) or update the custom node; final confirmation 'Update with git pull for this custom-node and everything is fine again' (PR #532).",
-      "difficulty_guess": "EASY"
+      "difficulty_guess": "EASY",
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 9,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 8,
+        "solution_specificity_1to10": 8,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "Duplicate of freqs_cis import break post-0.28; update node pack (PR #532) or newer ComfyUI build."
+      }
     },
     {
       "repo": "Lightricks/ComfyUI-LTXVideo",
@@ -3297,7 +3448,22 @@
       "problem_summary": "SCAIL model + WanVideoContextOptions crashes at nodes_sampler.py:2068 (partial_img_emb.clone()) because SCAIL doesn't pass standard image_embeds, leaving partial_img_emb None in the context-splitting path.",
       "solution_found": "partially",
       "solution": "OP's own root-cause analysis: SCAIL models don't produce standard image_embeds, so partial_img_emb is None when context splitting runs; fix would be guarding/deriving embeds in nodes_sampler.py (~line 2068). Suggested fix not merged and never confirmed by maintainer.",
-      "difficulty_guess": "MEDIUM"
+      "difficulty_guess": "MEDIUM",
+      "assessment": {
+        "difficulty_1to10": 5,
+        "answer_confidence_1to10": 6,
+        "age_months": 8,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 8,
+        "solution_specificity_1to10": 6,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "software-bug",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "custom-nodes",
+        "notes": "SCAIL + Context Options crash: partial_img_emb None at nodes_sampler.py:2068; OP root-cause solid, guard fix unmerged."
+      }
     },
     {
       "repo": "kijai/ComfyUI-WanVideoWrapper",
@@ -8230,7 +8396,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 101
+      "thread_responses": 101,
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 4,
+        "age_months": 1,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 2,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "request",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Open call for character-swap workflow processes using ref2va turbo lora; discussion, no failure, no resolution."
+      }
     },
     {
       "message_id": "1537503875769311405",
@@ -8389,7 +8570,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 25
+      "thread_responses": 25,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 3,
+        "age_months": 1,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 3,
+        "generalizability": "niche",
+        "model_family": "MiniMax-H3",
+        "failure_class": "unclear",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Begs others to verify suspected H3 reference-to-video bug; truncated repro steps, no confirmed outcome."
+      }
     },
     {
       "message_id": "1533879278641483796",
@@ -8435,7 +8631,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 24
+      "thread_responses": 24,
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 3,
+        "age_months": 3,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 2,
+        "solution_specificity_1to10": 2,
+        "generalizability": "niche",
+        "model_family": "LTX",
+        "failure_class": "quality-mystery",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Vague 'weirder results, workflow issue?' one-liner; nothing actionable to grade."
+      }
     },
     {
       "message_id": "1512430101101285466",
@@ -8458,7 +8669,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 171
+      "thread_responses": 171,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 4,
+        "age_months": 3,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 6,
+        "solution_specificity_1to10": 5,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "request",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Question on Bernini wrapper wiring: per-slot image_0/1 vs Batch Images into reference_images input; understanding ask."
+      }
     },
     {
       "message_id": "1512180816036499637",
@@ -8580,7 +8806,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 81
+      "thread_responses": 81,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 4,
+        "age_months": 5,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 6,
+        "solution_specificity_1to10": 3,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "wrong-setting",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "LTX 2.3 vid2vid detailer barely changes output; classic low-denoise/strength symptom, no confirmed fix."
+      }
     },
     {
       "message_id": "1490537512748191764",
@@ -8610,7 +8851,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 58
+      "thread_responses": 58,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 3,
+        "age_months": 5,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 2,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "quality-mystery",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Muddy output from runexx 3-pass workflow; single-line report, no settings or resolution."
+      }
     },
     {
       "message_id": "1485587352121507840",
@@ -8633,7 +8889,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 117
+      "thread_responses": 117,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 5,
+        "age_months": 5,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 7,
+        "solution_specificity_1to10": 3,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "request",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Is embeddings connector required for transformers-only LTX 2.3 model? Conceptual question; optional since 2.3."
+      }
     },
     {
       "message_id": "1483204544702845223",
@@ -8762,7 +9033,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 41
+      "thread_responses": 41,
+      "assessment": {
+        "difficulty_1to10": 5,
+        "answer_confidence_1to10": 3,
+        "age_months": 6,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 5,
+        "solution_specificity_1to10": 3,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "unclear",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "LTX 2.3 i2v semi-broken with full dev model vs distill; cause (model vs ComfyUI) unresolved."
+      }
     },
     {
       "message_id": "1476347135766040747",
@@ -8799,7 +9085,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 23
+      "thread_responses": 23,
+      "assessment": {
+        "difficulty_1to10": 5,
+        "answer_confidence_1to10": 3,
+        "age_months": 7,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 5,
+        "solution_specificity_1to10": 3,
+        "generalizability": "niche",
+        "model_family": "LTX",
+        "failure_class": "request",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "How to merge FML + IC lora + Depth Anything for VACE-style multi-ref control; exploratory ask, no answer recorded."
+      }
     },
     {
       "message_id": "1474093161965031454",
@@ -8829,7 +9130,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 44
+      "thread_responses": 44,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 3,
+        "age_months": 7,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 2,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "quality-mystery",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "SVI lora gens distorted vs baseline Wan; screenshot comparison, no diagnosis or resolution."
+      }
     },
     {
       "message_id": "1472901132283154494",
@@ -9991,7 +10307,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 45
+      "thread_responses": 45,
+      "assessment": {
+        "difficulty_1to10": 5,
+        "answer_confidence_1to10": 3,
+        "age_months": 8,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 3,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "quality-mystery",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Infinite anchored 6x5s gen: subject identity partially returns at end; drift across segment boundaries, no fix."
+      }
     },
     {
       "message_id": "1460665270824730798",
@@ -10015,7 +10346,22 @@
       ],
       "thread_solution_verdict": "yes",
       "thread_responses": 25,
-      "op_confirmation": "thanks for that btw, also the gguf was the only way i got it working. so thanks for the vaes and nodes all that jazz"
+      "op_confirmation": "thanks for that btw, also the gguf was the only way i got it working. so thanks for the vaes and nodes all that jazz",
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 5,
+        "age_months": 8,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 3,
+        "solution_specificity_1to10": 3,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "request",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Showcase of shared T2V/I2V GGUF workflows (civitai), fp4 gemma mention; thanks-reply only, no problem to solve."
+      }
     },
     {
       "message_id": "1460664655834779910",
@@ -10038,7 +10384,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 56
+      "thread_responses": 56,
+      "assessment": {
+        "difficulty_1to10": 2,
+        "answer_confidence_1to10": 5,
+        "age_months": 8,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 3,
+        "solution_specificity_1to10": 3,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "request",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Same GGUF workflow-share message, correctly-placed channel duplicate of 1460665270824730798; no resolution thread."
+      }
     },
     {
       "message_id": "1459641660194558206",
@@ -10092,7 +10453,22 @@
       ],
       "thread_solution_verdict": "yes-expert",
       "thread_responses": 42,
-      "expert_answer": "If it\u2019s blurry - then you probably are using just 20 steps without the distill Lora in the upscale phase ?"
+      "expert_answer": "If it\u2019s blurry - then you probably are using just 20 steps without the distill Lora in the upscale phase ?",
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 6,
+        "age_months": 8,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 4,
+        "solution_specificity_1to10": 4,
+        "generalizability": "common",
+        "model_family": "LTX",
+        "failure_class": "wrong-setting",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Keyframe workflow latent count question (81 vs 121); expert answer points to missing distill lora in 20-step upscale."
+      }
     },
     {
       "message_id": "1459416899908669642",
@@ -10265,7 +10641,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 10
+      "thread_responses": 10,
+      "assessment": {
+        "difficulty_1to10": 5,
+        "answer_confidence_1to10": 3,
+        "age_months": 8,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 5,
+        "solution_specificity_1to10": 4,
+        "generalizability": "common",
+        "model_family": "Wan",
+        "failure_class": "quality-mystery",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "VACE control video: depth-mask background leaves white edge halos degrading control; mask cleanup advice sought."
+      }
     },
     {
       "message_id": "1454237994436268248",
@@ -10325,7 +10716,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 19
+      "thread_responses": 19,
+      "assessment": {
+        "difficulty_1to10": 5,
+        "answer_confidence_1to10": 3,
+        "age_months": 9,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 6,
+        "solution_specificity_1to10": 4,
+        "generalizability": "common",
+        "model_family": "Wan",
+        "failure_class": "quality-mystery",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "Native Wan 2.2 nodes eat 96% RAM/78% VRAM vs wrapper nodes on heavy Humo workflow; unexplained memory behavior."
+      }
     },
     {
       "message_id": "1450980437605220363",
@@ -10348,7 +10754,22 @@
         }
       ],
       "thread_solution_verdict": "partial",
-      "thread_responses": 64
+      "thread_responses": 64,
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 4,
+        "age_months": 9,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 7,
+        "solution_specificity_1to10": 5,
+        "generalizability": "niche",
+        "model_family": "Wan",
+        "failure_class": "software-bug",
+        "judge_grade_able": "rubric",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "SCAIL example workflow drops 41 -> 37 frames; likely length-rounding in sampler, no fix recorded."
+      }
     },
     {
       "message_id": "1450026483325206548",
@@ -10372,7 +10793,22 @@
       ],
       "thread_solution_verdict": "yes",
       "thread_responses": 81,
-      "op_confirmation": "the wanvideowrapper one works now anyway"
+      "op_confirmation": "the wanvideowrapper one works now anyway",
+      "assessment": {
+        "difficulty_1to10": 3,
+        "answer_confidence_1to10": 5,
+        "age_months": 9,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 6,
+        "solution_specificity_1to10": 3,
+        "generalizability": "common",
+        "model_family": "Wan",
+        "failure_class": "wrong-setting",
+        "judge_grade_able": "weak",
+        "modality": "video",
+        "nodes_type": "mixed",
+        "notes": "WanVideoWrapper 51min for 6-step gen vs fast native GGUF; OP later says 'works now' without stating the fix."
+      }
     },
     {
       "message_id": "1448721417054060737",
@@ -10396,7 +10832,22 @@
       ],
       "thread_solution_verdict": "yes",
       "thread_responses": 67,
-      "op_confirmation": "looks like a torch 2.9 problem... downgraded to torch 2.8 and it works."
+      "op_confirmation": "looks like a torch 2.9 problem... downgraded to torch 2.8 and it works.",
+      "assessment": {
+        "difficulty_1to10": 4,
+        "answer_confidence_1to10": 8,
+        "age_months": 9,
+        "tech_freshness": "current",
+        "problem_clarity_1to10": 9,
+        "solution_specificity_1to10": 8,
+        "generalizability": "common",
+        "model_family": "Wan",
+        "failure_class": "version-regression",
+        "judge_grade_able": "strict",
+        "modality": "video",
+        "nodes_type": "core-comfy",
+        "notes": "Humo AudioEncoderEncode NotImplementedError: torch 2.9 xmitter op gap; downgrade to torch 2.8 confirmed working."
+      }
     }
   ],
   "vibecomfy_assessment": [
@@ -12561,6 +13012,1165 @@
       "vc_verdict": "GOLD",
       "vc_maps_to": "video/wanvideo_wrapper_21_14b_v2v_infinitetalk",
       "vc_notes": "Direct template hit: removing the lightx2v distill lora and raising steps/cfg on the InfiniteTalk template is a deterministic param edit VibeComfy can run and expect a specific validation/runtime failure. Known right answer (distill lora requires low steps, cfg=1) is well documented."
+    }
+  ],
+  "sense_check_v2": [
+    {
+      "id": "gh-comfyui-wanvideowrapper-1997",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "stale-workflow"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Root-cause the WanAnimate bg_images IndexError: bg encoded at raw length (nodes.py:1281) vs None-case length num_frames-num_refs, plus 4k+1 num_frames rounding desync; patch normalizes bg by truncate/last-frame-pad."
+    },
+    {
+      "id": "gh-workflow-templates-429",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Diagnose a deterministic first-execution-only failure whose traceback (tuple unpack in common_ksampler) contradicts the maintainer's VRAM guess \u2014 tests resisting a plausible-but-wrong authority signal."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-538",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Attribute an ImportError to ComfyUI's RoPE refactor and update the pack rather than hand-editing or reinstalling blindly."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-492",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Trace a TypeError through SamplerCustom/stg.py to a cross-repo API signature mismatch (local apg() vs upstream APG) and apply the exact one-line fix."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1738",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize that a kwarg-signature break after ComfyUI updates is a known wrapper bug fixed by pulling the latest ComfyUI-WanVideoWrapper."
+    },
+    {
+      "id": "gh-comfyui-14250",
+      "update_trap": true,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only",
+        "version-drift"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Attribute a post-update intermittent 'HostBuffer.read_file_slice failed'/CUDA OOM to the pinned-memory change and land the confirmed mitigation (--disable-pinned-memory or GPU-hiding) on a multi-GPU rig."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-2010",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Read a multi-return-path sampler function and spot the inconsistent return arity in one early-exit branch (2-tuple vs 3-tuple unpack) \u2014 pure code-reading, no model knowledge needed."
+    },
+    {
+      "id": "gh-comfy-aimdo-83",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Reason about GPU virtual-address-space reservation math (VBAR clamping to capacity) and validate a one-multiplier core patch with a measured before/after, not intuition."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-518",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "visual-judgment",
+        "unreproducible",
+        "information-poor"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Diagnose why i2v output ignores the conditioning image (prompt_enhance / conditioning strength) rather than a crash \u2014 grading requires watching the video and judging adherence."
+    },
+    {
+      "id": "gh-workflow-templates-433",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Map 'k' in GGUT k-quant naming to missing MPS kernel support and switch to a non-k quant \u2014 backend-capability reasoning, not model tuning."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-523",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "env-specific",
+        "gpu-only"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Trace intermittent AAC-encoder NaN/Inf failures to AudioVAE NaNs at awkward sequence lengths amplified by the vocoder, then design a sanitize-at-the-boundary patch (nan_to_num before av.AudioFrame)."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-489",
+      "update_trap": false,
+      "pitfalls": [
+        "stale-workflow",
+        "outcome-ambiguous",
+        "information-poor"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Audit a template's model-links manifest against actual repo assets and recognize documentation/ecosystem drift (missing Gemma text encoder, misfiled safetensors)."
+    },
+    {
+      "id": "gh-comfyui-7667",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Attribute load-time 'missing positional argument' validation errors to custom-node API signature drift after a core ComfyUI upgrade, and resolve by aligning node-pack versions."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-588",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "visual-judgment",
+        "outcome-ambiguous",
+        "information-poor"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Reject the misleading pass-through node as suspect and reason about where black FramePack renders actually originate, despite the issue containing no confirmed cause."
+    },
+    {
+      "id": "gh-comfyui-gguf-466",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "information-poor",
+        "unreproducible"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Evaluate whether JoyAI Image Edit GGUF already works via existing loaders because the checkpoint name contains 'wan' \u2014 a support request with only one unconfirmed comment."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-535",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Same interleaved_freqs_cis core-refactor break as #531; fix is update pack or pin ComfyUI."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1332",
+      "update_trap": false,
+      "pitfalls": [],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Inspect the full graph (including a hidden/overlapped VACE module loader) and notice its model selector is empty \u2014 then choose main-model-with-VACE vs normal-model+VACE-module correctly."
+    },
+    {
+      "id": "gh-comfyui-7309",
+      "update_trap": false,
+      "pitfalls": [
+        "trivial",
+        "version-drift",
+        "unreproducible"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize the zod-schema modal is frontend PR #2751 regex-validating non-semver node-pack 'ver' fields, and that disabling workflow validation silences it (real fix merged in frontend)."
+    },
+    {
+      "id": "gh-comfy-aimdo-82",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only",
+        "unreproducible",
+        "outcome-ambiguous",
+        "information-poor"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Maintain hypothesis discipline (quantized-tensor geometry, detour-hook interference) when the maintainer cannot reproduce and the environment is the confound."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-750",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial",
+        "stale-workflow"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a stale custom node broken by upstream model API changes and update KJNodes past the fix commit \u2014 no workflow reasoning required."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-746",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "unreproducible",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Independently verify and fix a hasattr-based kernel resolution that breaks under sageattention 2.2.0's torch.ops custom-op layout, before MiniMax H3 sampling crashes."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-542",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Same as #541: diagnose kornia 0.8.3's dropped `pad` re-export and either patch the import in-repo or pin kornia==0.8.2."
+    },
+    {
+      "id": "gh-comfyui-15084",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only",
+        "unreproducible",
+        "visual-judgment"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Separate a real diffusion-path NaN (black decode) from a false-positive text-encoder signal, then apply the pointed backend workaround (--enable-triton-backend per #14782)."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1964",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "information-poor",
+        "unreproducible"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Reason architecturally that DreamID-Omni is an Ovi variant (same layers, fp32 vs bf16, mmaudio + Wan 2.2 5B) so the existing Ovi workflow covers it, and that the maintainer has abandoned the wrapper."
+    },
+    {
+      "id": "gh-comfyui-15261",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "unreproducible",
+        "gpu-only",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Explain H2O-style H3 offload behavior: performance is memory-bandwidth/PCIe-bound (GDDR7 + PCIe 5.0), not compute-bound, so a 5070 Ti beats a 4080 despite lower compute."
+    },
+    {
+      "id": "gh-comfyui-15666",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "unreproducible",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Know --reserve-vram's legacy semantics (bounds runtime activations only, not load/init) and that --vram-headroom/--vram-extra-headroom is the intended mechanism \u2014 while recognizing even that flag doesn't cap load-time usage."
+    },
+    {
+      "id": "gh-comfyui-7699",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Distinguish a RAM-bound stall (fp16 weights overflow system memory) from a GPU bug, using the fp16-fails/fp8-bf16-works differential as the diagnostic clue."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-436",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Recognize node/model ecosystem coupling (KJ nodes vs native LTX nodes) as a failure class and audit a mixed graph for cross-ecosystem contamination."
+    },
+    {
+      "id": "gh-comfyui-gguf-477",
+      "update_trap": false,
+      "pitfalls": [
+        "solution-too-specific",
+        "version-drift",
+        "gpu-only"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Debug inside third-party GGUF loader code: recognize that packed-BF16 storage dims leak for named non-layer tensors and patch tensor materialization before model load, not the workflow."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-553",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "solution-too-specific",
+        "stale-workflow"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "See through a 'missing node' symptom to the pack-wide kornia pad ImportError and patch pyramid_blending.py's import."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-669",
+      "update_trap": false,
+      "pitfalls": [
+        "visual-judgment",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Attribute degraded video quality to environment (xformers installed against node requirements) plus workflow wiring (distill LoRA detached) rather than to dependency churn or model bugs."
+    },
+    {
+      "id": "gh-workflow-templates-993",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "information-poor"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a CLIPLoader shape-mismatch as a truncated/misplaced text-encoder model file in ComfyUI Desktop's install layout, not a workflow bug."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1745",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "gpu-only"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Trace the 81\u2192241 frame mismatch during sampling to SplineEditor (KJNodes) emitting wrong frame counts with multiple splines; fix via KJNodes update or manual per-node frame counts."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-494",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "env-specific",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a kornia 0.8.3 API break (removed torch pad re-export) and choose between pinning, patching pyramid_blending.py, or updating the pack."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-700",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Understand a core PR's API migration (model -> ModelPatcherDynamic) and either rewire the workflow to bypass the incompatible node or apply the patcher API correctly."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-528",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "env-specific",
+        "unreproducible"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Recognize OpenCV 5.x removed/changed the imwrite writer path used by LTXVHDRDecodePostprocess and either pin opencv-python<5 or reroute the writer."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-403",
+      "update_trap": false,
+      "pitfalls": [
+        "trivial"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Map an off-by-one tensor mismatch (111 vs 110) to Wan's latent dims needing divisibility by 16 and locate the upstream node emitting a non-conforming resolution."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-950",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Trace an 'unexpected keyword argument hidden_inputs' error after a ComfyUI upgrade to a conflicting custom-node pack (Anything-Anywhere) rather than WanVideoWrapper itself."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1338",
+      "update_trap": false,
+      "pitfalls": [
+        "gpu-only",
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Diagnose that Lucy Edit shape/size-mismatch errors come from the FastWan low-step LoRA interaction, not from wrong Lucy Edit wiring; fix by disabling the LoRA and raising steps to ~50."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-544",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Map 'nodes error after install' to a pack-wide import failure after a ComfyUI update and apply the known update-the-pack remedy."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1986",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "gpu-only",
+        "solution-too-specific",
+        "stale-workflow"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Separately diagnose (a) unbounded pinned-memory RAM growth on Windows (fix: --disable-pinned-memory + older WanVideo Enhanced BlockSwap node) and (b) sageattn_3/torch.compile conflicts (per_block_mean mode; avoid reduce-overhead on Windows)."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1969",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "gpu-only",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Implement Q-chunked attention (keep full K/V, chunk Q) in comfy/ldm/wan/model.py to cut long-sequence attention memory on low-VRAM GPUs."
+    },
+    {
+      "id": "gh-workflow-templates-341",
+      "update_trap": false,
+      "pitfalls": [
+        "gpu-only",
+        "unreproducible",
+        "outcome-ambiguous",
+        "information-poor"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Tests honest handling of an undiagnosed hardware-specific OOM-kill: the thread ended with no fix, so the correct behavior is bounded hypotheses, not a fabricated solution."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-505",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Third instance of the kornia 0.8.3 pad-import break; identical symptom and identical fix set."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-525",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Fifth kornia pad-import instance; fix is the F.pad shim or pin, both already confirmed elsewhere."
+    },
+    {
+      "id": "gh-sageattention-403",
+      "update_trap": false,
+      "pitfalls": [
+        "gpu-only",
+        "env-specific",
+        "solution-too-specific"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Isolate a hard CUDA-context crash to one SM89 FP8-PV kernel path and A/B to the safe sageattn_qk_int8_pv_fp16_cuda mode."
+    },
+    {
+      "id": "gh-sageattention-383",
+      "update_trap": false,
+      "pitfalls": [
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Understand the padding contract between per_channel_fp8 (pads kv_len to 64) and sm90 kernels requiring CTA_K=128 alignment, then pad V to a multiple of 128."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-548",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "unreproducible",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Recognize that an sd1_clip.py unpack crash on LTX 2.5 means the ComfyUI core predates the 2.5 text-encoder contract and must be bumped to >=0.32.0."
+    },
+    {
+      "id": "gh-comfyui-15427",
+      "update_trap": false,
+      "pitfalls": [
+        "information-poor",
+        "unreproducible",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Diagnose a Sampler RuntimeError from essentially zero evidence (no error text, empty log section); only evidence is one user's unconfirmed screenshot anecdote about 'easy cache'."
+    },
+    {
+      "id": "gh-workflow-templates-422",
+      "update_trap": true,
+      "pitfalls": [
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Chain 'missing class_type property' on a template node to the ComfyUI-tbox pack failing import via 'cv2 has no attribute dnn', then repair the broken OpenCV install."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-2037",
+      "update_trap": false,
+      "pitfalls": [
+        "outcome-ambiguous",
+        "gpu-only"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Resist blaming the ROCm stack and instead spot that num_frames:16 violates Wan's 4n+1 frame requirement (use 17+), per a peer's identical-stack evidence."
+    },
+    {
+      "id": "gh-comfyui-12949",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Untangle a multi-package 0.17.x regression: separate the Comfy-gguf/SageAttention/Triton conflicts from the core meta-tensor bug (PR #12967) and the unaddressed frontend subgraph breakage."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-434",
+      "update_trap": false,
+      "pitfalls": [
+        "visual-judgment",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Judge whether tail-frame artifacts in a long LTX i2v generation come from leftover negative-prompt text inside the subgraph or from inherent long-video drift."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-2034",
+      "update_trap": false,
+      "pitfalls": [
+        "information-poor",
+        "unreproducible"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Locate and integrate an unofficial fork (tdrminglin's WanVideoWrapper) that adds Bernini/SCAIL-2 support, with no reference workflow or maintainer guidance."
+    },
+    {
+      "id": "gh-comfyui-14468",
+      "update_trap": false,
+      "pitfalls": [
+        "gpu-only",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Know that CPU diffusion is impractically slow, ComfyUI already offloads weights to RAM by default, and KJNodes FFN-chunker is the actual lever for cutting low-VRAM Wan/LTX inference."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1638",
+      "update_trap": false,
+      "pitfalls": [],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Know exactly which structural changes convert a WanVideoWrapper I2V workflow to T2V (drop LoadImage + Image2Video Encode, swap to Empty Embeds, T2V checkpoints/loras)."
+    },
+    {
+      "id": "gh-comfyui-15445",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a 0.31 memory-management regression (disk thrash, VRAM underused, 2x runtime) and land on 'rollback to 0.30.0' after ruling out custom_nodes."
+    },
+    {
+      "id": "gh-workflow-templates-401",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "visual-judgment",
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Diagnose that dual-GPU auto-placement puts the model on cuda:1 where output renders black, and pin it to cuda:0 via MultiGpu nodes (or swap to the fp8 checkpoint)."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-581",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "env-specific",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Resist the rollback temptation: recognize that disabled KJNodes cannot cause the OOM and reason about VRAM knobs (chunk feedforward) instead of pinning blame on the update."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-438",
+      "update_trap": false,
+      "pitfalls": [
+        "visual-judgment",
+        "unreproducible",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Tune conditioning (bypass Prompt Enhancer, explicitly prompt lip-sync, raise SolidMask, adjust nag scale) so LTX 2.3 image-audio-to-video actually lip-syncs."
+    },
+    {
+      "id": "gh-workflow-templates-339",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize that the new template's Qwen3-shaped text-encoder weights cannot load on an older ComfyUI build and the fix is a full backend+frontend update (not a workflow change)."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-496",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Same kornia pad-import break as #494; test is whether the solver picks the durable patch over the naive 0.6.12 downgrade that breaks other packs."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-692",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "gpu-only",
+        "env-specific"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Trace an AttributeError into sageattention 2.x API drift and repair kernel dispatch for sm120 (generic sageattn call or torch.ops.sageattention_qattn_sm89 lookup)."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-207",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a custom-node update regression (tensor-dim mismatch in the Wan control path) and confirm the fix by updating the wrapper to kijai's patched commit."
+    },
+    {
+      "id": "gh-comfyui-gguf-443",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "trivial",
+        "information-poor"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Fix a pip install failure caused by running pip from the wrong working directory or a broken custom-node checkout on ComfyUI portable \u2014 pure environment/setup debugging."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-443",
+      "update_trap": false,
+      "pitfalls": [
+        "solution-too-specific"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Inspect what the conditioning saver actually persists, discover it drops pooled_output and cond_options keys, and restore complete text conditioning (or use fixed save/load nodes)."
+    },
+    {
+      "id": "gh-comfyui-8108",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Recognize 'loading aborted due to error reloading workflow data' as stale multi-pack custom nodes and refresh them (git pull + pip requirements)."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1992",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "stale-workflow"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Root-cause the SCAIL crash at nodes_sampler.py:2068: SCAIL models produce no standard image_embeds, so partial_img_emb is None in the context-split path; propose a guard/derivation there."
+    },
+    {
+      "id": "gh-comfyui-15653",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "gpu-only",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Attribute 'CUDA error: invalid argument' on RX 9060 XT to a missing AOTriton kernel in the SDPA path (PR #15648) and get the fix by running a post-merge build."
+    },
+    {
+      "id": "gh-comfyui-13139",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Know that dynamic VRAM management forces full model unloads between 2-pass Qwen-Image-Edit samplers and that --disable-dynamic-vram (or equivalent memory policy) avoids the reload penalty."
+    },
+    {
+      "id": "gh-comfyui-8040",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Trace a JS 'displayValue of undefined' workflow-load crash to a known VHS upstream bug rather than the MMAudio workflow itself."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-458",
+      "update_trap": false,
+      "pitfalls": [],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Trace the multimodal guider code path where cfg=1.0 skips the uncond branch, leaving noise_pred_neg unbound for sampler post-CFG hooks, and apply the initialization patch."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-531",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Understand that a ComfyUI core refactor removed interleaved_freqs_cis and the pack's embeddings_connector must track the new freqs_cis_matrix API \u2014 or simply update the pack past PR #532."
+    },
+    {
+      "id": "gh-comfyui-gguf-435",
+      "update_trap": false,
+      "pitfalls": [
+        "information-poor",
+        "outcome-ambiguous",
+        "gpu-only",
+        "env-specific",
+        "unreproducible"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Advise on multi-GPU sharding of a flux2 q8 GGUF across 2x16GB cards \u2014 a hardware topology question with zero verified answer in the thread."
+    },
+    {
+      "id": "gh-comfyui-11260",
+      "update_trap": false,
+      "pitfalls": [
+        "information-poor"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Detect silently-skipped missing custom nodes by probing the API (invalid_prompt 'node RIFE VFI does not exist') and enumerating/installing the absent packs."
+    },
+    {
+      "id": "gh-comfyui-7233",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial",
+        "env-specific"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Identify that Desktop vs local disagree because v0.3.12 made ancestral sampling more deterministic, so mismatched versions \u2014 not the workflow \u2014 explain differing outputs."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-435",
+      "update_trap": false,
+      "pitfalls": [
+        "information-poor",
+        "outcome-ambiguous",
+        "unreproducible"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Assemble a workable non-distilled LTX-2.3 Dev sampling config (KSamplerSelect gradient_estimation, ManualSigmas, 20-step scheduler shifts, distilled lora staged into the upscale pass)."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-541",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Trace a third-party dependency's removed re-export (kornia's `pad`) from the ImportError and patch the node-pack import to use torch's F.pad."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1254",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "env-specific",
+        "unreproducible"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "multi-sample",
+      "hidden_requirement": "Untangle a CUDA IndexKernel assert into a triton/torch version mismatch (CompiledKernel launch_enter_hook) and resolve via triton downgrade or wrapper update."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-831",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "solution-too-specific",
+        "env-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize the Triton 'invalid argument' as an attention-backend mismatch between the Uni3C controlnet loader (sage) and the sampler, fixable by setting sdpa on the Uni3C loader or updating the wrapper."
+    },
+    {
+      "id": "gh-comfyui-15967",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "outcome-ambiguous",
+        "unreproducible"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Resist the 'it's hung' hypothesis: on MPS, ~9-12 min of silence after 'loaded completely' is normal H3 sampling time (confirmed completing on a 32GB MacBook Air with a specific stack)."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-725",
+      "update_trap": false,
+      "pitfalls": [
+        "version-drift",
+        "env-specific",
+        "gpu-only",
+        "information-poor"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Diagnose a Windows/Blackwell-specific kernel-lookup failure in the memory-efficient SageAttention path and either switch to the working patch node or fix the torch.ops fallback."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-537",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a ComfyUI-core/pack version skew and update the pack, while rejecting the in-thread kornia==0.6.12 downgrade red herring."
+    },
+    {
+      "id": "gh-workflow-templates-762",
+      "update_trap": false,
+      "pitfalls": [
+        "information-poor",
+        "unreproducible",
+        "outcome-ambiguous",
+        "solution-too-specific",
+        "stale-workflow"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Untangle a grab-bag ticket: mostly feature requests, with one user-specific VAEDecode hang and a duplicate save-prompt traced to a ResizeImageMaskNode conflict with that user's install."
+    },
+    {
+      "id": "gh-sageattention-391",
+      "update_trap": false,
+      "pitfalls": [
+        "gpu-only",
+        "env-specific",
+        "version-drift"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Isolate a Windows driver-level GPU loss (nvlddmkm) to the Sage int8-QK/FP8-PV kernel via a controlled single-variable A/B, then build the confirmed workaround: keep int8-QK, demote V to FP16 and call the sm80 qk_int8_sv_f16_accum kernel."
+    },
+    {
+      "id": "gh-comfyui-kjnodes-709",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "env-specific",
+        "gpu-only",
+        "solution-too-specific"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Read the node's version gate correctly and resolve a dependency-version conflict by installing a compatible sageattention build, with no workflow reasoning involved."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-433",
+      "update_trap": false,
+      "pitfalls": [
+        "trivial",
+        "information-poor",
+        "env-specific"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Recognize this is not a workflow fault at all: an fal.ai account-billing error plus local removal of a stored API key in ComfyUI Desktop."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1644",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "env-specific",
+        "gpu-only"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Distinguish a real wrapper-version VRAM regression from stale Triton/inductor caches, and know the missing 'blocks to swap' log line was just removed in a refactor (blockswap still works)."
+    },
+    {
+      "id": "gh-workflow-templates-754",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific",
+        "solution-too-specific"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Diagnose that the template's fp8 (Float8_e4m3fn) weights have no MPS backend on Apple Silicon \u2014 a platform limitation \u2014 and substitute GGUF-quantized weights."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-444",
+      "update_trap": true,
+      "pitfalls": [
+        "visual-judgment",
+        "unreproducible",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Visually diagnose mosaic/flicker output in the LTX-2.3 two-stage distilled workflow and trace it to the known-bad v1.0 upscaler checkpoint, substituting v1.1."
+    },
+    {
+      "id": "gh-comfyui-gguf-444",
+      "update_trap": false,
+      "pitfalls": [
+        "solution-too-specific",
+        "version-drift"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Debug a 2.0.0-regression access violation where GGUFModelPatcher.unpatch_model touches mmap'd weight memory during cache cleanup, and reason about why unpatch_weights=False prevents it."
+    },
+    {
+      "id": "gh-comfyui-15478",
+      "update_trap": false,
+      "pitfalls": [
+        "solution-too-specific",
+        "version-drift"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Determine that the error comes from MiniMaxH3MemoryEfficientSageAttentionPatch's own version/arch detection being wrong (env is actually fine: torch 2.13+cu130, sage 2.2.0) and swap to Patch Sage Attention KJ."
+    },
+    {
+      "id": "gh-comfyui-ltxvideo-517",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "stale-workflow",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Fourth kornia pad-import instance, only distinguishing detail is the clean reinstall recipe (uninstall kornia-rs too)."
+    },
+    {
+      "id": "gh-comfyui-gguf-385",
+      "update_trap": false,
+      "pitfalls": [
+        "solution-too-specific",
+        "version-drift"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Diagnose a PyTorch index-dtype mismatch (int64 vs int32) inside UnetLoaderGGUF for Z-Image/Qwen3 GGUF and apply/read the dtype-conversion fix."
+    },
+    {
+      "id": "gh-comfyui-15643",
+      "update_trap": false,
+      "pitfalls": [
+        "stale-workflow",
+        "visual-judgment",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Recognize the LTX 2.3 audio-encode/latent-mask lipsync wiring is stale for LTX 2.5 and rebuild the lipsync path with native nodes (per UCHIJ's ported repo)."
+    },
+    {
+      "id": "gh-comfyui-14496",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "information-poor",
+        "env-specific",
+        "outcome-ambiguous"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Correlate an intermittent (~30% of runs) ~180s 'Model Initializing' stall with slow disk read throughput (<~1GB/s) and OS kernel regressions, not with model loading code."
+    },
+    {
+      "id": "gh-comfyui-10247",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Recognize a Desktop v0.5.0 packaging regression breaking LTXV nodes and update to v0.5.1."
+    },
+    {
+      "id": "gh-comfyui-gguf-429",
+      "update_trap": false,
+      "pitfalls": [
+        "unreproducible",
+        "outcome-ambiguous",
+        "information-poor",
+        "trivial"
+      ],
+      "eval_value": "low",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Nothing technical \u2014 the issue is bot-generated README/license spam with no workflow defect and no confirmed solution."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-2044",
+      "update_trap": false,
+      "pitfalls": [
+        "env-specific"
+      ],
+      "eval_value": "high",
+      "recommended_grade_mode": "rubric",
+      "hidden_requirement": "Root-cause a progressive VRAM leak to the _fp8_cache dict keyed by id(context) in WanI2VCrossAttention/WanT2VCrossAttention that is only cleared in __init__, and clear it per prompt in wanvideo/modules/model.py."
+    },
+    {
+      "id": "gh-comfyui-wanvideowrapper-1146",
+      "update_trap": true,
+      "pitfalls": [
+        "version-drift",
+        "solution-too-specific",
+        "unreproducible"
+      ],
+      "eval_value": "medium",
+      "recommended_grade_mode": "strict",
+      "hidden_requirement": "Rule out workflow/user error for a cuda:0-vs-cpu device mismatch and identify it as a wrapper regression needing revert/upgrade."
     }
   ]
 }

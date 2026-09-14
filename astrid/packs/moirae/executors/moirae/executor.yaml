@@ -10,7 +10,7 @@
       "astrid.packs.moirae.executors.moirae.run",
       "{screenplay}",
       "-o",
-      "{output}"
+      "{out}/terminal.mp4"
     ]
   },
   "conditions": [
@@ -71,7 +71,9 @@
       "mode": "create_or_replace",
       "name": "video",
       "placeholder": "output",
-      "type": "file"
+      "type": "file",
+      "path_template": "{out}/terminal.mp4",
+      "artifact_type": "clip/visual"
     }
   ],
   "short_description": "Run a Moirae screenplay through the terminal-as-cinema renderer to produce a video.",

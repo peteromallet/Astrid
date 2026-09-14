@@ -43,13 +43,13 @@ def _run(cmd: list[str]) -> None:
 def load_fal_key(env_file: Path | None = None) -> str:
     """Resolve the FAL key through the canonical resolver only (m4 Step 31).
 
-    Frozen precedence: explicit option, process environment, injectable
-    supported OS keychain, then one explicitly named env file. Broad
-    cwd/repository/workspace/home env-file scavenging is absent, so the
-    key is never discovered from an implicit file.
+    Frozen precedence: explicit option, shared Astrid env file, process
+    environment, then one explicitly named fallback env file. Broad
+    cwd/repository/workspace/home env-file scavenging is absent, so the key
+    is never discovered from an implicit file.
     """
     try:
-        return CredentialsScope.get("fal", env_file=env_file)
+        return CredentialsScope.get_local("fal", env_file=env_file)
     except AstridError as exc:
         raise SystemExit(f"FAL key not found. {exc.cause}") from exc
 

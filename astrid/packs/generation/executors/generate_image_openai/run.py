@@ -72,7 +72,7 @@ def _warn(message: str) -> None:
 
 
 def _resolve_key(*, env_file: Path | None = None) -> str:
-    return CredentialsScope.get("openai", env_file=env_file)
+    return CredentialsScope.get_local("openai", env_file=env_file)
 
 
 def _normalize_format(value: str) -> str:

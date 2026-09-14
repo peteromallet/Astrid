@@ -1,6 +1,9 @@
 # Secrets and local environment
+.DS_Store
+/HEAD
 .env
 .env.*
+astrid.env
 this.env
 !.env.example
 *.pem
@@ -9,6 +12,9 @@ this.env
 *.pfx
 *credentials*
 *secret*
+# These are safe reference docs, not credential material.
+!docs/reference/credentials.md
+!docs/reference/runpod-credentials.md
 # Real source files whose names trip the broad credential globs above.
 !astrid/core/util/secrets.py
 !astrid/core/util/credentials_scope.py
@@ -136,3 +142,4 @@ dist/
 /ideogram-competition/
 !.megaplan/initiatives/astrid-first/
 !.megaplan/initiatives/astrid-first/**
+.megaplan/initiatives/astrid-first/.DS_Store

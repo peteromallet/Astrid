@@ -257,7 +257,7 @@ def execute(
             )
 
         if api_key is None:
-            api_key = CredentialsScope.get("fal", env_file=args.env_file)
+            api_key = CredentialsScope.get_local("fal", env_file=args.env_file)
         if client is None:
             client = default_client()
         client.register_secret(api_key)

@@ -238,6 +238,62 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
     assert staged_run_members == staged_validate_members
 
 
+def test_canonical_run_uses_bundle_compile_and_runtime_api_without_gpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    run = importlib.import_module("astrid.packs.vibecomfy.executors.run.run")
+    python_path = tmp_path / "workflow.py"
+    python_path.write_bytes(b"workflow = VibeWorkflow(id='portrait')\n")
+    python_path.with_name("workflow.vibe.json").write_text("{}", encoding="utf-8")
+    python_path.with_name("source.json").write_text("{}", encoding="utf-8")
+    engine_result_path = tmp_path / "engine-result.png"
+    engine_result_path.write_bytes(b"fixture image bytes")
+    bundle = SimpleNamespace(
+        require_canonical_authority=Mock(),
+        compile=Mock(return_value="approved-record"),
+    )
+    schema_provider = object()
+    load_bundle = Mock(return_value=bundle)
+    get_schema_provider = Mock(return_value=schema_provider)
+    run_sync = Mock(
+        return_value=SimpleNamespace(
+            outputs=[str(engine_result_path)],
+            run_id="run-1",
+            prompt_id="prompt-1",
+        )
+    )
+
+    package = ModuleType("vibecomfy")
+    package.__path__ = []  # type: ignore[attr-defined]
+    schema = ModuleType("vibecomfy.schema")
+    schema.get_authoring_schema_provider = get_schema_provider  # type: ignore[attr-defined]
+    workflow_bundle = ModuleType("vibecomfy.workflow_bundle")
+    workflow_bundle.load_bundle = load_bundle  # type: ignore[attr-defined]
+    runtime = ModuleType("vibecomfy.runtime")
+    runtime.__path__ = []  # type: ignore[attr-defined]
+    runtime_run = ModuleType("vibecomfy.runtime.run")
+    runtime_run.run_sync = run_sync  # type: ignore[attr-defined]
+    with patch.dict(
+        "sys.modules",
+        {
+            "vibecomfy": package,
+            "vibecomfy.schema": schema,
+            "vibecomfy.workflow_bundle": workflow_bundle,
+            "vibecomfy.runtime": runtime,
+            "vibecomfy.runtime.run": runtime_run,
+        },
+    ):
+        manifest = run._run_and_settle(python_path, tmp_path / "run-results")
+
+    get_schema_provider.assert_called_once_with(on_demand_schemas=False)
+    load_bundle.assert_called_once_with(python_path, schema_provider=schema_provider)
+    bundle.require_canonical_authority.assert_called_once_with("Astrid workflow execution")
+    bundle.compile.assert_called_once_with(schema_provider=schema_provider)
+    run_sync.assert_called_once_with("approved-record", bundle)
+    assert manifest["outputs"][0]["path"].startswith("artifacts/")
+
+
 def _load_import_runner(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
     return importlib.import_module("astrid.packs.vibecomfy.executors.import.run")

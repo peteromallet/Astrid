@@ -41,11 +41,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _run_and_settle(workflow_path: Path, output_root: Path) -> dict[str, Any]:
     """Run *workflow_path*, copy every engine result, and write its receipt."""
-    from vibecomfy import load_workflow_any
     from vibecomfy.runtime.run import run_sync
 
-    workflow = load_workflow_any(str(workflow_path))
-    result = run_sync(workflow)
+    if workflow_path.suffix.lower() == ".py":
+        from vibecomfy.schema import get_authoring_schema_provider
+        from vibecomfy.workflow_bundle import load_bundle
+
+        schema_provider = get_authoring_schema_provider(on_demand_schemas=False)
+        bundle = load_bundle(workflow_path, schema_provider=schema_provider)
+        bundle.require_canonical_authority("Astrid workflow execution")
+        record = bundle.compile(schema_provider=schema_provider)
+        result = run_sync(record, bundle)
+    else:
+        from vibecomfy import load_workflow_any
+
+        workflow = load_workflow_any(str(workflow_path))
+        # Legacy JSON callers retain the pre-bundle API contract when paired
+        # with an older compatible VibeComfy runtime. The canonical path
+        # above uses the editable bundle API.
+        result = run_sync(workflow)
     inventory = getattr(result, "outputs", None)
     if not isinstance(inventory, (list, tuple)):
         raise ValueError("VibeComfy engine returned an invalid artifact inventory")

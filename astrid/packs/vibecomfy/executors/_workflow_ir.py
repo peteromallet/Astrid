@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -166,8 +166,12 @@ def _parse_edit_document(path: Path) -> tuple[list[dict[str, Any]], int]:
 
 
 def _diagnostic_payload(value: Any) -> dict[str, Any]:
-    if is_dataclass(value):
-        return asdict(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        payload = {
+            item.name: _diagnostic_value(getattr(value, item.name))
+            for item in fields(value)
+        }
+        return payload
     return {
         "code": str(getattr(value, "code", "unknown")),
         "message": str(getattr(value, "message", value)),
@@ -175,12 +179,40 @@ def _diagnostic_payload(value: Any) -> dict[str, Any]:
     }
 
 
+def _diagnostic_value(value: Any) -> Any:
+    """Thaw immutable diagnostic containers into JSON-safe values."""
+    if isinstance(value, Mapping):
+        return {str(key): _diagnostic_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_diagnostic_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_diagnostic_value(item) for item in value), key=repr)
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            item.name: _diagnostic_value(getattr(value, item.name))
+            for item in fields(value)
+        }
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, (str, int, float, bool)):
+        return enum_value
+    return str(value)
+
+
 def edit_workflow(
     workflow_path: Path,
     operations_path: Path,
     out_dir: Path,
+    *,
+    schema_provider: Any | None = None,
 ) -> dict[str, Path]:
-    """Apply one atomic typed-tool batch and emit a new UI graph artifact."""
+    """Apply one typed-tool batch and emit a UI graph artifact.
+
+    Schema-dependent operations require VibeComfy schema authority. Callers
+    may pass an explicit provider; otherwise VibeComfy's configured provider is
+    used and missing touched schemas fail closed.
+    """
     workflow, source_bytes = _read_json_object(workflow_path, label="workflow")
     ops, expected_revision = _parse_edit_document(operations_path)
 
@@ -199,7 +231,7 @@ def edit_workflow(
                 f"operations.ops[{index}].op must be one of: {allowed}"
             )
 
-    session = EditSession(workflow)
+    session = EditSession(workflow, schema_provider=schema_provider)
     try:
         result = apply_edit_tool_call(
             session,

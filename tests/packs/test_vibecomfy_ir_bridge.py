@@ -4,8 +4,9 @@ import hashlib
 import importlib
 import json
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from astrid.packs.vibecomfy.executors._bundle_inputs import (
 )
 from astrid.packs.vibecomfy.executors._workflow_ir import (
     WorkflowIrBridgeError,
+    _diagnostic_payload,
     edit_workflow,
     inspect_canonical_bundle,
     inspect_workflow,
@@ -38,6 +40,87 @@ def _write_operations(path: Path, ops: list[dict[str, object]]) -> None:
         json.dumps({"schema_version": 1, "expected_revision": 0, "ops": ops}),
         encoding="utf-8",
     )
+
+
+def _frozen_ksampler_schema_provider():
+    from vibecomfy.schema import (
+        FrozenSchemaSnapshotProvider,
+        InputSpec,
+        NodeSchema,
+        capture_schema_snapshot,
+        schema_payload_from_node_schema,
+    )
+
+    schema = NodeSchema(
+        class_type="KSampler",
+        pack="fixture",
+        inputs={
+            "model": InputSpec(type="MODEL", required=True),
+            "positive": InputSpec(type="CONDITIONING", required=True),
+            "negative": InputSpec(type="CONDITIONING", required=True),
+            "latent_image": InputSpec(type="LATENT", required=True),
+            "seed": InputSpec(type="INT", default=42),
+            "steps": InputSpec(type="INT", default=20, min=1),
+            "cfg": InputSpec(type="FLOAT", default=8),
+            "sampler_name": InputSpec(type="COMBO", choices=["euler"]),
+            "scheduler": InputSpec(type="COMBO", choices=["normal"]),
+            "denoise": InputSpec(type="FLOAT", default=1),
+        },
+        outputs=[],
+        widget_input_order=(
+            "seed",
+            "control_after_generate",
+            "steps",
+            "cfg",
+            "sampler_name",
+            "scheduler",
+            "denoise",
+        ),
+    )
+    snapshot = capture_schema_snapshot(
+        class_types=("KSampler",),
+        request_snapshot={
+            "contract_version": "schema_snapshot_v1",
+            "schemas": {"KSampler": schema_payload_from_node_schema("KSampler", schema)},
+            "missing_classes": [],
+        },
+        node_classes={"5": "KSampler"},
+    )
+    return FrozenSchemaSnapshotProvider(snapshot)
+
+
+def test_diagnostic_payload_serializes_frozen_mapping_details() -> None:
+    @dataclass(frozen=True)
+    class Diagnostic:
+        code: str
+        message: str
+        severity: str
+        detail: object
+
+    diagnostic = Diagnostic(
+        code="stale_revision",
+        message="expected revision differs from current revision",
+        severity="error",
+        detail=MappingProxyType(
+            {
+                "revision": MappingProxyType({"expected": 1, "current": 0}),
+                "path": ("workflow", "nodes"),
+            }
+        ),
+    )
+
+    payload = _diagnostic_payload(diagnostic)
+
+    assert payload == {
+        "code": "stale_revision",
+        "message": "expected revision differs from current revision",
+        "severity": "error",
+        "detail": {
+            "revision": {"expected": 1, "current": 0},
+            "path": ["workflow", "nodes"],
+        },
+    }
+    assert json.loads(json.dumps(payload)) == payload
 
 
 def test_ir_executors_are_manifested_without_growing_the_gateway() -> None:
@@ -809,7 +892,12 @@ def test_edit_applies_one_atomic_typed_batch_and_emits_fresh_projection(
         ],
     )
 
-    outputs = edit_workflow(FIXTURE, operations, tmp_path / "edited")
+    outputs = edit_workflow(
+        FIXTURE,
+        operations,
+        tmp_path / "edited",
+        schema_provider=_frozen_ksampler_schema_provider(),
+    )
 
     edited = json.loads(outputs["workflow"].read_text(encoding="utf-8"))
     sampler = next(node for node in edited["nodes"] if node["type"] == "KSampler")
@@ -890,6 +978,11 @@ def test_edit_batch_is_atomic_when_any_leaf_operation_is_invalid(tmp_path: Path)
     out_dir = tmp_path / "edited"
 
     with pytest.raises(WorkflowIrBridgeError, match="typed edit rejected"):
-        edit_workflow(FIXTURE, operations, out_dir)
+        edit_workflow(
+            FIXTURE,
+            operations,
+            out_dir,
+            schema_provider=_frozen_ksampler_schema_provider(),
+        )
 
     assert not out_dir.exists()

@@ -9,9 +9,9 @@ def test_shipped_ledger_reconciles_historical_capability_sets():
     ledger = load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
     sources = ledger["sources"]
 
-    assert sources["counts"]["pack_labels"] == 86
-    assert sources["counts"]["historical_pack_labels"] == 91
-    assert sources["counts"]["executor_inventory"] == 78
+    assert sources["counts"]["pack_labels"] == 87
+    assert sources["counts"]["historical_pack_labels"] == 92
+    assert sources["counts"]["executor_inventory"] == 79
     assert sources["counts"]["legacy_ids"] == 19
     assert all(section["complete"] for section in sources["coverage"].values())
     assert not sources["coverage"]["source_labels"]["missing"]
@@ -35,8 +35,30 @@ def test_host_consumes_the_reconciled_ledger_before_readiness_matrix():
     from astrid.core.execution.generic_host import GenericPackHost
 
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])
-    assert host.ledger["sources"]["counts"]["pack_labels"] == 86
-    assert len(host.matrix) == 72
+    assert host.ledger["sources"]["counts"]["pack_labels"] == 87
+    assert len(host.matrix) == 74
+
+
+def test_vibecomfy_readiness_reserves_gpu_for_workflow_execution():
+    from astrid.core.execution.generic_host import GenericPackHost
+
+    host = GenericPackHost(
+        pack_roots=[Path("astrid/packs/vibecomfy")],
+        capability_matrix=Path("config/astrid-beta-capabilities.json"),
+    )
+    for capability in (
+        "vibecomfy.import",
+        "vibecomfy.inspect",
+        "vibecomfy.edit",
+        "vibecomfy.validate",
+    ):
+        entry = host.matrix[capability]
+        assert entry["adapter_family"] == "cpu"
+        assert entry["resource_keys"] == ["cpu"]
+
+    run = host.matrix["vibecomfy.run"]
+    assert run["adapter_family"] == "local_generation"
+    assert run["resource_keys"] == ["gpu"]
 
 
 def test_historical_executor_rows_are_explicitly_not_installed():
@@ -136,6 +158,7 @@ def test_hivemind_matrix_rows_expose_provider_readiness_metadata():
 
 def test_source_census_still_rejects_unreviewed_pack_labels(monkeypatch):
     import pytest
+
     from astrid.core.execution import capability_ledger
 
     original = capability_ledger._source_labels

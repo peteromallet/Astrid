@@ -733,10 +733,10 @@
   {
    "id": "vibecomfy.validate",
    "disposition": "required",
-   "evidence_reason": "Required local-generation validation path; VibeComfy readiness is explicit.",
-   "adapter_family": "local_generation",
+   "evidence_reason": "Required CPU-only canonical workflow validation path; VibeComfy readiness is explicit.",
+   "adapter_family": "cpu",
    "resource_keys": [
-    "gpu"
+    "cpu"
    ],
    "required_env": [],
    "required_binaries": [],
@@ -786,10 +786,10 @@
   {
    "id": "vibecomfy.inspect",
    "disposition": "required",
-   "evidence_reason": "Required supported local-generation profile; read-only IR projection over admitted workflows.",
-   "adapter_family": "local_generation",
+   "evidence_reason": "Required CPU-only canonical workflow inspection path; read-only IR projection over admitted artifacts.",
+   "adapter_family": "cpu",
    "resource_keys": [
-    "gpu"
+    "cpu"
    ],
    "required_env": [],
    "required_binaries": [],
@@ -800,10 +800,24 @@
   {
    "id": "vibecomfy.edit",
    "disposition": "required",
-   "evidence_reason": "Required supported local-generation profile; typed edits over admitted workflows.",
-   "adapter_family": "local_generation",
+   "evidence_reason": "Required CPU-only canonical workflow edit path; typed successor transitions over admitted bundles.",
+   "adapter_family": "cpu",
    "resource_keys": [
-    "gpu"
+    "cpu"
+   ],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": [
+    "vibecomfy"
+   ]
+  },
+  {
+   "id": "vibecomfy.import",
+   "disposition": "required",
+   "evidence_reason": "Required canonical workflow origin path; CPU-only import and bundle inspection.",
+   "adapter_family": "cpu",
+   "resource_keys": [
+    "cpu"
    ],
    "required_env": [],
    "required_binaries": [],

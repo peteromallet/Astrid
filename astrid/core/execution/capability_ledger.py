@@ -356,8 +356,8 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
     # source-label census. Only labels backed by manifests in this checkout
     # advance these counts.
     coverage = {
-        "source_labels": {"source": 86, "ledger": len(labels), "missing": [], "complete": len(labels) == 86},
-        "historical_source_labels": {"source": 91, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 91},
+        "source_labels": {"source": 87, "ledger": len(labels), "missing": [], "complete": len(labels) == 87},
+        "historical_source_labels": {"source": 92, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 92},
         "executor_inventory": {"source": 79, "ledger": len(executors), "missing": [], "complete": len(executors) == 79},
         "legacy_ids": {"source": 19, "ledger": len(legacy), "missing": [], "complete": len(legacy) == 19},
     }

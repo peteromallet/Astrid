@@ -71,6 +71,8 @@ def inspect_workflow(workflow_path: Path, out_dir: Path) -> dict[str, Path]:
             "schema_version": 1,
             "authority": "input_ui_graph",
             "source_sha256": _sha256(source_bytes),
+            "python_execution_consent": None,
+            "security_gate_audit": [],
             "projection": "read_only_python_like_ir",
             "lenses": {
                 "census": rendered["census"],
@@ -88,26 +90,30 @@ def inspect_canonical_bundle(
     companion_path: Path,
     source_path: Path,
     out_dir: Path,
+    *,
+    python_execution_consent: str | None,
 ) -> dict[str, Path]:
     """Read a canonical sibling bundle and project it without publishing edits."""
     from ._bundle_inputs import staged_workflow_path
+    from ._python_execution_consent import confirmed_python_execution_scope
 
-    with staged_workflow_path(
-        workflow=None,
-        python=python_path,
-        companion=companion_path,
-        source=source_path,
-    ) as (staged_python, _authority):
-        from vibecomfy.porting.render import render
-        from vibecomfy.workflow_bundle import load_bundle
+    with confirmed_python_execution_scope(python_execution_consent) as gate:
+        with staged_workflow_path(
+            workflow=None,
+            python=python_path,
+            companion=companion_path,
+            source=source_path,
+        ) as (staged_python, _authority):
+            from vibecomfy.porting.render import render
+            from vibecomfy.workflow_bundle import load_bundle
 
-        bundle = load_bundle(staged_python)
-        rendered = render(bundle.workflow, lenses=("census", "surface", "topology"))
-        if not isinstance(rendered, Mapping):
-            raise WorkflowIrBridgeError("VibeComfy returned an invalid IR projection")
-        python_bytes = python_path.read_bytes()
-        companion_bytes = companion_path.read_bytes()
-        source_bytes = source_path.read_bytes()
+            bundle = load_bundle(staged_python)
+            rendered = render(bundle.workflow, lenses=("census", "surface", "topology"))
+            if not isinstance(rendered, Mapping):
+                raise WorkflowIrBridgeError("VibeComfy returned an invalid IR projection")
+            python_bytes = python_path.read_bytes()
+            companion_bytes = companion_path.read_bytes()
+            source_bytes = source_path.read_bytes()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     projection_path = out_dir / "workflow-ir.py"
@@ -124,6 +130,8 @@ def inspect_canonical_bundle(
             "semantic_digest": bundle.semantic_digest,
             "ui_digest": bundle.ui_digest,
             "source_sha256": _sha256(source_bytes),
+            "python_execution_consent": "confirmed",
+            "security_gate_audit": list(gate.audit),
             "members": {
                 "workflow.py": _sha256(python_bytes),
                 "workflow.vibe.json": _sha256(companion_bytes),

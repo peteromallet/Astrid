@@ -1748,6 +1748,7 @@ class GenericPackHost:
         *,
         authorized_input_object_ids: list[str] | tuple[str, ...] | None = None,
         continuation_id: str | None = None,
+        file_input_names: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
         """Materialize digest inputs and managed registry objects in *attempt*.
 
@@ -1894,7 +1895,17 @@ class GenericPackHost:
             "hype_assets",
         }
         for name, value in list(values.items()):
-            digest = value.get("digest") if isinstance(value, Mapping) else (value if isinstance(value, str) and len(value) == 64 else None)
+            digest = (
+                value.get("digest")
+                if isinstance(value, Mapping)
+                else (
+                    value
+                    if name in file_input_names
+                    and isinstance(value, str)
+                    and len(value) == 64
+                    else None
+                )
+            )
             if digest:
                 if self.client is None or not callable(getattr(self.client, "get_object", None)):
                     raise HostError(
@@ -2830,6 +2841,11 @@ class GenericPackHost:
                 root,
                 authorized_input_object_ids=authorized_input_object_ids,
                 continuation_id=task_id,
+                file_input_names=frozenset(
+                    port.name
+                    for port in record.definition.inputs
+                    if port.type == "file"
+                ),
             )
             if record.adapter.family == "provider" and record.definition.isolation.network:
                 policy = _network_policy(record)

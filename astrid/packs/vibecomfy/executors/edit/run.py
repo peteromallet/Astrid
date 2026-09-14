@@ -119,7 +119,7 @@ def _optional_path(value: str) -> Path | None:
     return Path(value) if value.strip() else None
 
 
-def edit_workflow(
+def _edit_workflow_with_gate(
     *,
     python_path: Path,
     companion_path: Path,
@@ -133,6 +133,7 @@ def edit_workflow(
     capture_python_path: Path | None,
     capture_graph_path: Path | None,
     out_dir: Path,
+    gate_audit: list[dict[str, Any]],
 ) -> dict[str, Path]:
     """Create one history-linked canonical successor from immutable members."""
     scalars = {
@@ -213,22 +214,8 @@ def edit_workflow(
                 }
 
         published = staged_python.parent / "published" / "workflow.py"
-        gate_audit: list[dict[str, Any]] = []
         try:
-            if transition_kind == "manual_capture" and capture_python_path is not None:
-                from vibecomfy.security import GateContext, set_gate_context
-
-                capture_gate = GateContext(non_interactive=True, assume_yes=True)
-                gate_token = set_gate_context(capture_gate)
-                try:
-                    result = transition_bundle(
-                        staged_python, output=published, **transition_kwargs
-                    )
-                    gate_audit = list(capture_gate.audit)
-                finally:
-                    gate_token.var.reset(gate_token)
-            else:
-                result = transition_bundle(staged_python, output=published, **transition_kwargs)
+            result = transition_bundle(staged_python, output=published, **transition_kwargs)
         except Exception as exc:
             raise WorkflowTransitionError(f"VibeComfy rejected workflow transition: {exc}") from exc
         if getattr(result, "status", None) != "saved":
@@ -277,6 +264,7 @@ def edit_workflow(
             "readiness": {"status": "bundle_ready", "run_readiness": "not_assessed"},
             "diagnostics": result_dict.get("diagnostics", []),
             "security_gate_audit": gate_audit,
+            "python_execution_consent": "confirmed",
             "service_result": result_dict,
         }
         try:
@@ -301,6 +289,49 @@ def edit_workflow(
     }
 
 
+def edit_workflow(
+    *,
+    python_path: Path,
+    companion_path: Path,
+    source_path: Path,
+    workflow_id: str,
+    parent_revision: str,
+    parent_task_id: str,
+    origin_task_id: str,
+    transition_kind: str,
+    operations_path: Path | None,
+    capture_python_path: Path | None,
+    capture_graph_path: Path | None,
+    out_dir: Path,
+    python_execution_consent: str | None,
+) -> dict[str, Path]:
+    """Create one consented canonical successor and record the gate audit."""
+    from .._python_execution_consent import (
+        PythonExecutionConsentError,
+        confirmed_python_execution_scope,
+    )
+
+    try:
+        with confirmed_python_execution_scope(python_execution_consent) as gate:
+            return _edit_workflow_with_gate(
+                python_path=python_path,
+                companion_path=companion_path,
+                source_path=source_path,
+                workflow_id=workflow_id,
+                parent_revision=parent_revision,
+                parent_task_id=parent_task_id,
+                origin_task_id=origin_task_id,
+                transition_kind=transition_kind,
+                operations_path=operations_path,
+                capture_python_path=capture_python_path,
+                capture_graph_path=capture_graph_path,
+                out_dir=out_dir,
+                gate_audit=gate.audit,
+            )
+    except PythonExecutionConsentError as exc:
+        raise WorkflowTransitionError(str(exc)) from exc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Create a canonical VibeComfy successor through typed edits or explicit capture."
@@ -313,6 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parent-task-id", required=True)
     parser.add_argument("--origin-task-id", required=True)
     parser.add_argument("--transition-kind", required=True)
+    parser.add_argument("--python-execution-consent", required=True)
     parser.add_argument("--operations", type=_optional_path, default=None)
     parser.add_argument("--capture-python", type=_optional_path, default=None)
     parser.add_argument("--capture-graph", type=_optional_path, default=None)
@@ -336,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
             capture_python_path=args.capture_python,
             capture_graph_path=args.capture_graph,
             out_dir=args.out,
+            python_execution_consent=args.python_execution_consent,
         )
     except WorkflowTransitionError as exc:
         print(f"vibecomfy.edit: {exc}", file=sys.stderr)

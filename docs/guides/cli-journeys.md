@@ -306,18 +306,27 @@ python3 -m astrid tasks show --project demo <ORIGIN_TASK_ID> --json
 ```
 
 `vibecomfy.inspect` can then report on the canonical bundle without creating a
-revision. Supply all three canonical member digests as named inputs and put
-those same content-addressed IDs in the input manifest:
+revision. Loading a canonical Python bundle executes its generated Python, so
+canonical inspection requires the explicit scalar
+`python_execution_consent="confirmed"`. This value has no default and is not
+implied by task admission. UI JSON inspection stays static and needs no consent.
+Supply all three canonical member digests as named inputs and put those same
+content-addressed IDs in the input manifest:
 
 ```bash
 python3 -m astrid tasks create --project demo \
   --capability vibecomfy.inspect \
-  --spec '{"inputs":{},"input_digests":[{"name":"python","digest":"sha256:<PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
+  --spec '{"inputs":{"python_execution_consent":"confirmed"},"input_digests":[{"name":"python","digest":"sha256:<PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
   --input-manifest '["sha256:<PYTHON_OBJECT_ID>","sha256:<COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>"]' --json
 ```
 
-`vibecomfy.edit` accepts the same canonical trio plus a typed operation or
-ordered batch, and emits the complete successor trio with a transition report.
+`vibecomfy.edit` accepts the same canonical trio plus explicit
+`python_execution_consent="confirmed"`, and a typed operation or ordered
+batch. The input is required, has no default, and must exactly match the value
+shown; an admitted task alone is not consent. This same consent applies to
+`manual_capture`, including direct Python candidates. Edit emits the complete
+successor trio with a transition report containing the input and VibeComfy's
+audited gate decisions.
 Put the ordered typed operations in a JSON file and import it as a managed
 object. The edit task names the exact parent revision/task and the origin task.
 Import `operations.json` with `media import`; use its `digest` in the named
@@ -340,7 +349,7 @@ python3 -m astrid media import ./operations.json --project demo --json
 
 python3 -m astrid tasks create --project demo \
   --capability vibecomfy.edit \
-  --spec '{"inputs":{"workflow_id":"portrait","parent_revision":"<PARENT_REVISION>","parent_task_id":"<ORIGIN_OR_PREVIOUS_EDIT_TASK_ID>","origin_task_id":"<ORIGIN_TASK_ID>","transition_kind":"typed_edit"},"input_digests":[{"name":"python","digest":"sha256:<PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"},{"name":"operations","digest":"sha256:<OPERATIONS_DIGEST>"}],"workflow_id":"portrait","parent_revision":"<PARENT_REVISION>","transition_kind":"typed_edit","parent_task_id":"<ORIGIN_OR_PREVIOUS_EDIT_TASK_ID>","origin_task_id":"<ORIGIN_TASK_ID>"}' \
+  --spec '{"inputs":{"workflow_id":"portrait","parent_revision":"<PARENT_REVISION>","parent_task_id":"<ORIGIN_OR_PREVIOUS_EDIT_TASK_ID>","origin_task_id":"<ORIGIN_TASK_ID>","transition_kind":"typed_edit","python_execution_consent":"confirmed"},"input_digests":[{"name":"python","digest":"sha256:<PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"},{"name":"operations","digest":"sha256:<OPERATIONS_DIGEST>"}],"workflow_id":"portrait","parent_revision":"<PARENT_REVISION>","transition_kind":"typed_edit","parent_task_id":"<ORIGIN_OR_PREVIOUS_EDIT_TASK_ID>","origin_task_id":"<ORIGIN_TASK_ID>"}' \
   --input-manifest '["sha256:<PYTHON_OBJECT_ID>","sha256:<COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>","sha256:<OPERATIONS_OBJECT_ID>"]' --json
 python3 -m astrid tasks show --project demo <EDIT_TASK_ID> --json
 ```
@@ -352,15 +361,16 @@ and input manifest. In `result.outputs`, match each entry by port `name`; its
 `digest` is the object ID. Use the successor trio for validation:
 
 For a direct Python change, call `vibecomfy.edit` with the same parent trio,
-set `transition_kind` to `manual_capture`, and provide the candidate as the
-separate `capture_python` input. An applied ComfyUI canvas can be captured
-through `capture_graph`. Neither route creates invented per-tool operations;
-the report records the aggregate before/after difference.
+the same exact consent input, set `transition_kind` to `manual_capture`, and
+provide the candidate as the separate `capture_python` input. An applied
+ComfyUI canvas can be captured through `capture_graph`. Neither route creates
+invented per-tool operations; the report records the aggregate before/after
+difference and audited consent gate decisions.
 
 ```bash
 python3 -m astrid tasks create --project demo \
   --capability vibecomfy.validate \
-  --spec '{"inputs":{},"input_digests":[{"name":"python","digest":"sha256:<EDITED_PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<EDITED_COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
+  --spec '{"inputs":{"python_execution_consent":"confirmed"},"input_digests":[{"name":"python","digest":"sha256:<EDITED_PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<EDITED_COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
   --input-manifest '["sha256:<EDITED_PYTHON_OBJECT_ID>","sha256:<EDITED_COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>"]' --json
 ```
 
@@ -374,6 +384,8 @@ python3 -m astrid tasks create --project demo \
   --input-manifest '["sha256:<EDITED_PYTHON_OBJECT_ID>","sha256:<EDITED_COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>"]' --json
 ```
 
+A successful canonical validation emits `validation-report.json` with the
+explicit consent input and gate audit; static UI JSON validation omits consent.
 A run can launch ComfyUI generation; validation by itself does not. The
 inspect task's projection is an explanation artifact only. Never pass it as
 the workflow input to edit, validate, or run. A manual capture records one

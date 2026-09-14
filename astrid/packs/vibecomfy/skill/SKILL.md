@@ -18,9 +18,9 @@ UI companion, and byte-identical original `source.json`.
 | Executor | Inputs and result |
 |---|---|
 | `vibecomfy.import` | Admitted raw `source` JSON plus a stable `workflow_id`; emits `python`, `companion`, `source`, and an origin `report`. |
-| `vibecomfy.inspect` | One UI `workflow` JSON or the complete `python`/`companion`/`source` trio; emits only a read-only `projection` and `inspection`. |
-| `vibecomfy.edit` | A canonical parent trio plus `operations` for one atomic typed batch, or one separate `capture_python`/`capture_graph` candidate for explicit capture; emits the full successor trio and `report`. |
-| `vibecomfy.validate` | A UI `workflow` JSON or the canonical trio; validates without running inference. |
+| `vibecomfy.inspect` | One UI `workflow` JSON or the complete `python`/`companion`/`source` trio; emits only a read-only `projection` and `inspection`. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is inspected statically without it. |
+| `vibecomfy.edit` | A canonical parent trio plus required `python_execution_consent="confirmed"`, and `operations` for one atomic typed batch or one separate `capture_python`/`capture_graph` candidate; emits the full successor trio and audited `report`. |
+| `vibecomfy.validate` | A UI `workflow` JSON or the canonical trio; validates without running inference. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is validated statically without it. |
 | `vibecomfy.run` | A UI `workflow` JSON or the canonical trio; executes the workflow and settles its result artifacts. |
 
 Canonical bundle members are immutable Astrid artifacts. Each edit or capture
@@ -36,6 +36,16 @@ bundle. Its Python-like projection is for reading, never for mutation input.
 produce a successor and a structured transition report. A ComfyUI canvas Apply
 does not enter Astrid task history; use explicit project-bound capture to
 record a candidate.
+
+For canonical Python bundles, include the scalar input
+`python_execution_consent: "confirmed"` in `spec.inputs` for inspect, edit,
+and validate. It has no default, is validated as an exact literal, and must be
+explicitly present on every task that loads canonical Python. The adapter maps
+it to VibeComfy's existing audited non-interactive `--yes` GateContext; task
+admission and `authority_context` do not stand in for this input. Inspect,
+edit, and validation artifacts include the consent value and gate audit. UI
+JSON inspection and validation stay on the static ingestion path and need no
+consent. `vibecomfy.run` is a separate generation capability.
 
 ## Typed edit document
 

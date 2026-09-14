@@ -32,13 +32,13 @@
 | `generation.generate_image` | Generate images from text prompts via local, cloud, or Codex backends. v2: model→mode→backend. |
 | `generation.generate_image_openai` | Generate image files with OpenAI GPT Image models from a prompt file. |
 | `generation.generate_video` | Generate videos from text prompts via local or cloud backends. v2: model→mode→backend with t2v/i2v/flf/v2v modes. |
-| `hivemind.contribute` | Submit a resource or distillation to the Hivemind corpus via the contribute edge function. |
+| `hivemind.contribute` | Submit and review immutable Hivemind resource revisions and evidence. |
 | `hivemind.get_item` | Fetch a single full row from the Hivemind corpus by kind and id. |
 | `hivemind.ingest_article` | Fetch a web article, extract readable text, and submit as a resource. |
 | `hivemind.ingest_workflow` | Parse a ComfyUI workflow JSON and submit as a resource with model metadata. |
 | `hivemind.ingest_youtube` | Extract YouTube captions via yt-dlp and submit as a transcript resource. |
 | `hivemind.refresh_media` | Refresh expiring Discord CDN attachment URLs for a message. |
-| `hivemind.search` | Search the Hivemind corpus (messages, resources, distillations) with per-token matching and client-side ranking. |
+| `hivemind.search` | Search Discord messages and accepted current resource heads with per-token matching and client-side ranking. |
 | `iteration.assemble` | Adapt runtime-materialized iteration data into result-only timeline and render artifacts. |
 | `iteration.experiment_import` | Import an unmanaged run root into an experiment without rewriting history or guessing ambiguous associations. |
 | `iteration.experiment_prepare` | Normalize an experiment's provider manifests into a provider-independent review model with diagnostics. |
@@ -47,6 +47,7 @@
 | `media.gif_search` | Search GIPHY for GIF or sticker assets and optionally download a selected rendition. |
 | `media.speech_repair_lavasr` | Repair weak-mic speech with hotter pre-lift, fal.ai LavaSR, optional DeepFilterNet3, and a final loudness pass. |
 | `moirae.moirae` | Run a Moirae screenplay through the terminal-as-cinema renderer to produce a video. |
+| `rendering.assemble_timeline` | Author a canonical two-child timeline from runtime-resolved visual outputs. |
 | `rendering.html_canvas_effect` | Scaffold a local Remotion HTML-in-canvas effect element. |
 | `rendering.render` | Render a hype timeline to opaque MP4 or explicitly stamped alpha MOV through the selected backend. |
 | `rendering.sprite_sheet` | Generate, slice, and preview GPT Image sprite sheets for batch image work. |
@@ -69,11 +70,14 @@
 | `understanding.understand` | Dispatch to the audio, visual, or video understanding executor based on --mode. |
 | `understanding.video_understand` | Inspect synchronized audio+video windows with a video-understanding model. |
 | `understanding.visual_understand` | Inspect images or sampled video frames with a vision LLM — free-text or JSON-schema-constrained. |
-| `vibecomfy.edit` | Apply an atomic batch of typed VibeComfy edits to a ComfyUI UI graph. |
-| `vibecomfy.inspect` | Render a ComfyUI UI graph as readable Python-like VibeComfy IR. |
-| `vibecomfy.run` | Run a VibeComfy / ComfyUI workflow JSON through the VibeComfy CLI. |
-| `vibecomfy.validate` | Validate a VibeComfy / ComfyUI workflow JSON without executing it. |
+| `vibecomfy.edit` | Create an immutable canonical successor through a typed edit or explicit capture. |
+| `vibecomfy.import` | Import a ComfyUI workflow into VibeComfy's canonical editable bundle. |
+| `vibecomfy.inspect` | Render a ComfyUI workflow as readable Python-like VibeComfy IR. |
+| `vibecomfy.run` | Run a VibeComfy / ComfyUI workflow and settle its artifact inventory. |
+| `vibecomfy.validate` | Validate a VibeComfy workflow without running generation. |
 | `video_editing.cut` | Build a result-only hype timeline, assets, and metadata JSON triple from arrangement. |
+| `wan2gp.generate_video` | One-shot native Wan2GP video generation with private spool. |
+| `wan2gp.validate_settings` | Compile and validate Wan2GP settings (no engine execution). |
 | `youtube.upload` | Upload a finished video to YouTube via the shared banodoco-social Zapier integration. |
 | `youtube.youtube_audio` | Download a YouTube video's audio (MP3) or video (MP4) — by search query or direct URL. |
 
@@ -108,12 +112,13 @@
 | `effects/end-codex-transform` | Reference images connect into timeline images and transform them. |
 | `effects/end-mid-combined` | One continuous codex-then-minimax insert over a single plate. |
 | `effects/end-minimax-animate` | Timeline images lift out below while their videos load and play above. |
-| `effects/end-spanning-layer` | One continuous, beat-centered ending timeline with in-place transforms. |
+| `effects/end-spanning-layer` | Flexible amber workflow timeline with real moving output and keyframe references. |
 | `effects/ending-carousel` | Image carousel insert that flies cards through, picks one, and lays them onto a timeline. |
 | `effects/event-card` | DOM-to-canvas Remotion effect for post-processed cards. |
 | `effects/frame-overlay` | Full-frame tight amber border overlay. |
 | `effects/model-trends` | Animated stacked-area chart of model-family share-of-conversation, driven by Remotion frame. |
 | `effects/neon-orbit-card` | DOM-to-canvas Remotion effect for post-processed cards. |
+| `effects/scrolling-guide` | Transparent orange and cream scrolling guide for the video-making workflow. |
 | `effects/sliding-media` | Full-screen media clip with slide-in/out motion. |
 | `effects/text-card` | Default text card effect for captions and titles. |
 | `effects/vibe-comfy-asset-overlay` | Asset-driven Vibe Comfy overlay with procedural noodle. |

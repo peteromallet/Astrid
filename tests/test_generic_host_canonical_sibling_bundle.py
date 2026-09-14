@@ -47,6 +47,35 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def test_materialization_does_not_treat_revision_hash_as_file_digest(
+    tmp_path: Path,
+) -> None:
+    source_bytes = b"canonical Python workflow\n"
+    source_digest = _sha256(source_bytes)
+    revision_id = "a" * 64
+    runtime = RecordingFakeRuntime({source_digest: source_bytes})
+    host = GenericPackHost(pack_roots=[], client=runtime)
+
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [source_digest],
+            "spec": {
+                "inputs": {
+                    "python": source_digest,
+                    "parent_revision": revision_id,
+                }
+            },
+        },
+        tmp_path / "attempt",
+        authorized_input_object_ids=[source_digest],
+        file_input_names=frozenset({"python"}),
+    )
+
+    assert Path(values["python"]).read_bytes() == source_bytes
+    assert values["parent_revision"] == revision_id
+    assert runtime.fetched_inputs == [source_digest]
+
+
 def test_generic_host_materializes_named_sibling_inputs_and_settles_four_outputs(
     tmp_path: Path,
 ) -> None:

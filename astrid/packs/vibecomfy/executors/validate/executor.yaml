@@ -15,16 +15,26 @@
       "--companion",
       "{companion}",
       "--source",
-      "{source}"
+      "{source}",
+      "--out",
+      "{out}"
+    ],
+    "input_args": [
+      {
+        "input": "python_execution_consent",
+        "flag": "--python-execution-consent",
+        "optional": true
+      }
     ]
   },
-  "description": "Validate a VibeComfy workflow through the VibeComfy CLI.",
+  "description": "Validate UI JSON statically or validate a canonical Python bundle after explicit python_execution_consent=confirmed through VibeComfy's audited CLI gate.",
   "graph": {
     "consumes": [
       "workflow",
       "python",
       "companion",
-      "source"
+      "source",
+      "python_execution_consent"
     ],
     "provides": [
       "vibecomfy_validation"
@@ -59,6 +69,21 @@
       "name": "source",
       "required": false,
       "type": "file"
+    },
+    {
+      "description": "Required only for canonical Python bundles; exact accepted value is confirmed. Omit for static UI JSON validation.",
+      "name": "python_execution_consent",
+      "required": false,
+      "type": "string"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "validation",
+      "type": "file",
+      "path_template": "{out}/validation-report.json",
+      "artifact_type": "vibecomfy/workflow-validation-report",
+      "description": "Validation status, issues, consent input when used, and audited VibeComfy gate decisions."
     }
   ],
   "isolation": {
@@ -109,6 +134,6 @@
     "workflows": []
   },
   "name": "VibeComfy Validate",
-  "short_description": "Validate a VibeComfy / ComfyUI workflow JSON without executing it.",
+  "short_description": "Validate a VibeComfy workflow without running generation.",
   "version": "0.1.0"
 }

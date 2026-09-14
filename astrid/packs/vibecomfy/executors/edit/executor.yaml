@@ -16,6 +16,7 @@
     {"name": "parent_task_id", "type": "string", "required": true, "description": "Astrid task ID whose settled outputs are these parent members."},
     {"name": "origin_task_id", "type": "string", "required": true, "description": "Astrid origin import task ID for this workflow history."},
     {"name": "transition_kind", "type": "string", "required": true, "description": "typed_edit or manual_capture."},
+    {"name": "python_execution_consent", "type": "string", "required": true, "description": "Explicit consent to load canonical workflow Python; must be exactly confirmed. Never inferred from task admission."},
     {"name": "operations", "type": "file", "required": false, "default": "", "artifact_type": "vibecomfy/typed-edit-batch", "description": "Typed edit JSON: {schema_version:1, expected_revision:0, ops:[...]}; required for typed_edit."},
     {"name": "capture_python", "type": "file", "required": false, "default": "", "artifact_type": "text/x-python", "description": "Separate manually edited candidate workflow.py; used with manual_capture."},
     {"name": "capture_graph", "type": "file", "required": false, "default": "", "artifact_type": "vibecomfy/ui-workflow", "description": "Separate ComfyUI canvas candidate JSON; used with manual_capture."}
@@ -24,13 +25,13 @@
     {"name": "python", "type": "file", "path_template": "{out}/workflow.py", "artifact_type": "text/x-python", "description": "Canonical successor Python source."},
     {"name": "companion", "type": "file", "path_template": "{out}/workflow.vibe.json", "artifact_type": "application/json", "description": "Canonical successor revision and UI identity companion."},
     {"name": "source", "type": "file", "path_template": "{out}/source.json", "artifact_type": "application/json", "description": "Byte-identical source workflow preserved from the origin bundle."},
-    {"name": "report", "type": "file", "path_template": "{out}/edit-report.json", "artifact_type": "vibecomfy/workflow-transition-report", "description": "Exact before/after member digests, revision/task lineage, ordered operations or capture diff, validation/readiness, and diagnostics."}
+    {"name": "report", "type": "file", "path_template": "{out}/edit-report.json", "artifact_type": "vibecomfy/workflow-transition-report", "description": "Exact before/after member digests, revision/task lineage, ordered operations or capture diff, explicit Python execution consent, audited gate decisions, validation/readiness, and diagnostics."}
   ],
   "command": {
-    "argv": ["{python_exec}", "-m", "astrid.packs.vibecomfy.executors.edit.run", "--python", "{python}", "--companion", "{companion}", "--source", "{source}", "--workflow-id", "{workflow_id}", "--parent-revision", "{parent_revision}", "--parent-task-id", "{parent_task_id}", "--origin-task-id", "{origin_task_id}", "--transition-kind", "{transition_kind}", "--operations", "{operations}", "--capture-python", "{capture_python}", "--capture-graph", "{capture_graph}", "--out", "{out}"]
+    "argv": ["{python_exec}", "-m", "astrid.packs.vibecomfy.executors.edit.run", "--python", "{python}", "--companion", "{companion}", "--source", "{source}", "--workflow-id", "{workflow_id}", "--parent-revision", "{parent_revision}", "--parent-task-id", "{parent_task_id}", "--origin-task-id", "{origin_task_id}", "--transition-kind", "{transition_kind}", "--python-execution-consent", "{python_execution_consent}", "--operations", "{operations}", "--capture-python", "{capture_python}", "--capture-graph", "{capture_graph}", "--out", "{out}"]
   },
   "cache": {"mode": "none"},
-  "graph": {"consumes": ["python", "companion", "source", "workflow_id", "parent_revision", "parent_task_id", "origin_task_id", "transition_kind", "operations", "capture_python", "capture_graph"], "provides": ["vibecomfy_canonical_bundle", "vibecomfy_workflow_transition_report"]},
+  "graph": {"consumes": ["python", "companion", "source", "workflow_id", "parent_revision", "parent_task_id", "origin_task_id", "transition_kind", "python_execution_consent", "operations", "capture_python", "capture_graph"], "provides": ["vibecomfy_canonical_bundle", "vibecomfy_workflow_transition_report"]},
   "isolation": {"mode": "subprocess", "network": false, "requirements": ["vibecomfy"]},
   "metadata": {
     "pack_id": "vibecomfy",

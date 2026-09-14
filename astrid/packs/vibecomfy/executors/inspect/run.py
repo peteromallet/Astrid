@@ -10,6 +10,9 @@ from astrid.core.pack.entrypoint import guard_canonical_entrypoint
 
 guard_canonical_entrypoint("vibecomfy.inspect")
 
+from astrid.packs.vibecomfy.executors._python_execution_consent import (  # noqa: E402
+    PythonExecutionConsentError,
+)
 from astrid.packs.vibecomfy.executors._workflow_ir import (  # noqa: E402
     WorkflowIrBridgeError,
     inspect_canonical_bundle,
@@ -25,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python", default="")
     parser.add_argument("--companion", default="")
     parser.add_argument("--source", default="")
+    parser.add_argument("--python-execution-consent", default="")
     parser.add_argument("--out", type=Path, required=True)
     return parser
 
@@ -38,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.companion),
                 Path(args.source),
                 args.out,
+                python_execution_consent=args.python_execution_consent,
             )
         elif args.workflow:
             inspect_workflow(Path(args.workflow), args.out)
@@ -45,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             raise WorkflowIrBridgeError(
                 "provide workflow JSON or python, companion, and source bundle members"
             )
-    except WorkflowIrBridgeError as exc:
+    except (WorkflowIrBridgeError, PythonExecutionConsentError) as exc:
         print(f"vibecomfy.inspect: {exc}", file=sys.stderr)
         return 1
     return 0

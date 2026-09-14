@@ -138,10 +138,10 @@ def test_ir_executors_are_manifested_without_growing_the_gateway() -> None:
     assert import_manifest.isolation.network is False
     assert inspect_manifest.metadata["mutation"] == "none"
     assert {item.name for item in inspect_manifest.inputs} == {
-        "workflow", "python", "companion", "source"
+        "workflow", "python", "companion", "source", "python_execution_consent"
     }
     assert {item.name for item in validate_manifest.inputs} == {
-        "workflow", "python", "companion", "source"
+        "workflow", "python", "companion", "source", "python_execution_consent"
     }
     assert {item.name for item in run_manifest.inputs} == {
         "workflow", "python", "companion", "source"
@@ -171,6 +171,17 @@ def test_ir_executors_are_manifested_without_growing_the_gateway() -> None:
         "source",
         "report",
     }
+    assert {output.name for output in validate_manifest.outputs} == {"validation"}
+    consent_port = next(
+        item for item in edit_manifest.inputs if item.name == "python_execution_consent"
+    )
+    assert consent_port.required is True and consent_port.default is None
+    assert next(
+        item for item in inspect_manifest.inputs if item.name == "python_execution_consent"
+    ).default is None
+    assert next(
+        item for item in validate_manifest.inputs if item.name == "python_execution_consent"
+    ).default is None
     assert {item.name for item in edit_manifest.inputs} == {
         "python",
         "companion",
@@ -180,6 +191,7 @@ def test_ir_executors_are_manifested_without_growing_the_gateway() -> None:
         "parent_task_id",
         "origin_task_id",
         "transition_kind",
+        "python_execution_consent",
         "operations",
         "capture_python",
         "capture_graph",
@@ -259,8 +271,19 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
     validate = importlib.import_module("astrid.packs.vibecomfy.executors.validate.run")
     staged_validate_members = {}
 
+    security = ModuleType("vibecomfy.security")
+    active_gate = ContextVar("validate_fake_gate", default=None)
+
+    class FakeGate:
+        def __init__(self):
+            self.audit = []
+
+    security.current_gate_context = active_gate.get  # type: ignore[attr-defined]
+    security.set_gate_context = active_gate.set  # type: ignore[attr-defined]
+    cli = ModuleType("vibecomfy.cli")
+
     def capture_validate(argv):
-        workflow_path = Path(argv[-1])
+        workflow_path = Path(argv[argv.index("validate") + 1])
         staged_validate_members["python"] = workflow_path.read_bytes()
         staged_validate_members["companion"] = workflow_path.with_name(
             "workflow.vibe.json"
@@ -268,10 +291,15 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
         staged_validate_members["source"] = workflow_path.with_name(
             "source.json"
         ).read_bytes()
-        return SimpleNamespace(returncode=0)
+        assert "--yes" in argv and "--json" in argv
+        gate = FakeGate()
+        gate.audit.append({"decision": "allow", "reason": "assume_yes_bypass"})
+        security.set_gate_context(gate)  # type: ignore[attr-defined]
+        print(json.dumps({"workflow_id": "fixture", "ok": True, "status": "ok", "issues": []}))
+        return 0
 
-    validate_call = Mock(side_effect=capture_validate)
-    with patch.object(validate.subprocess, "run", validate_call):
+    cli.main = Mock(side_effect=capture_validate)  # type: ignore[attr-defined]
+    with patch.dict("sys.modules", {"vibecomfy.security": security, "vibecomfy.cli": cli}):
         assert validate.main(
             [
                 "validate",
@@ -282,8 +310,19 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
                 str(inputs["companion"]),
                 "--source",
                 str(inputs["source"]),
+                "--python-execution-consent",
+                "confirmed",
+                "--out",
+                str(tmp_path / "validation-output"),
             ]
         ) == 0
+    validation_report = json.loads(
+        (tmp_path / "validation-output" / "validation-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert validation_report["python_execution_consent"] == "confirmed"
+    assert validation_report["security_gate_audit"][0]["reason"] == "assume_yes_bypass"
     assert staged_validate_members == {
         "python": inputs["python"].read_bytes(),
         "companion": inputs["companion"].read_bytes(),
@@ -319,6 +358,44 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
         ]
     ) == 0
     assert staged_run_members == staged_validate_members
+
+
+def test_ui_json_validation_is_static_and_requires_no_python_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    validate = importlib.import_module("astrid.packs.vibecomfy.executors.validate.run")
+    ui_path = tmp_path / "ui.json"
+    ui_path.write_text('{"nodes":[],"links":[]}', encoding="utf-8")
+    workflow = SimpleNamespace(
+        id="static-ui",
+        validate=lambda: SimpleNamespace(ok=True, issues=[]),
+    )
+    loader = ModuleType("vibecomfy.ingest.loader")
+    loader.load_workflow_json = Mock(return_value={"nodes": [], "links": []})  # type: ignore[attr-defined]
+    normalize = ModuleType("vibecomfy.ingest.normalize")
+    normalize.from_ui = Mock(return_value=workflow)  # type: ignore[attr-defined]
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "vibecomfy.ingest.loader": loader,
+            "vibecomfy.ingest.normalize": normalize,
+        },
+    ):
+        assert validate.main(
+            ["validate", str(ui_path), "--out", str(tmp_path / "static-validation")]
+        ) == 0
+
+    report = json.loads(
+        (tmp_path / "static-validation" / "validation-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["validation_mode"] == "static_ui_graph"
+    assert report["python_execution_consent"] is None
+    assert report["security_gate_audit"] == []
+    assert normalize.from_ui.call_args.kwargs["use_comfy_converter"] is False
 
 
 def test_canonical_run_uses_bundle_compile_and_runtime_api_without_gpu(
@@ -595,6 +672,7 @@ def test_canonical_edit_emits_parent_linked_successor_and_exact_members(
         _fake_transition_modules(
             transition_bundle=transition_bundle,
             load_bundle=load_bundle,
+            gate_context=True,
         ),
     ):
         outputs = runner.edit_workflow(
@@ -610,6 +688,7 @@ def test_canonical_edit_emits_parent_linked_successor_and_exact_members(
             capture_python_path=None,
             capture_graph_path=None,
             out_dir=tmp_path / "edited-output",
+            python_execution_consent="confirmed",
         )
 
     assert service_call["expected_parent_revision"] == "rev-origin"
@@ -672,6 +751,7 @@ def test_canonical_edit_failure_does_not_publish_partial_members(
         _fake_transition_modules(
             transition_bundle=fail_transition,
             load_bundle=load_bundle,
+            gate_context=True,
         ),
     ):
         with pytest.raises(runner.WorkflowTransitionError, match="rejected workflow transition"):
@@ -688,8 +768,34 @@ def test_canonical_edit_failure_does_not_publish_partial_members(
                 capture_python_path=None,
                 capture_graph_path=None,
                 out_dir=out_dir,
+                python_execution_consent="confirmed",
             )
     assert not out_dir.exists()
+
+
+def test_canonical_edit_rejects_missing_or_nonexact_python_execution_consent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    runner = importlib.import_module("astrid.packs.vibecomfy.executors.edit.run")
+    path = tmp_path / "unused.py"
+    with pytest.raises(runner.WorkflowTransitionError, match="python_execution_consent.*confirmed"):
+        runner.edit_workflow(
+            python_path=path,
+            companion_path=path,
+            source_path=path,
+            workflow_id="portrait",
+            parent_revision="rev-origin",
+            parent_task_id="T_origin",
+            origin_task_id="T_origin",
+            transition_kind="typed_edit",
+            operations_path=None,
+            capture_python_path=None,
+            capture_graph_path=None,
+            out_dir=tmp_path / "rejected",
+            python_execution_consent="yes",
+        )
+    assert not (tmp_path / "rejected").exists()
 
 
 def test_manual_python_capture_keeps_parent_and_candidate_separate_with_gate_audit(
@@ -782,6 +888,7 @@ def test_manual_python_capture_keeps_parent_and_candidate_separate_with_gate_aud
             capture_python_path=candidate,
             capture_graph_path=None,
             out_dir=tmp_path / "capture-output",
+            python_execution_consent="confirmed",
         )
 
     assert service_call["capture"] is True
@@ -790,6 +897,7 @@ def test_manual_python_capture_keeps_parent_and_candidate_separate_with_gate_aud
     assert {name: path.read_bytes() for name, path in paths.items()} == parent
     report = json.loads(outputs["report"].read_text(encoding="utf-8"))
     assert report["transition_kind"] == "manual_capture"
+    assert report["python_execution_consent"] == "confirmed"
     assert report["operations"] == []
     assert report["diff"] == [{"kind": "node_value_changed"}]
     assert report["security_gate_audit"][0]["reason"] == "assume_yes_bypass"
@@ -805,6 +913,8 @@ def test_inspect_emits_projection_without_mutating_ui_graph(tmp_path: Path) -> N
     assert "ksampler" in outputs["projection"].read_text(encoding="utf-8")
     report = json.loads(outputs["inspection"].read_text(encoding="utf-8"))
     assert report["authority"] == "input_ui_graph"
+    assert report["python_execution_consent"] is None
+    assert report["security_gate_audit"] == []
     assert report["projection"] == "read_only_python_like_ir"
     assert report["source_sha256"].startswith("sha256:")
     assert report["lenses"]["topology"]
@@ -844,6 +954,17 @@ def test_canonical_inspect_projects_bundle_without_mutating_any_member(
         }
     )
     bundle_module = ModuleType("vibecomfy.workflow_bundle")
+    security_module = ModuleType("vibecomfy.security")
+    active_gate = ContextVar("inspect_fake_gate", default=None)
+
+    class FakeGateContext:
+        def __init__(self, *, non_interactive, assume_yes):
+            self.non_interactive = non_interactive
+            self.assume_yes = assume_yes
+            self.audit = []
+
+    security_module.GateContext = FakeGateContext  # type: ignore[attr-defined]
+    security_module.set_gate_context = active_gate.set  # type: ignore[attr-defined]
 
     def load_bundle(path: Path):
         assert path.name == "workflow.py"
@@ -861,6 +982,7 @@ def test_canonical_inspect_projects_bundle_without_mutating_any_member(
             "vibecomfy.porting": porting,
             "vibecomfy.porting.render": render_module,
             "vibecomfy.workflow_bundle": bundle_module,
+            "vibecomfy.security": security_module,
         },
     ):
         outputs = inspect_canonical_bundle(
@@ -868,6 +990,7 @@ def test_canonical_inspect_projects_bundle_without_mutating_any_member(
             paths["workflow.vibe.json"],
             paths["source.json"],
             tmp_path / "inspection",
+            python_execution_consent="confirmed",
         )
 
     assert outputs["projection"].read_text(encoding="utf-8") == "workflow = VibeWorkflow()\n"
@@ -875,8 +998,28 @@ def test_canonical_inspect_projects_bundle_without_mutating_any_member(
     assert report["authority"] == "canonical_workflow_bundle"
     assert report["workflow_identity"] == "workflow:portrait"
     assert report["revision_id"] == "rev-origin"
+    assert report["python_execution_consent"] == "confirmed"
+    assert report["security_gate_audit"] == []
     assert set(report["members"]) == set(members)
     assert {name: path.read_bytes() for name, path in paths.items()} == members
+
+
+def test_canonical_inspect_rejects_missing_consent_before_loading_python(
+    tmp_path: Path,
+) -> None:
+    from astrid.packs.vibecomfy.executors._python_execution_consent import (
+        PythonExecutionConsentError,
+    )
+
+    with pytest.raises(PythonExecutionConsentError, match="python_execution_consent.*confirmed"):
+        inspect_canonical_bundle(
+            tmp_path / "workflow.py",
+            tmp_path / "workflow.vibe.json",
+            tmp_path / "source.json",
+            tmp_path / "inspection",
+            python_execution_consent=None,
+        )
+    assert not (tmp_path / "inspection").exists()
 
 
 def test_edit_applies_one_atomic_typed_batch_and_emits_fresh_projection(

@@ -95,6 +95,7 @@ def _write_fake_vibecomfy_package(pack_root: Path) -> None:
         "        from vibecomfy.security import _active_gate\n"
         "        gate = _active_gate.get()\n"
         "        assert gate is not None and gate.non_interactive and gate.assume_yes\n"
+        "        gate.audit.append({'kind': 'explicit_manual_capture', 'non_interactive': gate.non_interactive, 'assume_yes': gate.assume_yes})\n"
         "        ops = []\n"
         "        python = Path(candidate_python).read_bytes()\n"
         "        revision = 'captured-revision'\n"
@@ -125,7 +126,7 @@ def _write_fake_vibecomfy_package(pack_root: Path) -> None:
         "    def __init__(self, *, non_interactive, assume_yes):\n"
         "        self.non_interactive = non_interactive\n"
         "        self.assume_yes = assume_yes\n"
-        "        self.audit = [{'kind': 'explicit_manual_capture', 'non_interactive': non_interactive, 'assume_yes': assume_yes}]\n"
+        "        self.audit = []\n"
         "def set_gate_context(context): return _active_gate.set(context)\n",
         encoding="utf-8",
     )
@@ -338,6 +339,7 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
                     "parent_task_id": task_id,
                     "origin_task_id": task_id,
                     "transition_kind": "typed_edit",
+                    "python_execution_consent": "confirmed",
                 },
                 "input_digests": [
                     {"name": name, "digest": digest}
@@ -376,6 +378,7 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
         assert "sha256:" + hashlib.sha256(edit_report_bytes).hexdigest() == edit_report_output["digest"]
         edit_report = json.loads(edit_report_bytes)
         assert edit_report["transition_kind"] == "typed_edit"
+        assert edit_report["python_execution_consent"] == "confirmed"
         assert edit_report["workflow_id"] == "portrait"
         assert edit_report["revision_id"] == "edited-revision"
         assert edit_report["parent_revision"] == "origin-revision"
@@ -432,6 +435,7 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
                     "parent_task_id": edit_task_id,
                     "origin_task_id": task_id,
                     "transition_kind": "typed_edit",
+                    "python_execution_consent": "confirmed",
                 },
                 "input_digests": [
                     {"name": name, "digest": digest}
@@ -473,6 +477,7 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
         )
         edit_two_report = json.loads(edit_two_report_bytes)
         assert edit_two_report["transition_kind"] == "typed_edit"
+        assert edit_two_report["python_execution_consent"] == "confirmed"
         assert edit_two_report["revision_id"] == "edited-twice-revision"
         assert edit_two_report["parent_revision"] == "edited-revision"
         assert edit_two_report["parent_task_id"] == edit_task_id
@@ -515,6 +520,7 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
                     "parent_task_id": edit_two_task_id,
                     "origin_task_id": task_id,
                     "transition_kind": "manual_capture",
+                    "python_execution_consent": "confirmed",
                 },
                 "input_digests": [
                     {"name": name, "digest": digest}
@@ -556,6 +562,7 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
         )
         capture_report = json.loads(capture_report_bytes)
         assert capture_report["transition_kind"] == "manual_capture"
+        assert capture_report["python_execution_consent"] == "confirmed"
         assert capture_report["revision_id"] == "captured-revision"
         assert capture_report["parent_revision"] == "edited-twice-revision"
         assert capture_report["parent_task_id"] == edit_two_task_id

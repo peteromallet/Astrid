@@ -4,11 +4,12 @@
   "captured_at": "2026-09-10",
   "notes": [
     "Source and dependency identities are pinned without downloading model payloads.",
-    "GPU readiness remains a separate gate requiring mounted-byte verification and provider capacity."
+    "GPU readiness remains a separate gate requiring mounted-byte verification and provider capacity.",
+    "Candidate source custody records the committed pre-artifact Astrid parent; the successor commit carrying this artifact is intentionally not self-referenced."
   ],
   "repositories": {
-    "astrid": {"commit": "d896a452e522df1f8484b88cc0cf29ea419b5705", "tree": "872a6eefe3810bc355cff1bcc306a7080a376fec"},
-    "runtime": {"commit": "f804bf58a5783174e9e84d2762ec9b4d13d40acc", "tree": "48969849e4aae6425144159dd8433f091ba288ca"},
+    "astrid": {"commit": "617714ab4fbec52c1bd721dd80b7b7ff957972ed", "tree": "07029280deb8bfb8b29855b7377fdfbba5034ff0"},
+    "runtime": {"commit": "ff4e4dc4f708d003f01a6ea65e6282ffb465d650", "tree": "7e5f7fe77370294ea5d6f6469de5466f63f93769"},
     "reigh_app": {"commit": "7521d3812c36087b2cd9cb9a9cc0a78a394cedee", "tree": "59b0ae3a001cc6f9a44d1abc663c94dd0913a39a"},
     "reigh_worker": {"commit": "e0c6a0765bee05f27155b335bbf67110c0df6103", "tree": "ad4a1831f2f2f5b71d603e006de979eee7e97f36"},
     "vibecomfy": {"commit": "8f58c8143dd84c981f985b409a17a3df8f05b026", "tree": "b19e51fa2e390fb24b6a15131a76e77b8cbaa89b"},
@@ -221,7 +222,7 @@
     },
     "drivers": [
       {"path": "tests/integrations/test_c12_cpu_harness.py", "sha256": "4a2fe25e207871bf42b09db24bf36bf77dac2eb6cac3004d4d2831f8fe2d8da6", "role": "manager custody and durable supervisor"},
-      {"path": "tests/integrations/test_c12_cpu_runtime_harness.py", "sha256": "62066bc3d8b17e038cd368729e319a7a2617e1aa1eeecfea78196dea200e0f1c", "role": "Runtime-to-Worker-to-GenericPackHost CPU seam"},
+      {"path": "tests/integrations/test_c12_cpu_runtime_harness.py", "sha256": "6d1848aed944305e5f6fbcb2c4fd046c54a6b326fe2dd0f971fa438850be6888", "role": "Runtime-to-Worker-to-GenericPackHost CPU seam"},
       {"path": "tests/integrations/test_generation_runtime_composition.py", "sha256": "5adc5dfbd49508f7ee4aa2f484b86d0e1a31f9b68fff7db891a82360dd478cd4", "role": "typed image-generation CPU composition"},
       {"path": "../reigh-worker/scripts/capability_contracts/live_matrix_manifest.json", "sha256": "6c3dcc6458483da79582cb114dd7f09657d2a2c4b715c15f3f78012c7a6c1ad2", "role": "Worker live case inventory, 36 cases"},
       {"path": "../VibeComfy/tests/live_agentic_harness/scenario_manifest.json", "sha256": "07cf5308c64c40189751df84c74cd4a7e9a127c3d419ba86ac22630933f062e7", "role": "VibeComfy scenario inventory, 100 scenarios"}

@@ -55,7 +55,7 @@ FIXTURE_PACK = Path(__file__).parents[1] / "fixtures" / "c12_cpu_pack"
 # These are the post-T7 composition pins.  Keeping them explicit makes the
 # CPU journey fail closed when a dependency checkout drifts from the reviewed
 # composition instead of silently testing another tree.
-PINNED_RUNTIME_COMMIT = "f804bf58a5783174e9e84d2762ec9b4d13d40acc"
+PINNED_RUNTIME_COMMIT = "ff4e4dc4f708d003f01a6ea65e6282ffb465d650"
 PINNED_WORKER_COMMIT = "e0c6a0765bee05f27155b335bbf67110c0df6103"
 
 

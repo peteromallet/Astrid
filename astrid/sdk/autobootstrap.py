@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ RECONFIGURE_ACTION = "run `banodoco-local up --profile astrid`"
 INSTALL_RUNTIME_ACTION = (
     "python3 -m pip install 'banodoco-workspace-runtime @ "
     "git+https://github.com/banodoco/banodoco-workspace-runtime.git@"
-    "afccb430e2a983c968b6a8a96fd630ba3a6262fc'"
+    "bc74a4b2179de83ace55c35fa6371f10e1e58610'"
 )
 
 
@@ -88,7 +89,19 @@ def _launcher_command() -> list[str]:
     )
 
 
-def ensure_runtime(*, start_pack_host: bool = True) -> Mapping[str, Any]:
+def _launcher_timeout() -> float:
+    """Allow the runtime's admission budget plus launcher/process overhead."""
+    raw = _configured("BANODOCO_RUNTIME_ADMISSION_TIMEOUT_SECONDS") or "120"
+    try:
+        admission = float(raw)
+    except ValueError as exc:
+        raise AutoBootstrapError("runtime admission timeout must be finite and positive") from exc
+    if not math.isfinite(admission) or admission <= 0:
+        raise AutoBootstrapError("runtime admission timeout must be finite and positive")
+    return max(15.0, admission + 15.0)
+
+
+def ensure_runtime(*, start_pack_host: bool = True, data_root: str | Path | None = None) -> Mapping[str, Any]:
     """Invoke the installed launcher once and return its bounded result.
 
     Runtime reads may connect while an existing pack-host child is busy.  The
@@ -96,15 +109,26 @@ def ensure_runtime(*, start_pack_host: bool = True) -> Mapping[str, Any]:
     needs the generic pack host to be registered and preflight-ready.
     """
     manifest = _manifest_from_environment()
+    explicit_data_root = data_root is not None
     try:
         from astrid.sdk.storage_root import ensure_no_unmigrated_runtime, resolve_runtime_data_root
 
-        data_root = resolve_runtime_data_root()
-        if data_root is not None:
+        data_root = (
+            Path(data_root).expanduser().absolute()
+            if explicit_data_root
+            else resolve_runtime_data_root()
+        )
+        if data_root is not None and not explicit_data_root:
             ensure_no_unmigrated_runtime(data_root)
     except ValueError as exc:
+        next_action = (
+            "run `astrid-upgrade`"
+            if "astrid-upgrade" in str(exc)
+            else RECONFIGURE_ACTION
+        )
         raise AutoBootstrapError(
-            f"Astrid runtime data-root is not ready: {exc}; {RECONFIGURE_ACTION}"
+            f"Astrid runtime data-root is not ready: {exc}; {next_action}",
+            next_action=next_action,
         ) from exc
     command = [*_launcher_command(), "up", "--profile", PROFILE]
     if manifest is not None:
@@ -121,7 +145,7 @@ def ensure_runtime(*, start_pack_host: bool = True) -> Mapping[str, Any]:
             stderr=subprocess.PIPE,
             text=True,
             check=False,
-            timeout=15.0,
+            timeout=_launcher_timeout(),
         )
     except subprocess.TimeoutExpired as exc:
         raise AutoBootstrapError(

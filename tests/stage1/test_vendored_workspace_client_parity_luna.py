@@ -34,8 +34,8 @@ METADATA_PATH = ROOT / "banodoco_workspace_client" / "contract_metadata.py"
 PINNED_PROTOCOL = "workspace.v1"
 PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:dc91a45390f33582f0299f81285d165128e1885a9fd62b4ccffa7b8e465ed63a"
 PINNED_SCHEMA_DIGEST = "sha256:e64d2bd291f7e746d66cc688e673ee98dd240117e42131dbcde613080993c2d4"
-PINNED_GENERATED_SHA256 = "fd4f8e29701785e6b9e635032a9146abb3264a1816044bdb99617df98673ac2a"
-PINNED_METADATA_SHA256 = "0e09db73e5ec357ca6b39fe022fdbc8b4f4436c41b82f183e09aee6aba7c933b"
+PINNED_GENERATED_SHA256 = "d574962df19db3591ea1070adbeaf0746b3bbcbae77031cdafe322233ba37f7d"
+PINNED_METADATA_SHA256 = "bbf698e8c2d1e7c4af3bcbc615603f7419c41877b804a41b25ea2be9eb2865a2"
 
 
 def _camel_to_snake(value: str) -> str:
@@ -44,7 +44,7 @@ def _camel_to_snake(value: str) -> str:
 
 
 def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
-    assert SOURCE_COMMIT == "fff23d01d53b874defdd3654fb23dc9051220122"
+    assert SOURCE_COMMIT == "90f4a9f22764bc66fa8b30d7d9081c6ac6307328"
     assert PROTOCOL == PINNED_PROTOCOL == generated.PROTOCOL
     assert COMPONENT_MANIFEST_SHA256 == PINNED_COMPONENT_MANIFEST_SHA256
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST
@@ -116,3 +116,8 @@ def test_obsolete_generic_client_artifact_is_absent() -> None:
     assert not (ROOT / "generated" / "runtime_client.py").exists()
     assert not (ROOT / "generated" / "runtime_client_metadata.py").exists()
     assert not (ROOT / "scripts" / "generate_runtime_client.py").exists()
+
+
+def test_generation_preserves_source_task_identity():
+    row = generated.Generation.from_json({"generation_id": "g", "project_id": "p", "source_task_id": "task-1", "type": "image", "status": "completed", "version": 1, "created_at": "now", "updated_at": "now"})
+    assert row.source_task_id == "task-1"

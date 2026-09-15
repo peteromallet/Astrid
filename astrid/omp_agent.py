@@ -19,13 +19,38 @@ from .version import ASTRID_VERSION
 
 DEFAULT_AGENT = "astrid"
 
-# ``astrid`` is the single user-facing command.  The conversational agent is
-# the default route, while these names retain the product gateway's compact
-# toolkit surface.  Keep this list explicit: an unknown first word is useful
-# natural-language input and must continue to become a one-shot prompt.
-_TOOLKIT_FAMILIES = frozenset(
+# ``astrid`` is the single user-facing command. Product families are stable
+# core routes. Pack routes are discovered from installed manifests at dispatch
+# time; a pack does not need a second launcher allowlist entry. Reserved
+# conversational/auth words stay blocked so they cannot be claimed by a pack.
+_PRODUCT_TOOLKIT_FAMILIES = frozenset(
     {"projects", "timelines", "media", "tasks", "runs", "doctor", "backup"}
 )
+_PACK_ROUTE_BLOCKLIST = frozenset(
+    {"agent", "auth", "help", "login", "status", "logout", "revoke"}
+)
+
+
+def _installed_pack_families() -> frozenset[str]:
+    """Return visible installed/discovered pack ids without starting runtime."""
+    try:
+        from astrid.core.pack.discovery import discover_pack_metadata
+
+        return frozenset(
+            pack.id
+            for pack in discover_pack_metadata()
+            if pack.id not in _PACK_ROUTE_BLOCKLIST
+        )
+    except Exception:  # pragma: no cover - minimal launcher must still work
+        return frozenset()
+
+
+def _toolkit_families() -> frozenset[str]:
+    return _PRODUCT_TOOLKIT_FAMILIES | _installed_pack_families()
+
+
+# Kept as a compatibility view for callers/tests that import the old name.
+_TOOLKIT_FAMILIES = _PRODUCT_TOOLKIT_FAMILIES
 _AUTH_ALIASES = frozenset(AUTH_COMMANDS)
 
 _LAUNCHER_CANDIDATES: tuple[Path, ...] = (Path.home() / ".bun" / "bin" / "agent",)
@@ -120,7 +145,7 @@ def _print_unified_help(stream=None) -> None:
     """Print the top-level command contract without starting OMP or a runtime."""
     stream = sys.stdout if stream is None else stream
     print(_USAGE, end="", file=stream)
-    print("Toolkit families: " + " ".join(sorted(_TOOLKIT_FAMILIES)), file=stream)
+    print("Toolkit families: " + " ".join(sorted(_toolkit_families())), file=stream)
     print(
         "\nExamples:\n"
         "  astrid projects list --json\n"
@@ -265,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_auth(rest[1:])
     if rest and rest[0] in _AUTH_ALIASES:
         return run_auth(rest)
-    if rest and rest[0] in _TOOLKIT_FAMILIES:
+    if rest and (
+        rest[0] in _PRODUCT_TOOLKIT_FAMILIES
+        or rest[0] in _installed_pack_families()
+    ):
         return _dispatch_toolkit(rest)
     if rest and rest[0] == "agent":
         rest.pop(0)

@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload_preview, indent=2))
         return 0
 
-    api_key = CredentialsScope.get("fal", env_file=args.env_file)
+    api_key = CredentialsScope.get_local("fal", env_file=args.env_file)
     payload = {
         "video_url": _data_uri_for_video(clip),
         "text_prompt": args.prompt,

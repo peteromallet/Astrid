@@ -9,19 +9,32 @@
       "-m",
       "astrid.packs.vibecomfy.executors.validate.run",
       "validate",
-      "{workflow}"
+      "{workflow}",
+      "--python",
+      "{python}",
+      "--companion",
+      "{companion}",
+      "--source",
+      "{source}",
+      "--out",
+      "{out}"
+    ],
+    "input_args": [
+      {
+        "input": "python_execution_consent",
+        "flag": "--python-execution-consent",
+        "optional": true
+      }
     ]
   },
-  "conditions": [
-    {
-      "input": "workflow",
-      "kind": "requires_input"
-    }
-  ],
-  "description": "Validate a VibeComfy workflow through the VibeComfy CLI.",
+  "description": "Validate UI JSON statically or validate a canonical Python bundle after explicit python_execution_consent=confirmed through VibeComfy's audited CLI gate.",
   "graph": {
     "consumes": [
-      "workflow"
+      "workflow",
+      "python",
+      "companion",
+      "source",
+      "python_execution_consent"
     ],
     "provides": [
       "vibecomfy_validation"
@@ -30,10 +43,47 @@
   "id": "vibecomfy.validate",
   "inputs": [
     {
-      "description": "VibeComfy workflow JSON file.",
+      "default": "",
+      "description": "Optional VibeComfy UI workflow JSON. Use this or all three canonical members.",
       "name": "workflow",
-      "required": true,
+      "required": false,
       "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional canonical workflow.py member.",
+      "name": "python",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional canonical workflow.vibe.json companion member.",
+      "name": "companion",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional byte-identical source.json member.",
+      "name": "source",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "description": "Required only for canonical Python bundles; exact accepted value is confirmed. Omit for static UI JSON validation.",
+      "name": "python_execution_consent",
+      "required": false,
+      "type": "string"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "validation",
+      "type": "file",
+      "path_template": "{out}/validation-report.json",
+      "artifact_type": "vibecomfy/workflow-validation-report",
+      "description": "Validation status, issues, consent input when used, and audited VibeComfy gate decisions."
     }
   ],
   "isolation": {
@@ -75,15 +125,15 @@
     "runtime_module": "astrid.packs.vibecomfy.executors.validate.run",
     "vibecomfy_command": "validate",
     "workflow_input_contract": {
-      "description": "VibeComfy workflow JSON file.",
+      "description": "UI JSON or complete canonical Python/companion/source sibling bundle.",
       "format": "ComfyUI/VibeComfy workflow JSON",
       "name": "workflow",
-      "required": true,
+      "required": false,
       "type": "file"
     },
     "workflows": []
   },
   "name": "VibeComfy Validate",
-  "short_description": "Validate a VibeComfy / ComfyUI workflow JSON without executing it.",
+  "short_description": "Validate a VibeComfy workflow without running generation.",
   "version": "0.1.0"
 }

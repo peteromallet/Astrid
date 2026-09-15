@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -71,6 +71,72 @@ def inspect_workflow(workflow_path: Path, out_dir: Path) -> dict[str, Path]:
             "schema_version": 1,
             "authority": "input_ui_graph",
             "source_sha256": _sha256(source_bytes),
+            "python_execution_consent": None,
+            "security_gate_audit": [],
+            "projection": "read_only_python_like_ir",
+            "lenses": {
+                "census": rendered["census"],
+                "surface": rendered["surface"],
+                "topology": rendered["topology"],
+                "topology_source": rendered.get("topology_source", "computed"),
+            },
+        },
+    )
+    return {"projection": projection_path, "inspection": inspection_path}
+
+
+def inspect_canonical_bundle(
+    python_path: Path,
+    companion_path: Path,
+    source_path: Path,
+    out_dir: Path,
+    *,
+    python_execution_consent: str | None,
+) -> dict[str, Path]:
+    """Read a canonical sibling bundle and project it without publishing edits."""
+    from ._bundle_inputs import staged_workflow_path
+    from ._python_execution_consent import confirmed_python_execution_scope
+
+    with confirmed_python_execution_scope(python_execution_consent) as gate:
+        with staged_workflow_path(
+            workflow=None,
+            python=python_path,
+            companion=companion_path,
+            source=source_path,
+        ) as (staged_python, _authority):
+            from vibecomfy.porting.render import render
+            from vibecomfy.workflow_bundle import load_bundle
+
+            bundle = load_bundle(staged_python)
+            rendered = render(bundle.workflow, lenses=("census", "surface", "topology"))
+            if not isinstance(rendered, Mapping):
+                raise WorkflowIrBridgeError("VibeComfy returned an invalid IR projection")
+            python_bytes = python_path.read_bytes()
+            companion_bytes = companion_path.read_bytes()
+            source_bytes = source_path.read_bytes()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    projection_path = out_dir / "workflow-ir.py"
+    projection_path.write_text(str(rendered["surface"]), encoding="utf-8")
+    inspection_path = out_dir / "inspection.json"
+    _write_json(
+        inspection_path,
+        {
+            "schema_version": 1,
+            "authority": "canonical_workflow_bundle",
+            "workflow_identity": bundle.workflow_identity,
+            "revision_id": bundle.revision_id,
+            "parent_revision": bundle.parent_revision or None,
+            "semantic_digest": bundle.semantic_digest,
+            "ui_digest": bundle.ui_digest,
+            "source_sha256": _sha256(source_bytes),
+            "python_execution_consent": "confirmed",
+            "security_gate_audit": list(gate.audit),
+            "members": {
+                "workflow.py": _sha256(python_bytes),
+                "workflow.vibe.json": _sha256(companion_bytes),
+                "source.json": _sha256(source_bytes),
+            },
             "projection": "read_only_python_like_ir",
             "lenses": {
                 "census": rendered["census"],
@@ -108,8 +174,12 @@ def _parse_edit_document(path: Path) -> tuple[list[dict[str, Any]], int]:
 
 
 def _diagnostic_payload(value: Any) -> dict[str, Any]:
-    if is_dataclass(value):
-        return asdict(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        payload = {
+            item.name: _diagnostic_value(getattr(value, item.name))
+            for item in fields(value)
+        }
+        return payload
     return {
         "code": str(getattr(value, "code", "unknown")),
         "message": str(getattr(value, "message", value)),
@@ -117,12 +187,40 @@ def _diagnostic_payload(value: Any) -> dict[str, Any]:
     }
 
 
+def _diagnostic_value(value: Any) -> Any:
+    """Thaw immutable diagnostic containers into JSON-safe values."""
+    if isinstance(value, Mapping):
+        return {str(key): _diagnostic_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_diagnostic_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_diagnostic_value(item) for item in value), key=repr)
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            item.name: _diagnostic_value(getattr(value, item.name))
+            for item in fields(value)
+        }
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, (str, int, float, bool)):
+        return enum_value
+    return str(value)
+
+
 def edit_workflow(
     workflow_path: Path,
     operations_path: Path,
     out_dir: Path,
+    *,
+    schema_provider: Any | None = None,
 ) -> dict[str, Path]:
-    """Apply one atomic typed-tool batch and emit a new UI graph artifact."""
+    """Apply one typed-tool batch and emit a UI graph artifact.
+
+    Schema-dependent operations require VibeComfy schema authority. Callers
+    may pass an explicit provider; otherwise VibeComfy's configured provider is
+    used and missing touched schemas fail closed.
+    """
     workflow, source_bytes = _read_json_object(workflow_path, label="workflow")
     ops, expected_revision = _parse_edit_document(operations_path)
 
@@ -141,7 +239,7 @@ def edit_workflow(
                 f"operations.ops[{index}].op must be one of: {allowed}"
             )
 
-    session = EditSession(workflow)
+    session = EditSession(workflow, schema_provider=schema_provider)
     try:
         result = apply_edit_tool_call(
             session,

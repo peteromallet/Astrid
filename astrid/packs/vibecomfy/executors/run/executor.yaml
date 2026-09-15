@@ -10,6 +10,12 @@
       "astrid.packs.vibecomfy.executors.run.run",
       "run",
       "{workflow}",
+      "--python",
+      "{python}",
+      "--companion",
+      "{companion}",
+      "--source",
+      "{source}",
       "--out",
       "{out}",
       "--task-identity",
@@ -22,16 +28,13 @@
       "{readiness_profile_hash}"
     ]
   },
-  "conditions": [
-    {
-      "input": "workflow",
-      "kind": "requires_input"
-    }
-  ],
   "description": "Run a VibeComfy workflow through the VibeComfy CLI.",
   "graph": {
     "consumes": [
-      "workflow"
+      "workflow",
+      "python",
+      "companion",
+      "source"
     ],
     "provides": [
       "vibecomfy_run",
@@ -41,9 +44,31 @@
   "id": "vibecomfy.run",
   "inputs": [
     {
-      "description": "VibeComfy workflow JSON file.",
+      "default": "",
+      "description": "Optional VibeComfy UI workflow JSON. Use this or all three canonical members.",
       "name": "workflow",
-      "required": true,
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional canonical workflow.py member.",
+      "name": "python",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional canonical workflow.vibe.json companion member.",
+      "name": "companion",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional byte-identical source.json member.",
+      "name": "source",
+      "required": false,
       "type": "file"
     },
     {
@@ -112,10 +137,10 @@
     "output_result_manifest": true,
     "vibecomfy_command": "run",
     "workflow_input_contract": {
-      "description": "VibeComfy workflow JSON file.",
-      "format": "ComfyUI/VibeComfy workflow JSON",
+      "description": "UI JSON or complete canonical Python/companion/source sibling bundle.",
+      "format": "ComfyUI/VibeComfy workflow JSON or canonical bundle",
       "name": "workflow",
-      "required": true,
+      "required": false,
       "type": "file"
     },
     "workflows": [],

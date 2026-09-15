@@ -47,3 +47,9 @@ observed pod location in the provider receipt. A profile does not create or resi
 `storage_name` must name an existing RunPod network volume, and callers that
 need persistence should also set `require_storage` (or use
 `--require-storage`).
+
+For Astrid's general credential policy, see [Credential strategy](credentials.md).
+For RunPod key storage and replacement, see [RunPod credentials](runpod-credentials.md).
+Local Astrid commands resolve the referenced variable from the shared
+`~/.astrid/astrid.env` file, then use process environment for CI and deployed
+service injection. Override the shared file location with `ASTRID_ENV_FILE`.

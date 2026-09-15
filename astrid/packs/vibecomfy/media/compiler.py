@@ -16,7 +16,9 @@ from dataclasses import asdict, dataclass
 from importlib.resources import files
 from typing import Any, Mapping
 
-ENGINE_REVISION = "dc8d962a8e330015bbb209080292fad248f1ceb3"
+from astrid.core.generation.vibecomfy_dependency import VIBECOMFY_ENGINE_REVISION
+
+ENGINE_REVISION = VIBECOMFY_ENGINE_REVISION
 
 
 class MediaCompileError(ValueError):

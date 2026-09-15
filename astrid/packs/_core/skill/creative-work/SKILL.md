@@ -14,6 +14,24 @@ path is `astrid/packs/<pack>/executors/<slug>/STAGE.md` (or
 Packs own execution guidance; this skill does not duplicate their procedures or
 create a new runtime pack.
 
+When delivering a video preview for feedback on reference frames, storyboards,
+timing, or an ongoing edit, use the rendering skill's review mode by default.
+The user needs visible shot names and timecodes to identify what to change.
+Keep review mode on through subsequent revisions unless the user requests a
+clean export; a separate filmstrip viewer does not replace labels in the video.
+Remotion's default review export uses its `--scale` option to fit the authored
+canvas inside 640x360 with the original aspect ratio. The props and authored
+coordinates remain at the canonical canvas size, and the actual scaled profile
+is probed and recorded. The exported video marks this state with `Low Res
+Render` at top left; shot names and timecodes stay at top right. Clean exports
+and explicit profiles retain their existing resolution behavior.
+
+Review labels and subtitles are inspection overlays and must not drive the
+creative layout. Center authored content in the full canvas and avoid
+reserving space for captions unless the user explicitly asks for a
+caption-safe design; scale review subtitles with the authored canvas while
+keeping the low-resolution badge readable.
+
 ## Route by intent
 
 | User intent | Read and use | Typical entrypoints |

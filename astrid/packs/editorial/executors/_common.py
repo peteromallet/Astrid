@@ -11,7 +11,7 @@ from astrid.core.util.credentials_scope import CredentialsScope
 def load_api_key(env_file: Path | None) -> str:
     """Resolve the OPENAI_API_KEY via the canonical scoped credentials resolver."""
     try:
-        return CredentialsScope.get("openai", env_file=env_file)
+        return CredentialsScope.get_local("openai", env_file=env_file)
     except AstridError as exc:
         raise SystemExit(str(exc)) from exc
 

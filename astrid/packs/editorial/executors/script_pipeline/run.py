@@ -220,7 +220,7 @@ def build_chat_client(config: PipelineConfig, *, fake: bool, env: dict[str, str]
             valid_options=["deepseek"],
             recovery_command="set provider.name to 'deepseek' in the preset config",
         )
-    api_key = CredentialsScope.get("deepseek")
+    api_key = CredentialsScope.get_local("deepseek")
     return DeepSeekClient(config.provider, api_key)
 
 

@@ -2,13 +2,39 @@
 
 For the reusable method, including collaboration and agent checks, start with [Replacing speech in an existing video](replacing-speech-in-existing-video.md). This document records the project-specific example and handoff.
 
-Updated 9 September 2026. Project: `matrix-minkhole`. Timeline: `rough-cut`.
+Updated 11 September 2026. Project: `matrix-minkhole`. Timeline: `rough-cut`.
 
 ## Current result
 
-We built a timing preview using the original Matrix pill scene, replacement narration and revised picture cuts. The latest delivered preview is [v13](../runs/matrix-minkhole/minkhole-review-v13.mp4), render `e3aaf311c17b450198d1c2d6f1582887`, lasting approximately 29.54 seconds.
+The latest delivered reference-keyframe preview is **v23**, canonical render `a5f7624d22eb4e85bfc9a40aba81f76a`, digest `sha256:29f72b5caa8349afa6c6731dc6a2347264aa527737b670250bd0fa1c8eba2dcd`, approximately **43.492667 seconds** at 720p/24 fps. Parent timeline version: **21**; the final reflection child is version **16**. It was rendered through the Astrid task runtime with `review: true`, opened from the exact successful run, and checked as a reference-keyframe preview. The v23 picture updates preserve the accepted four-limb correction while matching the mink scale and the amazed pixel-Neo expression; this remains a still-based visual draft rather than finished animation or lip-sync.
 
-The original red pill is still visible in the moving footage. The [pixely creature image](../runs/matrix-minkhole/planning/pixely-creature-concept.png) is a concept still; the moving replacement and matching reflections remain to be made. MiniMax/H3 was investigated as a possible route, but was not used to produce this edit.
+```bash
+python3 -m astrid runs open a5f7624d22eb4e85bfc9a40aba81f76a --project matrix-minkhole
+```
+
+The first five seconds introduce the canonical mink-on-ASTRID logo, melting pixels and a Matrix-style pullback. The final part of that pullback uses actual Morpheus speaking footage and continues into the original “You have two options” opening. The full dialogue remains present.
+
+The current six-shot cut is: **00:00–00:05** ASTRID through the glasses; **00:05–00:08** “Two options”; **00:08–00:19** blue-pill manual tools; **00:19–00:22** red pill; **00:22–00:26.916667** creature reveal in the glasses; and **00:26.916667–00:43.492667** the reflection close-up. The separate frontal smiling Neo still remains removed. The final shot keeps the two reflections distinct: only the touching, screen-left Neo changes, while the screen-right blue-pill Neo remains human. The mink then examines its hands, says “Let’s go!”, and runs through the pixel world before the canonical Astrid logo and slogan ending.
+
+## Current production shot approach
+
+Treat the v23 cut as the timing and continuity reference for the next generation pass. Start with one short, representative speaking-face passage, using the actual source shot and its surrounding original audio. Resolve the replacement line, source interval, retained context and spatial mask before processing the longer reflection sequence. Keep the hand/object reveal and the two-reflection transformation as a separate pilot: it needs tracked spatial masks, matched before/after contact frames and explicit protection for the unaffected screen-right character.
+
+The practical order is: lock the Astrid timeline and phrase timing; test one H3 audio/video inpainting passage; inspect the generated line and both audio boundaries; then test the hand/object or reflection replacement separately. Combine them only after each pass is visually stable. A still-based reference-keyframe preview can establish design and timing, but it cannot prove temporal consistency, lip-sync, identity preservation or reflection continuity.
+
+## Lessons from the reference-keyframe revisions
+
+- **Review mode is the default during feedback.** Use `--review` on every revision and inspect the actual exported labels. The filmstrip complements the video; it does not replace those labels.
+- **Review exports are lightweight by design.** Remotion uses its backend `--scale` option to fit the authored canvas inside 640x360 while preserving aspect ratio. The canonical canvas and authored positions stay unchanged, the output profile matches the dimensions actually emitted, and the video carries `Low Res Render` at top left. Explicit profiles and clean exports keep their existing resolution.
+- **Find the real character in the referenced timeline.** The useful Astrid-intro references were later registered anchors, not its first opening image or the initially empty saved-reference list. `anchor_shot_v02.png` established the mink-on-logo design, `anchor_shot_v03.png` the upright mink and slogan, and `anchor_shot_v06.png` the side profile. These names describe the inspected exports; recover the managed media through the source timeline rather than treating a filename as identity.
+- **Use those images as generation inputs every time.** The mink is flat orange pixel art with a long low body, short legs and dark pixel details. Earlier furry, rounded or glowing-outline substitutes did not match. Reflections must preserve the same character design.
+- **Track the two reflections separately.** Screen-left is the mink interaction and transformation; screen-right retains the human blue-pill character. Keep matched before/after contact frames and preserve the unaffected figure.
+- **Preserve speech while changing picture.** Removing the smiling still meant extending the preceding reflection picture, not shortening its dialogue. Adding the intro must not lose “You have two options.” Compare decoded audio when an edit is picture-only.
+- **A zoom into a speaking shot needs the real shot.** The opening zoom was corrected to use advancing source footage, with matching source time across the following cut. Check adjacent rendered frames for continuity.
+
+## Historical timing preview (v13)
+
+The remainder records the earlier 9 September timing pass and its evidence. Its render IDs, timestamps and future-work list are historical, not instructions to restore that edit. v13 (`e3aaf311c17b450198d1c2d6f1582887`) lasted about 29.54 seconds and still used the original red-pill footage. MiniMax/H3 was investigated but was not used for these delivered revisions.
 
 ## Script and picture
 
@@ -35,7 +61,7 @@ The original red pill is still visible in the moving footage. The [pixely creatu
 
 ## The review loop
 
-1. Render a concrete edit and pin review evidence to that exact run.
+1. Render a concrete edit with `--review`, verify visible shot names/timecodes in the video, and pin review evidence to that exact run.
 2. Scan a contact sheet for picture continuity. Sample more densely around a suspicious cut; inspect the frames immediately before and after it.
 3. Compare each phrase’s beginning and end with the picture. Use the waveform to distinguish an actual quiet interval from missing transcript annotations.
 4. Listen around the proposed edit. ASR gives a starting point; the audible onset determines the final cut.
@@ -79,7 +105,7 @@ The [audio integration document](../docs/plans/timeline-inspector-audio-integrat
 
 The earlier [audio-v11 diagnostic](../runs/matrix-minkhole/audio-v11/sentence-review.html) and [waveform sheet](../runs/matrix-minkhole/audio-v11/auditory-timeline.png) show the **old v11 edit**, including the long pause. They are reference evidence, not current v13 views. Integrated playback still needs a fresh Matrix/browser-backed check; implementation tests do not replace that review.
 
-## Next steps
+## Historical next steps after v13
 
 1. **Review v13 in the integrated inspector.** Confirm runtime/client compatibility, generate the pinned filmstrip with media, and check waveform, phrase coverage, seeking and cut navigation against the actual video. Admit verified speech annotations if phrase rows are missing.
 2. **Finish the picture timing before effects.** Use phrase boundaries and cut-neighbor frames to review the reveal, face return and pickup. Keep any new changes tied to a new render and its own evidence.

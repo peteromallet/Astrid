@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from astrid.core.execution.process_group import _process_snapshot
+from astrid.core.generation.vibecomfy_dependency import (
+    VibeComfyDependencyError,
+    dependency_pythonpath,
+)
 
 PACK_HOST_ACTOR = "astrid-pack-host"
 PACK_HOST_SCOPES = (
@@ -29,6 +33,7 @@ PACK_HOST_SCOPES = (
     "objects:read",
     "objects:write",
 )
+PACK_HOST_PYTHON_ENV = "ASTRID_PACK_HOST_PYTHON"
 
 
 class PackHostBootstrapError(RuntimeError):
@@ -47,6 +52,26 @@ class PackHostBootstrapError(RuntimeError):
         self.request_id = request_id
         self.terminal = terminal
 
+def _pack_host_python_executable() -> str:
+    """Return the selected pack-host interpreter without resolving venv links."""
+    configured = os.environ.get(PACK_HOST_PYTHON_ENV, "").strip()
+    if not configured:
+        return os.path.abspath(sys.executable)
+
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        raise PackHostBootstrapError(
+            f"{PACK_HOST_PYTHON_ENV} must be an absolute path to an executable file"
+        )
+    try:
+        executable = candidate.is_file() and os.access(candidate, os.X_OK)
+    except (OSError, ValueError):
+        executable = False
+    if not executable:
+        raise PackHostBootstrapError(
+            f"{PACK_HOST_PYTHON_ENV} must be an absolute path to an executable file"
+        )
+    return os.path.abspath(str(candidate))
 
 def _host_pid_alive(pid: Any) -> bool:
     try:
@@ -176,15 +201,11 @@ def _write_object(path: Path, value: Mapping[str, Any]) -> None:
 
 
 def _dependency_pythonpath() -> tuple[str, ...]:
-    """Keep explicitly supplied interpreter dependency roots across the host boundary."""
-    values: list[str] = []
-    for raw in os.environ.get("PYTHONPATH", "").split(os.pathsep):
-        if not raw:
-            continue
-        path = Path(raw)
-        if path.name in {"site-packages", "dist-packages"}:
-            values.append(str(path))
-    return tuple(dict.fromkeys(values))
+    """Keep only approved dependency roots across the host boundary."""
+    try:
+        return dependency_pythonpath()
+    except VibeComfyDependencyError as exc:
+        raise PackHostBootstrapError(str(exc)) from exc
 
 
 def _provision_render_runtime_env(
@@ -355,6 +376,7 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             or not source_path.is_dir() or source_path.is_symlink()
             or worker_path.stat().st_mode & 0o777 != 0o600):
         raise PackHostBootstrapError(f"generic Astrid pack host handoff is unavailable; {reconfigure_action}")
+    host_python = _pack_host_python_executable()
     try:
         from astrid.core.pack.source_setup import active_source_inventory
 
@@ -454,7 +476,7 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
         expected = {
             # Preserve the venv executable path: resolving its symlink would
             # collapse different dependency environments to the base Python.
-            "python_executable": os.path.abspath(sys.executable),
+            "python_executable": host_python,
             "endpoint": endpoint,
             "executor_id": PACK_HOST_ACTOR,
             "ready_file": str(ready_path),
@@ -503,7 +525,7 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
         log_path = runtime_support / "generic-host.log"
         matrix = source_path / "config" / "astrid-beta-capabilities.json"
         argv = [
-            sys.executable,
+            host_python,
             "-m", "astrid.core.execution.generic_host", "run",
             "--pack-root", str(pack_root),
             "--runtime-endpoint", endpoint,

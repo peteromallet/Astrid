@@ -62,6 +62,7 @@ from astrid.packs.rendering.backends._shared import (
     _profile_mismatches,
     _reject_unknown_config,
     _remotion_mux_profile,
+    _review_output_profile,
     _render_provenance_payload,
     _serialize_timeline,
     _timeline_alpha,
@@ -456,7 +457,31 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
         # through the shared Remotion capture host; everything else keeps the
         # frozen H.264/yuv420p MP4 contract.  The declared profile must match
         # the probed artifact exactly (strict validation).
-        declared_profile = _remotion_mux_profile(request.profile or canonical, alpha=alpha)
+        review = (
+            json.loads(request.metadata["review"])
+            if "review" in request.metadata
+            else None
+        )
+        render_scale = None
+        profile_for_output = request.profile or canonical
+        if request.profile is None and review is not None:
+            profile_for_output, render_scale = _review_output_profile(canonical, alpha=alpha)
+        declared_profile = (
+            profile_for_output
+            if render_scale is not None
+            else _remotion_mux_profile(profile_for_output, alpha=alpha)
+        )
+        # ``useVideoConfig()`` remains authored-canvas sized under Remotion's
+        # native ``--scale`` flag.  Pin the emitted dimensions in the review
+        # props so the shared overlay can identify a low-resolution artifact.
+        if isinstance(review, dict):
+            review = {
+                **review,
+                "render_dimensions": {
+                    "width": declared_profile.width,
+                    "height": declared_profile.height,
+                },
+            }
         ownership = AudioOwnership.RENDERED
         private_tmp = lifecycle.enter_context(
             TemporaryDirectory(
@@ -474,7 +499,8 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
             composition_id=THREE_COMPOSITION_ID,
             theme_path=settings.theme_path,
             min_free_gb=settings.min_free_gb,
-            review=json.loads(request.metadata["review"]) if "review" in request.metadata else None,
+            review=review,
+            render_scale=render_scale,
         )
         output_path.unlink(missing_ok=True)
         os.replace(staged_video, output_path)
@@ -507,6 +533,7 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
                     "capture_host": "remotion",
                     "composition": THREE_COMPOSITION_ID,
                     **backend_provenance,
+                    "review_scale": render_scale,
                 }
             },
             normalization=[],

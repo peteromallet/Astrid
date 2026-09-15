@@ -364,8 +364,8 @@ def test_provision_named_storage_missing_fails_before_launch_without_creation(
     monkeypatch.setenv("RUNPOD_API_KEY", "test-key-rpa_0000000000000000000000000000000000000000000000")
 
     with patch("runpod_lifecycle.launch", mock_launch), \
-         patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value=None)), \
-         patch("runpod_lifecycle.Pod.create_storage", AsyncMock()) as create_storage:
+         patch("runpod_lifecycle.api.get_network_volumes", return_value=[]), \
+         patch("runpod_lifecycle.api.create_network_volume") as create_storage:
         with pytest.raises(AstridError) as raised:
             cmd_provision(Args(), produces_dir)
 
@@ -400,7 +400,7 @@ def test_provision_configured_storage_name_is_recorded_in_canonical_handle(
     monkeypatch.setenv("RUNPOD_API_KEY", "test-key-rpa_0000000000000000000000000000000000000000000000")
 
     with patch("runpod_lifecycle.launch", mock_launch), \
-         patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value={"id": "vol-astrid-storage"})), \
+         patch("runpod_lifecycle.api.get_network_volumes", return_value=[{"id": "vol-astrid-storage", "name": "astrid-storage"}]), \
          patch("runpod_lifecycle.RunPodConfig", MagicMock()):
         exit_code = cmd_provision(Args(), produces_dir)
 
@@ -914,7 +914,7 @@ def test_session_transient_handle_exists_during_detached_exec_and_is_removed_aft
     try:
         with patch("runpod_lifecycle.launch", mock_launch), \
              patch("runpod_lifecycle.get_pod", AsyncMock(return_value=mock_pod)), \
-             patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value={"id": "vol-astrid-storage"})), \
+             patch("runpod_lifecycle.api.get_network_volumes", return_value=[{"id": "vol-astrid-storage", "name": "astrid-storage"}]), \
              patch("runpod_lifecycle.ship_and_run_detached", ship), \
              patch("runpod_lifecycle.RunPodConfig", MagicMock()):
             from astrid.packs.runpod.executors.provision.run import cmd_session

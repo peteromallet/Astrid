@@ -83,9 +83,10 @@ def test_upload_outputs_preserves_explicit_contract_fields_without_gen_metadata(
         ("images/output_000.png", "output_000.png", "image/png", "generated_images"),
         ("videos/output_000.mp4", "output_000.mp4", "video/mp4", "generated_videos"),
         ("audio/output_000.wav", "output_000.wav", "audio/wav", "generated_audio"),
+        ("agent-view/structure.md", "structure.md", "text/markdown", "structure"),
     ],
 )
-def test_upload_outputs_maps_generation_directories_at_runtime_boundary(
+def test_upload_outputs_maps_known_namespaces_at_runtime_boundary(
     tmp_path: Path,
     staged_filename: str,
     runtime_filename: str,
@@ -168,6 +169,38 @@ def test_upload_outputs_maps_generation_directories_at_runtime_boundary(
     assert descriptor["path"] == str(staged)
 
 
+def test_upload_outputs_rejects_known_namespace_leaf_collisions(tmp_path: Path) -> None:
+    first = tmp_path / "first.bin"
+    second = tmp_path / "second.bin"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    calls: list[Path] = []
+
+    def upload_object(path: Path, **_kwargs: object) -> object:
+        calls.append(path)
+        data = path.read_bytes()
+        return SimpleNamespace(
+            digest="sha256:" + hashlib.sha256(data).hexdigest(),
+            size=len(data),
+        )
+
+    host = object.__new__(GenericPackHost)
+    host.client = SimpleNamespace(
+        INLINE_SETTLEMENT_OUTPUTS=False,
+        upload_object=upload_object,
+    )
+
+    with pytest.raises(HostError, match="collide on managed filename"):
+        host._upload_outputs(
+            [
+                {"name": "first", "path": str(first), "filename": "agent-view/structure.md"},
+                {"name": "second", "path": str(second), "filename": "agent-view/structure.md"},
+            ],
+            project_id=None,
+        )
+    assert calls == [first]
+
+
 def test_runtime_upload_binding_uses_leaf_and_stable_replay_key(tmp_path: Path) -> None:
     payload = b"replay-safe-generation-output"
     staged = tmp_path / "attempt" / "outputs" / "images" / "output_000.png"
@@ -227,6 +260,8 @@ def test_runtime_upload_binding_uses_leaf_and_stable_replay_key(tmp_path: Path) 
         "images/nested/output.png",
         "videos/nested/output.mp4",
         "audio/nested/output.wav",
+        "agent-view/nested/output.png",
+        "agent-view/../output.png",
         "nested/output.png",
         "/tmp/output.png",
         "images\\output.png",

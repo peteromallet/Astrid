@@ -10,6 +10,9 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
+
+from astrid.core._shared.result_manifest import build_manifest, write_manifest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,6 +30,15 @@ def main(argv: list[str] | None = None) -> int:
     rc = subprocess.run([sys.executable, "-m", "moirae", str(args.screenplay), "-o", str(output)]).returncode
     if rc == 0 and output != Path(args.output) and not Path(args.output).exists():
         Path(args.output).symlink_to(output.name)
+    if rc == 0:
+        manifest = build_manifest(
+            kind="moirae",
+            inputs={"screenplay": str(args.screenplay)},
+            outputs=[{"name": "video", "path": output.name, "type": "file",
+                      "media_type": "video/mp4", "is_primary": True}],
+            created=datetime.now(timezone.utc).isoformat(),
+        )
+        write_manifest(output.parent / "manifest.json", manifest)
     return rc
 
 

@@ -244,68 +244,175 @@ python3 -m astrid tasks events --project demo T_01ABC --json
 `tasks retry` retries a single task. Batch retry over a run group is the
 `runs retry` surface (next section), not a `tasks` flag.
 
-### VibeComfy: inspect → typed edit → validate → run
+### VibeComfy: import → inspect → edit → validate → run
 
-VibeComfy graph work stays inside the `tasks` family. The original ComfyUI UI
-JSON remains authoritative; `vibecomfy.inspect` produces a readable projection,
-and `vibecomfy.edit` applies typed deltas to a fresh output workflow. Neither is
-a top-level CLI family, and the projection is never accepted as mutation input.
+VibeComfy has three entry paths:
 
-First import the UI workflow and this operations document with `media import`.
-Record each returned managed-object SHA-256 digest:
+```bash
+# Standalone local work: no Astrid history.
+vibecomfy import ./workflow.json
+vibecomfy edit workflows/workflow set sampler.steps 24
+vibecomfy validate workflows/workflow
+
+# Standalone CLI with explicit Astrid tracking.
+vibecomfy import ./workflow.json --project demo
+vibecomfy edit workflows/workflow --project demo set sampler.steps 24
+```
+
+From an Astrid project, use the native task flow below. It inherits Astrid's
+project/task context, so its executor does not receive VibeComfy's
+`--project` flag and does not create a nested task.
+
+The canonical bundle has three sibling members: editable `workflow.py`, its
+identity/layout companion `workflow.vibe.json`, and byte-identical original
+`source.json`. The companion is required beside Python. `inspect` remains
+read-only: its projection and inspection report help explain a workflow but
+are not the workflow authority or valid edit input. `edit` writes a canonical
+Python/companion successor and a transition report; an atomic batch records
+its ordered operations as one accepted revision. Direct Python or applied
+canvas changes enter history only through explicit `capture`. Validation
+checks the edited artifact; it does not run generation.
+
+First store the raw workflow with `media import`. This stores the source as a
+project-managed object; the following `vibecomfy.import` task records its
+canonical origin. In the media-import response, `object_id` is the
+content-address (`sha256:<hex>`) and equals the SHA-256 `digest`. Put the
+returned digest in `spec.input_digests` for the named `source` port and the
+returned `object_id` in `--input-manifest` to authorize the managed object.
+These values have the same spelling, but serve different roles. In SDK code,
+pass the returned object ID in `input_manifest=[...]`:
+
+```bash
+python3 -m astrid media import ./workflow.json --project demo --json
+
+python3 -m astrid tasks create --project demo \
+  --capability vibecomfy.import \
+  --spec '{"inputs":{"workflow_id":"portrait"},"input_digests":[{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}],"transition_kind":"origin","parent_task_id":null,"origin_task_id":null}' \
+  --input-manifest '["sha256:<SOURCE_OBJECT_ID>"]' --json
+```
+
+The origin task emits `workflow.py`, `workflow.vibe.json`, unchanged
+`source.json`, and `edit-report.json`. The report records the origin identity,
+revision, readiness, and exact member digests. Settlement registers each
+output with the project's managed object store before task completion, so a
+named output digest is also its content-addressed `object_id` and can be
+admitted directly by the next task. Do not download and re-import these
+outputs. Each accepted edit or capture names its parent and origin task IDs.
+Read the output digests from `result.outputs` in the origin task response;
+each entry has a port `name` and `digest`:
+
+```bash
+python3 -m astrid tasks show --project demo <ORIGIN_TASK_ID> --json
+```
+
+`vibecomfy.inspect` can then report on the canonical bundle without creating a
+revision. Loading a canonical Python bundle executes its generated Python, so
+canonical inspection requires the explicit scalar
+`python_execution_consent="confirmed"`. This value has no default and is not
+implied by task admission. UI JSON inspection stays static and needs no consent.
+Supply all three canonical member digests as named inputs and put those same
+content-addressed IDs in the input manifest:
+
+```bash
+python3 -m astrid tasks create --project demo \
+  --capability vibecomfy.inspect \
+  --spec '{"inputs":{"python_execution_consent":"confirmed"},"input_digests":[{"name":"python","digest":"sha256:<PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
+  --input-manifest '["sha256:<PYTHON_OBJECT_ID>","sha256:<COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>"]' --json
+```
+
+`vibecomfy.edit` accepts the same canonical trio plus explicit
+`python_execution_consent="confirmed"`, and a typed operation or ordered
+batch. The input is required, has no default, and must exactly match the value
+shown; an admitted task alone is not consent. This same consent applies to
+`manual_capture`, including direct Python candidates. Edit emits the complete
+successor trio with a transition report containing the input and VibeComfy's
+audited gate decisions.
+Put the ordered typed operations in a JSON file and import it as a managed
+object. The edit task names the exact parent revision/task and the origin task.
+Import `operations.json` with `media import`; use its `digest` in the named
+`operations` port and its `object_id` in the input manifest. Each spec digest
+binds a named port; the content-addressed `sha256:<hex>` value is also the
+managed object ID that must be authorized by the input manifest:
 
 ```json
 {
   "schema_version": 1,
   "expected_revision": 0,
   "ops": [
-    {"op": "edit_node", "target": "ksampler", "field": "steps", "value": 24},
-    {"op": "set_node_mode", "target": "preview", "mode": "bypassed"}
+    {"op": "edit_node", "target": "ksampler", "field": "steps", "value": 24}
   ]
 }
 ```
 
 ```bash
-python3 -m astrid media import ./workflow.ui.json --project demo --json
 python3 -m astrid media import ./operations.json --project demo --json
 
-# Inspect. Substitute the exact digest returned for workflow.ui.json.
-python3 -m astrid tasks create --project demo \
-  --capability vibecomfy.inspect \
-  --spec '{"inputs":{},"input_digests":[{"name":"workflow","digest":"sha256:<WORKFLOW_SHA256>"}]}' \
-  --input-manifest '["sha256:<WORKFLOW_SHA256>"]' --json
-python3 -m astrid tasks show --project demo <INSPECT_TASK_ID> --json
-
-# Apply all leaf operations as one atomic VibeComfy edit_batch.
 python3 -m astrid tasks create --project demo \
   --capability vibecomfy.edit \
-  --spec '{"inputs":{},"input_digests":[{"name":"workflow","digest":"sha256:<WORKFLOW_SHA256>"},{"name":"operations","digest":"sha256:<OPERATIONS_SHA256>"}]}' \
-  --input-manifest '["sha256:<WORKFLOW_SHA256>","sha256:<OPERATIONS_SHA256>"]' --json
+  --spec '{"inputs":{"workflow_id":"portrait","parent_revision":"<PARENT_REVISION>","parent_task_id":"<ORIGIN_OR_PREVIOUS_EDIT_TASK_ID>","origin_task_id":"<ORIGIN_TASK_ID>","transition_kind":"typed_edit","python_execution_consent":"confirmed"},"input_digests":[{"name":"python","digest":"sha256:<PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"},{"name":"operations","digest":"sha256:<OPERATIONS_DIGEST>"}],"workflow_id":"portrait","parent_revision":"<PARENT_REVISION>","transition_kind":"typed_edit","parent_task_id":"<ORIGIN_OR_PREVIOUS_EDIT_TASK_ID>","origin_task_id":"<ORIGIN_TASK_ID>"}' \
+  --input-manifest '["sha256:<PYTHON_OBJECT_ID>","sha256:<COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>","sha256:<OPERATIONS_OBJECT_ID>"]' --json
 python3 -m astrid tasks show --project demo <EDIT_TASK_ID> --json
-
-# Copy the edit task's workflow output digest; validate that exact object.
-python3 -m astrid tasks create --project demo \
-  --capability vibecomfy.validate \
-  --spec '{"inputs":{},"input_digests":[{"name":"workflow","digest":"sha256:<EDITED_WORKFLOW_SHA256>"}]}' \
-  --input-manifest '["sha256:<EDITED_WORKFLOW_SHA256>"]' --json
-python3 -m astrid tasks show --project demo <VALIDATE_TASK_ID> --json
-
-# After validation succeeds, run the same immutable workflow object.
-python3 -m astrid tasks create --project demo \
-  --capability vibecomfy.run \
-  --spec '{"inputs":{},"input_digests":[{"name":"workflow","digest":"sha256:<EDITED_WORKFLOW_SHA256>"}]}' \
-  --input-manifest '["sha256:<EDITED_WORKFLOW_SHA256>"]' --json
-python3 -m astrid tasks show --project demo <RUN_TASK_ID> --json
 ```
 
-The inspect task emits `workflow-ir.py` and `inspection.json`. The edit task
-emits `workflow.ui.json`, a fresh `workflow-ir.py`, and `edit-report.json` with
-the input/output hashes, accepted revision, delta id, canonical typed delta,
-and diagnostics. Accepted leaf operation names are `edit_node`, `add_node`,
-`remove_node`, `upsert_link`, `remove_link`, and `set_node_mode`; the executor
-supplies the outer atomic `edit_batch`. The task input manifest is the runtime's
-authorization fence, so every digest in `spec.input_digests` must also appear
-in `--input-manifest`.
+The edit task emits the complete successor trio and `edit-report.json`. Its
+settled outputs are managed objects in the project too; copy the new named
+output digests from `tasks show` into both the next task's named input digests
+and input manifest. In `result.outputs`, match each entry by port `name`; its
+`digest` is the object ID. Use the successor trio for validation:
+
+For a direct Python change, call `vibecomfy.edit` with the same parent trio,
+the same exact consent input, set `transition_kind` to `manual_capture`, and
+provide the candidate as the separate `capture_python` input. An applied
+ComfyUI canvas can be captured through `capture_graph`. Neither route creates
+invented per-tool operations; the report records the aggregate before/after
+difference and audited consent gate decisions.
+
+```bash
+python3 -m astrid tasks create --project demo \
+  --capability vibecomfy.validate \
+  --spec '{"inputs":{"python_execution_consent":"confirmed"},"input_digests":[{"name":"python","digest":"sha256:<EDITED_PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<EDITED_COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
+  --input-manifest '["sha256:<EDITED_PYTHON_OBJECT_ID>","sha256:<EDITED_COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>"]' --json
+```
+
+After validation succeeds, pass that same immutable canonical trio to
+`vibecomfy.run` only when you want to execute the workflow:
+
+```bash
+python3 -m astrid tasks create --project demo \
+  --capability vibecomfy.run \
+  --spec '{"inputs":{},"input_digests":[{"name":"python","digest":"sha256:<EDITED_PYTHON_DIGEST>"},{"name":"companion","digest":"sha256:<EDITED_COMPANION_DIGEST>"},{"name":"source","digest":"sha256:<SOURCE_DIGEST>"}]}' \
+  --input-manifest '["sha256:<EDITED_PYTHON_OBJECT_ID>","sha256:<EDITED_COMPANION_OBJECT_ID>","sha256:<SOURCE_OBJECT_ID>"]' --json
+```
+
+A successful canonical validation emits `validation-report.json` with the
+explicit consent input and gate audit; static UI JSON validation omits consent.
+A run can launch ComfyUI generation; validation by itself does not. The
+inspect task's projection is an explanation artifact only. Never pass it as
+the workflow input to edit, validate, or run. A manual capture records one
+aggregate before/after change and does not invent individual tool operations.
+
+Discover and read the existing Astrid task history with the normal `tasks`
+commands:
+
+```bash
+python3 -m astrid tasks list --project demo --json
+python3 -m astrid tasks show --project demo <ORIGIN_OR_EDIT_TASK_ID> --json
+python3 -m astrid tasks events --project demo <ORIGIN_OR_EDIT_TASK_ID> --json
+python3 -m astrid tasks follow <ORIGIN_OR_EDIT_TASK_ID> --project demo
+```
+
+`task.admitted` and terminal task events come from Astrid's shared events
+table. The completed task's output digests are also the project's managed
+content-addressed object IDs for its immutable report and bundle members;
+semantic operations and before/after revisions live in the report, not in a
+custom event stream. `tasks list` discovers the chain;
+`tasks show` and `tasks events` inspect a specific transition, while `follow`
+observes its lifecycle. The task spec/report parent and origin IDs connect
+successive transitions. See the [VibeComfy pack skill](../../astrid/packs/vibecomfy/skill/SKILL.md)
+for the capability input/output contract and editing details. The input
+manifest is the runtime authorization fence: each `spec.input_digests` value
+binds a named port, and the matching `sha256:<hex>` object ID must appear in
+`--input-manifest`.
 
 ---
 

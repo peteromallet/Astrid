@@ -432,7 +432,7 @@ def test_generate_rejects_unscoped_fingerprint_override(
 
 
 def test_checkout_server_records_pinned_engine_contract() -> None:
-    assert VIBECOMFY_ENGINE_REVISION == "dc8d962a8e330015bbb209080292fad248f1ceb3"
+    assert VIBECOMFY_ENGINE_REVISION == "a6a0cdb493c2f8bea4115740b96ec4c118af7ad1"
     assert COMFYUI_VERSION == "0.26.0"
 
 def test_generate_failure_discards_prepared_warmth(
@@ -611,12 +611,65 @@ def test_run_compiled_workflow_uses_bundle_and_private_output_custody(
         encoding="utf-8",
     )
     bundle = Mock()
+    bundle.workflow = workflow
+    bundle.workflow_identity = workflow.id
     bundle.require_canonical_authority.return_value = None
     bundle.compile.return_value = object()
     monkeypatch.setattr(workflow_bundle, "load_bundle", lambda _: bundle)
     adapter._run_workflow = Mock(return_value=SimpleNamespace(metadata_path=metadata_path))  # type: ignore[method-assign]
     generated = adapter.run_compiled_workflow(workflow, output_root / "task-1")
     bundle.require_canonical_authority.assert_called_once_with("checkout_server execution")
+    bundle.compile.assert_called_once_with()
+    assert generated[0].read_bytes() == b"artifact"
+
+
+def test_run_compiled_workflow_accepts_canonical_bundle_loader_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("vibecomfy")
+    from vibecomfy.workflow import VibeWorkflow, WorkflowSource
+    from vibecomfy.workflow_bundle import WorkflowBundle
+
+    profile = _hc03_profile(tmp_path)
+    output_root = tmp_path / "outputs"
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch, output=b"artifact")
+    adapter = CheckoutServerAdapter.from_host_session(
+        hc03_profile=profile,
+        model_id="z-image",
+        template_id="canonical-workflow",
+        invocation_identity="task-1",
+    )
+    workflow = VibeWorkflow(
+        id="canonical-workflow",
+        source=WorkflowSource(id="canonical-workflow"),
+        metadata={},
+    )
+    bundle = Mock(spec=WorkflowBundle)
+    bundle.workflow = workflow
+    bundle.workflow_identity = workflow.id
+    bundle.require_canonical_authority.return_value = None
+    bundle.compile.return_value = object()
+    metadata_path = tmp_path / "run-metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "comfy_outputs": [
+                    {"filename": "artifact.png", "subfolder": "", "type": "output"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter._run_workflow = Mock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(metadata_path=metadata_path)
+    )
+
+    generated = adapter.run_compiled_workflow(bundle, output_root / "task-1")
+
+    bundle.require_canonical_authority.assert_called_once_with(
+        "checkout_server execution"
+    )
     bundle.compile.assert_called_once_with()
     assert generated[0].read_bytes() == b"artifact"
 

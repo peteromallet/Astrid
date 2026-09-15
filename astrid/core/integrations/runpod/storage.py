@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
+
+from astrid.core.util.credentials_scope import CredentialsScope
 
 ENSURE_STORAGE_HINT = (
     "Run `python3 -m astrid runpod ensure-storage <storage-name> --size <GB> "
@@ -21,8 +22,8 @@ async def ensure_storage(
 ) -> dict[str, Any]:
     """Find or create a RunPod network volume by *name*.
 
-    Calls ``Pod.get_storage(name)``; if missing, calls
-    ``Pod.create_storage(name, size_gb, datacenter_id)``.
+    Calls the lifecycle API with the resolved credential; if missing, creates
+    the volume only when a datacenter is explicitly supplied.
 
     Idempotent — no cost event emitted.
 
@@ -37,14 +38,22 @@ async def ensure_storage(
         a new volume; raises :class:`ValueError` if omitted and the volume
         does not exist.
     api_key:
-        RunPod API key.  When ``None`` (default), reads ``RUNPOD_API_KEY``
-        from the environment.  The parameter exists for test injection but
-        is not forwarded to ``Pod.*`` methods (which read the env var
-        directly).
+        Optional explicit RunPod API key. When omitted, resolves the
+        ``RUNPOD_API_KEY`` reference through Astrid's canonical credential
+        resolver.
     """
-    from runpod_lifecycle import Pod
+    from runpod_lifecycle import api
 
-    existing = await Pod.get_storage(name)
+    resolved_key = api_key or CredentialsScope.get_local("runpod")
+    volumes = await asyncio.to_thread(api.get_network_volumes, resolved_key)
+    existing = next(
+        (
+            volume
+            for volume in volumes
+            if volume.get("id") == name or volume.get("name") == name
+        ),
+        None,
+    )
     if existing is not None:
         return existing
 
@@ -54,21 +63,37 @@ async def ensure_storage(
             f"(volume {name!r} not found)"
         )
 
-    return await Pod.create_storage(name, size_gb, datacenter_id)
+    return await asyncio.to_thread(
+        api.create_network_volume,
+        resolved_key,
+        name,
+        size_gb,
+        datacenter_id,
+    )
 
 
 async def require_existing_storage(
     name: str | None,
     *,
     context: str = "RunPod storage",
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """Return an existing RunPod network volume, or fail without creating one."""
     if not name:
         raise ValueError(f"{context} requires a pre-existing RunPod network storage volume. {ENSURE_STORAGE_HINT}")
 
-    from runpod_lifecycle import Pod
+    from runpod_lifecycle import api
 
-    existing = await Pod.get_storage(name)
+    resolved_key = api_key or CredentialsScope.get_local("runpod")
+    volumes = await asyncio.to_thread(api.get_network_volumes, resolved_key)
+    existing = next(
+        (
+            volume
+            for volume in volumes
+            if volume.get("id") == name or volume.get("name") == name
+        ),
+        None,
+    )
     if existing is None:
         raise ValueError(f"RunPod network storage volume {name!r} was not found. {ENSURE_STORAGE_HINT}")
     return existing
@@ -82,13 +107,12 @@ async def list_volumes(api_key: str | None = None) -> list[dict[str, Any]]:
     Parameters
     ----------
     api_key:
-        RunPod API key.  When ``None`` (default), reads ``RUNPOD_API_KEY``
-        from the environment.
+        Optional explicit RunPod API key. When omitted, resolves the
+        ``RUNPOD_API_KEY`` reference through Astrid's canonical credential
+        resolver.
     """
     from runpod_lifecycle import api
 
-    resolved_key = api_key or os.environ.get("RUNPOD_API_KEY", "")
-    if not resolved_key:
-        raise RuntimeError("RUNPOD_API_KEY is not set")
+    resolved_key = api_key or CredentialsScope.get_local("runpod")
 
     return await asyncio.to_thread(api.get_network_volumes, resolved_key)

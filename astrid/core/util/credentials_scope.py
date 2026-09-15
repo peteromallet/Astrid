@@ -1,19 +1,22 @@
 """CredentialsScope — scoped API key resolution (tier-3).
 
 Provides a single in-process credentials resolver that delegates to
-``astrid.core.util.secrets.load_api_key``.  One ``SCOPE_REGISTRY`` entry is
+``astrid.core.util.secrets.load_api_key``. One ``SCOPE_REGISTRY`` entry is
 registered per ``credentials.<provider>`` key; each resolver returns a
 ``CredentialsScope`` populated with that provider's resolved value (or
 raises ``AstridError`` when the key is missing).
 
-Resolution precedence (frozen in m4, plan Step 31):
+Local integrations use ``CredentialsScope.get_local`` or
+``CredentialsScope.resolve_local`` to read Astrid's shared user-level
+``astrid.env`` file. ``CredentialsScope.get`` follows the same source policy.
+
+Resolution precedence:
 
 1. explicit option (caller-supplied key, ``ScopeRequest.explicit`` or the
    ``explicit`` argument);
-2. process environment;
-3. injectable supported OS keychain (tier 3 — the default boundary never
-   accesses a keychain; ``keyring`` is imported lazily, never eagerly);
-4. one explicitly named env file, as a lower-priority convenience only.
+2. shared ``astrid.env`` file;
+3. process environment when the shared file has no value;
+4. optional explicitly named fallback file.
 
 Broad cwd/repository/workspace/home env-file scavenging is absent.
 
@@ -27,12 +30,16 @@ deepseek   → ``DEEPSEEK_API_KEY``
 fireworks  → ``FIREWORKS_API_KEY``
 gemini     → ``GEMINI_API_KEY``
 giphy      → ``GIPHY_API_KEY``
+huggingface → ``HF_TOKEN``
+runpod     → ``RUNPOD_API_KEY``
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from astrid.core.contracts.errors import AstridError
 from astrid.core.contracts.scoped_config import (
@@ -40,7 +47,10 @@ from astrid.core.contracts.scoped_config import (
     ScopedConfig,
     ScopeRequest,
 )
-from astrid.core.util.secrets import KeychainProvider, load_api_key
+from astrid.core.util.secrets import (
+    load_api_key,
+    load_local_api_key_with_source,
+)
 
 # ---------------------------------------------------------------------------
 # Canonical provider → env-var table
@@ -55,7 +65,11 @@ _PROVIDER_ENV: dict[str, str] = {
     "fireworks": "FIREWORKS_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "giphy": "GIPHY_API_KEY",
+    "huggingface": "HF_TOKEN",
+    "runpod": "RUNPOD_API_KEY",
 }
+
+_LOG = logging.getLogger("astrid.credentials")
 
 # ---------------------------------------------------------------------------
 # CredentialsScope
@@ -77,24 +91,83 @@ class CredentialsScope(ScopedConfig):
     """The resolved API key value."""
 
     @classmethod
+    def resolve_local(
+        cls,
+        provider: str,
+        *,
+        env_var: str | None = None,
+        env_file: Path | None = None,
+        explicit: str | None = None,
+    ) -> "ResolvedCredential":
+        """Resolve a credential for a local Astrid command with safe provenance.
+
+        Local resolution uses the shared precedence: explicit value, Astrid's
+        shared ``astrid.env`` file, process environment, then a specifically
+        named fallback env file. The shared file path defaults to
+        ``~/.astrid/astrid.env`` and can be overridden with ``ASTRID_ENV_FILE``.
+        """
+
+        canonical_env_var = _PROVIDER_ENV.get(provider)
+        if canonical_env_var is None:
+            # Reuse the canonical unknown-provider error and recovery text.
+            cls.get(provider)
+            raise AssertionError("unreachable")  # pragma: no cover
+
+        reference = env_var or canonical_env_var
+        value, source = load_local_api_key_with_source(
+            reference,
+            env_file=env_file,
+            explicit=explicit,
+        )
+        _LOG.debug(
+            "Resolved local credential provider=%s reference=%s source=%s",
+            provider,
+            reference,
+            source,
+        )
+        return ResolvedCredential(
+            provider=provider,
+            reference=reference,
+            source=source,
+            value=value,
+        )
+
+    @classmethod
+    def get_local(
+        cls,
+        provider: str,
+        *,
+        env_var: str | None = None,
+        env_file: Path | None = None,
+        explicit: str | None = None,
+    ) -> str:
+        """Return the resolved value for a local Astrid command."""
+
+        return cls.resolve_local(
+            provider,
+            env_var=env_var,
+            env_file=env_file,
+            explicit=explicit,
+        ).value
+
+    @classmethod
     def get(
         cls,
         provider: str,
         *,
+        env_var: str | None = None,
         env_file: Path | None = None,
         explicit: str | None = None,
-        keychain: KeychainProvider | None = None,
     ) -> str:
-        """Resolve *provider*'s API key in the frozen m4 precedence.
+        """Resolve *provider*'s API key using Astrid's shared source policy.
 
         Args:
             provider: Canonical provider key (must be in ``_PROVIDER_ENV``).
-            env_file: Optional explicitly named ``.env`` file (lowest-priority
-                      convenience tier, forwarded to ``load_api_key``).
+            env_var: Optional override for the credential environment
+                     reference, used by compute profiles.
+            env_file: Optional explicitly named ``.env`` fallback file.
             explicit: Optional caller-supplied explicit value (highest
                       priority tier).
-            keychain: Optional injectable keychain boundary (tier 3). When
-                      ``None`` no OS keychain is ever accessed.
 
         Returns:
             The resolved API key string.
@@ -102,19 +175,29 @@ class CredentialsScope(ScopedConfig):
         Raises:
             AstridError: If the provider is unknown or the key is not found.
         """
-        env_var = _PROVIDER_ENV.get(provider)
-        if env_var is None:
+        canonical_env_var = _PROVIDER_ENV.get(provider)
+        if canonical_env_var is None:
             valid = ", ".join(sorted(_PROVIDER_ENV))
             raise AstridError(
                 f"Unknown credentials provider: {provider!r} (valid: {valid})",
-                recovery_command="use a canonical provider name (fal, openai, anthropic, deepseek, fireworks, gemini, giphy)",
+                recovery_command="use a canonical provider name (fal, openai, anthropic, deepseek, fireworks, gemini, giphy, huggingface, runpod)",
             )
+        resolved_env_var = env_var or canonical_env_var
         return load_api_key(
-            env_var,
+            resolved_env_var,
             env_file=env_file,
             explicit=explicit,
-            keychain=keychain,
         )
+
+
+@dataclass(frozen=True)
+class ResolvedCredential:
+    """Credential value plus safe, non-secret resolution provenance."""
+
+    provider: str
+    reference: str
+    source: Literal["explicit", "astrid_env_file", "environment", "env_file"]
+    value: str = field(repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -135,15 +218,18 @@ def _make_resolver(provider: str, env_var: str):
                 if value is not None:
                     return CredentialsScope(provider=provider, value=str(value))
 
-        # Tiers 2–4: process environment (from the request's env mapping when
-        # present, else os.environ), injectable keychain boundary (default:
-        # none), then an explicitly named env file (not carried by
-        # ScopeRequest, so the registry path resolves through the first three
-        # tiers; direct callers may pass env_file via CredentialsScope.get).
+        # The shared user-level file is the local source of truth; request.env
+        # remains a fallback for CI and deployed environments without it.
         try:
-            value = load_api_key(env_var, environ=request.env)
+            value, source = load_local_api_key_with_source(env_var, environ=request.env)
         except AstridError:
             raise  # re-raise — missing credentials are fatal
+        _LOG.debug(
+            "Resolved scoped credential provider=%s reference=%s source=%s",
+            provider,
+            env_var,
+            source,
+        )
         return CredentialsScope(provider=provider, value=value)
 
     return _resolve

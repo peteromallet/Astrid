@@ -76,7 +76,32 @@ def _dispatch_doctor(args: list[str]) -> int:
         # optional pack host or trigger execution-side discovery; deep audit
         # belongs to an explicit offline/snapshot-capable route.
         with AstridClient.open_from_launcher(start_pack_host=False) as client:
-            report = client.doctor()
+            try:
+                report = client.doctor()
+            except WorkspaceClientError as exc:
+                # The deep runtime doctor endpoint is admin-only.  A normal
+                # Astrid product credential can still establish a healthy,
+                # project-scoped session, so do not turn that deliberate
+                # permission boundary into a false launcher/runtime outage.
+                if not (
+                    exc.status in (401, 403)
+                    and exc.details.get("scope") == "admin"
+                ):
+                    raise
+                health = client.health()
+                if not isinstance(health, dict) or health.get("status") != "ok":
+                    raise exc
+                report = {
+                    "ok": True,
+                    "state": "ready",
+                    "health": health,
+                    "deep_diagnostics": {
+                        "ok": False,
+                        "state": "permission_limited",
+                        "required_scope": "admin",
+                        "error": str(exc),
+                    },
+                }
     except (ServiceUnavailableError, WorkspaceClientError) as exc:
         details = getattr(exc, "details", {})
         payload = {
@@ -93,6 +118,13 @@ def _dispatch_doctor(args: list[str]) -> int:
             print(f"Astrid doctor: {payload['error']}", file=sys.stderr)
             print(f"next action: {payload['next_action']}", file=sys.stderr)
         return 1
+    if isinstance(report, dict) and report.get("deep_diagnostics", {}).get("state") == "permission_limited":
+        if parsed.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print("Astrid doctor\nstate: ready")
+            print("deep diagnostics: permission limited (admin scope required)")
+        return 0
     if parsed.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

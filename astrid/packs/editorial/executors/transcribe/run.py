@@ -20,6 +20,7 @@ from astrid.core._shared.result_manifest import build_manifest, write_manifest
 from astrid.core.media import require_runtime_materialized_file
 from astrid.core.audit import AuditContext
 from astrid.core.cli_choices import add_choice_arg
+from astrid.core.contracts.errors import AstridError
 from astrid.core.media import ffprobe_duration_seconds
 
 from .._common import load_api_key
@@ -164,8 +165,12 @@ def prepare_chunks(audio_path: Path, cache_dir: Path, max_chunk_sec: float) -> t
 def require_hf_token(diarize_mode: str | None) -> str | None:
     if diarize_mode != "pyannote":
         return None
-    if token := os.environ.get("HF_TOKEN", "").strip():
-        return token
+    from astrid.core.util.credentials_scope import CredentialsScope
+
+    try:
+        return CredentialsScope.get_local("huggingface")
+    except AstridError:
+        pass
     raise SystemExit("HF_TOKEN is required when using --diarize pyannote")
 def diarize_audio(audio_path: Path, cache_dir: Path, diarize_mode: str | None) -> dict[str, Any] | None:
     token = require_hf_token(diarize_mode)

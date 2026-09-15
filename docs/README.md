@@ -51,6 +51,7 @@ Contributor-facing architecture docs live under
 - **[Error Model](contracts/error-model.md)** — Exit-code taxonomy and structured error
   envelopes.
 - **[Environment Variables](reference/env-vars.md)** — Canonical `ASTRID_*` reference.
+- **[Credential Setup](reference/credentials.md)** — Store local provider keys once for this computer login.
 - **[Creating Tools](guides/creating-tools.md)** — Adding new capabilities.
 - **[Debugging Renderers](guides/debugging.md)** — Validating, smoking, and
   debugging pluggable timeline renderers; the failure replay bundle.

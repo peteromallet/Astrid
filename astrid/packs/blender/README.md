@@ -74,9 +74,10 @@ python -m astrid.packs.blender.deploy teardown-runpod --pod-id <id>
   public URL. The Arnold docker container on :8080 is separate; don't touch it.
 - **RunPod:** no official Blender image exists, so a CUDA image
   (`runpod/pytorch:…cuda…`) is launched and the **official** GPU-capable Blender
-  tarball is installed (the distro `apt` Blender has no CUDA). API key is read
-  from `~/.runpod/config.toml`; the `runpod-lifecycle` package drives the pod
-  lifecycle. Pod SSH uses `~/.ssh/id_ed25519`.
+  tarball is installed (the distro `apt` Blender has no CUDA). API key uses
+  Astrid's shared `~/.astrid/astrid.env` credential resolver; the
+  `runpod-lifecycle` package drives the pod lifecycle. Pod SSH uses
+  `~/.ssh/id_ed25519`.
 - **Teardown:** `runpod-render --teardown auto` (default) tears the pod down the
   moment the render finishes; `--teardown never` keeps it up; `--keep-after-seconds N`
   lingers N seconds first.

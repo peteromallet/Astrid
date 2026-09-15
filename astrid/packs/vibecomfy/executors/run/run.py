@@ -16,14 +16,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from astrid.core._shared.result_manifest import build_manifest, write_manifest
-from astrid.core.cli_choices import add_choice_arg
+from astrid.core._shared.result_manifest import (  # noqa: E402
+    build_manifest,
+    write_manifest,
+)
+from astrid.core.cli_choices import add_choice_arg  # noqa: E402
+from astrid.packs.vibecomfy.executors._bundle_inputs import (  # noqa: E402
+    staged_workflow_path,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run VibeComfy workflow commands.")
     add_choice_arg(parser, "command", values=("run", "validate"))
-    parser.add_argument("workflow", type=Path)
+    parser.add_argument("workflow", nargs="?", default="")
+    parser.add_argument("--python", default="")
+    parser.add_argument("--companion", default="")
+    parser.add_argument("--source", default="")
     parser.add_argument(
         "--out",
         type=Path,
@@ -155,22 +164,40 @@ def _run_and_settle(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "validate":
-        return subprocess.run(
-            [sys.executable, "-m", "vibecomfy.cli", "validate", str(args.workflow)]
-        ).returncode
-    if args.out is None:
-        print("vibecomfy.run: --out is required for run", file=sys.stderr)
-        return 2
     try:
-        _run_and_settle(
-            args.workflow,
-            args.out,
-            task_identity=args.task_identity,
-            execution_identity=args.execution_identity,
-            readiness_profile_path=args.readiness_profile_path,
-            readiness_profile_hash=args.readiness_profile_hash,
+        scratch = (
+            args.out.expanduser().resolve().parent
+            if args.out is not None
+            else Path.cwd()
         )
+        with staged_workflow_path(
+            workflow=args.workflow,
+            python=args.python,
+            companion=args.companion,
+            source=args.source,
+            scratch=scratch,
+        ) as (workflow_path, _authority):
+            if args.command == "validate":
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "vibecomfy.cli",
+                        "validate",
+                        str(workflow_path),
+                    ]
+                ).returncode
+            if args.out is None:
+                print("vibecomfy.run: --out is required for run", file=sys.stderr)
+                return 2
+            _run_and_settle(
+                workflow_path,
+                args.out,
+                task_identity=args.task_identity,
+                execution_identity=args.execution_identity,
+                readiness_profile_path=args.readiness_profile_path,
+                readiness_profile_hash=args.readiness_profile_hash,
+            )
     except Exception as exc:
         print(f"vibecomfy.run: {exc}", file=sys.stderr)
         return 1

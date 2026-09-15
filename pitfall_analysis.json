@@ -1,0 +1,1326 @@
+[
+ {
+  "id": "gh-audio-minimax-music-3-15445",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "trivial"
+  ],
+  "hidden_requirement": "tests whether solver attributes a 2x runtime regression to the app update and bisects versions instead of blaming settings/hardware",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Recorded fix is literally 'roll back to 0.30.0'; if 0.31+ has since been patched the scenario no longer reproduces and the only answer is a version pin. Perf symptoms need the exact 50xx/H200 GPUs to observe."
+ },
+ {
+  "id": "gh-audio-minimax-music-3-15478",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "env-specific",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "tests whether solver recognizes a false-negative in the node's own sageattention version/arch check and swaps to an equivalent patch node rather than reinstalling deps",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Recorded fix is a node swap (workaround, PR #15270 was still open); if that PR merged, both 'update' and 'swap node' become defensible answers and strict grading picks the wrong one."
+ },
+ {
+  "id": "gh-audio-minimax-music-3-15653",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "env-specific",
+   "trivial"
+  ],
+  "hidden_requirement": "tests whether solver maps an AMD-specific AOTriton/SDPA kernel crash to a known fixed upstream PR instead of chasing workflow settings",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fix is 'update past PR #15648' \u2014 pure version pin on AMD ROCm hardware the grader likely can't run; difficulty 3 is overstated, the answer is one upgrade step."
+ },
+ {
+  "id": "gh-audio-minimax-music-3-391",
+  "update_trap": false,
+  "pitfalls": [
+   "solution-too-specific",
+   "unreproducible",
+   "gpu-only",
+   "version-drift"
+  ],
+  "hidden_requirement": "tests whether solver can isolate a failing SageAttention kernel via single-variable control and craft a kernel-level workaround (FP16 V + sm80 path) instead of blaming drivers",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Recorded fix is a hand-patched kernel call tied to one SageAttention version and an nvlddmkm TDR crash specific to RTX 5060 Ti \u2014 nearly impossible to reproduce or verify; any reasonable mitigation should pass."
+ },
+ {
+  "id": "gh-audio-minimax-music-3-750",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether solver recognizes a kwarg-signature break from upstream API drift and updates the custom node (or drops the now-redundant low-VRAM node)",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Maintainer already fixed it via PR and says the node is no longer needed at all \u2014 'git pull KJNodes' and 'delete the node, use core sparse attention' are both correct, so strict grading on one fix is unfair."
+ },
+ {
+  "id": "gh-comfyui-10247",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "tests whether solver attributes an AttributeError inside LTXVPreprocess to a Desktop build bug and upgrades to v0.5.1 rather than reinstalling custom nodes",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fix is exactly 'update Desktop to 0.5.1 (core 0.3.64)'; the bug is long since patched so the failure won't reproduce on a current install."
+ },
+ {
+  "id": "gh-comfyui-10383",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial",
+   "stale-workflow",
+   "version-drift"
+  ],
+  "hidden_requirement": "tests whether solver decodes the misleading 'missing class_type property: Node ID #1' error as a missing third-party custom node (ComfyUI-Hunyuan3d-2-1) and installs it",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Answer is one obvious step (install the named missing node pack) and newer frontend versions name the missing node outright, removing the only interesting part."
+ },
+ {
+  "id": "gh-comfyui-10568",
+  "update_trap": false,
+  "pitfalls": [
+   "visual-judgment",
+   "outcome-ambiguous",
+   "gpu-only",
+   "information-poor"
+  ],
+  "hidden_requirement": "tests whether solver knows ChronoEdit's model design (keeps 1 of 5 frames, needs latest git comfy, length >= 33 frames) instead of treating bad output as a bug",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "This is a usage-knowledge scenario, not a failure: 'outputs look bad unless frame count is raised' requires generating video and judging quality; the >=33-frames threshold is a community heuristic, not documented."
+ },
+ {
+  "id": "gh-comfyui-10805",
+  "update_trap": false,
+  "pitfalls": [
+   "unreproducible",
+   "gpu-only",
+   "version-drift",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether solver diagnosing a silent no-op Sage Attention on Blackwell checks torch/xformers/driver stack coherence (cu128 wheels vs CUDA-13 build) rather than the workflow graph",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Never OP-confirmed \u2014 the recorded 'fix' (build torch/xformers/sageattn from source for CUDA 13, driver 580+) is community diagnosis only; grading any single stack recipe as required is unjustified."
+ },
+ {
+  "id": "gh-comfyui-11260",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "env-specific",
+   "solution-too-specific",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether solver discovers that the UI silently drops missing custom nodes on import and uses the API (invalid_prompt: 'node RIFE VFI does not exist') to enumerate what to install",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The confirmed 'fix' is a manual loop (query API, install packs, repeat) that frontend issue #7427 has since made obsolete \u2014 graders must accept any reliable missing-node enumeration method."
+ },
+ {
+  "id": "gh-comfyui-12220",
+  "update_trap": false,
+  "pitfalls": [
+   "env-specific",
+   "gpu-only",
+   "unreproducible",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether the solver blames core ROCm async-offload/pinned-memory behavior and prescribes launch flags instead of the workflow's easy-use sleep/cleanGpuUsed distractor nodes",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "AMD ROCm + 6GB laptop GPU only: nothing verifiable without that hardware, and the workflow's easy-use nodes are red herrings. Rolling back ComfyUI is also a defensible fix (query itself says new memory code broke it), so strict-grading the exact 3-flag combo unfairly fails alternatives."
+ },
+ {
+  "id": "gh-comfyui-14447",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "unreproducible",
+   "gpu-only"
+  ],
+  "hidden_requirement": "tests whether the solver recognizes the GGUF legacy loading path (logs show legacy loader, not aimdo) as the offload root cause and recommends native weights + dynamic VRAM rather than flag tweaking",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "No OP retest, so 'stop using gguf' is maintainer opinion, not confirmed ground truth; native formats, dynamic VRAM, and blockswap are all defensible answers. Node list is an 8-node stub containing a raw subgraph UUID, barely matching the described problem."
+ },
+ {
+  "id": "gh-comfyui-14820",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "unreproducible"
+  ],
+  "hidden_requirement": "tests whether the solver maps a custom-node (UNetSelfAttentionMultiply) crash under partial offload to a core lowvram bug fixed upstream, rather than rewriting the workflow",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fixed by PR #14823 ~6 months ago, so a current ComfyUI checkout no longer reproduces it and the gold answer collapses to 'update'. Triggering it also needs a low-VRAM partial-offload state."
+ },
+ {
+  "id": "gh-comfyui-15246",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "outcome-ambiguous",
+   "env-specific"
+  ],
+  "hidden_requirement": "tests whether the solver checks torch compatibility (NestedTensor decode broken on 2.9.1+cu128) and knows the H3 VAE alternative (standard decode, built-in tiling) before touching the workflow",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Recorded fix is 'upgrade torch to 2.11', but two other defensible answers exist (use standard decode per #15274; woct0rdho/triton-windows notes for the compile variant). Torch has moved on, so the crash may no longer reproduce."
+ },
+ {
+  "id": "gh-comfyui-15274",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift"
+  ],
+  "hidden_requirement": "tests whether the solver knows the MiniMax H3 VAE has trained-in tiling (<8GB VRAM design), making VAEDecodeTiled categorically incompatible rather than misconfigured",
+  "eval_value": "high",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Cleanest scenario in the batch: confirmed root cause and a generalizable lesson (check built-in tiling before VAEDecodeTiled). But the node list is a 4-node stub omitting VAEDecodeTiled itself \u2014 feed the error text alongside it; risk if upstream later adds NestedTensor-safe tiling."
+ },
+ {
+  "id": "gh-comfyui-15321",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether the solver reads a weight-shape mismatch at CLIPLoader as a wrong/mismatched text-encoder file in the model dirs (Desktop shared-model resolution), not a code or graph bug",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Root cause is a qwen3vl nvfp4-awq file sitting where the minimax_h3 diffusion/text-encoder file belongs; 'corrupted' vs 'mismatched variant' vs 'wrong folder' are all defensible framings. Node list omits CLIPLoader entirely, and model filenames drift as H3 encoders update."
+ },
+ {
+  "id": "gh-comfyui-15470",
+  "update_trap": false,
+  "pitfalls": [
+   "visual-judgment",
+   "gpu-only",
+   "outcome-ambiguous",
+   "information-poor",
+   "unreproducible"
+  ],
+  "hidden_requirement": "tests whether the solver audits Ref2v audio/lip-sync conditioning wiring \u2014 but the record contains no diagnosis, so it mostly measures hypothesis generation",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Zero ground truth ('Diagnose and fix.') and success can only be judged by listening to audio and watching lip motion on rendered video. Unusable for strict grading; keep only as an open-ended rubric case, if at all."
+ },
+ {
+  "id": "gh-comfyui-15614",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "visual-judgment",
+   "gpu-only",
+   "env-specific"
+  ],
+  "hidden_requirement": "tests whether the solver isolates a version regression by bisection (0.30 vs 0.31/0.33) instead of tweaking sampler/LoRA/precision/attention knobs",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Gold fix is a rollback to the portable 0.30.0 build with no upstream fix recorded \u2014 newer releases may already be clean, killing reproducibility. Audio popping can only be judged by ear on that GPU/version combination."
+ },
+ {
+  "id": "gh-comfyui-15693",
+  "update_trap": false,
+  "pitfalls": [
+   "visual-judgment",
+   "gpu-only",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether the solver connects Q5_1 GGUF quantization of a 22B model to texture/grain degradation instead of tuning schedulers and step counts",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Unconfirmed ('Diagnose the root cause and propose the fix direction.'); graininess requires rendering and looking. Plausible rival causes (quant level, cfg, scheduler, steps) mean a wide answer space \u2014 sample multiple judge calls."
+ },
+ {
+  "id": "gh-comfyui-15859",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether the solver knows mmproj is the vision-projector weights a text-only GGUF lacks, and that the fault lives in a third-party node's model choice rather than ComfyUI core",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The error message nearly states the fix (fetch mmproj weights or use an image-capable model), and three alternatives (mmproj download, image-capable model, MiniMax-H3-Prompt-Rewriter node) are recorded, none OP-confirmed. Difficulty 5 is overstated."
+ },
+ {
+  "id": "gh-comfyui-16138",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "unreproducible",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests whether solver bisects a core regression to a version boundary (0.34.2 vs 0.34.3 hostbuf read_file_slice on-demand weight streaming) instead of blaming the workflow, VRAM size, or settings.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Needs exact MiniMax-H3 weights, a GPU, and ComfyUI pinned at 0.34.2/0.34.3 to reproduce at all. Resolution is just 'fixed in a later core release', so a bare version-pin answer passes without any understanding."
+ },
+ {
+  "id": "gh-comfyui-6480",
+  "update_trap": false,
+  "pitfalls": [
+   "information-poor",
+   "outcome-ambiguous",
+   "unreproducible",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether solver recognizes a frontend canvas/export rendering bug (the workflow file itself is valid and loads server-side) rather than workflow corruption \u2014 but the thread has no documented ground truth.",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "No resolution was ever documented (closed silently, zero comments) \u2014 you would be grading solvers against guesses. The 182-node FLUX PuLID graph may not even render on the current frontend."
+ },
+ {
+  "id": "gh-comfyui-6534",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "outcome-ambiguous",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "Tests whether solver localizes the NameError to the third-party ComfyUI-FluxTrainer pack's broken version-string check (misfiled to core ComfyUI) instead of blaming core, torch, or the workflow.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Bug lives in kijai's FluxTrainer (issue was redirected there) and has almost certainly been fixed upstream \u2014 on current versions the error never fires. The recorded 'fix' (string-comparing torch.__version__) is itself a hack the thread calls meaningless."
+ },
+ {
+  "id": "gh-comfyui-7233",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "visual-judgment",
+   "unreproducible"
+  ],
+  "hidden_requirement": "Tests whether solver checks ComfyUI version parity between the two installs and knows v0.3.12 changed ancestral-sampling determinism, rather than hunting for a workflow or smZ CLIP bug.",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Answer is one step: the two installs run different versions (maintainer confirmed with release link). Verifying a fix requires comparing generated images \u2014 subjective and only statistically reproducible."
+ },
+ {
+  "id": "gh-comfyui-7309",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests whether solver identifies the zod 'Invalid semantic version at nodes[..].properties.ver' modal as frontend PR #2751 validating custom-pack ver fields \u2014 a frontend-side annoyance, not workflow corruption.",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fix was merged in the frontend, so current builds no longer show the modal \u2014 the scenario won't reproduce without pinning old versions. The effective workaround is a single settings toggle (disable workflow validation)."
+ },
+ {
+  "id": "gh-comfyui-7322",
+  "update_trap": false,
+  "pitfalls": [
+   "unreproducible",
+   "env-specific",
+   "information-poor",
+   "version-drift",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests whether solver profiles frontend rendering and implicates preview-heavy LoadImage nodes (deleting them restored FPS) instead of blaming GPU, VRAM, or raw node count.",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "541-node graph, FPS measurements are hardware/browser/frontend-version dependent, and the issue was auto-closed stale with no confirmed fix \u2014 effectively ungradeable from static analysis and nearly unreproducible today."
+ },
+ {
+  "id": "gh-comfyui-7667",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests whether solver recognizes IS_CHANGED()/doit() signature-mismatch errors as core\u2194custom-node API drift after a partial upgrade, and prescribes coordinated upgrade of ComfyUI + Manager instead of editing the workflow.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Confirmed fix is literally 'upgrade both ComfyUI and ComfyUI-Manager to newest' \u2014 one step, and the failure window is gone on current versions, so it won't reproduce without pinning old builds despite recorded difficulty 5."
+ },
+ {
+  "id": "gh-comfyui-7699",
+  "update_trap": false,
+  "pitfalls": [
+   "gpu-only",
+   "unreproducible",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether solver reads the fp16-hangs / fp8-and-480p-fine pattern as a system-RAM bottleneck (confirmed: adding RAM fixed it) rather than a GPU/driver bug on new Blackwell hardware.",
+  "eval_value": "medium",
+  "pitfall_note": "Verifying requires RTX 5090-class GPU and enough RAM to hold the fp16 model \u2014 grading is hardware-gated. Also note the query says 'native Wan2.1' but the attached graph is kijai FramePack wrapper nodes.",
+  "recommended_grade_mode": "strict"
+ },
+ {
+  "id": "gh-comfyui-8040",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests whether solver attributes a frontend JS TypeError ('displayValue' of undefined) to a specific custom pack (VHS, fixed in VHS issue #472) and updates that pack rather than the workflow or core.",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "One-step answer: update VideoHelperSuite. The JS error only exists on the old VHS build, so the scenario is unreproducible on any current install."
+ },
+ {
+  "id": "gh-comfyui-8108",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "version-drift",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether solver treats the generic 'Loading aborted due to error reloading workflow data' as stale custom-node packs and knows the fix needs git pull PLUS pip install -r requirements.txt per pack, not just a pull.",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "One-step answer: update art-venture / Impact-Pack / VHS (with dependency reinstall). The 'ChatGPT Plus' node may no longer exist upstream, so the workflow itself may be unloadable today."
+ },
+ {
+  "id": "gh-comfyui-8473",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes a known frontend metadata-vs-selected-file comparison bug rather than hunting the workflow for errors",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Difficulty overstated: the fix is 'upgrade frontend / use --front-end-version', a version-pin answer, and the workflow runs fine \u2014 hard to grade strictly without the exact frontend version."
+ },
+ {
+  "id": "gh-comfyui-9078",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "visual-judgment",
+   "information-poor"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes that standard inpaint samplers under-adhere to prompts and that this is a quality limitation, not a wiring bug",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "No confirmed solution \u2014 the issue is subjective inpaint quality; success can only be judged by looking at generated images, and 'use LanPaint' is one opinion, not a graded ground truth."
+ },
+ {
+  "id": "gh-comfyui-gguf-153",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver reads the AttributeError and pins numpy<2.0 (or updates the node) instead of debugging the GGUF workflow itself",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The fix is a dependency downgrade; numpy 2.x compat is long fixed upstream so the failure may no longer reproduce on current installs."
+ },
+ {
+  "id": "gh-comfyui-gguf-385",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only"
+  ],
+  "hidden_requirement": "Tests whether the solver can trace a dtype error to the GGUF loader's index handling and know that PyTorch gather indexes should be int64",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fix was merged upstream shortly after the report, so a current ComfyUI-GGUF install never errors \u2014 reproduction requires a deliberately pinned old node version."
+ },
+ {
+  "id": "gh-comfyui-gguf-411",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver checks the ComfyUI core version / logs for the wrong TE model class (ZImageTEModel_ vs Flux2TEModel_) before blaming the GGUF file",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The literal answer is 'update ComfyUI core' \u2014 good solver discriminates only by reading logs to identify the stale core; on current ComfyUI the error won't occur at all."
+ },
+ {
+  "id": "gh-comfyui-gguf-452",
+  "update_trap": false,
+  "pitfalls": [
+   "solution-too-specific",
+   "outcome-ambiguous",
+   "stale-workflow",
+   "unreproducible"
+  ],
+  "hidden_requirement": "Tests whether the solver knows that using the official fp8 safetensors TE through standard CLIPLoader sidesteps the whole GGUF-TE problem",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "No mainline confirmation; fixes live in a random fork, and the workflow_nodes list (LoadImage/Flux2ImageNode) doesn't match the described GGUF-TE problem \u2014 scenario internals are incoherent."
+ },
+ {
+  "id": "gh-comfyui-gguf-471",
+  "update_trap": false,
+  "pitfalls": [
+   "solution-too-specific",
+   "stale-workflow",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver finds that a third-party fork plus a comfy.org subgraph with 'Unet Loader (Dynamic VRAM)' is the only working MiniMax-H3 path",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Ground truth is 'use molbal's fork + a specific subgraph node + pixel-dims-multiple-of-32' \u2014 an env-and-fork-specific recipe; workflow_nodes don't even include any GGUF loader node."
+ },
+ {
+  "id": "gh-comfyui-kjnodes-430",
+  "update_trap": false,
+  "pitfalls": [
+   "gpu-only",
+   "version-drift",
+   "unreproducible"
+  ],
+  "hidden_requirement": "Tests whether the solver attributes a CUDA pinned-memory error thrown under WanVideoNAG to ComfyUI-GGUF's loader (PR #357) instead of KJNodes or the sampler",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Requires a GPU run to even trigger the error, and the fix is already merged in ComfyUI-GGUF \u2014 reproduction depends on hitting the exact pre-fix node version."
+ },
+ {
+  "id": "gh-comfyui-kjnodes-484",
+  "update_trap": true,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "trivial",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver knows 'Patch Model Patch Order' is an obsolete torch.compile workaround to delete, and that post-removal slowness is first-run compilation",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Two loosely-coupled complaints (cancel timing + patch-order semantics) with a 37-node kitchen-sink workflow; 'remove the obsolete node and wait out first-run compile' is easy to half-answer correctly."
+ },
+ {
+  "id": "gh-comfyui-kjnodes-580",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "stale-workflow",
+   "information-poor",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes a latent_frequency_bins AttributeError as a ComfyUI/KJNodes-vs-VAE-file version mismatch and updates all three consistently",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Recorded resolution is vague ('something is not updated') with no confirmed exact pairing of LTX23 audio VAE file, loader node, and core version \u2014 strict grading would guess."
+ },
+ {
+  "id": "gh-comfyui-kjnodes-629",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial",
+   "gpu-only",
+   "visual-judgment",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests whether the solver isolates attention-mode as the flicker variable by ablation instead of blaming model/seed/VRAM \u2014 but the query text already states the cause and fix",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The query leaks the answer ('disappears when switching back to sdpa'), so difficulty 5 is overstated; plus confirming the fix needs a GPU Wan 2.2 run and eyeballing the video for flicker."
+ },
+ {
+  "id": "gh-comfyui-kjnodes-712",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "unreproducible"
+  ],
+  "hidden_requirement": "Tests whether the solver checks the SageAttention build/version for compatibility before blaming GPU hardware (SM89) or the node itself",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Fix is a package upgrade ('post6' wheel that may no longer be the current artifact); needs a 4090-class GPU and the old SageAttention version to reproduce, so the failure may not trigger at eval time."
+ },
+ {
+  "id": "gh-comfyui-ltxvideo-261",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "stale-workflow",
+   "information-poor",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests diagnostic reasoning on a second-stage latent-upsampler pipeline that collapses to a frozen first frame \u2014 with no confirmed ground truth to grade against",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Closed upstream with no resolution: any proposed fix is unverified, and the 0.9.8-era upscaler/13B-distill graph is stale, so grading any particular answer is arbitrary."
+ },
+ {
+  "id": "gh-comfyui-ltxvideo-430",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "gpu-only",
+   "information-poor"
+  ],
+  "hidden_requirement": "Tests tracing a NaN from the AAC mux back to its latent source: FP8-format LoRA incompatible with the 22B model, or bad sigma values in a two-pass setup \u2014 not an ffmpeg/audio-encoder bug",
+  "eval_value": "high",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Two distinct root causes were both confirmed in-thread; strict grading would unfairly fail the other valid diagnosis, and the provided workflow_nodes omit the LoRA/sigma nodes so the culprit isn't inspectable."
+ },
+ {
+  "id": "gh-comfyui-ltxvideo-449",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial",
+   "visual-judgment",
+   "gpu-only",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver diffs the user's workflow against official example defaults and spots IC-LoRA strength 1.0 (vs 0.5) as the texture-bleed cause on stylized inputs",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The listed workflow_nodes are Qwen-Image/Kontext/FaceDetailer nodes, not the LTX V2V IC-LoRA graph described \u2014 the node list cannot be used to locate or verify the strength knob."
+ },
+ {
+  "id": "gh-comfyui-ltxvideo-529",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "version-drift",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests recognition of a quantization-format support gap: LTXVAudioVAELoader cannot load the audio component of the int8-ConvRot checkpoint, so the fix is a compatible audio-VAE file or loader update, not workflow rewiring",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "No confirmed solution recorded ('diagnose and fix' only), and a newer ComfyUI/LTXV release may already support int8-ConvRot audio, making the failure unreproducible."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1094",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests understanding of nonstandard node semantics: the Long-I2V WanVideoSampler stores already-decoded frames in the 'latent' dict, so VAE-decoding it is a no-op and saving raises KeyError 'samples'",
+  "eval_value": "high",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Genuinely discriminates solvers who read wrapper internals from those who chase version bugs; but two fixes are valid (save the passthrough latent as-is, or re-encode images with the VAE encoder) so strict single-answer grading is wrong."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1143",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "unreproducible",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests recognizing a wrapper-side prefetch regression (black frames despite normal logs) and fixing it by updating/pinning the node instead of reworking the workflow",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "kijai reverted the regression, so any current checkout renders the bug unreproducible; the answer collapses to 'git pull', and the alternate multitalk-mode fix muddies strict grading."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1146-503",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "unreproducible",
+   "trivial",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests recognizing a post-update device-placement regression (cuda:0 vs cpu tensors) in the wrapper whose fix is upstream, not a workflow edit",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Exact duplicate of the 1146-821 record (same issue, nodes, fix) \u2014 dedupe or drop one; also can't reproduce post-fix and the 'second-run pixel-soup' residual issue invites misgrading."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1146-821",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "unreproducible",
+   "trivial",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests recognizing a post-update device-placement regression (cuda:0 vs cpu tensors) in the wrapper whose fix is upstream, not a workflow edit",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Exact duplicate of the 1146-503 record (same issue, nodes, fix) \u2014 dedupe or drop one; also can't reproduce post-fix and the 'second-run pixel-soup' residual issue invites misgrading."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1146",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "tests whether solver recognizes a tensor-device crash as an upstream wrapper regression and pins/reverts to a known-good commit instead of debugging the workflow",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The fix is 'git checkout f36fa45 / pull latest wrapper' \u2014 already merged upstream, so a solver on current code never reproduces the crash at all."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1254",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "unreproducible",
+   "env-specific"
+  ],
+  "hidden_requirement": "tests whether solver reads past the misleading CUDA index-out-of-bounds to find the triton/WanVideoWrapper version mismatch underneath",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "The recorded fix is 'downgrade Triton, then next-day wrapper release fixed it' \u2014 both fixes are version moves that no longer apply; the quoted error string differs from the query's symptom, making grading of alternatives murky."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1296",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial"
+  ],
+  "hidden_requirement": "tests whether solver knows latent dims must divide by 16 and checks resolution multiples before suspecting the workflow",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Solid discriminative fact (1080 % 16 != 0 \u2192 use 1088), but it is a one-line answer; difficulty is overstated at 2 only for people who know the rule."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1332",
+  "update_trap": false,
+  "pitfalls": [
+   "information-poor",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "tests whether solver notices a second (VACE module) loader node hidden underneath the main loader with an unselected model dropdown",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The error ('NoneType' endswith on extra_model path) doesn't point at the real cause; solver must inspect graph layout, which node-list-only inputs can't show \u2014 grading 'found the hidden unselected VACE loader' needs leniency."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1338",
+  "update_trap": false,
+  "pitfalls": [
+   "solution-too-specific",
+   "information-poor",
+   "visual-judgment"
+  ],
+  "hidden_requirement": "tests whether solver isolates a conflicting FastWan low-step LoRA (shape [3072,3072] vs 26214400) as the cause rather than blaming the undocumented Lucy Edit node wiring",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Two plausible-sounding causes (undocumented node wiring vs LoRA conflict) and the recorded fix is 'use the community JSON + disable that LoRA'; verifying success means watching edited video output."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1538",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "tests whether solver maps an UnboundLocalError in custom_linear.py to a wrapper bug and updates the custom node instead of editing the example workflow",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fix is literally 'update ComfyUI-WanVideoWrapper' for a bug fixed same-day; any solver on current code sees nothing."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1638",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "tests whether solver can correctly convert an I2V WanVideoWrapper graph to T2V (drop LoadImage + Image2VideoEncode, swap in WanVideoEmptyEmbeds, switch models/loras)",
+  "eval_value": "high",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Genuinely a multi-step workflow-surgery task, but many valid graph topologies exist \u2014 strict diff-against-expected grading would fail correct variants; needs rubric on the conversion invariants."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1644",
+  "update_trap": false,
+  "pitfalls": [
+   "env-specific",
+   "unreproducible",
+   "version-drift"
+  ],
+  "hidden_requirement": "tests whether solver attributes a VRAM regression to stale Triton/inductor caches (and knows the exact cache paths) rather than blockswap misconfiguration",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Verification needs a 4090-class GPU run comparing GB before/after cache clearing; the 'blocks to swap' log line was intentionally removed, so a key diagnostic in the record no longer exists."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1738",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "tests whether solver attributes a kwarg signature break after a ComfyUI update to the WanVideoWrapper and updates it, instead of patching LongCat node code",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "One-step fix ('update the wrapper'); fixed upstream same-day, so the failure only exists at a pinned old commit pair."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1745",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "tests whether solver traces a frame-count mismatch (81 vs 241) in WanMove Tracks back to a SplineEditor (KJNodes) bug rather than the Draw Tracks node",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Cross-custom-node blame (WanVideoWrapper symptom, KJNodes root cause) is genuinely discriminative, but the fix collapses to 'update KJNodes' \u2014 acceptable as an easy update-trap discriminator."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1747",
+  "update_trap": false,
+  "pitfalls": [
+   "env-specific",
+   "unreproducible",
+   "outcome-ambiguous",
+   "information-poor"
+  ],
+  "hidden_requirement": "Tests whether the solver localizes memory pressure to the VAE decode stage (not the sampler) and knows the tiled-decode + block-swap non_blocking levers",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "OOM reproducibility depends entirely on the grader's VRAM; the thread itself ended 'partially resolved' with the user blaming upstream ComfyUI, so even the recorded fix is contested."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1876",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver checks custom-node version/changelog for a known tensor-double-rename bug before debugging the workflow graph",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The bug is already fixed in WanVideoWrapper nightlies; on any current install the scenario cannot reproduce, so the only answer left is 'update the wrapper'."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1922",
+  "update_trap": false,
+  "pitfalls": [
+   "unreproducible",
+   "env-specific",
+   "information-poor",
+   "outcome-ambiguous",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "Supposedly tests block-swap/offload tuning, but the recorded 'fix' (CUDA PATH repair) does not explain a 16-vs-8 tensor mismatch, so the real root cause is unknown",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Difficulty 8 is overstated: the self-reported environment fix is causally dubious and no repro exists \u2014 grading strictly against it would punish correct solvers."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1923",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes an upstream UnboundLocalError code bug (uninitialized image_cond_mask branch) rather than user misconfiguration",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Maintainer already merged the fix; on current wrapper versions the crash cannot occur, so the scenario degenerates to 'update the custom node'."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1967",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver knows saved workflows can carry stale node definitions and that ComfyUI's 'Fix node (recreate)' resolves unexpected-kwarg errors",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The entire fix is a one-click 'recreate node' UI action \u2014 difficulty 2 at best; any solver who has seen a stale-node error answers instantly."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-1998",
+  "update_trap": false,
+  "pitfalls": [
+   "information-poor",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver connects an audio cross-attention reshape mismatch to a resolution not divisible by 16 (456/16=28.5) and fixes it at the resize node",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The recorded workflow_nodes list is degraded (a bare UUID, 5 nodes \u2014 no sampler or resize node visible), so a solver graded against the actual workflow sees nothing diagnostic in the graph."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-2003",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "information-poor",
+   "unreproducible"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes the 36-vs-68-channel symptom as wrong-VAE (Wan2.1 VAE used with a Wan2.2 model, or vice versa) instead of a sampler bug",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Recorded fix is commenter-supplied and never OP-confirmed, and the workflow node list is again degraded (UUID nodes) \u2014 grade leniently on VAE-channel reasoning, not the exact swap."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-207",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver identifies a wrapper regression introduced by a node update and checks upstream for the maintainer's fix commit",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Very early issue (#207): the fix is literally 'pull the new wrapper', and the era's node names (WanVideoEncode, WanVideoControlEmbeds) no longer match current example workflows."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-403",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver traces which upstream node emits a non-16-divisible resolution and inserts/fixes the resize before the sampler",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Same 16-divisibility lesson as #1998 \u2014 using both in one eval doubles coverage of one concept; on its own it's a solid but easy trace-the-size exercise."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-495",
+  "update_trap": false,
+  "pitfalls": [
+   "information-poor",
+   "outcome-ambiguous",
+   "solution-too-specific"
+  ],
+  "hidden_requirement": "Supposedly tests VACE mask-path debugging, but the record ends at 'removing the mask avoids it' with no root cause or actual fix",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "There is no confirmed solution \u2014 only a bisect showing the mask input triggers 'expected 14, got 2'; any grader key would be speculation, so multiple judge samples are essential."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-831",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "outcome-ambiguous",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver isolates the attention-backend conflict to the Uni3C controlnet loader specifically (sdpa there, sage on the model loader is fine) instead of blindly switching every attention setting or blaming Triton/radial-attention install.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Maintainer pushed a fix and updating the wrapper resolves it, so on a current checkout the error may never reproduce; also two defensible fixes (sdpa setting vs update) make strict grading unfair."
+ },
+ {
+  "id": "gh-comfyui-wanvideowrapper-950",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver blames the correct third-party pack (Anything-Anywhere hooking node metadata) instead of the WanVideoWrapper or ComfyUI v0.3.48 itself.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Traceback points at WanVideoDecode/ComfyUI core, so value comes from the misdirection; but the fix (remove/disable one node pack) is close to trivial and newer Anything-Anywhere or ComfyUI versions may already resolve it."
+ },
+ {
+  "id": "gh-image-to-video-wan-14250",
+  "update_trap": false,
+  "pitfalls": [
+   "unreproducible",
+   "gpu-only",
+   "env-specific",
+   "version-drift",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes a ComfyUI-core pinned-memory regression on multi-GPU setups and reaches for --disable-pinned-memory / GPU-pinning instead of editing the workflow.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "Failure is intermittent and multi-GPU-specific, so it can't be reliably triggered in a graded run; three OP-confirmed fixes (flag, hide GPU, update) mean strict single-answer grading would fail valid alternatives."
+ },
+ {
+  "id": "gh-image-to-video-wan-422",
+  "update_trap": false,
+  "pitfalls": [
+   "env-specific",
+   "version-drift",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests the diagnostic chain: 'missing class_type' -> missing DWPose nodes -> ComfyUI-tbox import failure -> broken/mixed OpenCV (cv2.dnn) install, then repairing the Python env.",
+  "eval_value": "high",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The real work is env repair (reinstall OpenCV, remove stale cv2 copies), which is hard to grade without controlling the Python environment; a solver on a clean env never sees the failure."
+ },
+ {
+  "id": "gh-image-to-video-wan-754",
+  "update_trap": false,
+  "pitfalls": [
+   "env-specific",
+   "unreproducible",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests recognizing a hard platform limitation (macOS/MPS has no Float8_e4m3fn backend) instead of hunting for a wiring bug, and proposing the right escape (GGUF/bf16 weights) or correctly declaring it unfixable.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Only reproducible on Apple Silicon; on CUDA the scenario simply doesn't fail, and 'use GGUF weights' vs 'this is force majeure, close it' are both acceptable endings."
+ },
+ {
+  "id": "gh-image-z-image-401",
+  "update_trap": false,
+  "pitfalls": [
+   "env-specific",
+   "unreproducible",
+   "version-drift",
+   "outcome-ambiguous",
+   "visual-judgment"
+  ],
+  "hidden_requirement": "Tests connecting a black-output symptom to automatic model placement on cuda:1 in dual-GPU systems and pinning the model to cuda:0 (or matching weight file to VRAM) rather than suspecting the sampler/model.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Requires a dual-GPU machine to reproduce at all; the workflow node list contains a bare subgraph GUID, so the shipped workflow may not even load in a fresh harness."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-477",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "gpu-only",
+   "solution-too-specific",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests tracing a GGUF dequantization edge case (BF16 non-layer params like learnable_registers left as GGMLTensor) into a loader-level patch, not a workflow edit.",
+  "eval_value": "high",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Fix means patching city96's loader.py (dequantize 3 named tensors) \u2014 if that PR/fix has since landed upstream, the scenario silently becomes 'update the pack'; LTX-2.5 GGUF checkpoints must exist for reproduction."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-492",
+  "update_trap": false,
+  "pitfalls": [
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests reading a TypeError traceback as a local-vs-upstream API signature drift (stg.py passing momentum_buffer=None to apg()) and applying the minimal correct edit.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The fix is deleting one argument from one line \u2014 once located it's mechanical, and a 1-month-old bug in an actively maintained repo has likely already been fixed upstream."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-494",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Tests recognizing that kornia 0.8.3 removed an accidental torch pad re-export and choosing the right remedy (pin kornia <0.8.3 or one-line import fix) rather than touching the workflow.",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Essentially a duplicate of #505 (same kornia break) \u2014 keep at most one of the two; the fix is a pip pin, so the only discrimination is whether the solver avoids red herrings."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-505",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "trivial",
+   "outcome-ambiguous"
+  ],
+  "hidden_requirement": "Same as #494: recognize the kornia 0.8.3 pad re-export removal and pin kornia or apply the one-line pad import patch.",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Duplicate of #494 with no added signal; error message practically names the fix (import pad from torch.nn.functional), and pin/downgrade is exactly the 'rollback X' trap."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-517",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver reads the ImportError traceback and fixes the dependency (pin kornia==0.7.3 / 0.8.2, or replace the dead re-export with torch.nn.functional.pad) instead of touching the workflow graph.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Traceback names the exact missing symbol and three different fixes are all confirmed-correct, so strict grading fails valid answers; the bug was fixed upstream long ago, so a fresh env may not even reproduce it. The workflow_nodes list is boilerplate irrelevant to an import-time failure."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-525",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes a dependency re-export removal and applies the one-line pad shim or pins kornia==0.8.2, rather than debugging the workflow.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Near-duplicate of #517/#541/#542 (same kornia root cause): using them together adds no discrimination. Two equally-confirmed fixes (shim vs pin) make strict mode unfair, and current pack releases already contain the fix."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-531",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests cross-boundary blame: ComfyUI core refactored RoPE helpers (interleaved_freqs_cis -> freqs_cis_matrix), so the fix is updating the custom node, not rolling back ComfyUI.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Hardest of the RoPE quartet (difficulty 4): the traceback points at comfy.ldm.lightricks.model, tempting a wrong ComfyUI rollback that 'fixes' this pack but breaks others. PR #532 already landed, so a current git clone won't reproduce the error."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-535",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver chooses update-custom-node over downgrading ComfyUI, and can parse the confusing 'pin 0.28.2 (actually a newer build)' versioning trap.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Duplicate of #531/#537/#538 root cause; the recorded fix is literally 'git pull the custom node'. The '0.28.2 is actually newer' confusion in the thread makes the pinned-version path ambiguous to grade strictly."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-537",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver resists the in-thread kornia==0.6.12 downgrade distractor (unrelated to a RoPE import error) and updates the node pack instead.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Only discriminating element is the deliberate distractor: a solver that pattern-matches to the kornia fix fails. Otherwise it is 'git pull' \u2014 and the fix has long been upstream, so the failure won't reproduce on a fresh install."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-538",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver maps a core-refactor import break to 'update the custom node' (PR #532) rather than reinstalling models or rolling back ComfyUI.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Fourth scenario with the identical interleaved_freqs_cis cause; accepted outcomes span git pull, clean reinstall, and a hand-edit to embeddings_connector.py. Fixed upstream, so version-drift kills reproduction."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-541",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver can author the one-line pad shim (drop the kornia import, use F.pad) from the ImportError alone.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "15 months old and merged upstream since; a current checkout cannot reproduce it without force-installing kornia>=0.8.3. Fix is a single diff line \u2014 difficulty is overstated even at 2."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-542",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver correctly locates the fix in the node-pack repo (kornia maintainer said so) and either pins kornia==0.8.2 or swaps pad to F.pad.",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Same kornia root cause as #517/#525/#541/#553 with the most authoritative confirmation (maintainer statement), but that also makes the answer the most easily memorized/leaked. Duplicate cluster \u2014 pick at most one of the five for an eval."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-553",
+  "update_trap": true,
+  "pitfalls": [
+   "version-drift",
+   "outcome-ambiguous",
+   "trivial",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests symptom-to-cause indirection: a 'missing node' complaint must be traced to a pack-wide import failure in ComfyUI logs, then fixed in pyramid_blending.py.",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Best of the kornia five because the symptom (unknown node) hides the cause (import error) \u2014 solvers must check import logs, not reinstall models. Still: fix merged upstream, and it re-appeared after node updates until the PR landed, so reproducibility is time-sensitive."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-669",
+  "update_trap": false,
+  "pitfalls": [
+   "visual-judgment",
+   "gpu-only",
+   "unreproducible",
+   "env-specific",
+   "trivial"
+  ],
+  "hidden_requirement": "Supposedly tests recognizing environment/attention-backend interference (xformers) plus a missing distill LoRA behind degraded video quality \u2014 but the query text already states the root cause, so it mostly tests restating it.",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "The problem statement leaks the diagnosis ('Root cause: ... distill LoRA ... xformers'), making it trivial; verification needs GPU generation and visual quality judgment, and the 'intermittent ghost recovery' makes the failure unreliable to trigger. Strip the leaked cause or skip."
+ },
+ {
+  "id": "gh-ltxv-image-to-video-83",
+  "update_trap": false,
+  "pitfalls": [
+   "gpu-only",
+   "env-specific",
+   "unreproducible",
+   "solution-too-specific",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests whether the solver distinguishes GPU virtual-address-space exhaustion from real VRAM OOM and traces the VBAR reservation math (model_size*10 clamp) in model_patcher instead of blaming VRAM capacity or settings",
+  "eval_value": "medium",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Reproducing needs a large-VRAM ROCm/Windows box with three >=1/10-capacity models; without it, grading is static analysis of a proposed one-line multiplier change. Valid fix space is wide (multiplier, aimdo clamp, upstream fix), and PR #78/upstream movement risks version drift."
+ },
+ {
+  "id": "gh-workflow-templates-330",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "unreproducible",
+   "outcome-ambiguous",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests whether the solver connects a 'Failed to convert INT' validation error to unpopulated/stale widget values in the shipped template JSON versus a broken local install",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "Thread is unresolved (maintainer only asked 'is ComfyUI latest'), the root cause was never confirmed, and the leading hypothesis is already spelled out in the problem text, so the answer is nearly given: update/re-save. Grading strictly would be guessing."
+ },
+ {
+  "id": "gh-workflow-templates-447",
+  "update_trap": false,
+  "pitfalls": [
+   "information-poor",
+   "stale-workflow",
+   "version-drift",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver can identify which custom-node pack supplies the missing animate nodes when ComfyUI-Manager's registry finds nothing (registry gap, not a core bug)",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The recorded node list contains only core nodes, so the actually-missing node class names are absent from the record \u2014 a solver cannot know what to install, and the pack may have been renamed/removed since. Effectively ungradable as-is."
+ },
+ {
+  "id": "gh-workflow-templates-457",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "solution-too-specific",
+   "stale-workflow"
+  ],
+  "hidden_requirement": "Tests whether the solver knows subgraph conversion can hide existing inputs and can unpack/navigate subgraphs to re-expose them instead of concluding nodes are missing",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The only confirmed resolution is a maintainer workaround video ('use the fp8 template and unpack the subgraph'), never OP-confirmed, and the template repo moves fast enough the conversion may already be fixed \u2014 success criteria are vague and UI-navigation-shaped."
+ },
+ {
+  "id": "gh-workflow-templates-536",
+  "update_trap": true,
+  "pitfalls": [
+   "trivial",
+   "version-drift",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver recognizes missing nodes as core nodes added in ComfyUI 0.11.1 (template newer than runtime), not as custom-node gaps",
+  "eval_value": "low",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "The fix is literally the maintainer's one-liner 'update your comfyui first'; the only wrinkle is the Desktop install reporting no update available (updater quirk), so the scenario mostly grades whether the solver says 'update ComfyUI'."
+ },
+ {
+  "id": "gh-workflow-templates-858",
+  "update_trap": false,
+  "pitfalls": [
+   "trivial",
+   "stale-workflow",
+   "outcome-ambiguous",
+   "env-specific"
+  ],
+  "hidden_requirement": "Tests whether the solver checks node-type existence against the current platform schema and spots widgets_values ordering drift (V2 order) rather than just renaming the node",
+  "eval_value": "low",
+  "recommended_grade_mode": "rubric",
+  "pitfall_note": "The reporter already delivered a full diagnosis plus two concrete fixes (republish vs reinstate V2), so the eval hands the solver a pre-solved problem; also Comfy-Cloud-specific and unconfirmed-fixed, so state may have moved."
+ },
+ {
+  "id": "gh-workflow-templates-866",
+  "update_trap": false,
+  "pitfalls": [
+   "visual-judgment",
+   "gpu-only",
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "Tests whether the solver inspects node bypass/mute state and follows the image-preprocess path before blaming model weights, precision, or VAE",
+  "eval_value": "high",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Best discriminator in the batch (bypassed ImageScaleToTotalPixels vs chasing fp8/VAE), but verification requires actually rendering and seeing grey output, and the template may have shipped un-bypassed since the 2026-05-19 fix. Note: duplicated verbatim as gh-workflow_templates-866."
+ },
+ {
+  "id": "gh-workflow-templates-871",
+  "update_trap": true,
+  "pitfalls": [
+   "unreproducible",
+   "gpu-only",
+   "visual-judgment",
+   "information-poor",
+   "version-drift"
+  ],
+  "hidden_requirement": "Tests whether the solver can triage a no-log-error corrupted-video report (suspected VAE/precision/RTX-50-series issue) with zero confirmed root cause",
+  "eval_value": "low",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "RTX 5090-specific, thread died after the sage-attention question, and no diagnosis was ever confirmed \u2014 the answer space (attention backend, VAE mismatch, precision, driver) is wide and unverifiable without that GPU, so any grading is speculative."
+ },
+ {
+  "id": "gh-workflow-templates-931",
+  "update_trap": false,
+  "pitfalls": [
+   "outcome-ambiguous",
+   "visual-judgment",
+   "gpu-only",
+   "information-poor"
+  ],
+  "hidden_requirement": "Tests understanding that CFG=1 turbo models have no usable negative branch and whether ConditioningZeroOut vs an empty CLIP Text Encode differ in conditioning semantics at low CFG",
+  "eval_value": "medium",
+  "recommended_grade_mode": "multi-sample",
+  "pitfall_note": "OP and commenter legitimately disagree (high CFG vs node choice) with no maintainer ruling, and 'better output' is a subjective image-quality call \u2014 strict grading would arbitrarily pick a side. Real nodes are hidden inside a UUID subgraph."
+ },
+ {
+  "id": "gh-workflow_templates-866",
+  "update_trap": false,
+  "pitfalls": [
+   "visual-judgment",
+   "gpu-only",
+   "version-drift",
+   "trivial"
+  ],
+  "hidden_requirement": "Identical to gh-workflow-templates-866: tests whether the solver inspects node bypass/mute state and follows the image-preprocess path before blaming model weights or precision",
+  "eval_value": "high",
+  "recommended_grade_mode": "strict",
+  "pitfall_note": "Exact duplicate of gh-workflow-templates-866 (same provenance_url issue #866, same query/outcome) with only an underscore in the id \u2014 dedupe before running, or weight it as one scenario, since it would double-count the same evidence."
+ }
+]

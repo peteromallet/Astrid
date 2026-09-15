@@ -259,10 +259,16 @@ def _detached_exec_result(
 def _host_hf_token_env_vars(profile: Mapping[str, Any] | None = None) -> dict[str, str]:
     """Return pod credential env vars sourced from the host, never literals from disk."""
     from astrid.core.compute_profile import credential_env_ref
+    from astrid.core.util.credentials_scope import CredentialsScope
 
     token_ref = credential_env_ref(profile or {}, "hf_token", "HF_TOKEN")
-    token = os.environ.get(token_ref) if token_ref else None
-    return {token_ref: token} if token and token_ref else {}
+    if not token_ref:
+        return {}
+    try:
+        token = CredentialsScope.get_local("huggingface", env_var=token_ref)
+    except AstridError:
+        return {}
+    return {token_ref: token} if token else {}
 
 
 _RUNPOD_COMPUTE_DEFAULTS: dict[str, Any] = {
@@ -373,14 +379,20 @@ def _storage_required(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "require_storage", False) or env_required)
 
 
-def _preflight_storage(storage_name: str | None, *, required: bool, context: str) -> int:
+def _preflight_storage(
+    storage_name: str | None,
+    *,
+    required: bool,
+    context: str,
+    api_key: str,
+) -> int:
     if not required and not storage_name:
         return 0
 
     from astrid.core.integrations.runpod.storage import require_existing_storage
 
     try:
-        asyncio.run(require_existing_storage(storage_name, context=context))
+        asyncio.run(require_existing_storage(storage_name, context=context, api_key=api_key))
     except Exception as exc:
         raise AstridError(
             str(exc),
@@ -494,13 +506,10 @@ def _load_handle_and_config(handle_path: Path) -> tuple[dict[str, Any], Any]:
 
     handle = json.loads(handle_path.read_text(encoding="utf-8"))
     api_key_ref = handle["config_snapshot"]["api_key_ref"]
-    api_key = os.environ.get(api_key_ref)
-    if not api_key:
-        raise AstridError(
-            f"API key env var {api_key_ref!r} is not set. "
-            f"The pod_handle stores only the env var name, never the literal key.",
-            recovery_command=f"set the {api_key_ref} environment variable and retry",
-        )
+    from astrid.core.util.credentials_scope import CredentialsScope
+
+    credential = CredentialsScope.resolve_local("runpod", env_var=api_key_ref)
+    api_key = credential.value
 
     snap = handle["config_snapshot"]
     config = RunPodConfig(
@@ -531,14 +540,12 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
     from astrid.core.compute_profile import credential_env_ref
 
     resolved = _resolve_compute_profile(args, produces_dir)
-    api_key_ref = credential_env_ref(resolved, "runpod_api_key", "RUNPOD_API_KEY")
+    api_key_ref = credential_env_ref(resolved, "runpod_api_key", "RUNPOD_API_KEY") or "RUNPOD_API_KEY"
 
-    api_key = os.environ.get(api_key_ref) if api_key_ref else None
-    if not api_key:
-        raise AstridError(
-            f"{api_key_ref or 'RunPod API key'} environment variable is required",
-            recovery_command=f"set the {api_key_ref or 'RUNPOD_API_KEY'} environment variable and retry",
-        )
+    from astrid.core.util.credentials_scope import CredentialsScope
+
+    credential = CredentialsScope.resolve_local("runpod", env_var=api_key_ref)
+    api_key = credential.value
 
     gpu_type = resolved["gpu_type"]
     if isinstance(gpu_type, str) and "," in gpu_type:
@@ -554,7 +561,12 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
     max_runtime = int(resolved["max_runtime_seconds"])
     ports = resolved.get("ports")
 
-    _preflight_storage(storage_name, required=storage_required, context="RunPod provision")
+    _preflight_storage(
+        storage_name,
+        required=storage_required,
+        context="RunPod provision",
+        api_key=api_key,
+    )
 
     hourly_rate = _get_hourly_rate(api_key, gpu_type)
     provisioned_at = _utc_now_iso()
@@ -841,14 +853,12 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
     from astrid.core.compute_profile import credential_env_ref
 
     resolved = _resolve_compute_profile(args, produces_dir)
-    api_key_ref = credential_env_ref(resolved, "runpod_api_key", "RUNPOD_API_KEY")
+    api_key_ref = credential_env_ref(resolved, "runpod_api_key", "RUNPOD_API_KEY") or "RUNPOD_API_KEY"
 
-    api_key = os.environ.get(api_key_ref) if api_key_ref else None
-    if not api_key:
-        raise AstridError(
-            f"{api_key_ref or 'RunPod API key'} environment variable is required",
-            recovery_command=f"set the {api_key_ref or 'RUNPOD_API_KEY'} environment variable and retry",
-        )
+    from astrid.core.util.credentials_scope import CredentialsScope
+
+    credential = CredentialsScope.resolve_local("runpod", env_var=api_key_ref)
+    api_key = credential.value
 
     gpu_type = resolved["gpu_type"]
     if isinstance(gpu_type, str) and "," in gpu_type:
@@ -874,7 +884,12 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
     )
     excludes = set(str(resolved["excludes"]).split(",")) if resolved.get("excludes") else set()
 
-    _preflight_storage(storage_name, required=storage_required, context="RunPod session")
+    _preflight_storage(
+        storage_name,
+        required=storage_required,
+        context="RunPod session",
+        api_key=api_key,
+    )
 
     hourly_rate = _get_hourly_rate(api_key, gpu_type)
     provisioned_at = _utc_now_iso()

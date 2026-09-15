@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -69,7 +69,9 @@ from astrid.packs.rendering.backends._shared import (
     _parse_min_free_gb,
     _profile_mismatches,
     _reject_unknown_config,
+    _remotion_scaled_dimensions,
     _remotion_mux_profile,
+    _review_output_profile,
     _render_provenance_payload,
     _resolved_theme_for_render,
     _serialize_timeline,
@@ -668,6 +670,7 @@ def _execute_remotion(
     theme_path: Path | None,
     min_free_gb: float | None,
     review: Mapping[str, Any] | None = None,
+    render_scale: float | None = None,
     materialized_root: Path | None = None,
     staging_parent: Path | None = None,
     materialized_objects: Mapping[str, str] | None = None,
@@ -688,6 +691,7 @@ def _execute_remotion(
                 theme_path=theme_path,
                 min_free_gb=min_free_gb,
                 review=review,
+                render_scale=render_scale,
                 materialized_root=materialized_root,
                 staging_parent=staging_parent,
                 materialized_objects=materialized_objects,
@@ -719,6 +723,7 @@ def _execute_remotion(
                 theme_path=theme_path,
                 min_free_gb=min_free_gb,
                 review=review,
+                render_scale=render_scale,
                 materialized_root=materialized_root,
                 staging_parent=staging_parent,
                 materialized_objects=materialized_objects,
@@ -740,6 +745,7 @@ def _execute_remotion_locked(
     theme_path: Path | None,
     min_free_gb: float | None,
     review: Mapping[str, Any] | None = None,
+    render_scale: float | None = None,
     materialized_root: Path | None = None,
     staging_parent: Path | None = None,
     materialized_objects: Mapping[str, str] | None = None,
@@ -882,6 +888,9 @@ def _execute_remotion_locked(
                     _load_registry_mapping(assets_path),
                     theme_path,
                 )
+                if render_scale is not None:
+                    width, height = _remotion_scaled_dimensions(profile, render_scale)
+                    profile = replace(profile, width=width, height=height)
                 max_rate_bps, buffer_size_bps = h264_encoder_bitrates(
                     width=profile.width,
                     height=profile.height,
@@ -893,6 +902,8 @@ def _execute_remotion_locked(
                     f"--buffer-size={buffer_size_bps // 1000}K",
                     "--audio-bitrate=320K",
                 ]
+            if render_scale is not None and render_scale != 1:
+                remotion_args.append(f"--scale={render_scale:.15g}")
             completed = subprocess.run(
                 remotion_args,
                 cwd=str(project_dir),
@@ -1159,7 +1170,32 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
         # artifact: alpha-stamped timelines render ProRes 4444/yuva444p12le
         # in MOV, everything else stays H.264/yuv420p in MP4 (strict
         # validation compares every field against the probed file).
-        declared_profile = _remotion_mux_profile(request.profile or canonical, alpha=alpha)
+        review = (
+            json.loads(request.metadata["review"])
+            if "review" in request.metadata
+            else None
+        )
+        render_scale = None
+        profile_for_output = request.profile or canonical
+        if request.profile is None and review is not None:
+            profile_for_output, render_scale = _review_output_profile(canonical, alpha=alpha)
+        declared_profile = (
+            profile_for_output
+            if render_scale is not None
+            else _remotion_mux_profile(profile_for_output, alpha=alpha)
+        )
+        # Remotion keeps the authored composition dimensions in
+        # ``useVideoConfig()`` when ``--scale`` is used.  Carry the actual
+        # emitted dimensions alongside review props so the overlay can make
+        # its low-resolution badge decision from the artifact dimensions.
+        if isinstance(review, dict):
+            review = {
+                **review,
+                "render_dimensions": {
+                    "width": declared_profile.width,
+                    "height": declared_profile.height,
+                },
+            }
         # Remotion always muxes an audio track into its output (silent when
         # the timeline has none), so ownership is effectively 'rendered'.
         ownership = AudioOwnership.RENDERED
@@ -1181,7 +1217,8 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
                 composition_id=settings.composition_id,
                 theme_path=settings.theme_path,
                 min_free_gb=settings.min_free_gb,
-                review=json.loads(request.metadata["review"]) if "review" in request.metadata else None,
+                review=review,
+                render_scale=render_scale,
                 materialized_root=request.materialized_root,
                 staging_parent=workspace,
                 materialized_objects=request.materialized_objects,
@@ -1219,6 +1256,7 @@ def _protocol_render(request: RenderRequest, *, workspace: Path) -> RenderResult
                     "composition": settings.composition_id,
                     **backend_provenance,
                     "review": request.metadata.get("review"),
+                    "review_scale": render_scale,
                 }
             },
             normalization=[],

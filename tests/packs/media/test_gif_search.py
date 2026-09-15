@@ -75,7 +75,7 @@ def test_main_writes_results_preview_manifest_and_download(tmp_path: Path) -> No
             return FakeResponse(b"mp4-bytes", headers={"content-type": "video/mp4"})
         raise AssertionError(f"unexpected URL: {url}")
 
-    with patch("astrid.packs.media.executors.gif_search.run.CredentialsScope.get", return_value="key"):
+    with patch("astrid.packs.media.executors.gif_search.run.CredentialsScope.get_local", return_value="key"):
         assert run.main(
             [
                 "--query",

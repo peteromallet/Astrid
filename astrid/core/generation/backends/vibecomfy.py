@@ -33,6 +33,7 @@ from astrid.core.generation.backends.base import (
     split_feature_support,
 )
 from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
+from astrid.core.generation.vibecomfy_dependency import VIBECOMFY_ENGINE_REVISION
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,6 @@ logger = logging.getLogger(__name__)
 # preferred; the checked-out managed server runtime remains the second choice.
 ADAPTER_ORDER: tuple[str, ...] = ("pip_embedded", "checkout_server")
 
-VIBECOMFY_ENGINE_REVISION = (
-    "dc8d962a8e330015bbb209080292fad248f1ceb3"
-)
 COMFYUI_VERSION = "0.26.0"
 
 
@@ -1534,17 +1532,26 @@ class CheckoutServerAdapter(VibeComfyBackend):
         try:
             self._revalidate_host_session()
             from vibecomfy.workflow import VibeWorkflow
-            from vibecomfy.workflow_bundle import load_bundle
+            from vibecomfy.workflow_bundle import WorkflowBundle, load_bundle
 
-            if not isinstance(workflow, VibeWorkflow):
+            if isinstance(workflow, WorkflowBundle):
+                bundle = workflow
+            elif isinstance(workflow, VibeWorkflow):
+                bundle = load_bundle(workflow)
+            else:
                 raise ValueError(
-                    "checkout_server requires a VibeWorkflow from the canonical loader"
+                    "checkout_server requires a canonical VibeComfy loader result"
                 )
-            ready_template = getattr(workflow, "metadata", {}).get("ready_template")
-            if ready_template != self._bound_template_id:
-                raise ValueError("checkout_server workflow template binding changed")
-            bundle = load_bundle(workflow)
             bundle.require_canonical_authority("checkout_server execution")
+            metadata = getattr(bundle.workflow, "metadata", {})
+            ready_template = (
+                metadata.get("ready_template")
+                if isinstance(metadata, Mapping)
+                else None
+            )
+            effective_template = ready_template or bundle.workflow_identity
+            if effective_template != self._bound_template_id:
+                raise ValueError("checkout_server workflow template binding changed")
             approved = bundle.compile()
             model_bytes_digest = self._engine._validate_model_bytes_digest(
                 self._bound_host_model_digest()

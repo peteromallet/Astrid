@@ -1,55 +1,57 @@
 ---
 name: vibecomfy
 description: >
-  VibeComfy pack — inspect, typed-edit, validate, and run ComfyUI / VibeComfy
-  workflow JSON. The escape hatch for LoRAs,
-  IP-adapter, ControlNet, custom samplers, and graph composition beyond
-  the standard generation contracts.
+  Import, inspect, edit, validate, and run ComfyUI workflows through VibeComfy's
+  canonical Python/companion/source bundle and Astrid task history.
 ---
 
 # VibeComfy
 
-The vibecomfy pack is the **escape hatch** for ComfyUI generation features
-that fall outside the standard `generation` pack contracts. Use it directly
-for LoRAs, IP-adapter, ControlNet, custom samplers, or any node-graph surgery
-not covered by the opinionated `generation.generate_image` path.
+Use this pack for ComfyUI workflows that need graph inspection or edits beyond
+the standard `generation` contracts, including LoRAs, IP-adapter, ControlNet,
+custom samplers, and graph composition. The canonical bundle contains three
+separate members: editable `workflow.py`, its `workflow.vibe.json` revision and
+UI companion, and byte-identical original `source.json`.
 
 ## Executors
 
-| Executor | What it does |
+| Executor | Inputs and result |
 |---|---|
-| `vibecomfy.inspect` | Emit a read-only Python-like IR projection plus structured census/topology. |
-| `vibecomfy.edit` | Apply one atomic batch of typed edit operations and emit a new UI workflow artifact. |
-| `vibecomfy.run` | Execute a ComfyUI / VibeComfy workflow JSON — maps to `python -m vibecomfy.cli run {workflow}`. |
-| `vibecomfy.validate` | Validate a ComfyUI / VibeComfy workflow JSON without executing it — maps to `python -m vibecomfy.cli validate {workflow}`. |
+| `vibecomfy.import` | Admitted raw `source` JSON plus a stable `workflow_id`; emits `python`, `companion`, `source`, and an origin `report`. |
+| `vibecomfy.inspect` | One UI `workflow` JSON or the complete `python`/`companion`/`source` trio; emits only a read-only `projection` and `inspection`. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is inspected statically without it. |
+| `vibecomfy.edit` | A canonical parent trio plus required `python_execution_consent="confirmed"`, and `operations` for one atomic typed batch or one separate `capture_python`/`capture_graph` candidate; emits the full successor trio and audited `report`. |
+| `vibecomfy.validate` | A UI `workflow` JSON or the canonical trio; validates without running inference. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is validated statically without it. |
+| `vibecomfy.run` | A UI `workflow` JSON or the canonical trio; executes the workflow and settles its result artifacts. |
 
-## When to use
+Canonical bundle members are immutable Astrid artifacts. Each edit or capture
+consumes the exact prior trio and reports its `workflow_id`, `transition_kind`,
+`parent_revision`, `parent_task_id`, and `origin_task_id`. Astrid's existing
+task lifecycle records admission, completion/failure, and output digests. Read
+the detailed import → inspect → edit/capture → validate → run journey in
+[`docs/guides/cli-journeys.md`](../../../../docs/guides/cli-journeys.md).
 
-- Use `vibecomfy.run` when you need LoRAs, IP-adapter, ControlNet, custom
-  samplers (DPM++ 3M, UniPC, LCM), exotic conditioning, regional prompting,
-  attention injection, CFG scheduling, or any path the standard registry
-  does not cover.
-- Use `vibecomfy.validate` to check a workflow JSON before execution.
-- Use `vibecomfy.inspect` before graph surgery. Its `workflow-ir.py` is a
-  readable projection, never mutation input.
-- Use `vibecomfy.edit` with a JSON operations artifact. Accepted leaf tools
-  are `edit_node`, `add_node`, `remove_node`, `upsert_link`, `remove_link`, and
-  `set_node_mode`; the executor wraps them in one atomic `edit_batch`.
+`vibecomfy.inspect` is read-only: it does not create a revision or canonical
+bundle. Its Python-like projection is for reading, never for mutation input.
+`vibecomfy.edit` is the accepted mutation path. Typed edits and manual captures
+produce a successor and a structured transition report. A ComfyUI canvas Apply
+does not enter Astrid task history; use explicit project-bound capture to
+record a candidate.
 
-## When NOT to use
+For canonical Python bundles, include the scalar input
+`python_execution_consent: "confirmed"` in `spec.inputs` for inspect, edit,
+and validate. It has no default, is validated as an exact literal, and must be
+explicitly present on every task that loads canonical Python. The adapter maps
+it to VibeComfy's existing audited non-interactive `--yes` GateContext; task
+admission and `authority_context` do not stand in for this input. Inspect,
+edit, and validation artifacts include the consent value and gate audit. UI
+JSON inspection and validation stay on the static ingestion path and need no
+consent. `vibecomfy.run` is a separate generation capability.
 
-- Do not use for standard image generation — use `generation.generate_image`
-  (the recommended primary entry point).
-- Do not use to understand existing media (use `understanding`) or to
-  cut/render timelines (use `video_editing`).
+## Typed edit document
 
-## Authority-preserving workflow
-
-These capabilities are admitted through the existing runtime-backed `tasks`
-family. Do not add a pack command to the gateway and do not edit the Python-like
-projection. Import workflow/operation files as managed objects, reference their
-digests in `spec.input_digests`, and authorize the same digests with
-`--input-manifest`.
+The `operations` input is JSON with one ordered list of leaf operations. The
+executor lowers the list to one VibeComfy `edit_batch`, so any rejected leaf
+rejects the whole batch and no successor artifacts are published.
 
 ```json
 {
@@ -61,49 +63,23 @@ digests in `spec.input_digests`, and authorize the same digests with
 }
 ```
 
-Each `ops` entry has one of these exact shapes. `target` and link endpoints are
-names from the rendered projection (or stable node UIDs):
+The supported leaf tools are `edit_node`, `add_node`, `remove_node`,
+`upsert_link`, `remove_link`, and `set_node_mode`. Node targets may be rendered
+bindings or stable UIDs. Explicitly named new-node UIDs can be referenced by a
+later operation in the same batch. For field names, node classes, and tool
+schemas, use the installed `vibecomfy node` command before editing.
 
-| `op` | Required fields | Optional fields |
-|---|---|---|
-| `edit_node` | `target`, `field`, `value` | — |
-| `add_node` | `class_type` | `fields` or `widget_values`, `inputs`, `uid`, `node_id` |
-| `remove_node` | `target` | — |
-| `upsert_link` | `source`, `target`, `target_input` | `source_output` (defaults to `0`) |
-| `remove_link` | `target`, `target_input` | — |
-| `set_node_mode` | `target`, `mode` | —; mode is `enabled`, `muted`, or `bypassed` |
+For task invocation, place scalar ports under `spec.inputs`; name each
+immutable file port in `spec.input_digests` and authorize its media object in
+`input_manifest`. Keep the same `workflow_id`, `transition_kind`,
+`parent_revision`, `parent_task_id`, and `origin_task_id` in the task spec so
+the report and task history describe one lineage. Import, edit, capture,
+validation, and execution are separate tasks when using Astrid. Do not pass a
+`--project` option to an Astrid-native executor: its admitted task already
+supplies project context.
 
-The edit outputs are a new `workflow.ui.json`, a fresh read-only projection,
-and `edit-report.json` containing hashes, the accepted revision/delta id, and
-the canonical typed delta. Feed the new workflow object's digest to
-`vibecomfy.validate`, then to `vibecomfy.run`; never mutate a task input in
-place.
+## When not to use
 
-## SDK quick-start
-
-```python
-import astrid.sdk as sdk
-
-# Inspect and typed-edit a workflow
-inspection = sdk.invoke(
-    "vibecomfy.inspect", kind="executor", project="demo",
-    inputs={"workflow": "./my_workflow.json"},
-)
-edited = sdk.invoke(
-    "vibecomfy.edit", kind="executor", project="demo",
-    inputs={"workflow": "./my_workflow.json", "operations": "./edits.json"},
-)
-edited_workflow = edited.outputs["workflow"]
-
-# Validate the edited workflow artifact
-validated = sdk.invoke(
-    "vibecomfy.validate", kind="executor", project="demo",
-    inputs={"workflow": edited_workflow},
-)
-
-# Run that same immutable artifact only after validation
-run = sdk.invoke(
-    "vibecomfy.run", kind="executor", project="demo",
-    inputs={"workflow": edited_workflow},
-)
-```
+- Use `generation.generate_image` for standard image generation contracts.
+- Use `understanding` to explain existing media.
+- Use `video_editing` to cut or render timelines.

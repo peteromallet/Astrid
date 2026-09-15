@@ -10,8 +10,10 @@ import os
 import shutil
 import signal
 import sys
+import tempfile
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,18 @@ _EMBEDDED_COMFY_FALLBACKS = (Path("/root/b06-t04/comfyui-embedded"),)
 
 class ProductionEngineError(RuntimeError):
     """The pinned VibeComfy engine rejected or failed a typed workflow."""
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedWorkflow:
+    """Canonical loader result shared by host preflight and child execution."""
+
+    resolved: Any
+    model_id: str
+    template_id: str
+    workflow_identity: str
+    workflow_revision: str
+    workflow_content_digest: str
 
 
 def _bootstrap_embedded_comfy_client() -> Path:
@@ -133,30 +147,184 @@ def _load_workflow(workflow: Mapping[str, Any], references: Mapping[str, str], s
     )
 
 
+def _canonical_bundle_value(resolved: Any) -> Any:
+    """Bind a loader result to VibeComfy's canonical bundle authority."""
+    try:
+        from vibecomfy.workflow import VibeWorkflow
+        from vibecomfy.workflow_bundle import WorkflowBundle, load_bundle
+    except ImportError as exc:  # pragma: no cover - dependency boundary
+        raise ProductionEngineError(
+            "VibeComfy canonical workflow bundle support is unavailable"
+        ) from exc
+    if isinstance(resolved, WorkflowBundle):
+        bundle = resolved
+    elif isinstance(resolved, VibeWorkflow):
+        bundle = load_bundle(resolved)
+    else:
+        raise ProductionEngineError(
+            "production engine requires a canonical VibeComfy loader result"
+        )
+    bundle.require_canonical_authority("production engine execution")
+    return bundle
+
+
+def _workflow_content_digest(source: Path) -> str:
+    """Bind execution identity to the exact admitted input member bytes."""
+    members = [source]
+    if source.suffix.lower() == ".py":
+        members.extend((source.with_suffix(".vibe.json"), source.with_name("source.json")))
+    digest = hashlib.sha256()
+    for member in members:
+        try:
+            payload = member.read_bytes()
+        except OSError as exc:
+            raise ProductionEngineError(
+                f"canonical workflow member could not be read: {member}"
+            ) from exc
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return "sha256:" + digest.hexdigest()
+
+
+def _ui_workflow_identity(workflow: Mapping[str, Any], source_bytes: bytes) -> str:
+    """Use declared UI identity when present, otherwise its exact content hash."""
+    candidates = [
+        workflow.get("workflow_identity"),
+        workflow.get("workflow_id"),
+        workflow.get("id"),
+    ]
+    nested_source = workflow.get("source")
+    if isinstance(nested_source, Mapping):
+        candidates.extend(
+            (
+                nested_source.get("id"),
+                nested_source.get("workflow_identity"),
+                nested_source.get("workflow_id"),
+            )
+        )
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return hashlib.sha256(source_bytes).hexdigest()
+
+
+def _canonicalize_ui_workflow(
+    source: Path,
+    raw_workflow: Mapping[str, Any],
+    scratch: Path,
+) -> Any:
+    """Convert UI JSON through VibeComfy's canonical import service."""
+    try:
+        source_bytes = source.read_bytes()
+        from vibecomfy.porting.import_service import import_workflow_bytes
+
+        artifacts = import_workflow_bytes(
+            source_bytes,
+            workflow_id=_ui_workflow_identity(raw_workflow, source_bytes),
+        )
+    except ImportError as exc:
+        raise ProductionEngineError(
+            "VibeComfy canonical UI workflow conversion is unavailable"
+        ) from exc
+    except OSError as exc:
+        raise ProductionEngineError(f"workflow could not be read: {source}") from exc
+    except Exception as exc:
+        raise ProductionEngineError(
+            f"VibeComfy canonical UI workflow conversion failed: {exc}"
+        ) from exc
+
+    python_bytes = getattr(artifacts, "python_bytes", None)
+    companion_bytes = getattr(artifacts, "companion_bytes", None)
+    returned_source = getattr(artifacts, "source_bytes", None)
+    if (
+        not isinstance(python_bytes, bytes)
+        or not python_bytes
+        or not isinstance(companion_bytes, bytes)
+        or not companion_bytes
+        or returned_source != source_bytes
+    ):
+        raise ProductionEngineError(
+            "VibeComfy canonical UI workflow conversion returned invalid members"
+        )
+    staging = Path(tempfile.mkdtemp(prefix="canonical-ui-", dir=scratch))
+    python_path = staging / "workflow.py"
+    python_path.write_bytes(python_bytes)
+    python_path.with_suffix(".vibe.json").write_bytes(companion_bytes)
+    python_path.with_name("source.json").write_bytes(source_bytes)
+    try:
+        from vibecomfy.security.provenance import Provenance
+        from vibecomfy.workflow_bundle import load_bundle
+
+        return load_bundle(python_path, trust=Provenance.USER_CONFIRMED)
+    except Exception as exc:
+        raise ProductionEngineError(
+            f"VibeComfy canonical UI workflow bundle could not be loaded: {exc}"
+        ) from exc
+
+
 def load_workflow_path(
     workflow_path: str | Path,
     scratch: str | Path,
     *,
     model_id: str = "vibecomfy",
     template_id: str = "vibecomfy.run",
-) -> tuple[Any, str, str]:
-    """Load one canonical workflow and return its effective execution identity."""
+) -> LoadedWorkflow:
+    """Load one canonical workflow and return its effective execution profile."""
     source = Path(workflow_path).expanduser().resolve(strict=True)
+    scratch_path = Path(scratch).expanduser().resolve()
+    scratch_path.mkdir(parents=True, exist_ok=True)
     try:
-        raw_workflow = json.loads(source.read_text(encoding="utf-8"))
+        source_bytes = source.read_bytes()
+        raw_workflow = None if source.suffix.lower() == ".py" else json.loads(
+            source_bytes.decode("utf-8")
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProductionEngineError(f"workflow could not be read: {source}") from exc
-    if not isinstance(raw_workflow, Mapping):
-        raise ProductionEngineError("workflow must be a JSON object")
-    resolved = _load_workflow(raw_workflow, {}, Path(scratch).resolve())
-    metadata = getattr(resolved, "metadata", {})
+    if source.suffix.lower() == ".py":
+        try:
+            from vibecomfy.security.provenance import Provenance
+            from vibecomfy.workflow_bundle import load_bundle
+
+            resolved = load_bundle(source, trust=Provenance.USER_CONFIRMED)
+        except Exception as exc:
+            raise ProductionEngineError(
+                f"canonical workflow bundle could not be loaded: {exc}"
+            ) from exc
+    else:
+        if not isinstance(raw_workflow, Mapping):
+            raise ProductionEngineError("workflow must be a JSON object")
+        if isinstance(raw_workflow.get("template_id"), str) and isinstance(
+            raw_workflow.get("bindings"), Mapping
+        ):
+            resolved = _load_workflow(raw_workflow, {}, scratch_path)
+        else:
+            resolved = _canonicalize_ui_workflow(
+                source,
+                raw_workflow,
+                scratch_path,
+            )
+    bundle = _canonical_bundle_value(resolved)
+    metadata = getattr(bundle.workflow, "metadata", {})
     if not isinstance(metadata, Mapping):
         metadata = {}
-    effective_template_id = str(metadata.get("ready_template") or template_id)
+    effective_template_id = str(
+        metadata.get("ready_template") or bundle.workflow_identity or template_id
+    )
     effective_model_id = str(metadata.get("model_id") or model_id)
     if not effective_template_id.strip():
-        raise ProductionEngineError("canonical workflow has no ready-template identity")
-    return resolved, effective_model_id, effective_template_id
+        raise ProductionEngineError("canonical workflow has no execution identity")
+    workflow_identity = str(bundle.workflow_identity)
+    workflow_revision = str(bundle.revision_id)
+    if not workflow_identity.strip() or not workflow_revision.strip():
+        raise ProductionEngineError("canonical workflow bundle identity is incomplete")
+    return LoadedWorkflow(
+        resolved=bundle,
+        model_id=effective_model_id,
+        template_id=effective_template_id,
+        workflow_identity=workflow_identity,
+        workflow_revision=workflow_revision,
+        workflow_content_digest=_workflow_content_digest(source),
+    )
 
 
 def execution_identity_digest(
@@ -164,6 +332,9 @@ def execution_identity_digest(
     template_id: str,
     *,
     model_digest: str | None = None,
+    workflow_identity: str | None = None,
+    workflow_revision: str | None = None,
+    workflow_content_digest: str | None = None,
 ) -> str:
     """Return the shared host/child identity for one canonical execution."""
     return hashlib.sha256(
@@ -172,12 +343,35 @@ def execution_identity_digest(
                 "model_id": model_id,
                 "template_id": template_id,
                 "model_digest": model_digest,
+                "workflow_identity": workflow_identity,
+                "workflow_revision": workflow_revision,
+                "workflow_content_digest": workflow_content_digest,
             },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode()
     ).hexdigest()
+
+
+def loaded_workflow_execution_identity(
+    loaded: LoadedWorkflow,
+    hc03_profile: Any = None,
+) -> str:
+    """Derive the exact host/child identity from one canonical loader result."""
+    model_digest = None
+    if isinstance(hc03_profile, Mapping):
+        facts = hc03_profile.get("verified_facts")
+        exact = facts.get("exact") if isinstance(facts, Mapping) else None
+        model_digest = exact.get("model_digest") if isinstance(exact, Mapping) else None
+    return execution_identity_digest(
+        loaded.model_id,
+        loaded.template_id,
+        model_digest=model_digest,
+        workflow_identity=loaded.workflow_identity,
+        workflow_revision=loaded.workflow_revision,
+        workflow_content_digest=loaded.workflow_content_digest,
+    )
 
 
 def _profile_id(value: Any) -> str:
@@ -193,19 +387,7 @@ def _profile_id(value: Any) -> str:
 
 def _canonical_bundle(resolved: Any) -> tuple[Any, Any]:
     """Return the only workflow form admitted by the selected Vibe runtime."""
-    try:
-        from vibecomfy.workflow import VibeWorkflow
-        from vibecomfy.workflow_bundle import load_bundle
-    except ImportError as exc:  # pragma: no cover - dependency boundary
-        raise ProductionEngineError(
-            "VibeComfy canonical workflow bundle support is unavailable"
-        ) from exc
-    if not isinstance(resolved, VibeWorkflow):
-        raise ProductionEngineError(
-            "production engine requires a VibeWorkflow from the canonical loader"
-        )
-    bundle = load_bundle(resolved)
-    bundle.require_canonical_authority("production engine execution")
+    bundle = _canonical_bundle_value(resolved)
     return bundle.compile(), bundle
 
 
@@ -406,31 +588,22 @@ def run_workflow_path(
         raise ProductionEngineError("production engine task_identity is required")
     destination_path = Path(destination).expanduser().resolve()
     destination_path.mkdir(parents=True, exist_ok=True)
-    resolved, effective_model_id, effective_template_id = load_workflow_path(
+    loaded = load_workflow_path(
         workflow_path,
         destination_path,
         model_id=model_id,
         template_id=template_id,
     )
     if expected_execution_identity is not None:
-        model_digest = None
-        if isinstance(hc03_profile, Mapping):
-            facts = hc03_profile.get("verified_facts")
-            exact = facts.get("exact") if isinstance(facts, Mapping) else None
-            model_digest = exact.get("model_digest") if isinstance(exact, Mapping) else None
-        actual_identity = execution_identity_digest(
-            effective_model_id,
-            effective_template_id,
-            model_digest=model_digest,
-        )
+        actual_identity = loaded_workflow_execution_identity(loaded, hc03_profile)
         if actual_identity != expected_execution_identity:
             raise ProductionEngineError("workflow execution identity changed before launch")
     return _run_profile(
-        resolved,
+        loaded.resolved,
         profile_id,
         hc03_profile,
-        model_id=effective_model_id,
-        template_id=effective_template_id,
+        model_id=loaded.model_id,
+        template_id=loaded.template_id,
         task_identity=task_identity,
         destination=destination_path,
     )

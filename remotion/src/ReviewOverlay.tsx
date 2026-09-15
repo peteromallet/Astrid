@@ -3,6 +3,7 @@ import {AbsoluteFill, useCurrentFrame, useVideoConfig} from 'remotion';
 
 export type ReviewContext = {
   shots: Array<{shot_id: string; name: string; at: number; hold: number}>;
+  render_dimensions?: {width: number; height: number};
   speech?: {
     status?: string;
     phrases?: Array<{
@@ -46,17 +47,32 @@ export const reviewLabel = (review: ReviewContext, frame: number, fps: number): 
   return `${names.join(' / ') || 'No shot'}  ·  ${clock}`;
 };
 
+export const isLowResRender = (width: number, height: number): boolean => height <= 360;
+// Keep subtitle sizing in authored-canvas units. Remotion's --scale then
+// reduces the emitted subtitle proportionally with the rest of the frame.
+export const reviewCaptionFontSize = (width: number): number => width / 48;
+
 export const ReviewOverlay = ({review}: {review?: ReviewContext | null}): ReactElement | null => {
   const frame = useCurrentFrame();
   const {fps, width, height} = useVideoConfig();
+  // Remotion's useVideoConfig() stays on the authored canvas when --scale is
+  // used. The backend pins the actual emitted dimensions into the review
+  // props, which makes the badge decision deterministic in every capture host.
+  const outputWidth = review?.render_dimensions?.width ?? width;
+  const outputHeight = review?.render_dimensions?.height ?? height;
+  const outputScale = outputWidth / width;
+  const labelFontSize = Math.max(14, width / 80);
+  const badgeFontSize = Math.max(14 / outputScale, width / 80);
+  const captionFontSize = reviewCaptionFontSize(width);
   if (!review) return null;
   const caption = reviewCaption(review, frame, fps);
   return <AbsoluteFill style={{pointerEvents: 'none', zIndex: 2147483647}}>
+    {isLowResRender(outputWidth, outputHeight) ? <div style={{position: 'absolute', left: width * 0.016, top: height * 0.016, background: 'rgba(0,0,0,0.78)', color: '#fff', padding: '0.45em 0.7em', borderRadius: 6, fontFamily: 'monospace', fontSize: badgeFontSize, lineHeight: 1.3, whiteSpace: 'nowrap'}}>Low Res Render</div> : null}
     <AbsoluteFill style={{alignItems: 'flex-end', justifyContent: 'flex-start', padding: width * 0.016}}>
-      <div style={{maxWidth: '85%', background: 'rgba(0,0,0,0.78)', color: '#fff', padding: '0.45em 0.7em', borderRadius: 6, fontFamily: 'monospace', fontSize: Math.max(14, width / 80), lineHeight: 1.3, whiteSpace: 'pre-wrap', textAlign: 'right'}}>{reviewLabel(review, frame, fps)}</div>
+      <div style={{maxWidth: '85%', background: 'rgba(0,0,0,0.78)', color: '#fff', padding: '0.45em 0.7em', borderRadius: 6, fontFamily: 'monospace', fontSize: labelFontSize, lineHeight: 1.3, whiteSpace: 'pre-wrap', textAlign: 'right'}}>{reviewLabel(review, frame, fps)}</div>
     </AbsoluteFill>
-    {caption ? <div style={{position: 'absolute', left: '1%', right: '1%', bottom: '1%', minHeight: height * 0.24, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', padding: `${height * 0.025}px ${width * 0.06}px`}}>
-      <div style={{maxWidth: '90%', color: '#fff', fontFamily: 'Arial, sans-serif', fontSize: Math.max(22, width / 48), fontWeight: 600, lineHeight: 1.25, whiteSpace: 'pre-wrap', textAlign: 'center'}}>{caption}</div>
+    {caption ? <div style={{position: 'absolute', left: '1%', right: '1%', bottom: '1%', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: `0 ${width * 0.06}px ${height * 0.025}px`}}>
+      <div style={{maxWidth: '90%', color: '#fff', fontFamily: 'Arial, sans-serif', fontSize: captionFontSize, fontWeight: 600, lineHeight: 1.25, whiteSpace: 'pre-wrap', textAlign: 'center', textShadow: '0 2px 8px rgba(0,0,0,0.9)'}}>{caption}</div>
     </div> : null}
   </AbsoluteFill>;
 };

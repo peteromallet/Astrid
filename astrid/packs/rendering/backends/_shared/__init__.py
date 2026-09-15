@@ -29,6 +29,12 @@ from astrid.core.rendering.profile import resolve_render_profile
 from astrid.core.theme import builtin_theme, load_runtime_theme
 
 
+# Review exports are deliberately small enough for a browser/editorial pass
+# while retaining the authored composition canvas in the Remotion props.
+REVIEW_MAX_WIDTH = 640
+REVIEW_MAX_HEIGHT = 360
+
+
 def _input_path(raw_path: str, workspace: Path) -> Path:
     candidate = Path(raw_path).expanduser()
     return (candidate if candidate.is_absolute() else workspace / candidate).resolve()
@@ -337,6 +343,46 @@ def _remotion_mux_profile(profile: RenderProfile, *, alpha: bool = False) -> Ren
         audio_sample_rate=profile.audio_sample_rate or 48000,
         audio_channel_layout=profile.audio_channel_layout or "stereo",
     )
+
+
+def _remotion_scaled_dimensions(
+    profile: RenderProfile, scale: float, *, even: bool = True
+) -> tuple[int, int]:
+    """Mirror Remotion's scaled dimensions, including H.264 even rounding."""
+
+    if not isinstance(scale, (int, float)) or isinstance(scale, bool) or scale <= 0:
+        raise ValueError("Remotion render scale must be a positive number")
+
+    def js_round(value: float) -> int:
+        # Remotion uses JavaScript Math.round, whose positive-number behavior
+        # differs from Python's bankers-rounding at .5.
+        return int(value + 0.5)
+
+    def scaled_dimension(source: int) -> int:
+        candidate = source
+        # Remotion adjusts the authored dimension down until its scaled output
+        # is even for the H.264 codecs used by opaque MP4 renders.
+        while even and candidate > 1 and js_round(candidate * scale) % 2:
+            candidate -= 1
+        return max(1, js_round(candidate * scale))
+
+    return scaled_dimension(profile.width), scaled_dimension(profile.height)
+
+
+def _review_render_scale(profile: RenderProfile) -> float:
+    """Return the backend scale that fits the authored canvas into 640x360."""
+
+    return min(1.0, REVIEW_MAX_WIDTH / profile.width, REVIEW_MAX_HEIGHT / profile.height)
+
+
+def _review_output_profile(
+    profile: RenderProfile, *, alpha: bool = False
+) -> tuple[RenderProfile, float]:
+    """Return the actual Remotion review profile and the ``--scale`` value."""
+
+    scale = _review_render_scale(profile)
+    width, height = _remotion_scaled_dimensions(profile, scale, even=not alpha)
+    return _remotion_mux_profile(replace(profile, width=width, height=height), alpha=alpha), scale
 
 
 def _reject_unknown_config(

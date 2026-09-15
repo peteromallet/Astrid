@@ -220,7 +220,7 @@ def build(args: argparse.Namespace) -> int:
     response: dict[str, Any] = {}
     source_sheet_path = input_sheet or sheet_path
     if input_sheet is None:
-        api_key = CredentialsScope.get("openai", env_file=args.env_file)
+        api_key = CredentialsScope.get_local("openai", env_file=args.env_file)
         print(f"Calling {args.model} for {size} sprite sheet", file=sys.stderr)
         started = time.time()
         if reference_image is not None:
@@ -542,7 +542,7 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "--fal-env-file",
         type=Path,
-        help="Explicitly named env file containing FAL_KEY (lowest-priority convenience tier; canonical precedence is explicit option, process env, keychain, then this file).",
+        help="Explicitly named fallback env file containing FAL_KEY (the shared Astrid env file and process environment take precedence).",
     )
     add("--fal-timeout", type=int, default=900)
     add("--fal-logs", action="store_true", help="Print FAL queue logs while AI upscaling.")

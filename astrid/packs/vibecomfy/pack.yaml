@@ -16,7 +16,7 @@ permissions:
     reason: Reads workflow JSON files and writes generated outputs.
   - id: accelerator
     reason: May use GPU for ComfyUI model inference.
-description: Inspect, edit, validate, and run ComfyUI / VibeComfy workflow JSON.
+description: Import, inspect, edit, validate, and run ComfyUI / VibeComfy workflows using canonical editable bundles.
 keywords:
 - comfyui
 - vibecomfy
@@ -27,6 +27,7 @@ keywords:
 - gpu
 - runpod
 capabilities:
+- import_workflow
 - inspect_workflow_ir
 - edit_workflow_ir
 - run_workflow
@@ -34,9 +35,10 @@ capabilities:
 - video_enhance
 - character_animation
 agent:
-  purpose: Choose this pack to inspect, typed-edit, validate, or execute a ComfyUI/VibeComfy workflow JSON.
+  purpose: Choose this pack to import, inspect, typed-edit or capture, validate, or execute a ComfyUI/VibeComfy workflow.
   do_not_use_for: Do not use to understand existing media (use understanding) or to cut/render timelines (use video_editing); it runs workflow graphs, not editorial pipelines.
   normal_entrypoints:
+  - vibecomfy.import
   - vibecomfy.inspect
   - vibecomfy.edit
   - vibecomfy.run

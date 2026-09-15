@@ -244,6 +244,90 @@ def test_child_environment_carries_explicit_runtime_connection(tmp_path):
         secrets.clear()
 
 
+def _write_credential_manifest(root: Path) -> None:
+    (root / "pack.yaml").write_text(
+        "schema_version: 1\nid: credential_test\nname: Credential Test\n"
+        "version: 1.0\ncontent:\n  executors: executors\n",
+        encoding="utf-8",
+    )
+    executor_root = root / "executors" / "credential_echo"
+    executor_root.mkdir(parents=True)
+    (executor_root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "credential_test.echo",
+                "name": "Credential Echo",
+                "kind": "external",
+                "version": "1.0",
+                "command": {"argv": ["{python_exec}", "-c", "pass"]},
+                "outputs": [],
+                "isolation": {
+                    "mode": "subprocess",
+                    "network": False,
+                    "secrets_required": ["FAL_KEY"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_manifest_credentials_use_shared_precedence_at_host_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Readiness and injection agree on shared-file precedence and scope."""
+    _write_credential_manifest(tmp_path)
+    shared = tmp_path / "astrid.env"
+    shared.write_text("FAL_KEY=from-shared\nUNRELATED_SECRET=must-not-cross\n", encoding="utf-8")
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(shared))
+    monkeypatch.setenv("FAL_KEY", "stale-process")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-process")
+
+    host = GenericPackHost(pack_roots=[tmp_path], credential_source={})
+    record = host.discover()[0]
+    host.preflight(record.id)
+    record = host.capabilities[record.id]
+    assert record.preflight["credentials"] == {"ok": True, "missing": []}
+
+    child_env, secrets = host._child_environment(record, tmp_path / "attempt")
+    try:
+        assert child_env["FAL_KEY"] == "from-shared"
+        assert child_env.get("OPENAI_API_KEY") is None
+        assert child_env.get("UNRELATED_SECRET") is None
+    finally:
+        child_env.clear()
+        secrets.clear()
+
+    explicit_host = GenericPackHost(
+        pack_roots=[tmp_path], credential_source={"FAL_KEY": "from-explicit"}
+    )
+    explicit_record = explicit_host.discover()[0]
+    explicit_host.preflight(explicit_record.id)
+    explicit_record = explicit_host.capabilities[explicit_record.id]
+    child_env, secrets = explicit_host._child_environment(
+        explicit_record, tmp_path / "explicit-attempt"
+    )
+    try:
+        assert child_env["FAL_KEY"] == "from-explicit"
+    finally:
+        child_env.clear()
+        secrets.clear()
+
+
+def test_manifest_credential_missing_from_all_sources_blocks_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_credential_manifest(tmp_path)
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    host = GenericPackHost(pack_roots=[tmp_path], credential_source={})
+    record = host.discover()[0]
+    host.preflight(record.id)
+    record = host.capabilities[record.id]
+    assert record.preflight["credentials"] == {"ok": False, "missing": ["FAL_KEY"]}
+
+
 def test_input_materialization_rejects_traversal_names(tmp_path):
     _write_manifest(tmp_path / "echo")
 
@@ -1599,6 +1683,7 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert outputs[0]["name"] == "answer"
     assert set(outputs[0]) <= {
         "name", "filename", "kind", "digest", "media_type", "size", "data_base64",
+        "role", "is_primary",
     }
     assert "path" not in outputs[0]
     assert "artifact_type" not in outputs[0]
@@ -1691,12 +1776,13 @@ def test_structure_pack_members_survive_harvest_cleanup_and_reopen(tmp_path):
         for item in runtime.uploaded_objects.values()
         if item["filename"] is not None
     ]
-    assert "agent-view/structure.md" in filenames
-    assert "agent-view/transcript-index.json" in filenames
-    assert "agent-view/PG001.png" in filenames
+    assert "structure.md" in filenames
+    assert "transcript-index.json" in filenames
+    assert "PG001.png" in filenames
+    assert all(not filename.startswith("agent-view/") for filename in filenames)
     assert any(
         item["name"] == "manifest_path"
-        and item["filename"] == "agent-view/manifest.json"
+        and item["filename"] == "manifest.json"
         for item in outputs
     )
     assert len({item["digest"] for item in outputs}) == len(outputs)
@@ -2396,6 +2482,7 @@ def test_command_host_harvests_result_manifest_media(tmp_path: Path) -> None:
         set(item)
         <= {
             "name", "kind", "filename", "digest", "media_type", "size", "data_base64",
+            "role", "is_primary",
         }
         for item in settled
     )

@@ -34,6 +34,7 @@ from astrid.core.contracts.binding import (
     assert_provided_inputs_bound,
     expand_command,
 )
+from astrid.core.contracts.errors import AstridError
 from astrid.core._shared.result_manifest import (
     HarvestError,
     harvest_staged_outputs,
@@ -65,6 +66,8 @@ from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantError,
 )
 from astrid.core.subprocess_env import build_child_subprocess_env
+from astrid.core.generation.vibecomfy_dependency import dependency_pythonpath
+from astrid.core.util.secrets import load_local_api_key_with_source
 from astrid.core.execution.managed_tool_session import (
     CapabilityDescriptor,
     ManagedToolSession,
@@ -107,7 +110,7 @@ _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
     "coverage",
 )
 
-_GENERATION_OUTPUT_DIRS = frozenset(("images", "videos", "audio"))
+_RUNTIME_OUTPUT_NAMESPACES = frozenset(("images", "videos", "audio", "agent-view"))
 
 
 def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
@@ -128,11 +131,12 @@ def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
 def _runtime_output_filename(value: str) -> str:
     """Map a safe staged output name to Runtime's direct-leaf wire name.
 
-    Generation executors keep modality-specific directories in their private
-    attempt spool (for example ``images/output_000.png``).  Runtime's managed
-    output contract carries only a direct filename, so strip exactly one of
-    those known producer directories at the upload boundary.  Arbitrary
-    nesting is not a filename mapping mechanism and remains rejected.
+    Producers keep known namespaces in their private attempt spool (for
+    example ``images/output_000.png`` or ``agent-view/structure.md``).
+    Runtime's managed output contract carries only a direct filename, so
+    strip exactly one known producer namespace at the upload boundary.
+    Arbitrary nesting is not a filename mapping mechanism and remains
+    rejected.
     """
     if (
         not isinstance(value, str)
@@ -150,7 +154,7 @@ def _runtime_output_filename(value: str) -> str:
         raise HostError("generated output has an invalid managed filename")
     if len(parts) == 1:
         return parts[0]
-    if len(parts) == 2 and parts[0] in _GENERATION_OUTPUT_DIRS:
+    if len(parts) == 2 and parts[0] in _RUNTIME_OUTPUT_NAMESPACES:
         return parts[1]
     raise HostError("generated output has an invalid managed filename")
 
@@ -558,16 +562,42 @@ def _bind_host_owned_command_values(
     return values
 
 
+def _prepare_vibecomfy_execution_identity(
+    inputs: Mapping[str, Any],
+    scratch: Path,
+    readiness_profile: Mapping[str, Any] | None,
+) -> tuple[str, str, str]:
+    """Select and identify the exact VibeComfy input form before launch."""
+    from astrid.packs.vibecomfy.executors._bundle_inputs import staged_workflow_path
+    from astrid.packs.vibecomfy.production_engine import (
+        load_workflow_path,
+        loaded_workflow_execution_identity,
+    )
+
+    try:
+        with staged_workflow_path(
+            workflow=inputs.get("workflow"),
+            python=inputs.get("python"),
+            companion=inputs.get("companion"),
+            source=inputs.get("source"),
+            scratch=scratch,
+        ) as (workflow_path, _authority):
+            loaded = load_workflow_path(
+                workflow_path,
+                scratch / "canonical-loader",
+            )
+            return (
+                loaded_workflow_execution_identity(loaded, readiness_profile),
+                loaded.model_id,
+                loaded.template_id,
+            )
+    except Exception as exc:
+        raise HostError(f"vibecomfy.run canonical input preflight failed: {exc}") from exc
+
+
 def _dependency_pythonpath() -> tuple[str, ...]:
-    """Keep explicitly supplied interpreter dependency roots across children."""
-    values: list[str] = []
-    for raw in os.environ.get("PYTHONPATH", "").split(os.pathsep):
-        if not raw:
-            continue
-        path = Path(raw)
-        if path.name in {"site-packages", "dist-packages"}:
-            values.append(str(path))
-    return tuple(dict.fromkeys(values))
+    """Keep only approved dependency roots across children."""
+    return dependency_pythonpath()
 
 
 @dataclass
@@ -769,10 +799,20 @@ def _required_secret_names(record: "CapabilityRecord") -> tuple[str, ...]:
         str(name) for name in (record.matrix.get("required_env") or ())
         if str(name).upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))
     )
+    manifest_secret_names = tuple(
+        str(name)
+        for raw in (
+            record.definition.metadata.get("required_env") or (),
+            record.definition.metadata.get("env") or (),
+        )
+        for name in ((raw,) if isinstance(raw, str) else raw)
+        if str(name).upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))
+    )
     return tuple(dict.fromkeys(
         str(name)
         for name in (
             *matrix_secret_names,
+            *manifest_secret_names,
             *(record.definition.isolation.secrets_required or ()),
             *(record.definition.metadata.get("secrets_required") or ()),
         )
@@ -795,7 +835,9 @@ def _required_env_names(record: "CapabilityRecord") -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _resolve_credential_value(source: Mapping[str, str], name: str) -> str | None:
+def _resolve_credential_value(
+    source: Mapping[str, str], name: str, *, explicit: bool = False
+) -> str | None:
     """Resolve a declared credential without broadening ordinary env access.
 
     Hivemind's contributor login stores its owner-only credential at the
@@ -804,7 +846,26 @@ def _resolve_credential_value(source: Mapping[str, str], name: str) -> str | Non
     or a logged-in contributor would be rejected during preflight.
     """
 
-    value = source.get(name)
+    # A caller-provided credential mapping is the explicit tier.  The default
+    # process environment remains the process tier.  Shared-file lookup is
+    # deliberately performed by the canonical resolver in both cases.
+    if explicit:
+        environ = dict(os.environ)
+        for config_name in ("ASTRID_HOME", "ASTRID_ENV_FILE"):
+            if config_name in source:
+                environ[config_name] = str(source[config_name])
+        explicit_value = source.get(name)
+    else:
+        environ = source
+        explicit_value = None
+    try:
+        value, _source = load_local_api_key_with_source(
+            name,
+            explicit=explicit_value,
+            environ=environ,
+        )
+    except AstridError:
+        value = ""
     if value:
         return str(value)
     if name != "HIVEMIND_CONTRIBUTOR_KEY":
@@ -1893,6 +1954,10 @@ class GenericPackHost:
         # Keep the mapping live when the default is os.environ so test/runtime
         # credential rotation is observed without snapshotting secret values.
         self.credential_source = os.environ if credential_source is None else credential_source
+        # A supplied mapping is the caller's explicit credential tier.  Keep
+        # process environment fallback available so shared astrid.env still
+        # wins over stale process values and fills an empty mapping.
+        self._credential_source_is_explicit = credential_source is not None
         self.ledger = load_capability_ledger(self.capability_matrix_path) if self.capability_matrix_path else {"capabilities": [], "sources": {}}
         self.matrix: dict[str, dict[str, Any]] = self._load_matrix(self.capability_matrix_path)
         self.source_epoch = "uninitialized"
@@ -2163,9 +2228,18 @@ class GenericPackHost:
             else:
                 checks["binaries"] = {"ok": True}
             required_env = _required_env_names(record)
+            required_credentials = set(_required_secret_names(record))
             missing_env = [
                 name for name in required_env
-                if not _resolve_credential_value(self.credential_source, name)
+                if not (
+                    _resolve_credential_value(
+                        self.credential_source,
+                        name,
+                        explicit=self._credential_source_is_explicit,
+                    )
+                    if name in required_credentials
+                    else self.credential_source.get(name)
+                )
             ]
             checks["credentials"] = {"ok": not missing_env, "missing": missing_env}
             required_packages = record.matrix.get("required_packages") or record.definition.metadata.get("required_packages", adapter.required_packages)
@@ -2454,6 +2528,7 @@ class GenericPackHost:
         input_size_limits: Mapping[str, int] | None = None,
         storage_policy_version: str | None = None,
         continuation_id: str | None = None,
+        file_input_names: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
         """Materialize digest inputs and managed registry objects in *attempt*.
 
@@ -2742,19 +2817,24 @@ class GenericPackHost:
             "hype_assets",
         }
         for name, value in list(values.items()):
-            digest = value.get("digest") if isinstance(value, Mapping) else (
-                value
-                if (
-                    storage_policy_version not in {
-                    "astrid.cloud-i2i.z-image.v1",
-                    "astrid.cloud-edit.qwen-source.v1",
-                    "astrid.cloud-edit.unified.v1",
-                }
-                    and isinstance(value, str)
-                    and len(value) == 64
-                    and all(character in "0123456789abcdef" for character in value)
+            digest = (
+                value.get("digest")
+                if isinstance(value, Mapping)
+                else (
+                    value
+                    if (
+                        name in file_input_names
+                        and storage_policy_version not in {
+                            "astrid.cloud-i2i.z-image.v1",
+                            "astrid.cloud-edit.qwen-source.v1",
+                            "astrid.cloud-edit.unified.v1",
+                        }
+                        and isinstance(value, str)
+                        and len(value) == 64
+                        and all(character in "0123456789abcdef" for character in value)
+                    )
+                    else None
                 )
-                else None
             )
             if digest:
                 if self.client is None or not callable(getattr(self.client, "get_object", None)):
@@ -3175,14 +3255,20 @@ class GenericPackHost:
         secrets = {
             name: value
             for name in declared
-            if (value := _resolve_credential_value(self.credential_source, name))
+            if (
+                value := _resolve_credential_value(
+                    self.credential_source,
+                    name,
+                    explicit=self._credential_source_is_explicit,
+                )
+            )
         }
         explicit = dict(explicit_env or {})
         explicit.update({
             name: value
             for name in all_declared
             if name not in declared
-            and (value := _resolve_credential_value(self.credential_source, name))
+            and (value := self.credential_source.get(name))
         })
         # A manifest may set ordinary fixed environment values, but secret
         # values are always sourced by the host and never trusted from YAML.
@@ -3351,6 +3437,7 @@ class GenericPackHost:
                 "runtime client must provide canonical upload_object for output publication"
             )
         uploaded: list[dict[str, Any]] = []
+        seen_filenames: set[str] = set()
         inline = bool(getattr(self.client, "INLINE_SETTLEMENT_OUTPUTS", False))
         for index, descriptor in enumerate(outputs):
             descriptor = dict(descriptor)
@@ -3362,6 +3449,11 @@ class GenericPackHost:
             if staged_filename is None:
                 staged_filename = path.name
             filename = _runtime_output_filename(staged_filename)
+            if filename in seen_filenames:
+                raise HostError(
+                    f"generated outputs collide on managed filename {filename!r}"
+                )
+            seen_filenames.add(filename)
             media_type = _settlement_media_type({**descriptor, "filename": filename})
             if inline:
                 data = path.read_bytes()
@@ -4196,6 +4288,11 @@ class GenericPackHost:
                     else None
                 ),
                 continuation_id=task_id,
+                file_input_names=frozenset(
+                    port.name
+                    for port in record.definition.inputs
+                    if port.type == "file"
+                ),
             )
             if record.definition.metadata.get("storage_policy_version") in {
                 "astrid.cloud-i2i.z-image.v1",
@@ -4259,36 +4356,20 @@ class GenericPackHost:
                 )
             evidence_root = root
             self.execution_policy.assert_deadline(execution_deadline)
-            if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
-                workflow_input = inputs.get("workflow")
-                if not isinstance(workflow_input, (str, Path)):
-                    raise HostError("vibecomfy.run workflow input is missing")
-                from astrid.packs.vibecomfy.production_engine import (
-                    execution_identity_digest,
-                    load_workflow_path,
-                )
-
-                _, model_id, template_id = load_workflow_path(
-                    workflow_input,
-                    root / "workflow-identity",
-                )
-                verified_facts = readiness_profile.get("verified_facts")
-                exact_facts = (
-                    verified_facts.get("exact")
-                    if isinstance(verified_facts, Mapping)
-                    else {}
-                )
-                model_digest = (
-                    exact_facts.get("model_digest")
-                    if isinstance(exact_facts, Mapping)
-                    else None
-                )
-                execution_identity = execution_identity_digest(
-                    model_id,
-                    template_id,
-                    model_digest=model_digest,
+            if capability_id == "vibecomfy.run":
+                execution_identity, model_id, template_id = (
+                    _prepare_vibecomfy_execution_identity(
+                        inputs,
+                        root / "workflow-identity",
+                        readiness_profile,
+                    )
                 )
                 network_admission["execution_identity"] = execution_identity
+                managed_binding = replace(
+                    managed_binding,
+                    execution_identity=execution_identity,
+                )
+            if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
                 from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
 
                 checkout_adapter = CheckoutServerAdapter.from_host_session(

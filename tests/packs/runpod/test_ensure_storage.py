@@ -18,15 +18,16 @@ def test_ensure_storage_finds_existing() -> None:
     """ensure_storage returns immediately when volume exists."""
     existing_volume = {"id": "vol-abc", "name": "my-volume", "size": 50}
 
-    with patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value=existing_volume)):
+    with patch("runpod_lifecycle.api.get_network_volumes", return_value=[existing_volume]) as get_volumes, \
+         patch("runpod_lifecycle.api.create_network_volume") as create_volume:
         from astrid.core.integrations.runpod.storage import ensure_storage
 
         import asyncio
 
-        result = asyncio.run(ensure_storage("my-volume", datacenter_id="US-GA-1"))
+        result = asyncio.run(ensure_storage("my-volume", datacenter_id="US-GA-1", api_key="test-key"))
         assert result == existing_volume
-        # Pod.create_storage should NOT have been called
-        # (get_storage returned non-None, so we short-circuit)
+        get_volumes.assert_called_once_with("test-key")
+        create_volume.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -38,33 +39,26 @@ def test_ensure_storage_creates_when_missing() -> None:
     """ensure_storage calls create_storage when get_storage returns None."""
     created_volume = {"id": "vol-new", "name": "new-volume", "size": 100}
 
-    with patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value=None)), \
-         patch("runpod_lifecycle.Pod.create_storage", AsyncMock(return_value=created_volume)) as create_storage:
+    with patch("runpod_lifecycle.api.get_network_volumes", return_value=[]), \
+         patch("runpod_lifecycle.api.create_network_volume", return_value=created_volume) as create_volume:
         from astrid.core.integrations.runpod.storage import ensure_storage
 
         import asyncio
 
-        result = asyncio.run(ensure_storage("new-volume", size_gb=100, datacenter_id="US-GA-1"))
+        result = asyncio.run(ensure_storage("new-volume", size_gb=100, datacenter_id="US-GA-1", api_key="test-key"))
         assert result == created_volume
-        create_storage.assert_awaited_once_with("new-volume", 100, "US-GA-1")
+        create_volume.assert_called_once_with("test-key", "new-volume", 100, "US-GA-1")
 
 
 def test_ensure_storage_raises_without_datacenter_when_missing() -> None:
     """ensure_storage raises ValueError without datacenter_id when volume missing."""
-    import os
-    os.environ["RUNPOD_API_KEY"] = "test-key-rpa_0000000000000000000000000000000000000000000000"
+    with patch("runpod_lifecycle.api.get_network_volumes", return_value=[]):
+        from astrid.core.integrations.runpod.storage import ensure_storage
 
-    try:
-        with patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value=None)):
-            from astrid.core.integrations.runpod.storage import ensure_storage
+        import asyncio
 
-            import asyncio
-
-            with pytest.raises(ValueError, match="datacenter_id"):
-                asyncio.run(ensure_storage("missing-vol"))
-    finally:
-        if os.environ.get("RUNPOD_API_KEY") == "test-key-rpa_0000000000000000000000000000000000000000000000":
-            del os.environ["RUNPOD_API_KEY"]
+        with pytest.raises(ValueError, match="datacenter_id"):
+            asyncio.run(ensure_storage("missing-vol", api_key="test-key"))
 
 
 # ---------------------------------------------------------------------------
@@ -78,40 +72,39 @@ def test_ensure_storage_idempotent() -> None:
 
     call_count = 0
 
-    async def get_storage(name: str):
+    def get_network_volumes(api_key: str):
         nonlocal call_count
         call_count += 1
-        return existing
+        assert api_key == "test-key"
+        return [existing]
 
-    async def create_storage(name: str, size_gb: int, datacenter_id: str):
-        pytest.fail("create_storage should not be called when volume exists")
-
-    with patch("runpod_lifecycle.Pod.get_storage", get_storage), \
-         patch("runpod_lifecycle.Pod.create_storage", create_storage):
+    with patch("runpod_lifecycle.api.get_network_volumes", get_network_volumes), \
+         patch("runpod_lifecycle.api.create_network_volume") as create_volume:
         from astrid.core.integrations.runpod.storage import ensure_storage
 
         import asyncio
 
-        r1 = asyncio.run(ensure_storage("idem-vol", datacenter_id="US-GA-1"))
-        r2 = asyncio.run(ensure_storage("idem-vol", datacenter_id="US-GA-1"))
+        r1 = asyncio.run(ensure_storage("idem-vol", datacenter_id="US-GA-1", api_key="test-key"))
+        r2 = asyncio.run(ensure_storage("idem-vol", datacenter_id="US-GA-1", api_key="test-key"))
         assert r1 == r2 == existing
+        create_volume.assert_not_called()
 
 
 def test_require_existing_storage_fails_without_creating_when_missing() -> None:
     """Storage-required executor paths report the ensure-storage command without creation."""
     from astrid.core.integrations.runpod.storage import ENSURE_STORAGE_HINT, require_existing_storage
 
-    with patch("runpod_lifecycle.Pod.get_storage", AsyncMock(return_value=None)), \
-         patch("runpod_lifecycle.Pod.create_storage", AsyncMock()) as create_storage:
+    with patch("runpod_lifecycle.api.get_network_volumes", return_value=[]), \
+         patch("runpod_lifecycle.api.create_network_volume") as create_volume:
         import asyncio
 
         with pytest.raises(ValueError, match="missing-vol"):
-            asyncio.run(require_existing_storage("missing-vol", context="RunPod provision"))
+            asyncio.run(require_existing_storage("missing-vol", context="RunPod provision", api_key="test-key"))
 
-        create_storage.assert_not_called()
+        create_volume.assert_not_called()
 
     try:
-        asyncio.run(require_existing_storage(None, context="RunPod session"))
+        asyncio.run(require_existing_storage(None, context="RunPod session", api_key="test-key"))
     except ValueError as exc:
         message = str(exc)
     else:  # pragma: no cover - assertion guard

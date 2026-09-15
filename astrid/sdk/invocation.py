@@ -510,7 +510,10 @@ def _validate_timeline_visualize_inputs(
         raise CapabilityValidationError(
             "transcript input is host-owned; config.app.transcript supplies the CAS object"
         )
-    view = values.get("view", "structure")
+    # The rendered filmstrip/storyboard is the primary visualization surface.
+    # Keep the structural diagram available as an explicit opt-in via
+    # ``view=structure``.
+    view = values.get("view", "filmstrip")
     if view not in {"structure", "filmstrip"}:
         raise CapabilityValidationError("view must be structure or filmstrip")
     if view == "filmstrip":

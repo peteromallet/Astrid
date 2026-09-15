@@ -368,7 +368,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Owning project slug issued by the workspace runtime.",
     )
-    parser.add_argument("--view", choices=("structure", "filmstrip"), default="structure")
+    parser.add_argument(
+        "--view",
+        choices=("structure", "filmstrip"),
+        default="filmstrip",
+        help="Rendered storyboard/filmstrip (default) or the diagnostic timeline diagram.",
+    )
     parser.add_argument("--sample", choices=("interval", "clips", "shots", "cuts"))
     parser.add_argument("--every", type=float)
     parser.add_argument("--every-frames", type=int)

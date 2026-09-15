@@ -18,6 +18,11 @@ snapshot:
 astrid timelines visualize --project <slug>
 ```
 
+The default presentation is the rendered filmstrip/storyboard unified
+inspector (and therefore requires a successful managed render). It is the
+primary continuity-review surface; use `--view structure` when the question is
+specifically about the diagnostic track/clip diagram or no render exists yet.
+
 - **stdout** is exactly one compact JSON object (`sort_keys`, no newline).
   Kernel-managed invocation returns a stable `run_id`, a durable
   `manifest_path`, and SDK outputs including `pack_root`, `pages`, and
@@ -35,8 +40,8 @@ astrid timelines visualize --project <slug>
   `diagnostics.json`, `metric-definitions.json`, `reading-guide.md`, plus
   optional `structure.md`, `PG*.png`, `PG*.svg`, and `filmstrip/*.png`
   (ledger: `pack-hashes.json`).
-- **The drill-down operation** is `astrid timelines visualize --project
-  <slug> --from-view <manifest_path> --focus <ref>`: it rehydrates and re-validates the prior pack (containment,
+- **The structural drill-down operation** is `astrid timelines visualize --project
+  <slug> --view structure --from-view <manifest_path> --focus <ref>`: it rehydrates and re-validates the prior pack (containment,
   full hash ledger, schemas, run ownership — `frozen.load_frozen_view`),
   rebuilds the model *exclusively from hashed frozen facts*, and emits a new
   child pack. Children copy the root-lineage substrate byte-for-byte
@@ -147,7 +152,7 @@ Each `action-index.json` entry: `canonical_ref`, `relations`, `actions`.
   reciprocal; targets outside a scoped emission are reported `null` (never
   dangling). The plan's `timeline_media`/`mapped_speech` relation names are
   not part of v1; TS/SP navigation uses the shipped action graph in §10.
-- Action kinds: `visualize` (`--from-view --focus` drill-downs) and
+- Action kinds: `visualize` (`--view structure --from-view --focus` drill-downs) and
   `inspect_media` (`inspect_original`). Every `visualize` action with a
   non-null `focus` carries exactly one `--from-view` and one `--focus`
   (schema-enforced); action `argv` is prefixed `python3 -m astrid` and
@@ -168,8 +173,8 @@ Each `action-index.json` entry: `canonical_ref`, `relations`, `actions`.
 
 ```sh
 # cold roots — project default timeline; mutually exclusive selectors
-astrid timelines visualize --project desert                  # default both layouts, all formats
-astrid timelines visualize --project desert --all            # every non-tombstoned timeline
+astrid timelines visualize --project desert                  # rendered filmstrip by default
+astrid timelines visualize --project desert --view structure --all  # every non-tombstoned timeline
 astrid timelines visualize --project desert desert-slug      # by timeline slug
 astrid timelines visualize --project desert --shot SH01
 astrid timelines visualize --project desert --range 0..13.9  # closed-open window (frame-quantized)
@@ -180,13 +185,14 @@ astrid timelines visualize --project desert --asset plant-frame-3
 # presentation
 --layout time-scaled|linear|both            # default both
 --format png --format svg --format md       # repeatable; default all
---view filmstrip --render-run latest       # managed rendered evidence; use an exact run id to pin provenance
+--view filmstrip --render-run latest       # explicit form of the default; pin with an exact run id
+--view structure                            # diagnostic structural evidence view
 
 # drill-down (the only navigation form)
-astrid timelines visualize --project desert --from-view <root>/agent-view/manifest.json --focus TL01.CL03 --context 2
+astrid timelines visualize --project desert --view structure --from-view <root>/agent-view/manifest.json --focus TL01.CL03 --context 2
 
 # frozen-lineage transition
-astrid timelines visualize --project desert --from-view <root>/agent-view/manifest.json --focus TL01 --refresh-root
+astrid timelines visualize --project desert --view structure --from-view <root>/agent-view/manifest.json --focus TL01 --refresh-root
 ```
 
 Rules: `--from-view` and `--focus` must be supplied together; neither can be

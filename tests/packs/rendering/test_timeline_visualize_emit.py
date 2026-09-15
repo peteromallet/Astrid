@@ -324,6 +324,7 @@ def test_cross_artifact_join(desert) -> None:
             if action["focus"] is not None:
                 assert "--from-view" in action["argv"]
                 assert "--focus" in action["argv"]
+                assert action["argv"][action["argv"].index("--view") + 1] == "structure"
                 assert action["argv"][action["argv"].index("--project") + 1] == PROJECT_SLUG
                 focus_value = action["argv"][action["argv"].index("--focus") + 1]
                 assert focus_value == action["focus"]

@@ -82,8 +82,9 @@ settings identity, and verified in the bundle manifest. A pinned render keeps
 old visual evidence associated with its own timeline state even after later
 edits.
 
-For the structural timeline diagram and frozen object navigation, use
-`--view structure` (the compatibility default):
+The rendered filmstrip/storyboard is the default and primary continuity-review
+visualization. For the structural timeline diagram and frozen object
+navigation, explicitly use `--view structure`:
 
 ```bash
 python3 -m astrid timelines visualize <slug-or-id> --project <project> \

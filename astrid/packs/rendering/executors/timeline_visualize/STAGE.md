@@ -30,8 +30,9 @@ bound to, or recorded in, a timeline `manifest.json`.
 
 ## Rendered filmstrip view
 
-Use `--view filmstrip` for continuity review. The existing diagram remains
-`--view structure`, which is the compatibility default. Filmstrip inputs are
+The rendered filmstrip/storyboard is the default and primary continuity-review
+view. The existing diagnostic diagram remains available as
+`--view structure`. Filmstrip inputs are
 `sample` (`interval`, `clips`, `cuts`, `shots`), `every` (seconds, default 0.5)
 or `every_frames` (positive integer, mutually exclusive with `every`),
 `render_run` (exact successful run id or `latest`), `columns` (default 5),

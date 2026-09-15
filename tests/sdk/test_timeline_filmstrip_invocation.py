@@ -25,6 +25,20 @@ def test_filmstrip_preflight_supports_intersecting_filters(monkeypatch):
     assert received['clip'] == 'clip1'
 
 
+def test_visualize_preflight_defaults_to_filmstrip(monkeypatch):
+    received = {}
+
+    def prepare(inputs, *, project, client):
+        received.update(inputs)
+        return {'mode': 'filmstrip'}
+
+    monkeypatch.setattr('astrid.sdk.timeline_filmstrip.prepare_filmstrip', prepare)
+    result = invocation._validate_timeline_visualize_inputs({}, project='p', _client='runtime')
+
+    assert result['mode'] == 'filmstrip'
+    assert received == {}
+
+
 def test_caller_cannot_supply_authority():
     with pytest.raises(CapabilityValidationError, match='host-owned'):
         invocation._validate_timeline_visualize_inputs(

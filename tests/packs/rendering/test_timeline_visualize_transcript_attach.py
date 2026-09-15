@@ -78,6 +78,22 @@ def test_metadata_declared_attachment_resolves_with_integrity_ok(tmp_path: Path)
     assert result.file == (timeline / "evidence" / "spoken.json").resolve()
 
 
+def test_runtime_staged_file_is_checked_against_config_declaration(tmp_path: Path) -> None:
+    staged = tmp_path / "attempt" / "inputs" / "transcript.json"
+    digest = _write(staged, b'{"segments": []}')
+    result = discover_attachment(
+        tmp_path / "disposable-project-root",
+        timeline_metadata={
+            "transcript": _declaration(file="transcript.json", sha256=digest),
+        },
+        materialized_file=staged,
+    )
+    assert result is not None
+    assert result.integrity == "ok"
+    assert result.file == staged.resolve()
+    assert result.observed_transcript_sha256 == digest
+
+
 @pytest.mark.parametrize("outside_kind", ["absolute", "relative_escape"])
 def test_metadata_declared_path_outside_project_is_uncontained(
     tmp_path: Path,

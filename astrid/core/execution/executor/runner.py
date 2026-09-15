@@ -37,6 +37,7 @@ from astrid.core.contracts.scoped_config import SCOPE_REGISTRY, ScopeRequest
 from astrid.core.env_vars import ASTRID_INTERNAL_INVOCATION
 from astrid.core.foundation.hash import executor_definition_digest
 from astrid.core.foundation.paths import REPO_ROOT
+from astrid.core.generation.vibecomfy_dependency import dependency_pythonpath
 from astrid.core.media import require_runtime_materialized_file
 from astrid.core.project.guidance import (
     format_project_required_guidance,
@@ -875,6 +876,21 @@ def _command_subprocess_env(
         **scoped_env,
         "ASTRID_INTERNAL_INVOCATION": "1",
     }
+    # The worker environment has already selected and validated the exact
+    # VibeComfy source. Preserve only those approved dependency roots through
+    # this final command-child boundary; ambient checkout paths stay filtered.
+    try:
+        dependency_roots = dependency_pythonpath()
+    except ValueError as exc:
+        raise ExecutorRunnerError(str(exc)) from exc
+    if dependency_roots:
+        existing_pythonpath = str(explicit_env.get("PYTHONPATH") or "")
+        roots = tuple(
+            value
+            for value in (*existing_pythonpath.split(os.pathsep), *dependency_roots)
+            if value
+        )
+        explicit_env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(roots))
     # Scoped credential resolution is the only allowed source for secret
     # values.  Pass them through the dedicated in-memory secret channel rather
     # than the ordinary explicit environment map.

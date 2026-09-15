@@ -250,6 +250,7 @@ class ValidatedResultOutput:
     is_primary: bool
     role: str | None = None
     label: str | None = None
+    filename: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-safe materialization descriptor for this output."""
@@ -264,6 +265,8 @@ class ValidatedResultOutput:
             descriptor["role"] = self.role
         if self.label is not None:
             descriptor["label"] = self.label
+        if self.filename is not None:
+            descriptor["filename"] = self.filename
         return descriptor
 
 
@@ -509,6 +512,7 @@ def validate_result_manifest(
                 is_primary=is_primary,
                 role=role,
                 label=label,
+                filename=Path(relative).name,
             )
         )
 
@@ -819,6 +823,15 @@ def _collect_manifest_files(
                 "bytes": actual_bytes,
                 "role": role,
                 "is_primary": is_primary,
+                "ordinal_explicit": "ordinal" in entry,
+                **{
+                    field: entry[field]
+                    for field in (
+                        "output_port", "group_key", "variant_key", "selector",
+                        "producer", "provenance", "durability", "regeneration", "coverage",
+                    )
+                    if field in entry
+                },
             }
         )
     return collected

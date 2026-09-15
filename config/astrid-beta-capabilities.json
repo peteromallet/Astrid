@@ -295,6 +295,48 @@
    "required_packages": []
   },
   {
+   "id": "generation.generate_image_cloud_i2i",
+   "disposition": "required",
+   "evidence_reason": "Narrow z-image cloud i2i capability with an enforced whole-task storage envelope; provider readiness is credential-gated.",
+   "adapter_family": "provider",
+   "resource_keys": [
+    "provider"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "generation.generate_image_edit",
+   "disposition": "required",
+   "evidence_reason": "Unified bounded cloud image-edit capability with source-only Qwen, source-only Klein, and source-plus-mask Qwen inpaint profiles under one typed CAS/storage envelope; provider readiness is credential-gated.",
+   "adapter_family": "provider",
+   "resource_keys": [
+    "provider"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
+   "id": "generation.generate_image_upscale",
+   "disposition": "required",
+   "evidence_reason": "Bounded SeedVR2 image-upscale capability with project-CAS source custody and provider readiness gated by FAL_KEY.",
+   "adapter_family": "provider",
+   "resource_keys": [
+    "provider"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_binaries": [],
+   "required_packages": []
+  },
+  {
    "id": "generation.generate_image_openai",
    "disposition": "required",
    "evidence_reason": "Required GPT image facade; OpenAI credential readiness is explicit.",
@@ -731,12 +773,40 @@
    ]
   },
   {
+   "id": "vibecomfy.character_animation",
+   "disposition": "optional",
+   "evidence_reason": "CPU-admitted bounded Wan Animate profile; mode=animate, two CAS media inputs, and exposed controls bind to the pinned ready graph. GPU execution/output proof remains open.",
+   "adapter_family": "local_generation",
+   "resource_keys": [
+    "gpu"
+   ],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": [
+    "vibecomfy"
+   ]
+  },
+  {
    "id": "vibecomfy.validate",
    "disposition": "required",
    "evidence_reason": "Required CPU-only canonical workflow validation path; VibeComfy readiness is explicit.",
    "adapter_family": "cpu",
    "resource_keys": [
     "cpu"
+   ],
+   "required_env": [],
+   "required_binaries": [],
+   "required_packages": [
+    "vibecomfy"
+   ]
+  },
+  {
+   "id": "vibecomfy.video_enhance",
+   "disposition": "optional",
+   "evidence_reason": "CPU-admitted bounded video-upscale profile; source audio/FPS and scale controls bind to the pinned ready graph. Interpolation, color correction, non-maximum quality, and GPU output proof remain fail-closed/open.",
+   "adapter_family": "local_generation",
+   "resource_keys": [
+    "gpu"
    ],
    "required_env": [],
    "required_binaries": [],
@@ -900,12 +970,8 @@
    "disposition": "optional",
    "evidence_reason": "Optional hosted FAL integration; retained with truthful credential preflight.",
    "adapter_family": "provider",
-   "resource_keys": [
-    "provider"
-   ],
-   "required_env": [
-    "FAL_KEY"
-   ],
+   "resource_keys": ["provider"],
+   "required_env": ["FAL_KEY"],
    "required_binaries": [],
    "required_packages": []
   },
@@ -938,13 +1004,9 @@
    "disposition": "optional",
    "evidence_reason": "Optional personal Discord adapter; retained with truthful binary preflight.",
    "adapter_family": "provider",
-   "resource_keys": [
-    "provider"
-   ],
+   "resource_keys": ["provider"],
    "required_env": [],
-   "required_binaries": [
-    "node"
-   ],
+   "required_binaries": ["node"],
    "required_packages": []
   }
  ]

@@ -7,7 +7,13 @@
     "argv": [
       "{python_exec}",
       "-m",
-      "astrid.packs.fal.executors.fal_foley.run"
+      "astrid.packs.fal.executors.fal_foley.run",
+      "--clip",
+      "{clip}",
+      "--prompt",
+      "{prompt}",
+      "--out",
+      "{out}/audio.wav"
     ]
   },
   "description": "Generate Foley audio for one short video clip via fal.ai's hunyuan-video-foley model. Takes a clip + text prompt, returns one audio file matched to the clip's duration.",
@@ -18,6 +24,13 @@
       "name": "clip",
       "required": true,
       "type": "file"
+    },
+    {
+      "description": "Text description of the Foley to generate.",
+      "name": "prompt",
+      "required": true,
+      "type": "string",
+      "artifact_type": "prompt"
     }
   ],
   "isolation": {
@@ -47,8 +60,17 @@
   "outputs": [
     {
       "name": "audio",
-      "path_template": "{out}",
-      "type": "file"
+      "path_template": "{out}/audio.wav",
+      "type": "file",
+      "artifact_type": "audio",
+      "mode": "create_or_replace"
+    },
+    {
+      "name": "audio_manifest",
+      "path_template": "{out}/manifest.json",
+      "type": "file",
+      "artifact_type": null,
+      "mode": "create_or_replace"
     }
   ],
   "scoped_configs": ["credentials.fal"],

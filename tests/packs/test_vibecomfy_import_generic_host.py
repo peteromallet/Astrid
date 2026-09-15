@@ -39,6 +39,8 @@ if RUNTIME_WORKTREE.is_dir():
 
 runtime_daemon = pytest.importorskip("runtime_protocol.daemon")
 RuntimeDaemon = runtime_daemon.RuntimeDaemon
+runtime_store = pytest.importorskip("runtime_protocol.store")
+RealmStore = runtime_store.RealmStore
 
 ROOT = Path(__file__).resolve().parents[2]
 IMPORT_CAPABILITY = (
@@ -216,7 +218,9 @@ def test_import_edit_capture_history_runs_as_runtime_tasks_and_settles_lineage(
     pack_root = tmp_path / "packs"
     pack_root.mkdir()
     _write_fake_vibecomfy_package(pack_root)
-    daemon = RuntimeDaemon(tmp_path / "realm", support_root=tmp_path / "support").start()
+    realm_root = tmp_path / "realm"
+    RealmStore.initialize(realm_root).close()
+    daemon = RuntimeDaemon(realm_root, support_root=tmp_path / "support").start()
     try:
         client = _open_client(daemon)
         project = client.projects.create(

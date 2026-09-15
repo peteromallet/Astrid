@@ -166,7 +166,7 @@ class ManagedTimeline:
     """
 
     timeline_dir: Path | None
-    timeline_id: str  # canonical UUID from identity file
+    timeline_id: str  # exact runtime timeline ID from the identity source
     timeline_ulid: str  # canonical ULID (uppercase Crockford base32)
     slug: str | None  # display slug, if any
     is_default: bool
@@ -373,19 +373,20 @@ def select_kernel_timelines(
     return timelines, diagnostics
 
 
-def _canonical_uuid(value: object) -> str | None:
-    """Return the canonical lowercase-hyphenated UUID string, or ``None``.
+def _canonical_timeline_id(value: object) -> str | None:
+    """Return an exact non-empty Runtime timeline ID, or ``None``.
 
-    Round-trip check: ``str(uuid.UUID(value)) == value`` rejects uppercase,
-    brace/urn forms, and bare-hex forms — only canonical lowercase hex UUIDs
-    (``xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx``) validate.
+    UUID IDs retain the historical canonical lowercase-hyphenated check;
+    other IDs are opaque Runtime identities and are preserved byte-for-byte.
     """
     if not isinstance(value, str):
+        return None
+    if not value:
         return None
     try:
         parsed = uuid.UUID(value)
     except (ValueError, AttributeError, TypeError):
-        return None
+        return value
     canonical = str(parsed)
     return canonical if canonical == value else None
 
@@ -603,8 +604,8 @@ def _manifest_identity_field_problem(identity: dict) -> str | None:
     """First violated ``timeline_identity`` field rule, or ``None`` when valid.
 
     The shared field-level contract for both accepted manifest forms: the five
-    required fields with closed shape, bare ``TL`` refs, canonical UUID,
-    uppercase-only canonical ULID, and the slug pattern.
+    required fields with closed shape, bare ``TL`` refs, exact non-empty
+    Runtime timeline ID, uppercase-only canonical ULID, and the slug pattern.
     """
     for field in _IDENTITY_FIELDS:
         if field not in identity:
@@ -618,8 +619,8 @@ def _manifest_identity_field_problem(identity: dict) -> str | None:
     qualified_ref = identity["qualified_ref"]
     if not isinstance(qualified_ref, str) or not _is_bare_tl_ref(qualified_ref):
         return "timeline identity qualified_ref is not a valid TL reference"
-    if _canonical_uuid(identity["uuid"]) is None:
-        return "timeline identity uuid is not a canonical UUID"
+    if _canonical_timeline_id(identity["uuid"]) is None:
+        return "timeline identity uuid is not a valid Runtime timeline ID"
     if (
         not isinstance(identity["ulid"], str)
         or _MANIFEST_ULID_RE.fullmatch(identity["ulid"]) is None
@@ -823,7 +824,7 @@ def select_from_manifest(manifest: dict) -> ManagedTimeline | None:
     identity = _manifest_timeline_identity(manifest)
     return ManagedTimeline(
         timeline_dir=None,
-        timeline_id=_canonical_uuid(identity["uuid"]),
+        timeline_id=_canonical_timeline_id(identity["uuid"]),
         timeline_ulid=_canonical_ulid(identity["ulid"]),
         slug=identity["slug"],
         is_default=False,

@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from astrid.sdk.remote import RemoteRuns
+from astrid.sdk.project_render import open_render
 
 
 class _Runtime:
@@ -99,6 +102,54 @@ def test_open_uses_runtime_canonical_path_by_default_without_cache_copy(monkeypa
     assert launched == [["open", "-b", "com.apple.QuickTimePlayerX", str(canonical)]]
 
 
+@pytest.mark.parametrize("location_state", ["valid", "missing", "unverified", "corrupt", "symlink"])
+def test_managed_open_uses_only_verified_canonical_location(monkeypatch, tmp_path, location_state):
+    runtime = _Runtime()
+    # Resolve /tmp's macOS symlink before testing canonical path validation.
+    canonical = tmp_path.resolve() / "canonical-object"
+    canonical.write_bytes(runtime.data)
+    runtime._canonical_path = canonical
+    original_task = runtime.get_task
+    runtime.get_task = lambda task_id: {
+        **original_task(task_id),
+        "result": {"outputs": [{
+            "output_port": "video", "managed_object_reference": "O-video",
+            "digest": runtime.digest, "size": len(runtime.data),
+            "actual_filename": "review.mp4", "media_type": "video/mp4",
+            "ordinal": 0, "role": "result", "task_id": task_id,
+        }]},
+    }
+    def unexpected_download(*args, **kwargs):
+        pytest.fail("default opening must not download or create a cache copy")
+    runtime.get_object = unexpected_download
+    monkeypatch.setattr("astrid.sdk.project_render._materialize", unexpected_download)
+    monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
+    if location_state == "missing":
+        runtime.get_project_object_location = None
+    elif location_state == "unverified":
+        resolver = runtime.get_project_object_location
+        runtime.get_project_object_location = lambda *args: {**resolver(*args), "verified": False}
+    elif location_state == "corrupt":
+        canonical.write_bytes(b"tampered")
+    elif location_state == "symlink":
+        link = canonical.with_name("link")
+        link.symlink_to(canonical)
+        runtime._canonical_path = link
+    opened = []
+    result = open_render(runtime, "P-1", opener=opened.append)
+    if location_state == "valid":
+        assert result.ok
+        assert opened == [canonical]
+        assert result.data["managed_object_reference"] == "O-video"
+        assert result.data["filename"] == "review.mp4"
+        assert result.data["open_requested"] is True
+        assert result.data["playback_confirmed"] is False
+    else:
+        assert not result.ok
+        assert result.error.code == ("runtime_location_unavailable" if location_state == "missing" else "integrity_error")
+        assert opened == []
+
+
 def test_open_exact_run_rejects_cross_project_before_download(monkeypatch, tmp_path: Path) -> None:
     runtime = _Runtime()
     runtime.runs.append({
@@ -177,7 +228,15 @@ def test_open_default_timeline_uses_only_runs_with_explicit_provenance(monkeypat
     runtime.get_project = lambda ref: {"project_id": "P-1", "slug": ref, "metadata": {"default_timeline_id": "TL-main"}}
     runtime.list_timelines = lambda project_id, *, cursor=None, limit=50: [[{"timeline_id": "TL-main", "slug": "main"}, {"timeline_id": "TL-other", "slug": "other"}], None]
     original_get_task = runtime.get_task
-    runtime.get_task = lambda task_id: {**original_get_task(task_id), "spec": {"timeline_ref": "TL-main" if "main" in task_id else "TL-other"}}
+    # Preserve the producing task's bounded historical filename while this
+    # fixture overrides spec only to exercise timeline scope selection.
+    runtime.get_task = lambda task_id: {
+        **original_get_task(task_id),
+        "spec": {
+            "timeline_ref": "TL-main" if "main" in task_id else "TL-other",
+            "inputs": {"output_name": "review.mp4"},
+        },
+    }
     monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
     monkeypatch.setattr("astrid.sdk.project_render.subprocess.run", lambda argv, check: None)
 
@@ -249,7 +308,7 @@ def test_open_hydrates_lightweight_run_rows_for_provenance(monkeypatch, tmp_path
     }
     original_get_task = runtime.get_task
     runtime.get_task = lambda task_id: original_get_task(task_id) | {
-        "spec": {"timeline_ref": "TL-main"}
+        "spec": {"timeline_ref": "TL-main", "inputs": {"output_name": "review.mp4"}}
     }
     monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
     monkeypatch.setattr("astrid.sdk.project_render.subprocess.run", lambda argv, check: None)

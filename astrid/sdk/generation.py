@@ -155,6 +155,10 @@ class GenerationFacade:
 
     def _invoke(self, capability_id: str, /, **kwargs: Any) -> Any:
         sdk_module = importlib.import_module(self.sdk_module_name)
+        # GenerationResult reconstruction requires terminal task readback;
+        # the low-level invoke() default remains admission-only for callers
+        # that intentionally manage waiting themselves.
+        kwargs.setdefault("wait", True)
         return sdk_module.invoke(capability_id, **kwargs)
 
     def __getattr__(self, name: str) -> Any:

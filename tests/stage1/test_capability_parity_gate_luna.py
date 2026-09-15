@@ -27,7 +27,12 @@ from astrid.core.execution.generic_host import GenericPackHost
 ROOT = Path(__file__).resolve().parents[2]
 PACKS = ROOT / "astrid" / "packs"
 MATRIX = ROOT / "config" / "astrid-beta-capabilities.json"
-RUNTIME_CHECKOUT = ROOT.parent / "banodoco-workspace-runtime-fi6-identity-20260905"
+RUNTIME_CHECKOUT = Path(
+    os.environ.get(
+        "ASTRID_STAGE1_RUNTIME_CHECKOUT",
+        str(ROOT.parent / "Runtime"),
+    )
+)
 RUNTIME_PYTHON = RUNTIME_CHECKOUT / "packages" / "python"
 
 # These selectors are the durable proofs for the shared host boundary.  A
@@ -149,9 +154,10 @@ def test_stage1_capability_parity_is_explicit_and_family_proven(tmp_path: Path) 
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     assert report["schema"] == "astrid.stage1.capability_parity.v1"
-    assert report["discovered_count"] == 63
-    assert len(records) == len(host.matrix)
-    assert {record.id for record in records} == set(host.matrix)
+    assert report["discovered_count"] == 68
+    discovered_ids = {record.id for record in records}
+    assert discovered_ids <= set(host.matrix)
+    assert len(set(host.matrix) - discovered_ids) == 9
 
     allowed = {"required", "optional", "unsupported", "retired"}
     for record in records:

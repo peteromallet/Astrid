@@ -350,7 +350,7 @@ class TestFalParamMapFallback:
         assert "prompt" not in captured_payload
         assert "image_size" not in captured_payload
 
-    def test_empty_mode_falls_back_to_empty_map(
+    def test_unknown_mode_falls_back_to_empty_map(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When mode is not in DEFAULT_PARAM_MAP, the fallback is an empty dict."""
@@ -359,7 +359,7 @@ class TestFalParamMapFallback:
         monkeypatch.setenv("FAL_KEY", "test-key")
         out_dir = tmp_path / "out"
 
-        entry = _make_fal_entry(mode="inpaint", param_map={})
+        entry = _make_fal_entry(mode="unmapped", param_map={})
 
         captured_payload: dict = {}
 
@@ -377,7 +377,7 @@ class TestFalParamMapFallback:
                 ):
                     backend.generate(
                         entry=entry,
-                        mode="inpaint",
+                        mode="unmapped",
                         params={"prompt": "test", "seed": 1},
                         out_dir=out_dir,
                     )

@@ -15,6 +15,7 @@ from typing import Any
 
 _MISSING = object()
 _TRANSITION_FALLBACK_FRAMES = 12
+_RENDER_CLOCK_APP_KEY = "astrid_render_clock"
 
 
 def _field(value: Any, name: str, default: Any = _MISSING) -> Any:
@@ -170,8 +171,8 @@ def clip_end_frame(clip: Any, fps: float) -> int:
     return start_frame + duration_frames
 
 
-def timeline_duration_frames(timeline: Any, fps: float) -> int:
-    """Return the all-clip composition duration, with a one-frame floor.
+def _authored_timeline_duration_frames(timeline: Any, fps: float) -> int:
+    """Return the all-clip authored duration, with a one-frame floor.
 
     ``typescript/src/lib/duration.ts:34-41`` takes
     ``max(1, startFrame + clipDurationFrames)`` over every clip.  It does not
@@ -189,6 +190,86 @@ def timeline_duration_frames(timeline: Any, fps: float) -> int:
         raise ValueError("timeline.clips must be an iterable of clips") from exc
 
 
+def _render_clock(timeline: Any) -> Mapping[str, Any] | None:
+    """Return the optional explicit render-only clock extension.
+
+    The shared timeline schema reserves ``app`` for application-owned data.
+    Astrid's render clock lives under ``app.astrid_render_clock`` so authored
+    clip intervals remain unchanged while a producer can declare a longer,
+    independently verified decoded output.
+    """
+
+    app = _field(timeline, "app", None)
+    if not isinstance(app, Mapping):
+        return None
+    if _RENDER_CLOCK_APP_KEY not in app:
+        return None
+    value = app[_RENDER_CLOCK_APP_KEY]
+    if not isinstance(value, Mapping):
+        raise ValueError("render clock must be an object")
+    return value
+
+
+def render_clock(timeline: Any, fps: float) -> Mapping[str, Any] | None:
+    """Validate and return the explicit render-only clock, when present."""
+
+    frame_rate = _positive_fps(fps)
+    value = _render_clock(timeline)
+    if value is None:
+        return None
+    authored = _authored_timeline_duration_frames(timeline, frame_rate)
+    for key in ("authored_duration_frames", "render_duration_frames"):
+        raw = value.get(key)
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            raise ValueError(f"render clock {key} must be a positive integer")
+    if value["authored_duration_frames"] != authored:
+        raise ValueError(
+            "render clock authored_duration_frames must match the authored clip extent"
+        )
+    rendered = value["render_duration_frames"]
+    if rendered <= authored:
+        raise ValueError(
+            "render clock render_duration_frames must be longer than authored duration"
+        )
+    tail = value.get("tail")
+    if not isinstance(tail, Mapping):
+        raise ValueError("render clock tail must be an object")
+    if tail.get("start_frame") != authored or tail.get("end_frame") != rendered:
+        raise ValueError(
+            "render clock tail must cover exactly the rendered extension after authored duration"
+        )
+    if not isinstance(tail.get("source_asset"), str) or not tail["source_asset"].strip():
+        raise ValueError("render clock tail source_asset must be a non-empty string")
+    if tail.get("source_start_frame") != authored or tail.get("source_end_frame") != rendered:
+        raise ValueError(
+            "render clock tail source interval must match the rendered extension"
+        )
+    if tail.get("policy") != "unmapped_excess_rendered_region":
+        raise ValueError(
+            "render clock tail policy must be unmapped_excess_rendered_region"
+        )
+    return value
+
+
+def timeline_duration_frames(timeline: Any, fps: float) -> int:
+    """Return the authored all-clip composition duration.
+
+    This is intentionally unchanged for authored interval consumers. Use
+    :func:`timeline_render_duration_frames` when a producer has declared an
+    explicit rendered tail.
+    """
+
+    return _authored_timeline_duration_frames(timeline, fps)
+
+
+def timeline_render_duration_frames(timeline: Any, fps: float) -> int:
+    """Return the decoded render duration, including a declared render tail."""
+
+    authored = _authored_timeline_duration_frames(timeline, fps)
+    clock = render_clock(timeline, fps)
+    return authored if clock is None else int(clock["render_duration_frames"])
+
+
 def timeline_duration_seconds(timeline: Any, fps: float) -> float:
     """Return canonical composition frames divided by FPS.
 
@@ -199,6 +280,13 @@ def timeline_duration_seconds(timeline: Any, fps: float) -> float:
 
     frame_rate = _positive_fps(fps)
     return timeline_duration_frames(timeline, frame_rate) / frame_rate
+
+
+def timeline_render_duration_seconds(timeline: Any, fps: float) -> float:
+    """Return decoded render seconds, including an explicit render tail."""
+
+    frame_rate = _positive_fps(fps)
+    return timeline_render_duration_frames(timeline, frame_rate) / frame_rate
 
 
 def visual_tracks_paint_order(tracks: Iterable[Any]) -> list[Any]:

@@ -215,6 +215,60 @@ def test_managed_preflight_requires_runtime_ref_and_rejects_file_mode(tmp_path: 
         )
 
 
+def test_managed_preflight_rejects_malformed_frozen_speech_before_admission() -> None:
+    runtime = _Runtime()
+    speech = {
+        "speech_annotations": [{
+            "annotation_id": "speech-shotless-01",
+            "start": 248.0,
+            "end": 252.5,
+            "text": "We stay with the ending.",
+            "source_type": "verified_speech",
+        }],
+        "speech_occurrences": [{
+            "occurrence_id": "speech-occurrence-speech-shotless-01",
+            "annotation_id": "speech-shotless-01",
+            "from": 0,
+            "to": 297,
+            "placement": 0,
+            "speed": 1,
+        }],
+        "source_audio_digest": "sha256:" + "a" * 64,
+        "annotation_digest": "sha256:" + "b" * 63,
+    }
+    with pytest.raises(CapabilityValidationError, match="annotation_digest must be a sha256 digest"):
+        _prepare_managed_render_inputs(
+            {"timeline_ref": "main", **speech}, project="demo", _client=runtime
+        )
+
+
+def test_managed_preflight_rejects_unmatched_speech_linkage() -> None:
+    runtime = _Runtime()
+    with pytest.raises(CapabilityValidationError, match="no matching annotation"):
+        _prepare_managed_render_inputs(
+            {
+                "timeline_ref": "main",
+                "speech_annotations": [{
+                    "annotation_id": "segment_id=speech-shotless-01",
+                    "start": 248.0,
+                    "end": 252.5,
+                    "text": "We stay with the ending.",
+                    "source_type": "verified_speech",
+                }],
+                "speech_occurrences": [{
+                    "occurrence_id": "speech-occurrence-speech-shotless-01",
+                    "annotation_id": "speech-shotless-01",
+                    "from": 0,
+                    "to": 297,
+                    "placement": 0,
+                    "speed": 1,
+                }],
+            },
+            project="demo",
+            _client=runtime,
+        )
+
+
 def test_snapshot_validation_rejects_missing_registry_asset() -> None:
     runtime = _Runtime()
     runtime.timeline["config"] = {
@@ -222,6 +276,90 @@ def test_snapshot_validation_rejects_missing_registry_asset() -> None:
         "clips": [{"id": "source", "at": 0, "track": "visual", "clipType": "video", "asset": "missing"}],
     }
     with pytest.raises(ValueError, match="missing registry asset"):
+        validate_managed_render_snapshot(_snapshot(runtime))
+
+
+def _render_clock() -> dict[str, object]:
+    return {
+        "authored_duration_frames": 8910,
+        "render_duration_frames": 9000,
+        "tail": {
+            "policy": "unmapped_excess_rendered_region",
+            "source_asset": "tail",
+            "start_frame": 8910,
+            "end_frame": 9000,
+            "source_start_frame": 8910,
+            "source_end_frame": 9000,
+        },
+    }
+
+
+def _clock_runtime() -> _Runtime:
+    digest = "a" * 64
+    runtime = _Runtime(media=[{"media_id": "media-tail", "digest": digest}])
+    runtime.timeline["config"] = {
+        "tracks": [{"id": "visual", "kind": "visual", "label": "Visual"}],
+        "clips": [{
+            "id": "base", "track": "visual", "at": 0, "hold": 297,
+            "clipType": "media", "asset": "base",
+        }],
+        "app": {"astrid_render_clock": _render_clock()},
+        "output": {"resolution": "640x360", "fps": 30, "file": "fixture.mp4"},
+    }
+    runtime.timeline["registry"] = {
+        "assets": {
+            "base": {"media_id": "media-tail", "content_sha256": digest},
+            "tail": {"media_id": "media-tail", "content_sha256": digest},
+        }
+    }
+    return runtime
+
+
+def test_render_clock_keeps_authored_and_rendered_extents_distinct() -> None:
+    from astrid.core.timeline.duration import (
+        render_clock,
+        timeline_duration_frames,
+        timeline_render_duration_frames,
+    )
+
+    timeline = {
+        "clips": [{"at": 0, "hold": 297}],
+        "app": {"astrid_render_clock": _render_clock()},
+    }
+    assert timeline_duration_frames(timeline, 30) == 8910
+    assert timeline_render_duration_frames(timeline, 30) == 9000
+    assert render_clock(timeline, 30)["tail"]["source_asset"] == "tail"
+
+
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda clock: clock.update(render_duration_frames=8910), "longer than authored"),
+        (lambda clock: clock["tail"].update(end_frame=8999), "cover exactly"),
+        (lambda clock: clock["tail"].update(policy="hold"), "policy"),
+        (lambda clock: clock["tail"].update(source_asset=""), "source_asset"),
+    ],
+)
+def test_render_clock_rejects_ambiguous_or_short_tail(mutate, message) -> None:
+    from astrid.core.timeline.duration import timeline_render_duration_frames
+
+    clock = _render_clock()
+    mutate(clock)
+    with pytest.raises(ValueError, match=message):
+        timeline_render_duration_frames(
+            {"clips": [{"at": 0, "hold": 297}], "app": {"astrid_render_clock": clock}},
+            30,
+        )
+
+
+def test_managed_render_clock_requires_runtime_admitted_tail_identity() -> None:
+    runtime = _clock_runtime()
+    snapshot = _snapshot(runtime)
+    validate_managed_render_snapshot(snapshot)
+    assert snapshot.authority()["render_clock"]["render_duration_frames"] == 9000
+
+    runtime.timeline["registry"]["assets"].pop("tail")
+    with pytest.raises(ManagedRenderValidationError, match="tail source asset"):
         validate_managed_render_snapshot(_snapshot(runtime))
 
 

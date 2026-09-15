@@ -269,8 +269,17 @@ def _rehydrate_managed_pack(
             relative = resolved_manifest.relative_to(run_root)
         except ValueError:
             continue
-        if relative.as_posix() not in {str(item.get("name", "")) for item in outputs} and not any(
-            str(item.get("name", "")).endswith(relative.name) for item in outputs
+        output_labels = {
+            str(
+                _runtime_output_field(item, "path", "label", "filename", "name")
+                or ""
+            )
+            for item in outputs
+        }
+        if (
+            relative.as_posix() not in output_labels
+            and relative.name not in output_labels
+            and "manifest_path" not in output_labels
         ):
             continue
         owner = (run_id, outputs)
@@ -286,7 +295,7 @@ def _rehydrate_managed_pack(
     try:
         requested_label = None
         for row in rows:
-            label = _runtime_output_field(row, "path", "name", "label")
+            label = _runtime_output_field(row, "path", "label", "filename", "name")
             digest = str(
                 _runtime_output_field(
                     row, "digest", "content_hash", "sha256", "object_id"
@@ -1215,7 +1224,7 @@ def _verify_runtime_output_binding(
     for index, raw in enumerate(runtime_outputs):
         if not isinstance(raw, Mapping):
             raise ContainmentError(f"runtime settlement output {index} is malformed")
-        raw_path = _runtime_output_field(raw, "path", "name", "label")
+        raw_path = _runtime_output_field(raw, "path", "label", "filename", "name")
         digest = _runtime_output_field(raw, "digest", "content_hash", "sha256", "object_id")
         size = _runtime_output_field(raw, "bytes", "size")
         if not isinstance(raw_path, str) or not raw_path or not isinstance(digest, str):
@@ -1231,6 +1240,17 @@ def _verify_runtime_output_binding(
             raise ContainmentError(f"runtime settlement output {raw_path!r} has an invalid path")
         if normalized.startswith(pack_prefix + "/"):
             normalized = normalized[len(pack_prefix) + 1 :]
+        if normalized == MANIFEST_NAME and MANIFEST_NAME not in expected:
+            try:
+                manifest_bytes = manifest_path.read_bytes()
+            except OSError as exc:
+                raise FrozenIntegrityError(
+                    "visualization manifest cannot be read for runtime binding"
+                ) from exc
+            expected[MANIFEST_NAME] = (
+                hashlib.sha256(manifest_bytes).hexdigest(),
+                len(manifest_bytes),
+            )
         if normalized not in expected:
             raise ContainmentError(
                 f"runtime settlement output {raw_path!r} is not in the selected visualization pack"

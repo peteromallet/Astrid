@@ -33,6 +33,18 @@ _ADAPTER_MAP: dict[str, type] = {
     "cloud": FalBackend,
 }
 
+# These FAL edit endpoints declare a plural image_urls input in their
+# endpoint schema, while FalBackend.DEFAULT_PARAM_MAP['edit'] remains the
+# singular fallback used by the other edit routes.  The shipped catalog and
+# the bounded transport tests are authoritative for these route-specific
+# mappings; the manifest map wins whenever one is present.
+_ROUTE_SPECIFIC_REMOTE_MAPS: dict[tuple[str, str, str], dict[str, str]] = {
+    ("qwen-image-edit-2511", "edit", "cloud"): {"image_ref": "image_urls"},
+    ("flux2-klein-4b", "edit", "cloud"): {"image_ref": "image_urls"},
+    ("flux2-klein-9b", "edit", "cloud"): {"image_ref": "image_urls"},
+    ("seedream-v5-pro", "edit", "cloud"): {"image_ref": "image_urls"},
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,16 +72,18 @@ def _enumerate_non_codex_combos() -> list[
         model_id: str = model["id"]
         modality: str = model.get("modality", "")
         for mode_name, mode_spec in model.get("modes", {}).items():
-            # These endpoint families intentionally diverge in remote names.
-            # Seedream's edit schema requires plural ``image_urls`` rather
-            # than the singular ``image_url`` used by most fal editors.
-            strict_parity = not (
-                (modality == "audio" and mode_name == "music")
-                or model_id == "seedream-v5-pro"
-            )
             for backend_id, backend_spec in mode_spec.get("backends", {}).items():
                 if backend_id == CODEX_BACKEND_ID:
                     continue  # SD2: Codex exempt
+
+                # These endpoint families intentionally diverge in remote
+                # names. Their route-specific declarations are checked below
+                # rather than compared with the mode-wide fallback.
+                route_key = (model_id, mode_name, backend_id)
+                strict_parity = not (
+                    (modality == "audio" and mode_name == "music")
+                    or route_key in _ROUTE_SPECIFIC_REMOTE_MAPS
+                )
                 manifest_map: dict[str, str] = dict(
                     backend_spec.get("param_map", {})
                 )
@@ -165,6 +179,8 @@ def test_param_map_parity(
     # 2. For non-audio modes, every shared canonical key MUST map to the same
     #    remote name.  Audio music endpoints diverge, so only check strict
     #    parity when requested.
+    route_key = (model_id, mode, backend_id)
+    expected_route_specific = _ROUTE_SPECIFIC_REMOTE_MAPS.get(route_key)
     if strict_parity:
         mismatched: list[tuple[str, str, str]] = []
         for canon in set(manifest_map) & set(default_map):
@@ -178,6 +194,18 @@ def test_param_map_parity(
                 f"{c!r}: manifest→{m!r} vs default→{d!r}"
                 for c, m, d in mismatched
             )
+        )
+
+    if expected_route_specific is not None:
+        actual_route_specific = {
+            canon: manifest_map[canon]
+            for canon in set(manifest_map) & set(default_map)
+            if manifest_map.get(canon) != default_map.get(canon)
+        }
+        assert actual_route_specific == expected_route_specific, (
+            f"[{model_id}/{mode}/{backend_id}] Route-specific manifest mapping "
+            f"changed: expected {expected_route_specific!r}, got "
+            f"{actual_route_specific!r}"
         )
 
     # 3. For strict-parity modes, build full canonical params from the union

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip
+from astrid.packs.rendering.executors.timeline_visualize.inspector_navigation import build_range_target
 
 
 def test_audio_targets_are_unique_and_render_scoped():
@@ -22,3 +25,20 @@ def test_audio_targets_are_unique_and_render_scoped():
     assert all(item["analysis_identity"] == snapshot["audio"]["analysis_identity"] for item in index["navigation"]["waveforms"])
     assert all("--range" in item["actions"]["focus_command"] for item in index["navigation"]["gaps"] + index["navigation"]["phrases"])
     assert index["navigation"]["frames"][0]["active_audio_targets"]
+
+
+def test_stateless_range_target_does_not_fabricate_render_parent():
+    snapshot = {"fps_rational": [24, 1], "duration_frames": 240}
+    target = build_range_target(snapshot, 24, 48)
+    command = target["actions"]["focus_command"]
+
+    assert target["kind"] == "range"
+    assert "--range 1.0..2.0" in command
+    assert "--render-run" not in command
+    assert "--project" not in command
+    assert target["target"].startswith("ins:")
+
+
+def test_partial_render_identity_is_rejected_in_navigation():
+    with pytest.raises(ValueError, match="identity must be complete"):
+        build_range_target({"project_slug": "demo", "fps_rational": [24, 1], "duration_frames": 240}, 0, 24)

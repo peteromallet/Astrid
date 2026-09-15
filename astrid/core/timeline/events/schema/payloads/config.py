@@ -12,7 +12,6 @@ from ._base import (
     TimelineEventSchemaError,
     TimelineImportSource,
     _require_nonempty_str,
-    _require_uuid_str,
     _validate_jsonable,
 )
 
@@ -24,7 +23,7 @@ class TimelineCreatedPayload:
     name: str
 
     def __post_init__(self) -> None:
-        _require_uuid_str(self.timeline_id, "payload.timeline_id")
+        _require_nonempty_str(self.timeline_id, "payload.timeline_id")
         _require_nonempty_str(self.slug, "payload.slug")
         _require_nonempty_str(self.name, "payload.name")
 
@@ -50,7 +49,7 @@ class TimelineDefaultSetPayload:
     timeline_id: str
 
     def __post_init__(self) -> None:
-        _require_uuid_str(self.timeline_id, "payload.timeline_id")
+        _require_nonempty_str(self.timeline_id, "payload.timeline_id")
 
     def to_json_obj(self) -> dict[str, Any]:
         return {"timeline_id": self.timeline_id}

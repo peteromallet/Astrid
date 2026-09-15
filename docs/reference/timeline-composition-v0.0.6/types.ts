@@ -56,6 +56,7 @@ export type TimelineConfig = {
   theme: string;
   tracks?: TrackDefinition[];
   clips: TimelineClip[];
+  app?: Record<string, unknown>;
   output?: unknown;
   pinnedShotGroups?: unknown;
   theme_overrides?: unknown;

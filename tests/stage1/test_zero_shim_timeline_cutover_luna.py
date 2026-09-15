@@ -162,9 +162,11 @@ def test_runtime_timeline_create_read_version_and_cas(tmp_path: Path) -> None:
 from pathlib import Path
 
 from runtime_protocol.daemon import RuntimeDaemon
+from runtime_protocol.store import RealmStore
 from astrid.sdk.client import AstridClient
 
 root = Path(sys.argv[1])
+RealmStore.initialize(root / "realm").close()
 daemon = RuntimeDaemon(root / "realm", support_root=root / "support").start()
 try:
     credential = root / "support" / "credentials" / "owner.token"

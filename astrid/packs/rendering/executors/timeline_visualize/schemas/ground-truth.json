@@ -41,12 +41,14 @@
             "required": [
               "authored_visual_only_end_seconds",
               "frame_quantized_visual_end",
-              "all_track_composition"
+              "all_track_composition",
+              "authored_all_track_composition"
             ],
             "properties": {
               "authored_visual_only_end_seconds": {"$ref": "_defs.json#/$defs/nonnegative_seconds"},
               "frame_quantized_visual_end": {"$ref": "_defs.json#/$defs/frame_extent"},
-              "all_track_composition": {"$ref": "_defs.json#/$defs/composition_extent"}
+              "all_track_composition": {"$ref": "_defs.json#/$defs/composition_extent"},
+              "authored_all_track_composition": {"$ref": "_defs.json#/$defs/composition_extent"}
             },
             "additionalProperties": false
           },

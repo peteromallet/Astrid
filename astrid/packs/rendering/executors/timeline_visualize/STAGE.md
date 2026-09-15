@@ -35,7 +35,9 @@ Use `--view filmstrip` for continuity review. The existing diagram remains
 `sample` (`interval`, `clips`, `cuts`, `shots`), `every` (seconds, default 0.5)
 or `every_frames` (positive integer, mutually exclusive with `every`),
 `render_run` (exact successful run id or `latest`), `columns` (default 5),
-`page_size` (default 50), and the opt-in `include_media` flag. Existing range,
+`page_size` (default 50), the opt-in `include_media` flag, and optional exact
+`resolution` (`WIDTHxHEIGHT`) applied by the frame extractor. Range, density,
+and resolution are recorded as separate request values. Existing range,
 timestamp/context, clip, asset, and shot selectors restrict frame selection.
 
 ```bash
@@ -125,6 +127,39 @@ The structural view writes `agent-view/manifest.json` plus the mandatory machine
 - numbered `PG*.png`, optional matching `PG*.svg`, sampled `filmstrip/` media,
   and `pack-hashes.json`
 
+### Filmstrip result and disposable-host contract
+
+The rendered filmstrip executor returns the existing read-only result envelope
+with `manifest_path`, `identity`, `cas`, and `entrypoints` fields. `identity.render`
+is the exact tuple `{render_run_id, timeline_id, video_digest}` from the admitted
+render. `identity.manifest.content_hash` and
+`identity.bundle.content_hash` are SHA-256 content identities; `cas` repeats the
+rendered-video, nested-manifest, and bundle digest locators that the host can
+publish as CAS objects. They are not inferred from a local filename. The
+relative entrypoints are `filmstrip-view/manifest.json`,
+`filmstrip-view/filmstrip.html`, `filmstrip-view/frame-index.json`, and
+`filmstrip-bundle.zip`. The nested manifest remains the filmstrip domain
+manifest; the output-root `manifest.json` is the generic
+`timeline_filmstrip_result` host receipt with the bundle as its primary result.
+This read-only path emits no mutation receipt and no review-specific events.
+
+The assigned output root is disposable attempt storage. The host/run ledger
+owns publication and retention of the generic receipt and its CAS outputs;
+the executor does not introduce a storage or lifecycle framework. Audio
+analysis reuse is a sibling `.audio-analysis-cache/` keyed by the immutable
+render digest and analysis settings, bounded to 256 JSON entries with stale
+entries removed when a new entry is stored. The cache is disposable: a missing
+or invalid entry is recomputed from the same admitted render identity.
+
+For SDK-managed results, the published bundle is read and hash-verified before
+being extracted into the deterministic project cache
+`~/Library/Caches/Astrid/timeline-visualize/<project>/<bundle-digest>/` (or the
+platform XDG equivalent). Extraction uses a hidden sibling staging directory,
+publishes with an atomic rename only after every declared member verifies, and
+removes failed staging or process-owned rehydrated views. Deleting that local
+cache does not change render authority; rehydration can repeat from the
+published bundle and its exact digest identities.
+
 For `--all`, `agent-view/manifest.json` is a project index and each selected
 timeline has a deterministic `TLNN/` child pack. Run ULIDs, run paths, and wall
 clock time are excluded from pack content identity.
@@ -134,7 +169,11 @@ clock time are excluded from pack content identity.
 Cold selectors mirror the timeline-navigation façade of the executor: optional
 timeline reference (slug, UUID, or ULID), `--all`, `--shot`, `--range`, `--at`,
 `--clip`, `--asset`, `--context`, `--neighbors`, `--layout`, repeatable
-`--format`, `--filmstrip`, `--rendered-video`, and `--include-media`.
+`--format`, `--filmstrip`, and `--include-media`. The managed public
+`--view filmstrip` route selects a project-owned rendered video with
+`--render-run RUN_ID|latest`; it does not accept a caller-owned
+`--rendered-video` path. The standalone executor below retains its separate
+explicit-output interface.
 `project_slug` is the
 executor-level project identity and is derived from `project=<slug>` for a
 managed SDK invocation. All selectors resolve canonical runtime timelines

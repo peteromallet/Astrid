@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,21 +43,22 @@ def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
         captured.append(list(argv))
         ready = Path(argv[argv.index("--ready-file") + 1])
         manifest = Path(argv[argv.index("--boot-manifest-path") + 1])
-        from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+        from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
         expected = {
             "status": "ready",
             "pid": FakeProcess.pid,
             "process_birth_id": "birth-4242",
-            "python_executable": str(Path(argv[0]).absolute()),
+            "python_executable": os.path.abspath(sys.executable),
             "endpoint": "http://127.0.0.1:9999",
             "executor_id": "astrid-pack-host",
             "ready_file": str(ready),
             "credential_file": str(worker_file.resolve()),
             "support_root": str(support.resolve()),
-            "source_checkout": str(source.resolve()),
-            "source_checkout_digest": "source-digest",
-            "runtime_instance_id": "runtime-7",
+                "source_checkout": str(source.resolve()),
+                "source_checkout_digest": "source-digest",
+                "source_inventory_identity": "",
+                "runtime_instance_id": "runtime-7",
             "runtime_epoch": 7,
             "schema_digest": "schema-7",
             "boot_manifest_path": str(manifest),

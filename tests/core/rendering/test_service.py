@@ -48,7 +48,13 @@ from astrid.core.rendering.registry import (
     RenderingCandidate,
     load_default_registries,
 )
-from astrid.core.rendering.service import RenderService
+from astrid.core.rendering.service import RenderService, _render_workspace_parent
+
+
+def test_managed_render_workspace_is_outside_attempt_output_root(tmp_path):
+    output = tmp_path / "attempt" / "outputs" / "video.mp4"
+    assert _render_workspace_parent(output) == tmp_path / "attempt"
+    assert _render_workspace_parent(tmp_path / "video.mp4") == tmp_path
 
 
 def _digest(value: str) -> str:

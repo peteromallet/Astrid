@@ -165,32 +165,29 @@ The SDK never opens a local Astrid database or content-addressed store.
 
 ### Moving an existing runtime realm
 
-Realm relocation is a controlled operator workflow. Start with a read-only plan
-bound to the selected owner:
+Realm relocation is a controlled operator workflow. The launcher currently
+supports a read-only plan bound to the selected owner:
 
 ```bash
 banodoco-local relocate --plan \
-  --backup /absolute/path/relocation-backup \
-  --destination /absolute/path/new-realm --json
+  --destination /absolute/path/new-support-root --json
 ```
 
-After reviewing the plan, the explicit execution form creates a verified backup,
-restores it into a new destination, checks the generated
-`activation-handoff.json`, stops the owner through a birth-checked process
-boundary, atomically publishes the selected catalog root, cold-starts the
-candidate, and retires the old realm only after the candidate is healthy:
+The execution form acquires the launcher lock, performs a birth-checked offline
+stop, and atomically renames the complete support root on the same filesystem.
+It rewrites only absolute pointers owned by that support root, preserves every
+catalog realm, cold-starts from the new root, and rolls back the rename if
+verification fails:
 
 ```bash
 banodoco-local relocate \
-  --backup /absolute/path/relocation-backup \
-  --destination /absolute/path/new-realm \
+  --destination /absolute/path/new-support-root \
   --confirm 'RELOCATE <selected-realm-id>' --json
 ```
 
-Do not copy the SQLite/CAS tree or edit `catalog.json` by hand. Keep the
-verified backup until the new owner has been inspected and the rollback window
-has ended. Review the plan and storage capacity before running the execution
-form; no live relocation is performed by setup or by the Astrid SDK.
+Do not copy the SQLite/CAS tree or edit `catalog.json` by hand. Review the
+plan and storage capacity before execution; setup and the Astrid SDK do not
+perform relocation implicitly.
 
 Historical pre-runtime project trees and local-store migration plans are not
 part of the Stage1 live path. Preserve them as immutable source artifacts and

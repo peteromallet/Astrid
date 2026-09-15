@@ -3611,8 +3611,11 @@ class GenericPackHost:
         # boundary, so mark the child invocation just as executor_runner does.
         # An external pack's ``python -m`` command executes directly in this
         # host path (command manifests do not go through the registry runner).
-        # Carry the pinned pack parent explicitly so the child can import the
-        # admitted module without falling back to ambient site-packages.
+        # Carry the pinned pack root and parent explicitly so a command can
+        # import its own ``executors`` package without falling back to an
+        # unrelated same-named checkout in ambient site-packages. The parent
+        # remains available for packs whose source package uses the checkout
+        # directory name as its import root.
         source_pack = str(record.definition.metadata.get("source_pack") or "")
         pack_root_raw = record.definition.metadata.get("pack_root")
         if source_pack and isinstance(pack_root_raw, str) and pack_root_raw:
@@ -3622,9 +3625,9 @@ class GenericPackHost:
                 pack_parent = str(pack_root.parent)
                 existing_pythonpath = env.get("PYTHONPATH")
                 env["PYTHONPATH"] = (
-                    pack_parent
+                    os.pathsep.join((str(pack_root), pack_parent))
                     if not existing_pythonpath
-                    else os.pathsep.join((pack_parent, existing_pythonpath))
+                    else os.pathsep.join((str(pack_root), pack_parent, existing_pythonpath))
                 )
         cwd = _confined_cwd(
             binding.cwd,

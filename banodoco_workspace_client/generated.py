@@ -145,10 +145,11 @@ class Generation:
     version: int
     created_at: str
     updated_at: str
+    source_task_id: str | None = None
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "Generation":
-        return cls(generation_id=value["generation_id"], project_id=value["project_id"], type=value["type"], status=value["status"], metadata=value.get("metadata", {}), version=int(value["version"]), created_at=value["created_at"], updated_at=value["updated_at"])
+        return cls(generation_id=value["generation_id"], project_id=value["project_id"], type=value["type"], status=value["status"], metadata=value.get("metadata", {}), version=int(value["version"]), created_at=value["created_at"], updated_at=value["updated_at"], source_task_id=value.get("source_task_id"))
 
 
 @dataclass(frozen=True)

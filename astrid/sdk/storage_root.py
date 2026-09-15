@@ -12,8 +12,8 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-
 DATA_ROOT_ENV = "BANODOCO_LOCAL_DATA_ROOT"
+UPGRADE_ACTION = "run `astrid-upgrade` before launching Astrid"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "astrid-runtime.json"
 
 
@@ -85,8 +85,8 @@ def ensure_no_unmigrated_runtime(data_root: Path) -> None:
     if isinstance(value, Mapping) and value.get("selected_realm_id"):
         raise ValueError(
             "an existing neutral runtime realm is configured at "
-            f"{legacy.parent}; review a relocation plan before using {data_root}"
+            f"{legacy.parent}; {UPGRADE_ACTION} to move it into {data_root}"
         )
 
 
-__all__ = ["CONFIG_PATH", "DATA_ROOT_ENV", "ensure_no_unmigrated_runtime", "resolve_runtime_data_root"]
+__all__ = ["CONFIG_PATH", "DATA_ROOT_ENV", "UPGRADE_ACTION", "ensure_no_unmigrated_runtime", "resolve_runtime_data_root"]

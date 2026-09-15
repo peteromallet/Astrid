@@ -14,6 +14,7 @@ import platform
 import re
 import subprocess
 import tempfile
+import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,14 @@ _MACOS_VIDEO_BUNDLE = "com.apple.QuickTimePlayerX"
 _SUCCESS_STATES = frozenset({"completed", "succeeded", "success"})
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm", ".mkv"})
 _VIDEO_MEDIA_TYPES = frozenset(
-    {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska"}
+    {
+        "video/mp4",
+        "video/quicktime",
+        "video/webm",
+        "video/x-matroska",
+        # The timeline/rendering registry's canonical visual artifact type.
+        "clip/visual",
+    }
 )
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _LOCAL_REFERENCE_PREFIXES = ("/", "\\", "file:", "cas:", "sqlite:")
@@ -52,21 +60,6 @@ def _state(row: Mapping[str, Any]) -> str:
 
 def _render_capability(row: Mapping[str, Any]) -> str:
     return _identifier(row, "capability_id", "capability")
-
-
-def _legacy_output_name(spec: Any) -> str | None:
-    """Read the producing task's bounded historical output-name fallback."""
-
-    if not isinstance(spec, Mapping):
-        return None
-    value = spec.get("output_name")
-    if isinstance(value, str) and _validate_filename(value):
-        return value
-    for key in ("inputs", "params", "spec"):
-        nested = _legacy_output_name(spec.get(key))
-        if nested:
-            return nested
-    return None
 
 
 def _timeline_provenance(value: Any) -> set[str]:
@@ -478,72 +471,6 @@ def _publication_metadata(
     return metadata, None
 
 
-def _legacy_publication_metadata(
-    *,
-    client: Any,
-    project_id: str,
-    output: Mapping[str, Any],
-    task: Mapping[str, Any],
-    run: Mapping[str, Any],
-) -> tuple[dict[str, Any], str | None]:
-    """Adapt only the known historical generic-``video`` output shape.
-
-    This is a bounded compatibility read for old settlements. It requires the
-    producing task's own safe filename and a project-scoped managed object
-    record; it never consults a global digest name and never accepts a local
-    storage path. New publications must carry the full association instead.
-    """
-
-    if _identifier(output, "output_port", "port", "name") != "video":
-        return {}, None
-    digest = _normalize_digest(_mapping_value(output, "digest", "content_sha256", "sha256"))
-    filename = _legacy_output_name(task.get("spec"))
-    raw_size = _mapping_value(output, "size", "byte_size", "bytes")
-    if digest is None or filename is None or isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
-        return {}, None
-    objects = paged_rows(client.list_project_objects, project_id, limit=50)
-    if objects is None:
-        return {}, "Runtime publication association is unavailable for this historical render"
-    media = next(
-        (
-            item for item in objects
-            if isinstance(item, Mapping)
-            and digest in {
-                (_normalize_digest(item.get("digest")) or ""),
-                (_normalize_digest(item.get("object_id")) or ""),
-            }
-        ),
-        None,
-    )
-    if media is None:
-        return {}, "historical render output is not owned by the selected project"
-    reference = _safe_managed_reference(_identifier(media, "object_id"))
-    if reference is None:
-        return {}, "historical render has no managed object reference"
-    media_type = _mapping_value(media, "media_type", "mime_type") or "video/mp4"
-    raw_media_size = _mapping_value(media, "size", "byte_size", "bytes")
-    if raw_media_size is not None and raw_media_size != raw_size:
-        return {}, "historical render media metadata conflicts with output size"
-    size = raw_size
-    if not isinstance(media_type, str) or media_type.lower() not in _VIDEO_MEDIA_TYPES:
-        return {}, "historical render has an invalid video media type"
-    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-        return {}, "historical render has an invalid byte size"
-    task_id = _identifier(task, "task_id", "id")
-    return {
-        "output_port": "video",
-        "managed_object_reference": reference,
-        "digest": "sha256:" + digest,
-        "filename": filename,
-        "media_type": media_type.lower(),
-        "size": size,
-        "ordinal": 0,
-        "role": "result",
-        "task_id": task_id,
-        "run_id": _identifier(run, "run_id", "id"),
-    }, None
-
-
 def _materialize(
     data: bytes, *, digest: str, size: int, filename: str, cache_root: Path
 ) -> Path:
@@ -620,8 +547,71 @@ def _verified_runtime_path(value: Any, *, digest: str, size: int) -> Path:
     return path
 
 
+def _runtime_presentation_path(
+    canonical: Path, *, digest: str, filename: str
+) -> Path:
+    """Return a named, runtime-owned view of one canonical CAS object.
+
+    macOS applications use the filename suffix to select a media importer and
+    cannot reliably open Runtime's extensionless CAS leaf. The presentation
+    view is a hard link inside the same realm; it never copies or re-publishes
+    the bytes and is safe to recreate on every open.
+    """
+
+    # Derive the realm root only from the authenticated CAS layout. This keeps
+    # an arbitrary local path from becoming a presentation location.
+    if (
+        canonical.parent.name != digest[:2]
+        or canonical.parent.parent.name != "sha256"
+        or canonical.parent.parent.parent.name != "cas"
+        or canonical.name != digest[2:]
+    ):
+        raise ValueError("runtime object location is not a canonical CAS path")
+    realm_root = canonical.parent.parent.parent.parent
+    presentation_root = realm_root / "presentations"
+    if presentation_root.exists() or presentation_root.is_symlink():
+        if presentation_root.is_symlink() or not presentation_root.is_dir():
+            raise ValueError("runtime presentation directory is not a regular directory")
+    else:
+        presentation_root.mkdir()
+    presentations = presentation_root / "renders"
+    if presentations.exists() or presentations.is_symlink():
+        if presentations.is_symlink() or not presentations.is_dir():
+            raise ValueError("runtime render presentation directory is not a regular directory")
+    else:
+        presentations.mkdir()
+
+    # Keep the original extension for desktop media type detection. The
+    # digest makes the name content-addressed and avoids cross-render clashes.
+    presentation = presentations / f"{digest[:16]}-{filename}"
+    if presentation.is_symlink():
+        raise ValueError("runtime presentation path is occupied by a symlink")
+    elif presentation.exists():
+        try:
+            if os.path.samefile(presentation, canonical):
+                return presentation
+        except OSError:
+            pass
+        raise ValueError("runtime presentation path is occupied by another object")
+
+    temporary = presentations / f".{presentation.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        # A hard link gives desktop applications a named media path while
+        # sharing the CAS inode. No second media byte copy is created.
+        os.link(canonical, temporary)
+        os.replace(temporary, presentation)
+        if presentation.is_symlink() or not os.path.samefile(presentation, canonical):
+            raise ValueError("runtime presentation link failed post-publication verification")
+        return presentation
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _open_path(path: Path, *, canonical_runtime_path: bool) -> None:
-    """Open a canonical extensionless media path with an explicit app hint."""
+    """Open a runtime presentation path with an explicit app hint."""
     argv = ["open"]
     if canonical_runtime_path:
         argv.extend(["-b", _MACOS_VIDEO_BUNDLE])
@@ -838,22 +828,6 @@ def open_render(
                 task=task,
                 run=run,
             )
-        elif association is None and output:
-            metadata, metadata_error = _legacy_publication_metadata(
-                client=client,
-                project_id=resolved_project_id,
-                output=output,
-                task=task,
-                run=run,
-            )
-            if not metadata:
-                return _failure(
-                    "unavailable",
-                    "Runtime publication association is unavailable; Astrid cannot safely open this render",
-                    dependency="runtime_publication_association",
-                    run_id=selected_run_id,
-                    **({"detail": metadata_error} if metadata_error else {}),
-                )
         elif association is not None:
             metadata, metadata_error = _publication_metadata(association=association, output=output, task=task, run=run)
         else:
@@ -885,7 +859,14 @@ def open_render(
             if not isinstance(location_digest, str) or location_digest.removeprefix("sha256:").lower() != normalized_digest or location.get("storage") != "runtime_cas" or location.get("verified") is not True:
                 return _failure("integrity_error", "runtime object location is not a verified canonical CAS object", managed_object_reference=reference)
             try:
-                path = _verified_runtime_path(location.get("local_path"), digest=normalized_digest, size=expected_size)
+                canonical_path = _verified_runtime_path(
+                    location.get("local_path"), digest=normalized_digest, size=expected_size
+                )
+                path = _runtime_presentation_path(
+                    canonical_path,
+                    digest=normalized_digest,
+                    filename=str(metadata["filename"]),
+                )
             except (OSError, ValueError) as exc:
                 return _failure("integrity_error", "runtime object location failed local verification", managed_object_reference=reference, detail=str(exc))
         else:
@@ -931,6 +912,15 @@ def open_render(
                 **({"producer_id": metadata["producer_id"]} if "producer_id" in metadata else {}),
                 **({"attempt_id": metadata["attempt_id"]} if "attempt_id" in metadata else {}),
                 "local_path": str(path),
+                **(
+                    {
+                        "canonical_local_path": str(canonical_path),
+                        "presentation_path": str(path),
+                        "presentation_link": True,
+                    }
+                    if canonical_runtime_path
+                    else {}
+                ),
                 "open_requested": True,
                 "playback_confirmed": False,
                 "opened": False,

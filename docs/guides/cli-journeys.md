@@ -463,9 +463,9 @@ yet expose a separate editor-approved/current-deliverable promotion pointer.
 `--timeline` selects a canonical timeline by slug or id. Both require matching
 runtime run/task provenance and report an error if no matching successful
 render exists. A filename alone does not establish a timeline match.
-Downloaded bytes are checked against their runtime SHA-256 and size before the
-video is opened from a content-addressed local cache. Opening is currently
-supported on macOS.
+The stored video is verified against its runtime SHA-256 and size, then opened
+on macOS through a named hard link. Opening does not download or duplicate the
+video.
 
 ### Batch retry semantics (frozen)
 

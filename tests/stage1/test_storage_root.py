@@ -43,5 +43,6 @@ def test_default_does_not_create_blank_realm_over_existing_external_catalog(
     old_catalog.parent.mkdir(parents=True)
     old_catalog.write_text('{"selected_realm_id":"existing"}', encoding="utf-8")
 
-    with pytest.raises(ValueError, match="existing neutral runtime"):
+    with pytest.raises(ValueError, match="existing neutral runtime") as caught:
         ensure_no_unmigrated_runtime(tmp_path / "Astrid" / ".astrid-data")
+    assert "astrid-upgrade" in str(caught.value)

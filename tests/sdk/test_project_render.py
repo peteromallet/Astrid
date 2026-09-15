@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
 
-from astrid.sdk.remote import RemoteRuns
 from astrid.sdk.project_render import open_render
+from astrid.sdk.remote import RemoteRuns
 
 
 class _Runtime:
@@ -42,7 +43,17 @@ class _Runtime:
             "capability_id": "rendering.render",
             "state": "completed",
             "spec": {"inputs": {"output_name": "review.mp4"}},
-            "result": {"outputs": [{"name": "video", "digest": self.digest, "size": len(self.data)}]},
+            "result": {"outputs": [{
+                "output_port": "video",
+                "managed_object_reference": "O-video",
+                "digest": self.digest,
+                "actual_filename": "review.mp4",
+                "media_type": "video/mp4",
+                "size": len(self.data),
+                "ordinal": 0,
+                "role": "result",
+                "task_id": task_id,
+            }]},
         }
 
     def list_project_objects(self, project_id, *, cursor=None, limit=50):
@@ -86,7 +97,8 @@ def test_open_selects_latest_successful_runtime_render(monkeypatch, tmp_path: Pa
 
 def test_open_uses_runtime_canonical_path_by_default_without_cache_copy(monkeypatch, tmp_path: Path) -> None:
     runtime = _Runtime()
-    canonical = tmp_path / "runtime" / "cas" / "canonical-object"
+    digest = runtime.digest.removeprefix("sha256:")
+    canonical = tmp_path / "runtime" / "realms" / "realm-1" / "cas" / "sha256" / digest[:2] / digest[2:]
     canonical.parent.mkdir(parents=True)
     canonical.write_bytes(runtime.data)
     runtime._canonical_path = canonical
@@ -97,16 +109,30 @@ def test_open_uses_runtime_canonical_path_by_default_without_cache_copy(monkeypa
     result = RemoteRuns(runtime).open()
 
     assert result.ok
-    assert result.data["local_path"] == str(canonical)
-    assert not (tmp_path / "renders").exists()
-    assert launched == [["open", "-b", "com.apple.QuickTimePlayerX", str(canonical)]]
+    presentation = Path(result.data["local_path"])
+    assert not presentation.is_symlink()
+    assert os.path.samefile(presentation, canonical)
+    assert result.data["canonical_local_path"] == str(canonical)
+    assert result.data["presentation_path"] == str(presentation)
+    assert result.data["presentation_link"] is True
+    assert presentation.read_bytes() == runtime.data
+    assert launched == [["open", "-b", "com.apple.QuickTimePlayerX", str(presentation)]]
+
+    retry = RemoteRuns(runtime).open()
+
+    assert retry.ok
+    assert retry.data["local_path"] == str(presentation)
+    assert os.path.samefile(Path(retry.data["local_path"]), canonical)
+    assert [item for item in presentation.parent.iterdir() if not item.name.startswith(".")] == [presentation]
 
 
 @pytest.mark.parametrize("location_state", ["valid", "missing", "unverified", "corrupt", "symlink"])
 def test_managed_open_uses_only_verified_canonical_location(monkeypatch, tmp_path, location_state):
     runtime = _Runtime()
     # Resolve /tmp's macOS symlink before testing canonical path validation.
-    canonical = tmp_path.resolve() / "canonical-object"
+    digest = runtime.digest.removeprefix("sha256:")
+    canonical = tmp_path.resolve() / "runtime" / "realms" / "realm-1" / "cas" / "sha256" / digest[:2] / digest[2:]
+    canonical.parent.mkdir(parents=True)
     canonical.write_bytes(runtime.data)
     runtime._canonical_path = canonical
     original_task = runtime.get_task
@@ -139,15 +165,48 @@ def test_managed_open_uses_only_verified_canonical_location(monkeypatch, tmp_pat
     result = open_render(runtime, "P-1", opener=opened.append)
     if location_state == "valid":
         assert result.ok
-        assert opened == [canonical]
+        presentation = Path(result.data["local_path"])
+        assert not presentation.is_symlink()
+        assert os.path.samefile(presentation, canonical)
+        assert opened == [presentation]
         assert result.data["managed_object_reference"] == "O-video"
         assert result.data["filename"] == "review.mp4"
+        assert result.data["canonical_local_path"] == str(canonical)
+        assert result.data["presentation_link"] is True
         assert result.data["open_requested"] is True
         assert result.data["playback_confirmed"] is False
     else:
         assert not result.ok
         assert result.error.code == ("runtime_location_unavailable" if location_state == "missing" else "integrity_error")
         assert opened == []
+
+
+def test_open_accepts_registry_clip_visual_media_type(monkeypatch, tmp_path: Path) -> None:
+    runtime = _Runtime()
+    digest = runtime.digest.removeprefix("sha256:")
+    canonical = tmp_path / "runtime" / "realms" / "realm-1" / "cas" / "sha256" / digest[:2] / digest[2:]
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(runtime.data)
+    runtime._canonical_path = canonical
+    runtime.get_task = lambda task_id: {
+        "task_id": task_id,
+        "capability_id": "rendering.render",
+        "state": "completed",
+        "result": {"outputs": [{
+            "output_port": "video", "managed_object_reference": "O-video",
+            "digest": runtime.digest, "size": len(runtime.data),
+            "actual_filename": "review.mp4", "media_type": "clip/visual",
+            "ordinal": 0, "role": "result", "task_id": task_id,
+        }]},
+    }
+    monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
+    opened: list[Path] = []
+
+    result = open_render(runtime, "P-1", opener=opened.append)
+
+    assert result.ok
+    assert result.data["media_type"] == "clip/visual"
+    assert opened == [Path(result.data["local_path"])]
 
 
 def test_open_exact_run_rejects_cross_project_before_download(monkeypatch, tmp_path: Path) -> None:

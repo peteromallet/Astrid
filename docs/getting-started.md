@@ -17,7 +17,7 @@ runtime through the neutral launcher; no separate database service is needed:
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install .
-python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@afccb430e2a983c968b6a8a96fd630ba3a6262fc'
+python3 -m pip install 'banodoco-workspace-runtime @ git+https://github.com/banodoco/banodoco-workspace-runtime.git@bc74a4b2179de83ace55c35fa6371f10e1e58610'
 export BANODOCO_LOCAL_SOURCE_MANIFEST=/path/to/astrid-source-profile.json
 python3 -m astrid --help
 python3 -m astrid projects list --json
@@ -161,38 +161,23 @@ lifecycle operations, with `--json` for a machine-readable result.
 
 Runtime health, project identity, media objects, timeline versions, task/run
 state, receipts, and events are authoritative only in the workspace runtime.
-The SDK never opens a local Astrid database or content-addressed store.
+The SDK never owns or queries a local database or object-store index. It can
+read a file location that the runtime has authenticated and verified.
 
-### Moving an existing runtime realm
+### Upgrading an existing workspace
 
-Realm relocation is a controlled operator workflow. The launcher currently
-supports a read-only plan bound to the selected owner:
-
-```bash
-banodoco-local relocate --plan \
-  --destination /absolute/path/new-support-root --json
-```
-
-The execution form acquires the launcher lock, performs a birth-checked offline
-stop, and atomically renames the complete support root on the same filesystem.
-It rewrites only absolute pointers owned by that support root, preserves every
-catalog realm, cold-starts from the new root, and rolls back the rename if
-verification fails:
+After installing updated Astrid and runtime packages, run:
 
 ```bash
-banodoco-local relocate \
-  --destination /absolute/path/new-support-root \
-  --confirm 'RELOCATE <selected-realm-id>' --json
+astrid-upgrade
 ```
 
-Do not copy the SQLite/CAS tree or edit `catalog.json` by hand. Review the
-plan and storage capacity before execution; setup and the Astrid SDK do not
-perform relocation implicitly.
-
-Historical pre-runtime project trees and local-store migration plans are not
-part of the Stage1 live path. Preserve them as immutable source artifacts and
-do not treat them as current workspace state; the product checkout has no
-historical migration command or local-store writer.
+The command locates the existing workspace, stops its idle runtime and pack
+host, applies the required migrations, moves an older store into the configured
+Astrid data folder when needed, then restarts and verifies both services.
+It preserves project identities and media, refuses to interrupt active work,
+and can be rerun safely. Migration archives are retained for recovery; only the
+current store is used during normal operation.
 
 For the complete project, timeline, media, recovery, and failure journeys,
 continue with [CLI journeys](guides/cli-journeys.md). For renderer-specific

@@ -34,6 +34,11 @@ def test_manifest_loads() -> None:
     assert manifest.kind == "built_in"
     assert manifest.version == "2.0"
     assert manifest.metadata["runtime_entrypoint"] == "run_sdk"
+    assert manifest.metadata["storage_estimate_required"] is True
+    assert manifest.metadata["estimated_scratch_bytes"] > 0
+    assert manifest.metadata["estimated_output_bytes"] > 0
+    assert manifest.metadata["hc04_cas_param_ports"] == ["image_ref", "image_end_ref"]
+    assert manifest.metadata["hc04_optional_cas_param_ports"] == ["image_end_ref"]
 
 
 def test_generate_core_returns_enriched_generation_result(

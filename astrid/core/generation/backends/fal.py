@@ -20,6 +20,13 @@ from astrid.core.generation.backends.base import (
     parse_dimension_pair,
     split_feature_support,
 )
+from astrid.core.generation.storage_policy import (
+    CLOUD_EDIT_STORAGE_POLICY,
+    CLOUD_I2I_STORAGE_POLICY,
+    CLOUD_T2I_STORAGE_POLICY,
+    CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
+    ImageStoragePolicyError,
+)
 from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
 from astrid.core.util.credentials_scope import CredentialsScope
 from astrid.core.util.http import (
@@ -109,6 +116,17 @@ class FalBackend(BackendAdapter):
             "image_ref": "image_url",
             "count": "num_images",
             "size": "image_size",
+            "guidance_scale": "guidance_scale",
+            "steps": "num_inference_steps",
+        },
+        "inpaint": {
+            "prompt": "prompt",
+            "seed": "seed",
+            "image_ref": "image_url",
+            "mask_ref": "mask_url",
+            "count": "num_images",
+            "size": "image_size",
+            "strength": "strength",
             "guidance_scale": "guidance_scale",
             "steps": "num_inference_steps",
         },
@@ -220,6 +238,43 @@ class FalBackend(BackendAdapter):
 
         api_key = self._resolve_api_key()
 
+        bounded_policy = None
+        if (
+            mode == "t2i"
+            and params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_T2I_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_T2I_STORAGE_POLICY
+        elif (
+            entry.id == "z-image"
+            and mode == "i2i"
+            and params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_I2I_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_I2I_STORAGE_POLICY
+        elif (
+            entry.id == "qwen-image-edit-2511"
+            and mode == "edit"
+            and params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_EDIT_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_EDIT_STORAGE_POLICY
+        elif (
+            params.get("execution") == "cloud"
+            and params.get("storage_policy_version") == CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version
+        ):
+            bounded_policy = CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+        if bounded_policy is not None:
+            try:
+                bounded_policy.validate_request(
+                    model=entry.id,
+                    mode=mode,
+                    execution="cloud",
+                    params=params,
+                )
+            except ImageStoragePolicyError as exc:
+                raise ValueError(str(exc)) from exc
+
         # --- compute applied / dropped feature lists -------------------------
         applied_features, dropped_features = split_feature_support(params, mode_spec.supports)
 
@@ -306,7 +361,20 @@ class FalBackend(BackendAdapter):
 
         for canon, remote_param in param_map.items():
             if canon == "count":
-                continue  # count is managed by the executor loop
+                # The bounded Qwen edit route is explicitly one-output-per-
+                # request, so keep the provider-side cardinality visible even
+                # though the executor also runs each requested output as N=1.
+                if (
+                    remote_param == "num_images"
+                    and entry.id in {
+                        "qwen-image-edit-2511",
+                        "qwen-image-edit-inpaint",
+                        "flux2-klein-4b",
+                        "flux2-klein-9b",
+                    }
+                ):
+                    payload[remote_param] = params.get(canon, 1)
+                continue  # other image profiles manage count in the executor loop
             if canon == "loras":
                 continue  # loras handled separately above
             if canon not in params:
@@ -319,13 +387,44 @@ class FalBackend(BackendAdapter):
             if canon == "size":
                 normalized = _parse_size(str(value))
                 if normalized:
-                    payload[remote_param] = normalized
+                    if (
+                        remote_param == "image_size"
+                        and (
+                            entry.id in {
+                                "qwen-image-edit-2511",
+                                "qwen-image-edit-inpaint",
+                                "flux2-klein-4b",
+                                "flux2-klein-9b",
+                            }
+                            or (entry.id == "z-image" and mode == "i2i")
+                        )
+                    ):
+                        width, height = parse_dimension_pair(normalized) or (None, None)
+                        payload[remote_param] = (
+                            {"width": width, "height": height}
+                            if width is not None and height is not None
+                            else normalized
+                        )
+                    else:
+                        payload[remote_param] = normalized
                 continue
 
             # Special handling for image_ref / image_end_ref — upload if local path
-            if canon in ("image_ref", "image_end_ref"):
+            if canon in ("image_ref", "mask_ref", "image_end_ref"):
                 uploaded_ref = _upload_ref_if_local(
-                    str(value), remote_param, self._client, api_key
+                    str(value),
+                    remote_param,
+                    self._client,
+                    api_key,
+                    max_bytes=(
+                        (
+                            bounded_policy.mask_max_bytes
+                            if canon == "mask_ref"
+                            else bounded_policy.source_max_bytes
+                        )
+                        if bounded_policy is not None and canon in {"image_ref", "mask_ref"}
+                        else None
+                    ),
                 )
                 # Multi-reference edit endpoints such as Seedream expose a
                 # plural ``image_urls`` input even when Astrid's basic image
@@ -387,11 +486,17 @@ class FalBackend(BackendAdapter):
 
         # --- submit + poll ---------------------------------------------------
         t0 = time.monotonic()
+        submit_kwargs = (
+            {"max_response_bytes": bounded_policy.control_max_bytes}
+            if bounded_policy is not None
+            else {}
+        )
         result = fal_submit_and_poll(
             self._client,
             endpoint,
             payload,
             api_key,
+            **submit_kwargs,
         )
         duration_ms = int((time.monotonic() - t0) * 1000)
 
@@ -414,6 +519,20 @@ class FalBackend(BackendAdapter):
         # or {"image": {"url": ...}} or {"video": {"url": ...}} etc.
         asset_urls = _extract_asset_urls(result)
         source_urls = list(asset_urls)
+        expected_provider_outputs = (
+            bounded_policy.provider_outputs_per_call
+            if bounded_policy is not None
+            and hasattr(bounded_policy, "provider_outputs_per_call")
+            else bounded_policy.max_count
+            if bounded_policy is not None
+            else None
+        )
+        if bounded_policy is not None and len(asset_urls) != expected_provider_outputs:
+            raise ValueError(
+                f"bounded cloud image call expected exactly "
+                f"{expected_provider_outputs} provider output, "
+                f"got {len(asset_urls)}"
+            )
 
         # --- cost fallback to typed registry price ----------------------------
         # If the API did not report a cost (missing or non-numeric), fall back
@@ -427,7 +546,20 @@ class FalBackend(BackendAdapter):
 
         for idx, url in enumerate(asset_urls):
             try:
-                data = self._client.get_bytes(url, timeout=120)
+                download_kwargs = (
+                    {"max_bytes": bounded_policy.output_max_bytes}
+                    if bounded_policy is not None
+                    else {}
+                )
+                data = self._client.get_bytes(
+                    url,
+                    timeout=120,
+                    **download_kwargs,
+                )
+                if bounded_policy is not None:
+                    bounded_policy.validate_download(data, index=idx)
+            except ImageStoragePolicyError as exc:
+                raise ValueError(str(exc)) from exc
             except Exception as exc:
                 raise ValueError(
                     f"Failed to download fal result output {idx}: {exc}"
@@ -466,6 +598,7 @@ def _upload_ref_if_local(
     feature_name: str,
     client: HttpClient,
     api_key: str,
+    max_bytes: int | None = None,
 ) -> str:
     """Upload one host-materialized local input to fal.
 
@@ -480,6 +613,10 @@ def _upload_ref_if_local(
             f"{feature_name} must be a host-materialized local file, got {ref_str!r}"
         )
     size = ref_path.stat().st_size
+    if max_bytes is not None and size > max_bytes:
+        raise ValueError(
+            f"{feature_name} exceeds bounded input limit of {max_bytes} bytes"
+        )
     if size > 512_000:
         logger.info("Uploading %s to fal CDN: %s (%d bytes)", feature_name, ref_path, size)
         return fal_storage_upload(client, ref_path, api_key)

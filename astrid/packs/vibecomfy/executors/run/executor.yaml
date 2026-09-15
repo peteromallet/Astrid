@@ -17,7 +17,15 @@
       "--source",
       "{source}",
       "--out",
-      "{out}"
+      "{out}",
+      "--task-identity",
+      "{task_identity}",
+      "--execution-identity",
+      "{execution_identity}",
+      "--readiness-profile-path",
+      "{readiness_profile_path}",
+      "--readiness-profile-hash",
+      "{readiness_profile_hash}"
     ]
   },
   "description": "Run a VibeComfy workflow through the VibeComfy CLI.",
@@ -62,6 +70,30 @@
       "name": "source",
       "required": false,
       "type": "file"
+    },
+    {
+      "description": "Host-issued task identity for the production engine adapter.",
+      "name": "task_identity",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Host-issued canonical workflow execution identity.",
+      "name": "execution_identity",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Worker-issued readiness profile path for owned checkout execution.",
+      "name": "readiness_profile_path",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Hash paired with the Worker-issued readiness profile.",
+      "name": "readiness_profile_hash",
+      "required": false,
+      "type": "string"
     }
   ],
   "isolation": {

@@ -1,0 +1,53 @@
+# Coordinator-readable Megado declaration. This file does not launch a
+# scheduler, grant implementation authority, or reset inherited counters.
+mode: planning_only
+roles:
+  # Explicit v3 routing: Astra directs at low reasoning.
+  coordinator: {model: gpt-6-astra, reasoning: low}
+  # Luna owns normal implementation, exploration, tests, and evidence work.
+  worker_normal: {model: gpt-5.6-luna, reasoning: high}
+  # Source routing explicitly assigns P0.b/P1/P2 hard implementation to Sol.
+  worker_xhard: {model: gpt-5.6-sol, reasoning: high}
+  reviewer_normal: {model: gpt-5.6-luna, reasoning: medium}
+  reviewer_xhard: {model: gpt-5.6-sol, reasoning: high}
+  # POST-COMPACTION-HANDOFF routes high-judgment/oracle work to Sol.
+  oracle: {model: gpt-5.6-sol, reasoning: high}
+  # Sol is the independent final reviewer; independence is an invocation and
+  # custody requirement, not permission for self-review.
+  final_reviewer: {model: gpt-5.6-sol, reasoning: high}
+oracle:
+  max_calls: 3
+  consumed_calls: unknown
+  accounting: "Inherited consumption is unresolved; do not reset or assume availability."
+review_stages: []
+
+# These explicit inherited constraints are carried forward without claiming
+# that current consumption is known. Reconcile them in P0.d before any GPU.
+budgets:
+  provider_aggregate_usd_cap: 6
+  provider_spend_consumed: unknown
+  historical_fire_count: 19
+  provider_attempt_balance: unknown
+  live_attempts_per_engine_profile_cluster_max: 2
+  pod_max_hours: 3
+  local_free_space_floor_gib: 4
+  run_generated_evidence_cap_gib: 2
+  review_history:
+    planner_revisions: 1
+    critics: 3
+    affected_delta_passes: 1
+    review_rounds_consumed: unknown
+  reset_policy: "No planning artifact or phase change resets unknown consumed counts."
+
+source:
+  authoritative_plan:
+    path: ./authority/UNIFIED-PLAN-v3.md
+    sha256: 0772f5ac5196b7c0e28d19c1d636f18c26a3cc8c550f9f1a09bd9a4e2ddb7dc0
+  custody_root: historical-custody-snapshot (not included wholesale)
+  source_manifest: ./provenance.md
+  dirty_work_policy: "Protected dirty source is included for inspection; never silently exclude or mutate it."
+
+planning:
+  artifact_status: planning_only
+  current_review_stages: []
+  future_gate_note: "Future P1/P2 independent reviews, P7 B05-T04/CR2 before B06-T01 freeze, and B06-T07 independent Sol final review are prescribed by plan.md; they are not scheduled here."

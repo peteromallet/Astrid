@@ -54,5 +54,17 @@ console.log('ok');
 
 def test_rendered_viewer_contains_audio_controls_and_media_clock_fallback():
     page = render_inspector(_viewer_data())
-    for marker in ("Speech and audio", "Quiet gaps", "Audition selection", "requestVideoFrameCallback", "timeupdate", "audio-ruler", "Verified rendered video"):
+    for marker in (
+        "Speech and audio",
+        "Quiet gaps",
+        "Audition selection",
+        "requestVideoFrameCallback",
+        "timeupdate",
+        "audio-ruler",
+        "Verified rendered video",
+        "Dialogue (authored text)",
+        "Find authored script text",
+        "Search matches authored script text and annotated speech phrases",
+        "Clear search and open Speech and audio",
+    ):
         assert marker in page

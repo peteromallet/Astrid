@@ -1,8 +1,7 @@
 """Discover the single durable transcript attachment for a timeline.
 
-The preferred, runtime-owned contract is the optional top-level ``transcript``
-field in Astrid pipeline metadata (normally persisted as
-``hype.metadata.json``)::
+The preferred, runtime-owned contract is the optional ``config.app.transcript``
+field in the canonical timeline snapshot.  Its declaration has this shape::
 
     {
       "transcript": {
@@ -80,6 +79,7 @@ def discover_attachment(
     pipeline_metadata: Mapping | None = None,
     pipeline_metadata_base: Path | None = None,
     pipeline_root: Path | None = None,
+    materialized_file: Path | None = None,
 ) -> TranscriptAttachment | None:
     """Find the one explicitly declared transcript attachment for a timeline.
 
@@ -99,10 +99,16 @@ def discover_attachment(
         declaration = timeline_metadata.get("transcript")
         if not isinstance(declaration, Mapping):
             return None
+        materialized_root = (
+            Path(materialized_file).expanduser().resolve().parent
+            if materialized_file is not None
+            else project_base
+        )
         return _attachment_from_declaration(
             declaration,
-            base=timeline_base,
-            root=project_base,
+            base=materialized_root if materialized_file is not None else timeline_base,
+            root=materialized_root,
+            resolved_file=materialized_file,
         )
 
     pipeline_declarations = _pipeline_declarations(pipeline_metadata)
@@ -138,6 +144,7 @@ def _attachment_from_declaration(
     *,
     base: Path,
     root: Path,
+    resolved_file: Path | None = None,
 ) -> TranscriptAttachment | None:
     schema_version = declaration.get("schema_version", 1)
     if schema_version != 1:
@@ -169,7 +176,11 @@ def _attachment_from_declaration(
     if media.get("sha256") is not None and media_sha256 is None:
         return None
 
-    transcript_file = _resolve_contained_path(file_value, base=base, root=root)
+    transcript_file = (
+        _resolve_contained_path(str(resolved_file), base=root, root=root)
+        if resolved_file is not None
+        else _resolve_contained_path(file_value, base=base, root=root)
+    )
     observed: str | None = None
     integrity = "uncontained" if transcript_file is None else "missing"
     notes: list[str] = []

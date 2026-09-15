@@ -17,8 +17,10 @@ if RUNTIME.is_dir():
 runtime_protocol = pytest.importorskip("runtime_protocol")
 from banodoco_workspace_client import ApiError, WorkspaceClient  # noqa: E402
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from runtime_protocol.store import RealmStore  # noqa: E402
 
 from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
 
 
 def _digest(value: str) -> str:
@@ -64,7 +66,9 @@ def test_generated_host_echo_claim_cas_settlement_and_restart(tmp_path: Path) ->
     probe = GenericPackHost(pack_roots=[pack])
     record = probe.discover()[0]
 
-    daemon = RuntimeDaemon(tmp_path / "realm", support_root=tmp_path / "support").start()
+    realm_root = tmp_path / "realm"
+    RealmStore.initialize(realm_root).close()
+    daemon = RuntimeDaemon(realm_root, support_root=tmp_path / "support").start()
     try:
         generated = WorkspaceClient(daemon.endpoint, daemon.token)
         generated.handshake("astrid-generic-host-test", "0.1.0", ["projects:read", "worker:execute"])
@@ -99,6 +103,7 @@ def test_generated_host_echo_claim_cas_settlement_and_restart(tmp_path: Path) ->
         assert not list(tmp_path.glob("astrid-attempt-*"))
 
         daemon.stop()
+        initialize_runtime_realm(tmp_path / "realm")
         daemon = RuntimeDaemon(tmp_path / "realm", support_root=tmp_path / "support").start()
         restarted = WorkspaceClient(daemon.endpoint, daemon.token)
         restarted.handshake("astrid-generic-host-test-reconnect", "0.1.0", ["projects:read", "worker:execute"])
@@ -187,6 +192,7 @@ def test_provider_fixture_is_credential_gated_then_settles_offline(
         encoding="utf-8",
     )
 
+    initialize_runtime_realm(tmp_path / "realm")
     daemon = RuntimeDaemon(tmp_path / "realm", support_root=tmp_path / "support").start()
     try:
         generated = WorkspaceClient(daemon.endpoint, daemon.token)

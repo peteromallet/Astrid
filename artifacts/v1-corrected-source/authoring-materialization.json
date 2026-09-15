@@ -1,0 +1,94 @@
+{
+  "config_patch": {
+    "app": {
+      "transcript": {
+        "file": "transcript.json",
+        "media": {
+          "asset_key": "source-main",
+          "sha256": "8a8f8abca816e5f7078775038d3ce51e27d31a445855059048eb2272f1772433"
+        },
+        "producer": "fixture.authoring",
+        "producer_version": "1",
+        "schema_version": 1,
+        "sha256": "074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d",
+        "source_id": "transcript:main",
+        "source_version": "1"
+      }
+    }
+  },
+  "digests": {
+    "annotation_bytes": "7f71f0df62404996144dfa53cf0ced1792718040ada5fc0dee673cb18081e209",
+    "authored_bytes": "a57b108fd11391652dd8843cc18da006d48e06efb441de1e85162c61b1fc8cb6",
+    "media": "8a8f8abca816e5f7078775038d3ce51e27d31a445855059048eb2272f1772433",
+    "transcript_bytes": "074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d"
+  },
+  "host_manifest": {
+    "input_object_ids": [
+      "sha256:074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d"
+    ],
+    "inputs": {
+      "transcript.json": {
+        "digest": "sha256:074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d",
+        "object_id": "sha256:074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d"
+      }
+    }
+  },
+  "preflight": {
+    "occurrences": 1,
+    "segments": 1,
+    "shotless": true,
+    "source": "authored.spoken_segments",
+    "source_type": "verified_speech",
+    "traps_excluded": true
+  },
+  "render_inputs": {
+    "annotation_digest": "sha256:a57b108fd11391652dd8843cc18da006d48e06efb441de1e85162c61b1fc8cb6",
+    "correction_version": 0,
+    "source_audio_digest": "sha256:8a8f8abca816e5f7078775038d3ce51e27d31a445855059048eb2272f1772433",
+    "speech_annotations": [
+      {
+        "annotation_id": "speech-shotless-01",
+        "end": 252.5,
+        "source_type": "verified_speech",
+        "start": 248.0,
+        "text": "We stay with the ending."
+      }
+    ],
+    "speech_coverage": {
+      "projected": 1,
+      "state": "complete",
+      "unavailable": 0
+    },
+    "speech_occurrences": [
+      {
+        "annotation_id": "speech-shotless-01",
+        "from": 0,
+        "mapping_state": "exact",
+        "occurrence_id": "speech-occurrence-speech-shotless-01",
+        "placement": 0,
+        "speed": 1,
+        "timing_method": "fixture-authored",
+        "to": 297
+      }
+    ],
+    "timing_method": "fixture-authored",
+    "transcript_digest": "sha256:074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d"
+  },
+  "runtime_input": {
+    "digest": "sha256:074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d",
+    "name": "transcript.json"
+  },
+  "transcript_declaration": {
+    "file": "transcript.json",
+    "media": {
+      "asset_key": "source-main",
+      "sha256": "8a8f8abca816e5f7078775038d3ce51e27d31a445855059048eb2272f1772433"
+    },
+    "producer": "fixture.authoring",
+    "producer_version": "1",
+    "schema_version": 1,
+    "sha256": "074dd8d462a5b773bd8051c16ec73b76628231175c5b7b52ab31b7c82da1b60d",
+    "source_id": "transcript:main",
+    "source_version": "1"
+  }
+}

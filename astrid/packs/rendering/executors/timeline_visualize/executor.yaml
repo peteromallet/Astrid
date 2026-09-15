@@ -147,6 +147,13 @@
       "description": "Host-owned object-id to attempt-local path handoff."
     },
     {
+      "name": "transcript.json",
+      "type": "file",
+      "required": false,
+      "artifact_type": null,
+      "description": "Host-staged bytes for the hash-bound config.app.transcript declaration; callers cannot provide this path."
+    },
+    {
       "name": "view",
       "type": "string",
       "required": false,
@@ -195,6 +202,12 @@
       "type": "integer",
       "required": false,
       "description": "Filmstrip static page card count, default 50."
+    },
+    {
+      "name": "resolution",
+      "type": "string",
+      "required": false,
+      "description": "Optional exact filmstrip frame resolution WIDTHxHEIGHT; recorded separately and applied by the frame extractor."
     },
     {
       "name": "filmstrip_authority",
@@ -268,6 +281,11 @@
       {
         "input": "materialized_objects",
         "flag": "--materialized-objects",
+        "optional": true
+      },
+      {
+        "input": "transcript.json",
+        "flag": "--transcript-file",
         "optional": true
       },
       {
@@ -383,6 +401,11 @@
       {
         "input": "page_size",
         "flag": "--page-size",
+        "optional": true
+      },
+      {
+        "input": "resolution",
+        "flag": "--resolution",
         "optional": true
       },
       {

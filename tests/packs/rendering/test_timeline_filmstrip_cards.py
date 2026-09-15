@@ -6,7 +6,9 @@ import subprocess
 
 import pytest
 
+from astrid.packs.rendering.executors.timeline_visualize import filmstrip_cards
 from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip, build_filmstrip_pack
+from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
 
 
 def snapshot(**changes):
@@ -52,6 +54,31 @@ def test_filters_and_bounds_are_enforced():
         plan_filmstrip(snapshot(), {'every_frames': 1.5})
 
 
+def test_v1_04_records_range_density_and_resolution_separately():
+    options = filmstrip_options({'range': '1..3', 'every': 0.25, 'resolution': '320x180'})
+    index = plan_filmstrip(snapshot(duration_frames=120), options)
+
+    assert options['request'] == {
+        'range': [1.0, 3.0], 'at': None,
+        'density': {'mode': 'every_seconds', 'value': 0.25},
+        'resolution': [320, 180],
+    }
+    assert index['sampling']['requested_range'] == [1.0, 3.0]
+    assert index['sampling']['requested_at'] is None
+    assert index['sampling']['density'] == options['density']
+    assert index['sampling']['resolution'] == [320, 180]
+    assert index['sampling']['effective_range'] == [1.0, 3.0]
+
+
+def test_v1_04_rejects_conflicting_range_and_density_values():
+    with pytest.raises(ValueError, match='range or at'):
+        filmstrip_options({'range': '1..2', 'at': 1.5})
+    with pytest.raises(ValueError, match='every seconds or every_frames'):
+        filmstrip_options({'every': 0.5, 'every_frames': 12})
+    with pytest.raises(ValueError, match='resolution'):
+        filmstrip_options({'resolution': '320'})
+
+
 def test_shots_sample_authored_midpoint():
     cards = plan_filmstrip(snapshot(), {'sample': 'shots'})['cards']
     assert [(c['frame'], c['sample_reasons']) for c in cards] == [(24, ['shot_midpoint'])]
@@ -79,6 +106,45 @@ def test_pack_uses_rendered_frames_and_escapes_html(tmp_path):
     svg = Path(result['paths']['svg'][0]).read_text()
     assert '&lt;/script&gt;' in svg
     assert 'Render run-exact · selection: explicit_render' in svg
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg required')
+def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
+    video = tmp_path / 'render.mp4'
+    subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=24:duration=4', '-c:v', 'libx264', '-y', str(video)], check=True)
+    raw_audio = {
+        'analysis_identity': 'sha256:' + 'b' * 64,
+        'status': 'analyzed',
+        'render_digest': 'sha256:video',
+        'stream': {'sample_rate': 10},
+        'presentation_origin': {'seconds': [0, 1]},
+        'waveform': {'levels': [{'id': 'level-2', 'bins': [
+            {'index': 0, 'start_sample': 0, 'end_sample': 5},
+        ]}]},
+        'quiet_gaps': [],
+        'speech': {'status': 'no_transcript', 'phrases': []},
+    }
+    result = build_filmstrip_pack(
+        out_root=tmp_path / 'pack',
+        video_path=video,
+        snapshot=snapshot(clips=[], scripts=[], audio=raw_audio),
+        options={'every_frames': 24},
+    )
+
+    index = json.loads(Path(result['paths']['json']).read_text())
+    sidecar = json.loads((tmp_path / 'pack' / 'audio-analysis.json').read_text())
+    assert len(index['cards']) == 4
+    assert index['audio'] == raw_audio
+    assert sidecar == raw_audio
+    assert 'waveform_targets' not in index['audio']
+
+    navigation = index['navigation']
+    assert navigation['audio']['waveform_targets']
+    target = navigation['waveforms'][0]
+    assert navigation['targets'][target['target']] == target
+    assert target['actions']['focus_command']
+    assert target['actions']['seek'] == {'start': [0, 1], 'end': [1, 2]}
+    assert target['target'] in navigation['frames'][0]['active_audio_targets']
 
 
 def test_float_arithmetic_noise_does_not_move_cut_boundary():
@@ -130,3 +196,74 @@ def test_repeated_shot_occurrences_have_separate_midpoints():
     cards = plan_filmstrip(snapshot(clips=clips, occurrences=occurrences), {'sample': 'shots'})['cards']
     assert [card['frame'] for card in cards] == [12, 84]
     assert [card['clips'][0]['occurrence_id'] for card in cards] == ['one', 'two']
+
+
+def test_default_is_bounded_full_duration_overview_with_tail_evidence():
+    snap = snapshot(
+        duration_frames=240,
+        clips=[
+            dict(id='picture', kind='video', at=0, duration=8),
+            dict(id='tail', kind='render_tail', at=8, duration=2, render_tail=True),
+        ],
+        metadata={'rendered_tail': {'start_frame': 192, 'end_frame': 240, 'status': 'unmapped'}},
+    )
+
+    index = plan_filmstrip(snap, {})
+    frames = {card['frame']: card for card in index['cards']}
+
+    assert index['sampling']['mode'] == 'overview'
+    assert index['sampling']['overview'] is True
+    assert len(index['cards']) <= 200
+    assert {0, 191, 192, 239}.issubset(frames)
+    assert 'overview_first_frame' in frames[0]['sample_reasons']
+    assert 'overview_last_frame' in frames[239]['sample_reasons']
+    assert 'rendered_tail_transition' in frames[191]['sample_reasons']
+    assert 'rendered_tail_eof' in frames[239]['sample_reasons']
+    assert index['coverage']['full_duration'] is True
+    assert index['coverage']['window_seconds'] == [0.0, 10.0]
+    assert index['coverage']['page_count'] == 4
+    assert index['coverage']['selected_frame_ids'] == [card['id'] for card in index['cards']]
+
+
+def test_hundreds_of_cuts_use_bounded_adaptive_overview_and_honest_coverage():
+    clips = [dict(id=f'cut-{i:04d}', kind='video', at=i, duration=1) for i in range(400)]
+    index = plan_filmstrip(snapshot(duration_frames=400 * 24, clips=clips), {})
+    coverage = index['coverage']
+
+    assert len(index['cards']) == 200
+    assert index['cards'][0]['frame'] == 0
+    assert index['cards'][-1]['frame'] == 9599
+    assert coverage['full_duration'] is True
+    assert coverage['selected_frame_count'] == 200
+    assert coverage['boundary_count'] >= 800
+    assert coverage['unselected_boundary_count'] > 0
+    assert coverage['all_boundaries_sampled'] is False
+    assert 'every fast-cut boundary is sampled' in coverage['not_promised']
+    boundary_frames = {entry['frame'] for entry in index['boundary_index']['entries']}
+    assert {0, 23, 24, 9599}.issubset(boundary_frames)
+    assert all('selected' in entry for entry in index['boundary_index']['entries'])
+
+
+def test_extract_uses_ffmpeg9_supported_filter_and_frame_mode(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen['argv'] = argv
+        frames = tmp_path / 'pack' / 'frames'
+        frames.mkdir(parents=True, exist_ok=True)
+        (frames / 'sample-000000.jpg').write_bytes(b'jpeg')
+        return subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+
+    monkeypatch.setattr(filmstrip_cards.subprocess, 'run', fake_run)
+    filmstrip_cards._extract(
+        tmp_path / 'render.mp4',
+        [{'frame': 12, 'image': 'frames/frame-000000012.jpg'}],
+        tmp_path / 'pack',
+    )
+
+    argv = seen['argv']
+    assert '-vf' in argv
+    assert argv[argv.index('-vf') + 1] == "select='eq(n,12)',scale=480:-2"
+    assert argv[argv.index('-fps_mode:v') + 1] == 'passthrough'
+    assert '-filter_script:v' not in argv
+    assert '-vsync' not in argv

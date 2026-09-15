@@ -20,6 +20,9 @@ permissions:
     reason: Provides render-time visual element definitions consumed by the rendering pack.
 content:
   elements: elements
+documentation:
+  kind: skill
+  path: skill/SKILL.md
 agent:
   purpose: "Use when a Remotion timeline needs one of this pack's visual overlay elements — an anchored/faded text card, a DOM-to-canvas post-processed 'neon orbit' card, or an animated model-trends stacked-area chart."
   do_not_use_for: "Not an executor pack — it provides effect elements only; the actual video render is done by the rendering pack, not here."

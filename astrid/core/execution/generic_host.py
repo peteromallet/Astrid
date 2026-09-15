@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import heapq
 import hmac
 import importlib.util
 import json
@@ -25,7 +26,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from astrid.core.contracts.binding import (
@@ -33,6 +34,7 @@ from astrid.core.contracts.binding import (
     assert_provided_inputs_bound,
     expand_command,
 )
+from astrid.core.contracts.errors import AstridError
 from astrid.core._shared.result_manifest import (
     HarvestError,
     harvest_staged_outputs,
@@ -64,6 +66,19 @@ from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantError,
 )
 from astrid.core.subprocess_env import build_child_subprocess_env
+from astrid.core.generation.vibecomfy_dependency import dependency_pythonpath
+from astrid.core.util.secrets import load_local_api_key_with_source
+from astrid.core.execution.managed_tool_session import (
+    CapabilityDescriptor,
+    ManagedToolSession,
+    SessionBinding,
+)
+from astrid.core.execution.guards import (
+    EvidenceCapError,
+    ExecutionGuardError,
+    ExecutionGuardPolicy,
+    ScratchFloorError,
+)
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -77,6 +92,225 @@ class HostError(RuntimeError):
 class HostCancelled(HostError):
     """The runtime cancelled the attempt while the subprocess was running."""
 
+
+_VIDEO_SUFFIX_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+}
+
+_SETTLEMENT_OUTPUT_METADATA_FIELDS = (
+    "role",
+    "is_primary",
+    "producer",
+    "provenance",
+    "durability",
+    "regeneration",
+    "coverage",
+)
+
+_RUNTIME_OUTPUT_NAMESPACES = frozenset(("images", "videos", "audio", "agent-view"))
+
+
+def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
+    """Publish a MIME media type while retaining internal artifact semantics."""
+
+    explicit = descriptor.get("media_type")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    artifact_type = str(descriptor.get("artifact_type") or "")
+    filename = descriptor.get("filename")
+    if artifact_type == "clip/visual" and isinstance(filename, str):
+        media_type = _VIDEO_SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
+        if media_type is not None:
+            return media_type
+    return artifact_type or "application/octet-stream"
+
+
+def _runtime_output_filename(value: str) -> str:
+    """Map a safe staged output name to Runtime's direct-leaf wire name.
+
+    Producers keep known namespaces in their private attempt spool (for
+    example ``images/output_000.png`` or ``agent-view/structure.md``).
+    Runtime's managed output contract carries only a direct filename, so
+    strip exactly one known producer namespace at the upload boundary.
+    Arbitrary nesting is not a filename mapping mechanism and remains
+    rejected.
+    """
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 512
+        or any(ord(char) < 32 for char in value)
+        or "\\" in value
+        or Path(value).is_absolute()
+        or ".." in Path(value).parts
+        or Path(value).as_posix() != value
+    ):
+        raise HostError("generated output has an invalid managed filename")
+    parts = Path(value).parts
+    if not parts or parts[-1] in {".", ".."}:
+        raise HostError("generated output has an invalid managed filename")
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2 and parts[0] in _RUNTIME_OUTPUT_NAMESPACES:
+        return parts[1]
+    raise HostError("generated output has an invalid managed filename")
+
+
+def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> str | None:
+    """Resolve the primary generated output port from the admitted schema."""
+    if not isinstance(intent, Mapping):
+        return None
+    modality = intent.get("modality")
+    expected = {"image": "generated_images", "video": "generated_videos", "audio": "generated_audio"}.get(modality)
+    if expected is None:
+        return None
+    matches = [
+        output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
+        if getattr(output, "name", None) == expected
+        and getattr(output, "type", None) == "file"
+        and not str(getattr(output, "name", "")).endswith("_manifest")
+        and getattr(output, "artifact_type", None)
+    ]
+    if matches != [expected]:
+        raise HostError(f"generation capability must declare exactly one primary {expected!r} output")
+    return expected
+
+
+def _generation_selector_declarations(
+    record: Any,
+    intent: Mapping[str, Any] | None,
+) -> tuple[str | None, tuple[dict[str, Any], ...]]:
+    """Flatten admitted selector declarations without changing their order."""
+    output_port = _generation_output_port(record, intent)
+    if output_port is None:
+        return None, ()
+    declarations: list[dict[str, Any]] = []
+    for group in intent["groups"]:
+        for selector in group["selectors"]:
+            declarations.append({
+                "group_key": group["group_key"],
+                "selector": selector["selector"],
+                "ordinal": selector["ordinal"],
+                "variant_key": selector["variant_key"],
+                "output_port": output_port,
+            })
+    return output_port, tuple(declarations)
+
+
+class StorageEnvelopeError(HostError):
+    """A live attempt exceeded its admitted scratch/output envelope."""
+
+    def __init__(self, message: str, *, diagnostic: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.diagnostic = dict(diagnostic)
+
+
+def _cleanup_ephemeral_attempt(root: Path) -> None:
+    """Remove an owned attempt root and verify that no residue remains."""
+    try:
+        shutil.rmtree(root)
+    except FileNotFoundError:
+        if _strict_root_exists(root):
+            raise HostError(f"owned attempt cleanup was not verified: {root}")
+        return
+    except OSError as exc:
+        raise HostError(f"owned attempt cleanup failed: {root}") from exc
+    if _strict_root_exists(root):
+        raise HostError(f"owned attempt cleanup was not verified: {root}")
+
+
+def _strict_root_exists(root: Path) -> bool:
+    """Observe an owned root without suppressing filesystem errors."""
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise HostError(f"owned attempt observation failed: {root}") from exc
+    return True
+
+
+class _ManagedTaskAdapter:
+    """Host-owned lifecycle adapter for one claimed task.
+
+    Engine-specific adapters may add stronger process/session custody, but the
+    generic host still needs a concrete fence/release surface around every
+    claimed task.  The manager's token is therefore part of the task's
+    completion proof even for CPU executors.
+    """
+
+    def __init__(
+        self,
+        cancel_signal: threading.Event,
+        process_census: Callable[[], bool] | None = None,
+    ) -> None:
+        self._cancel_signal = cancel_signal
+        self._process_census = process_census
+        self.fenced = False
+
+    def fence(self, *, reason: str) -> dict[str, Any]:
+        self.fenced = True
+        self._cancel_signal.set()
+        return {"ok": True, "fenced": True, "reason": reason}
+
+    def release(self, *, reason: str) -> dict[str, Any]:
+        if self._process_census is not None and self._process_census():
+            return {"ok": False, "released": False, "reason": reason, "active_processes": True}
+        return {"ok": True, "released": True, "reason": reason}
+
+
+class _ManagedVibeSessionAdapter:
+    """Bridge the manager lifecycle to the reviewed checkout adapter."""
+
+    def __init__(self, backend: Any) -> None:
+        self.backend = backend
+
+    @staticmethod
+    def _native_evidence(
+        evidence: Any,
+        *,
+        kind: str,
+        native_key: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(evidence, Mapping)
+            or evidence.get("ok") is not True
+            or evidence.get(native_key) is not True
+        ):
+            return {
+                "ok": False,
+                kind: False,
+                "reason": reason,
+                "native": dict(evidence) if isinstance(evidence, Mapping) else evidence,
+            }
+        return {"ok": True, kind: True, "reason": reason, "native": dict(evidence)}
+
+    def observe(self, *, binding: SessionBinding) -> dict[str, Any]:
+        del binding
+        self.backend._revalidate_host_session()
+        return {"ok": True, "observed": True}
+
+    def fence(self, *, reason: str) -> dict[str, Any]:
+        evidence = self.backend.cancel()
+        return self._native_evidence(
+            evidence, kind="fenced", native_key="cancelled", reason=reason
+        )
+
+    def cancel(self, *, reason: str) -> dict[str, Any]:
+        evidence = self.backend.cancel()
+        return self._native_evidence(
+            evidence, kind="cancelled", native_key="cancelled", reason=reason
+        )
+
+    def release(self, *, reason: str) -> dict[str, Any]:
+        evidence = self.backend.release(reason=reason)
+        return self._native_evidence(
+            evidence, kind="released", native_key="released", reason=reason
+        )
 
 class HostRegistrationError(HostError):
     """A typed, request-correlated executor registration failure."""
@@ -116,8 +350,10 @@ _HOST_OWNED_ENVELOPE_PORTS = (
     "task_spec_json",
     "input_object_paths_json",
     "task_identity",
+    "execution_identity",
     "engine_python",
     "readiness_profile_json",
+    "readiness_profile_path",
 )
 _TYPED_FAMILIES = {
     "z_image_turbo": "z_image_t2i",
@@ -178,16 +414,31 @@ def _normalize_verified_facts(value: Any) -> dict[str, dict[str, Any]]:
     return {"exact": normalized_exact, "minimum": normalized_minimum}
 
 
-def _registration_verified_facts() -> dict[str, dict[str, Any]] | dict[str, Any]:
-    """Read configured evidence fail-closed; profile-free hosts publish none."""
+def _read_readiness_profile_document() -> Mapping[str, Any] | None:
+    """Read the Worker-issued readiness document with its hash fence."""
     profile_path = os.environ.get("ASTRID_HOST_READINESS_PROFILE_PATH")
     if not profile_path:
-        return {}
+        return None
     try:
-        profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+        profile_bytes = Path(profile_path).read_bytes()
+        expected_hash = os.environ.get("ASTRID_HOST_READINESS_PROFILE_HASH", "")
+        actual_hash = "sha256:" + hashlib.sha256(profile_bytes).hexdigest()
+        if not expected_hash or expected_hash != actual_hash:
+            raise HostError("readiness profile hash does not match the supplied profile")
+        profile = json.loads(profile_bytes.decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise HostError(f"readiness profile is unreadable: {exc}") from exc
-    if not isinstance(profile, Mapping) or "verified_facts" not in profile:
+    if not isinstance(profile, Mapping):
+        raise HostError("readiness profile is not an object")
+    return profile
+
+
+def _registration_verified_facts() -> dict[str, dict[str, Any]] | dict[str, Any]:
+    """Read configured evidence fail-closed; profile-free hosts publish none."""
+    profile = _read_readiness_profile_document()
+    if profile is None:
+        return {}
+    if "verified_facts" not in profile:
         raise HostError("readiness profile is missing verified_facts")
     return _normalize_verified_facts(profile["verified_facts"])
 
@@ -285,9 +536,12 @@ def _bind_host_owned_command_values(
     if "input_object_paths_json" in declared:
         values.setdefault("input_object_paths_json", "[]")
     if "task_identity" in declared:
-        values.setdefault(
-            "task_identity",
-            str((admission or {}).get("task_id") or attempt.name),
+        values["task_identity"] = str(
+            (admission or {}).get("task_id") or attempt.name
+        )
+    if "execution_identity" in declared:
+        values["execution_identity"] = str(
+            (admission or {}).get("execution_identity") or "-"
         )
     if "engine_python" in declared:
         values.setdefault("engine_python", sys.executable)
@@ -297,19 +551,53 @@ def _bind_host_owned_command_values(
             values["readiness_profile_json"] = Path(profile_path).read_text(encoding="utf-8")
         else:
             values["readiness_profile_json"] = "{}"
+    if "readiness_profile_path" in declared:
+        values["readiness_profile_path"] = os.environ.get(
+            "ASTRID_HOST_READINESS_PROFILE_PATH"
+        ) or "-"
+    if "readiness_profile_hash" in declared:
+        values["readiness_profile_hash"] = os.environ.get(
+            "ASTRID_HOST_READINESS_PROFILE_HASH"
+        ) or "-"
     return values
 
 
+def _prepare_vibecomfy_execution_identity(
+    inputs: Mapping[str, Any],
+    scratch: Path,
+    readiness_profile: Mapping[str, Any] | None,
+) -> tuple[str, str, str]:
+    """Select and identify the exact VibeComfy input form before launch."""
+    from astrid.packs.vibecomfy.executors._bundle_inputs import staged_workflow_path
+    from astrid.packs.vibecomfy.production_engine import (
+        load_workflow_path,
+        loaded_workflow_execution_identity,
+    )
+
+    try:
+        with staged_workflow_path(
+            workflow=inputs.get("workflow"),
+            python=inputs.get("python"),
+            companion=inputs.get("companion"),
+            source=inputs.get("source"),
+            scratch=scratch,
+        ) as (workflow_path, _authority):
+            loaded = load_workflow_path(
+                workflow_path,
+                scratch / "canonical-loader",
+            )
+            return (
+                loaded_workflow_execution_identity(loaded, readiness_profile),
+                loaded.model_id,
+                loaded.template_id,
+            )
+    except Exception as exc:
+        raise HostError(f"vibecomfy.run canonical input preflight failed: {exc}") from exc
+
+
 def _dependency_pythonpath() -> tuple[str, ...]:
-    """Keep explicitly supplied interpreter dependency roots across children."""
-    values: list[str] = []
-    for raw in os.environ.get("PYTHONPATH", "").split(os.pathsep):
-        if not raw:
-            continue
-        path = Path(raw)
-        if path.name in {"site-packages", "dist-packages"}:
-            values.append(str(path))
-    return tuple(dict.fromkeys(values))
+    """Keep only approved dependency roots across children."""
+    return dependency_pythonpath()
 
 
 @dataclass
@@ -397,6 +685,11 @@ def _canonical_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def _capability_digest(value: Any) -> str:
+    """Return the wire-format digest required by the Runtime capability contract."""
+    return "sha256:" + _canonical_digest(value)
+
+
 def _json_safe(value: Any) -> Any:
     """Convert request values to the small JSON wire format used by workers."""
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -478,6 +771,23 @@ def _preflight_unavailable_reason(record: "CapabilityRecord") -> str:
     return str(record.matrix.get("evidence_reason") or "capability preflight is not ready")
 
 
+_WITHDRAWN_DISPOSITIONS = frozenset({"unsupported", "retired"})
+
+
+def _is_withdrawn(record: "CapabilityRecord") -> bool:
+    """Return whether the ledger withdraws a capability from every admission path."""
+
+    return str(record.matrix.get("disposition", "")) in _WITHDRAWN_DISPOSITIONS
+
+
+def _withdrawn_reason(record: "CapabilityRecord") -> str:
+    return str(
+        record.matrix.get("evidence_reason")
+        or record.matrix.get("disposition")
+        or "withdrawn"
+    )
+
+
 def _required_secret_names(record: "CapabilityRecord") -> tuple[str, ...]:
     """Return the manifest/matrix credential names admitted to one child.
 
@@ -489,10 +799,20 @@ def _required_secret_names(record: "CapabilityRecord") -> tuple[str, ...]:
         str(name) for name in (record.matrix.get("required_env") or ())
         if str(name).upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))
     )
+    manifest_secret_names = tuple(
+        str(name)
+        for raw in (
+            record.definition.metadata.get("required_env") or (),
+            record.definition.metadata.get("env") or (),
+        )
+        for name in ((raw,) if isinstance(raw, str) else raw)
+        if str(name).upper().endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))
+    )
     return tuple(dict.fromkeys(
         str(name)
         for name in (
             *matrix_secret_names,
+            *manifest_secret_names,
             *(record.definition.isolation.secrets_required or ()),
             *(record.definition.metadata.get("secrets_required") or ()),
         )
@@ -515,7 +835,9 @@ def _required_env_names(record: "CapabilityRecord") -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _resolve_credential_value(source: Mapping[str, str], name: str) -> str | None:
+def _resolve_credential_value(
+    source: Mapping[str, str], name: str, *, explicit: bool = False
+) -> str | None:
     """Resolve a declared credential without broadening ordinary env access.
 
     Hivemind's contributor login stores its owner-only credential at the
@@ -524,7 +846,26 @@ def _resolve_credential_value(source: Mapping[str, str], name: str) -> str | Non
     or a logged-in contributor would be rejected during preflight.
     """
 
-    value = source.get(name)
+    # A caller-provided credential mapping is the explicit tier.  The default
+    # process environment remains the process tier.  Shared-file lookup is
+    # deliberately performed by the canonical resolver in both cases.
+    if explicit:
+        environ = dict(os.environ)
+        for config_name in ("ASTRID_HOME", "ASTRID_ENV_FILE"):
+            if config_name in source:
+                environ[config_name] = str(source[config_name])
+        explicit_value = source.get(name)
+    else:
+        environ = source
+        explicit_value = None
+    try:
+        value, _source = load_local_api_key_with_source(
+            name,
+            explicit=explicit_value,
+            environ=environ,
+        )
+    except AstridError:
+        value = ""
     if value:
         return str(value)
     if name != "HIVEMIND_CONTRIBUTOR_KEY":
@@ -699,6 +1040,324 @@ def _source_digest(root: Path) -> str:
             continue
         entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
     return _canonical_digest(entries)
+
+
+def _attempt_tree_bytes(root: Path) -> int:
+    """Count owned attempt bytes without following symlink escapes."""
+    total = 0
+    for path in root.rglob("*"):
+        # Renderers may remove completed frame files while the live guard is
+        # walking the attempt. ``is_file()`` and ``stat()`` are not atomic; a
+        # vanished file is a normal scan race, not a renderer failure.
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            total += int(path.stat().st_size)
+        except FileNotFoundError:
+            continue
+    return total
+
+
+def _storage_tree_bytes(root: Path) -> int:
+    """Count regular files in a bounded subtree without following symlinks."""
+    if not root.is_dir():
+        return 0
+    total = 0
+    for path in root.rglob("*"):
+        # Atomic writers use sibling ``*.tmp`` files.  Those bytes are
+        # scratch during the write and must not be charged to the final-output
+        # bucket while the child is still running.
+        # The output tree can also contain renderer-owned intermediates for
+        # legacy/direct callers. Treat a file removed between discovery and
+        # stat as absent from this point-in-time accounting sample.
+        try:
+            if path.is_symlink() or not path.is_file() or path.name.endswith(".tmp"):
+                continue
+            total += int(path.stat().st_size)
+        except FileNotFoundError:
+            continue
+    return total
+
+
+_STORAGE_DIAGNOSTIC_PATH_SAMPLE_LIMIT = 32
+_RENDERER_WORKSPACE_MARKERS = (
+    ".render-service",
+    ".render-inputs-",
+    ".remotion-runtime-",
+    "astrid-render-assets-",
+)
+
+
+def _storage_path_class(relative: str, *, output: bool) -> str:
+    """Classify a relative attempt path without exposing its absolute root."""
+    if output:
+        return "output"
+    parts = relative.split("/")
+    if parts[0] == "managed-objects":
+        return "managed_inputs"
+    if parts[0] == "inputs":
+        return "canonical_inputs"
+    if any(
+        marker in part
+        for part in parts
+        for marker in _RENDERER_WORKSPACE_MARKERS
+    ):
+        return "renderer_workspace"
+    if parts[0] == "outputs":
+        return "output_temporary"
+    return "other_scratch"
+
+
+def _storage_envelope_measurement(
+    root: Path,
+    output_root: Path,
+    *,
+    path_sample_limit: int = _STORAGE_DIAGNOSTIC_PATH_SAMPLE_LIMIT,
+) -> dict[str, Any]:
+    """Capture bounded, path-relative storage evidence for an overrun."""
+    root = Path(root)
+    output_root = Path(output_root)
+    output_resolved = output_root.resolve(strict=False)
+    total_bytes = 0
+    output_bytes = 0
+    scratch_bytes = 0
+    vanished_files = 0
+    files = 0
+    scratch_files = 0
+    classes: dict[str, dict[str, int]] = {}
+    largest: list[tuple[int, str, str]] = []
+    try:
+        for path in root.rglob("*"):
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                size = int(path.stat().st_size)
+                relative = path.relative_to(root).as_posix()
+                is_output = (
+                    not path.name.endswith(".tmp")
+                    and path.resolve(strict=False).is_relative_to(output_resolved)
+                )
+                path_class = _storage_path_class(relative, output=is_output)
+                total_bytes += size
+                files += 1
+                if is_output:
+                    output_bytes += size
+                else:
+                    scratch_bytes += size
+                    scratch_files += 1
+                bucket = classes.setdefault(path_class, {"files": 0, "bytes": 0})
+                bucket["files"] += 1
+                bucket["bytes"] += size
+                if not is_output and path_sample_limit:
+                    candidate = (size, relative, path_class)
+                    if len(largest) < path_sample_limit:
+                        heapq.heappush(largest, candidate)
+                    elif candidate > largest[0]:
+                        heapq.heapreplace(largest, candidate)
+            except FileNotFoundError:
+                vanished_files += 1
+                continue
+    except FileNotFoundError:
+        vanished_files += 1
+    except OSError as exc:
+        return {
+            "measurement_error": type(exc).__name__,
+            "vanished_file_count": vanished_files,
+        }
+    largest.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return {
+        "observed_total_bytes": total_bytes,
+        "observed_output_bytes": output_bytes,
+        "observed_scratch_bytes": scratch_bytes,
+        "file_count": files,
+        "vanished_file_count": vanished_files,
+        "path_classes": {key: classes[key] for key in sorted(classes)},
+        "largest_scratch_paths": [
+            {"path": path, "bytes": size, "classification": classification}
+            for size, path, classification in largest[:path_sample_limit]
+        ],
+        "largest_scratch_paths_truncated": scratch_files > path_sample_limit,
+    }
+
+
+def _fixed_request_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a host-owned model/mode/execution scope, if declared."""
+    raw = metadata.get("fixed_inputs")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping) or not raw:
+        raise HostError("capability fixed_inputs must be a non-empty object")
+    scope = dict(raw)
+    if any(not isinstance(key, str) or not key for key in scope):
+        raise HostError("capability fixed_inputs keys must be non-empty strings")
+    return scope
+
+
+def _assert_fixed_request_scope(record: Any, task_data: Mapping[str, Any]) -> None:
+    """Reject task parameters that escape a capability's declared profile."""
+    scope = _fixed_request_scope(record.definition.metadata)
+    if not scope:
+        return
+    spec = task_data.get("spec")
+    if isinstance(spec, Mapping) and isinstance(spec.get("spec"), Mapping):
+        spec = spec["spec"]
+    params = spec.get("params") if isinstance(spec, Mapping) else None
+    if not isinstance(params, Mapping):
+        raise HostError(f"capability {record.id!r} requires a fixed request scope")
+    legacy_inputs = spec.get("inputs") if isinstance(spec, Mapping) else None
+    if isinstance(legacy_inputs, Mapping):
+        declared_inputs = {port.name for port in record.definition.inputs}
+        unsupported_inputs = sorted(
+            str(name) for name in legacy_inputs if str(name) not in declared_inputs
+        )
+        if unsupported_inputs:
+            raise HostError(
+                f"capability {record.id!r} received unsupported legacy input(s): "
+                + ", ".join(unsupported_inputs)
+            )
+    mismatches = {
+        key: {"expected": expected, "actual": params.get(key)}
+        for key, expected in scope.items()
+        if params.get(key) != expected
+    }
+    if mismatches:
+        raise HostError(
+            f"capability {record.id!r} request escapes fixed scope: "
+            f"{json.dumps(mismatches, sort_keys=True)}"
+        )
+
+
+def _storage_input_limits(metadata: Mapping[str, Any]) -> dict[str, int]:
+    """Read optional per-port byte limits for bounded CAS materialization."""
+    raw = metadata.get("storage_input_max_bytes")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise HostError("capability storage_input_max_bytes must be an object")
+    limits: dict[str, int] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not name:
+            raise HostError("capability storage input limit names must be non-empty strings")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise HostError(f"capability storage input limit for {name!r} must be a non-negative integer")
+        limits[name] = value
+    return limits
+
+
+def _task_storage_estimate(task_data: Mapping[str, Any]) -> dict[str, int] | None:
+    """Parse the canonical whole-task storage estimate, if one was admitted."""
+    raw = task_data.get("storage_estimate")
+    spec = task_data.get("spec")
+    if raw is None and isinstance(spec, Mapping):
+        raw = spec.get("storage_estimate")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or set(raw) != {"scratch_bytes", "output_bytes"}:
+        raise HostError("task storage_estimate must contain scratch_bytes and output_bytes")
+    try:
+        scratch_bytes = int(raw["scratch_bytes"])
+        output_bytes = int(raw["output_bytes"])
+    except (TypeError, ValueError) as exc:
+        raise HostError("task storage_estimate values must be integers") from exc
+    if scratch_bytes < 0 or output_bytes < 0:
+        raise HostError("task storage_estimate values must be non-negative")
+    return {"scratch_bytes": scratch_bytes, "output_bytes": output_bytes}
+
+
+def _assert_live_storage_envelope(
+    estimate: Mapping[str, int] | None,
+    root: Path,
+    output_root: Path,
+) -> None:
+    """Fail while a child is writing, before an overrun reaches settlement."""
+    if estimate is None:
+        return
+    total_bytes = _attempt_tree_bytes(root)
+    output_bytes = _storage_tree_bytes(output_root)
+    scratch_bytes = max(0, total_bytes - output_bytes)
+    if output_bytes > int(estimate["output_bytes"]):
+        diagnostic = {
+            "guard": "storage_envelope",
+            "category": "output_overrun",
+            "configured_scratch_bytes": int(estimate["scratch_bytes"]),
+            "configured_output_bytes": int(estimate["output_bytes"]),
+            **_storage_envelope_measurement(root, output_root),
+        }
+        raise StorageEnvelopeError(
+            f"live output bytes {output_bytes} exceed task output limit {estimate['output_bytes']}",
+            diagnostic=diagnostic,
+        )
+    if scratch_bytes > int(estimate["scratch_bytes"]):
+        diagnostic = {
+            "guard": "storage_envelope",
+            "category": "scratch_overrun",
+            "configured_scratch_bytes": int(estimate["scratch_bytes"]),
+            "configured_output_bytes": int(estimate["output_bytes"]),
+            **_storage_envelope_measurement(root, output_root),
+        }
+        raise StorageEnvelopeError(
+            f"live scratch bytes {scratch_bytes} exceed task scratch limit {estimate['scratch_bytes']}",
+            diagnostic=diagnostic,
+        )
+
+
+def _task_storage_envelope(
+    task_data: Mapping[str, Any],
+    root: Path,
+    staged_outputs: list[Mapping[str, Any]],
+) -> dict[str, int] | None:
+    """Enforce an explicit whole-task storage ceiling before CAS upload."""
+    estimate = _task_storage_estimate(task_data)
+    if estimate is None:
+        return None
+    scratch_limit = estimate["scratch_bytes"]
+    output_limit = estimate["output_bytes"]
+    output_root = root / "outputs"
+    resolved_output_root = output_root.resolve()
+    published_output_bytes = 0
+    published_paths: set[Path] = set()
+    for descriptor in staged_outputs:
+        raw_path = descriptor.get("path")
+        if not raw_path:
+            raise HostError("staged output is missing its path for storage accounting")
+        path = Path(str(raw_path))
+        if path.is_symlink() or not path.is_file():
+            raise HostError("staged output path is not a regular file")
+        resolved_path = path.resolve()
+        if not resolved_path.is_relative_to(resolved_output_root):
+            raise HostError("staged output path escapes the output directory")
+        if resolved_path not in published_paths:
+            published_paths.add(resolved_path)
+            published_output_bytes += int(path.stat().st_size)
+    # Use the same stable-output view as the live counter.  This includes the
+    # published result manifest and any undeclared stable file, while treating
+    # atomic writer temporaries as scratch.  The latter prevents the estimate
+    # from changing meaning between polling and final settlement.
+    stable_output_paths = {
+        path.resolve()
+        for path in output_root.rglob("*")
+        if not path.is_symlink() and path.is_file() and not path.name.endswith(".tmp")
+    }
+    output_paths = stable_output_paths | published_paths
+    output_bytes = sum(int(path.stat().st_size) for path in output_paths)
+    total_bytes = _attempt_tree_bytes(root)
+    scratch_bytes = max(0, total_bytes - output_bytes)
+    if output_bytes > output_limit:
+        raise HostError(
+            f"staged output bytes {output_bytes} exceed task output limit {output_limit}"
+        )
+    if scratch_bytes > scratch_limit:
+        raise HostError(
+            f"attempt scratch bytes {scratch_bytes} exceed task scratch limit {scratch_limit}"
+        )
+    return {
+        "scratch_bytes": scratch_bytes,
+        "scratch_limit_bytes": scratch_limit,
+        "output_bytes": output_bytes,
+        "output_limit_bytes": output_limit,
+        "total_bytes": total_bytes,
+        "total_limit_bytes": scratch_limit + output_limit,
+    }
 
 
 def source_checkout_digest(checkout: str | Path) -> str:
@@ -933,6 +1592,7 @@ class RuntimeProtocolClient:
     # so they must not pre-publish an unscoped CAS object and then attempt a
     # forbidden project association.
     INLINE_SETTLEMENT_OUTPUTS = True
+    REQUIRES_OUTPUT_BINDING = True
 
     def __init__(self, endpoint: str, credential: str, *, timeout: float = 30.0):
         try:
@@ -954,6 +1614,7 @@ class RuntimeProtocolClient:
             self.credential,
             timeout=self.timeout,
         )
+        self.executor_id: str | None = None
         self._runtime_epoch: int | None = None
         self._heartbeat_session = secrets_module.token_hex(8)
         self._heartbeat_sequence = 0
@@ -1000,13 +1661,15 @@ class RuntimeProtocolClient:
         }
         if verified_facts is not None:
             payload["verified_facts"] = dict(verified_facts)
-        return self.generated.register_executor(
+        registration = self.generated.register_executor(
             payload,
             idempotency_key=(
                 f"executor-{executor_id}-{_canonical_digest(payload)}-"
                 f"{self._registration_session}"
             ),
         )
+        self.executor_id = executor_id
+        return registration
 
     def renew_registration_session(self) -> None:
         """Rotate the host-session nonce before an intentional renewal."""
@@ -1106,10 +1769,22 @@ class RuntimeProtocolClient:
             idempotency_key=f"settle-{attempt_id}-{fence}",
         )
 
-    def fail(self, task_id: str, lease_token: str, error: str, *, retryable: bool = False, attempt_id: str | None = None, fence: int | None = None):
+    def fail(
+        self,
+        task_id: str,
+        lease_token: str,
+        error: str,
+        *,
+        retryable: bool = False,
+        attempt_id: str | None = None,
+        fence: int | None = None,
+        failure_diagnostic: Mapping[str, Any] | None = None,
+    ):
         if not attempt_id or fence is None:
             raise HostError("generated failure requires attempt_id and fence")
         payload: Any = {"message": str(error), "retryable": bool(retryable)}
+        if failure_diagnostic:
+            payload["diagnostic"] = dict(failure_diagnostic)
         return self.generated.fail_attempt(
             attempt_id,
             lease_id=lease_token,
@@ -1150,26 +1825,65 @@ class RuntimeProtocolClient:
         response = self.generated.get_object(digest)
         return response.data
 
-    def upload_object(self, path: Path, *, project_id: str | None, media_type: str, filename: str | None = None):
+    def upload_object(
+        self,
+        path: Path,
+        *,
+        project_id: str | None,
+        media_type: str,
+        filename: str | None = None,
+        run_id: str,
+        task_id: str,
+        attempt_id: str,
+        lease_id: str,
+        fence: int,
+        output_key: str,
+        output_port: str,
+        runtime_epoch: int | None = None,
+    ):
         if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
             raise HostError("output upload project_id must be a non-empty string or None")
-        # Worker credentials may publish CAS bytes but are deliberately not
-        # granted projects:write, which is required to mutate project
-        # associations.  Settlement owns that association transactionally;
-        # upload only the immutable object here and keep the project binding
-        # on the task/settlement path. Workspace tasks have no project binding
-        # and publish the same immutable CAS objects.
+        if runtime_epoch is None:
+            runtime_epoch = self._current_runtime_epoch()
+        executor_id = self.executor_id
+        if any(
+            not isinstance(value, str) or not value
+            for value in (executor_id, run_id, task_id, attempt_id, lease_id, output_key, output_port, filename)
+        ):
+            raise HostError("output upload provenance is incomplete")
+        binding = {
+            "project_id": project_id,
+            "run_id": run_id,
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "executor_id": executor_id,
+            "lease_id": lease_id,
+            "fence": int(fence),
+            "runtime_epoch": int(runtime_epoch),
+            "output_key": output_key,
+            "output_port": output_port,
+            "filename": filename,
+        }
         with path.open("rb") as stream:
             data = stream.read()
-            return self.generated.ingest_object(
-                data,
-                media_type=media_type,
-                idempotency_key=(
-                    "output-"
-                    f"{hashlib.sha256(data).hexdigest()}"
-                ),
-                filename=filename,
-            )
+        binding.update({
+            "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "media_type": media_type,
+        })
+        idempotency_key = "output-" + _canonical_digest(binding)
+        # Worker credentials may publish CAS bytes but are deliberately not
+        # granted projects:write. Settlement owns that association
+        # transactionally; upload carries an explicit, collision-safe
+        # provenance binding and only publishes immutable object bytes.
+        # Workspace tasks have no project binding and publish the same bytes.
+        return self.generated.ingest_object(
+            data,
+            media_type=media_type,
+            idempotency_key=idempotency_key,
+            filename=filename,
+            upload_binding=binding,
+        )
 
     def publish_timeline_render(
         self,
@@ -1199,6 +1913,9 @@ class RuntimeProtocolClient:
         )
 
 
+_OPTIONAL_EXTERNAL_MATRIX_PREFIXES = ("discord_local.", "hivemind.", "seedance_local.")
+
+
 class GenericPackHost:
     """Discover, register, preflight, and execute pack capabilities."""
 
@@ -1215,6 +1932,7 @@ class GenericPackHost:
         source_inventory_identity: str | None = None,
         boot_manifest_path: str | Path | None = None,
         boot_manifest_hash: str | None = None,
+        execution_policy: ExecutionGuardPolicy | None = None,
     ):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
@@ -1236,6 +1954,10 @@ class GenericPackHost:
         # Keep the mapping live when the default is os.environ so test/runtime
         # credential rotation is observed without snapshotting secret values.
         self.credential_source = os.environ if credential_source is None else credential_source
+        # A supplied mapping is the caller's explicit credential tier.  Keep
+        # process environment fallback available so shared astrid.env still
+        # wins over stale process values and fills an empty mapping.
+        self._credential_source_is_explicit = credential_source is not None
         self.ledger = load_capability_ledger(self.capability_matrix_path) if self.capability_matrix_path else {"capabilities": [], "sources": {}}
         self.matrix: dict[str, dict[str, Any]] = self._load_matrix(self.capability_matrix_path)
         self.source_epoch = "uninitialized"
@@ -1251,16 +1973,43 @@ class GenericPackHost:
             else None
         )
         self.boot_manifest_hash = boot_manifest_hash
+        self.execution_policy = execution_policy or ExecutionGuardPolicy()
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
         self._pending_provider_grants: dict[str, str] = {}
+        # Engine-neutral lifecycle custody lives beside, not inside, the
+        # Runtime client.  Adapters are opened explicitly by the execution
+        # path; the host owns shutdown fencing for every opened session.
+        self.managed_tool_session = ManagedToolSession(
+            manager_id=self.executor_id
+        )
         self._active_processes: set[subprocess.Popen] = set()
         self._process_lock = threading.RLock()
         self._shutdown = threading.Event()
         # An unregistered host must retain the existing claim-loop failure
         # semantics. register() arms the first refresh after success.
         self._registration_refresh_deadline = float("inf")
+        self._cleanup_uncertain = False
+        self._last_cleanup_receipt: dict[str, Any] | None = None
+
+    @property
+    def last_cleanup_receipt(self) -> dict[str, Any] | None:
+        return dict(self._last_cleanup_receipt) if self._last_cleanup_receipt is not None else None
+
+    def _cleanup_ephemeral_attempt_or_latch(self, root: Path) -> None:
+        """Delete one owned root, latching uncertainty if observation fails."""
+        try:
+            _cleanup_ephemeral_attempt(root)
+        except Exception as exc:
+            self._cleanup_uncertain = True
+            self._last_cleanup_receipt = {
+                "path": str(root),
+                "intended_disposition": "deleted",
+                "status": "uncertain",
+                "errors": [str(exc)],
+            }
+            raise
 
     def _track_process(self, process: subprocess.Popen) -> None:
         with self._process_lock:
@@ -1278,6 +2027,7 @@ class GenericPackHost:
     def shutdown(self) -> None:
         """Stop the host and every currently owned capability process."""
         self._shutdown.set()
+        self.managed_tool_session.close(reason="host_shutdown")
         with self._process_lock:
             active = tuple(self._active_processes)
         for process in active:
@@ -1291,7 +2041,7 @@ class GenericPackHost:
         """Return completion provenance for the root-owned manifest stamp."""
         if self.boot_manifest_path is None:
             return None
-        from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
+        from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
         stamped_manifest_hash = load_boot_manifest_hash(
             self.boot_manifest_path,
@@ -1368,13 +2118,17 @@ class GenericPackHost:
                 manifest = next((executor_root / name for name in ("executor.yaml", "executor.yml", "executor.json") if (executor_root / name).is_file()), None)
                 matrix_entry = self.matrix.get(definition.id, {})
                 source_roots = _admitted_source_roots(executor_root, definition)
-                record = CapabilityRecord(definition=definition, capability_digest=_canonical_digest(definition.to_dict()), source_digest=_source_digest_for_roots(source_roots), source_root=executor_root, manifest_path=manifest, matrix=matrix_entry)
+                record = CapabilityRecord(definition=definition, capability_digest=_capability_digest(definition.to_dict()), source_digest=_source_digest_for_roots(source_roots), source_root=executor_root, manifest_path=manifest, matrix=matrix_entry)
                 records[record.id] = record
         if self.matrix:
             discovered = set(records)
             expected = set(self.matrix)
             missing = sorted(discovered - expected)
-            stale = sorted(expected - discovered)
+            stale = sorted(
+                capability_id
+                for capability_id in expected - discovered
+                if not capability_id.startswith(_OPTIONAL_EXTERNAL_MATRIX_PREFIXES)
+            )
             if missing or stale:
                 details = []
                 if missing:
@@ -1442,7 +2196,7 @@ class GenericPackHost:
                     definition = _attach_pack_metadata(definition, orchestrator_root)
                     source_roots = _admitted_source_roots(orchestrator_root, definition)
                     source_digest = _source_digest_for_roots(source_roots)
-                    capability_digest = _canonical_digest(definition.to_dict())
+                    capability_digest = _capability_digest(definition.to_dict())
                     return definition.to_dict(), {
                         "capability_digest": capability_digest,
                         "source_digest": source_digest,
@@ -1474,9 +2228,18 @@ class GenericPackHost:
             else:
                 checks["binaries"] = {"ok": True}
             required_env = _required_env_names(record)
+            required_credentials = set(_required_secret_names(record))
             missing_env = [
                 name for name in required_env
-                if not _resolve_credential_value(self.credential_source, name)
+                if not (
+                    _resolve_credential_value(
+                        self.credential_source,
+                        name,
+                        explicit=self._credential_source_is_explicit,
+                    )
+                    if name in required_credentials
+                    else self.credential_source.get(name)
+                )
             ]
             checks["credentials"] = {"ok": not missing_env, "missing": missing_env}
             required_packages = record.matrix.get("required_packages") or record.definition.metadata.get("required_packages", adapter.required_packages)
@@ -1533,6 +2296,11 @@ class GenericPackHost:
             pack_source = _hivemind_source_preflight(record)
             if pack_source is not None:
                 checks["pack_source"] = pack_source
+            if _is_withdrawn(record):
+                checks["disposition"] = {
+                    "ok": False,
+                    "reason": _withdrawn_reason(record),
+                }
             ready = all(value is True or (isinstance(value, dict) and value.get("ok") is True) for value in checks.values())
             updated[record.id] = CapabilityRecord(**{**record.__dict__, "preflight": checks, "ready": ready})
         self.capabilities = updated
@@ -1575,7 +2343,13 @@ class GenericPackHost:
             self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
             self._registered_state = state
             self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
-            return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready], "withdrawn_capabilities": removed}
+            return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready and not _is_withdrawn(r)], "withdrawn_capabilities": removed}
+        # Publish capability admission metadata before advertising the executor.
+        # A real runtime must be able to validate a task against the exact
+        # definition digest/source-derived readiness before it can claim work.
+        register_capability = getattr(self.client, "register_capability", None)
+        if not callable(register_capability):
+            raise HostError("runtime client lacks canonical capability registration operation")
         executor_capabilities: list[dict[str, Any]] = []
         for record in self.capabilities.values():
             disposition = str(record.matrix.get("disposition", ""))
@@ -1747,6 +2521,12 @@ class GenericPackHost:
         attempt: Path,
         *,
         authorized_input_object_ids: list[str] | tuple[str, ...] | None = None,
+        task_param_ports: tuple[str, ...] | list[str] | None = None,
+        cas_param_ports: tuple[str, ...] | list[str] | None = None,
+        optional_cas_param_ports: tuple[str, ...] | list[str] | None = None,
+        storage_estimate: Mapping[str, int] | None = None,
+        input_size_limits: Mapping[str, int] | None = None,
+        storage_policy_version: str | None = None,
         continuation_id: str | None = None,
         file_input_names: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
@@ -1791,11 +2571,77 @@ class GenericPackHost:
             raise HostError("runtime task is missing its immutable spec envelope")
         input_spec = admitted
         values = dict(input_spec.get("inputs", {})) if isinstance(input_spec.get("inputs", {}), Mapping) else {}
+        params = input_spec.get("params")
+        bounded_policy = None
+        if storage_policy_version in {
+            "astrid.cloud-i2i.z-image.v1",
+            "astrid.cloud-edit.qwen-source.v1",
+            "astrid.cloud-edit.unified.v1",
+        }:
+            from astrid.core.generation.storage_policy import (
+                CLOUD_EDIT_STORAGE_POLICY,
+                CLOUD_I2I_STORAGE_POLICY,
+                CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
+                ImageStoragePolicyError,
+            )
+
+            if not isinstance(params, Mapping):
+                raise HostError("bounded cloud image admission requires typed params")
+            bounded_policy = (
+                CLOUD_I2I_STORAGE_POLICY
+                if storage_policy_version == CLOUD_I2I_STORAGE_POLICY.version
+                else (
+                    CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+                    if storage_policy_version == CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version
+                    else CLOUD_EDIT_STORAGE_POLICY
+                )
+            )
+            try:
+                bounded_policy.validate_admission_request(
+                    model=params.get("model"),
+                    mode=params.get("mode"),
+                    execution=params.get("execution"),
+                    params=params,
+                )
+            except ImageStoragePolicyError as exc:
+                raise HostError(str(exc)) from exc
+            if values:
+                raise HostError(
+                    "bounded cloud image admission does not accept legacy spec.inputs authority"
+                )
+            if input_spec.get("input_digests"):
+                raise HostError(
+                    "bounded cloud image admission does not accept legacy input_digests authority"
+                )
+        if task_param_ports is not None:
+            if not isinstance(params, Mapping):
+                raise HostError("HC-04 task spec params must be an object")
+            declared = tuple(str(name) for name in task_param_ports)
+            declared_set = set(declared)
+            unknown = sorted(str(name) for name in params if str(name) not in declared_set)
+            if unknown:
+                raise HostError("HC-04 task spec contains undeclared parameter(s): " + ", ".join(unknown))
+            for name in declared:
+                if name not in params:
+                    continue
+                if name in values and values[name] != params[name]:
+                    raise HostError(f"HC-04 task parameter conflicts with input binding: {name}")
+                values[name] = params[name]
         for key in _HOST_OWNED_ENVELOPE_PORTS + ("family", "params", "output_policy"):
             if key in spec and not values.get(key):
                 values[key] = spec[key]
             if key in input_spec and not values.get(key):
                 values[key] = input_spec[key]
+        if cas_param_ports is not None:
+            for name in tuple(str(value) for value in cas_param_ports):
+                candidate = values.get(name)
+                if candidate is None:
+                    continue
+                if not isinstance(candidate, Mapping) or not isinstance(candidate.get("digest"), str):
+                    raise HostError(
+                        f"HC-04 CAS parameter {name!r} must be an object containing a digest"
+                    )
+
         # Runtime continuation admission stores the authoritative child result
         # list below spec.runtime_dependencies.  Materialize that bounded
         # envelope into the attempt before command expansion; callers cannot
@@ -1852,7 +2698,53 @@ class GenericPackHost:
         input_digests = input_spec.get("input_digests", ())
         for item in input_digests if isinstance(input_digests, list) else ():
             if isinstance(item, Mapping) and item.get("name") and item.get("digest"):
-                values.setdefault(str(item["name"]), {"digest": str(item["digest"])})
+                name = str(item["name"])
+                if task_param_ports is not None and name not in declared_set:
+                    raise HostError(
+                        f"HC-04 input_digests contains undeclared input: {name}"
+                    )
+                values.setdefault(name, {"digest": str(item["digest"])})
+        declared_cas_ports = (
+            tuple(str(value) for value in cas_param_ports)
+            if cas_param_ports is not None
+            else ()
+        )
+        # Optional CAS ports are omitted from the ordered role sequence when
+        # absent. Every present port still has to match input_object_ids in
+        # order; this supports one manifest serving both i2v and flf safely.
+        optional_cas = {str(value) for value in (optional_cas_param_ports or ())}
+        # Preserve the direct helper contract used by the unified edit
+        # profile when callers provide the storage policy without manifest
+        # metadata (the mask is optional for source-only edit).
+        if storage_policy_version == "astrid.cloud-edit.unified.v1":
+            optional_cas.add("mask_ref")
+        ordered_cas_ports = tuple(
+            name
+            for name in declared_cas_ports
+            if name not in optional_cas or values.get(name) is not None
+        )
+        # Multi-source capabilities use the Runtime input-object sequence as
+        # the role/order contract.  Do this before fetching bytes so a caller
+        # cannot swap (for example) a driving video into the reference-image
+        # port while both objects remain individually authorized.
+        if ordered_cas_ports:
+            if len(authorized_digests) != len(ordered_cas_ports):
+                raise HostError(
+                    "HC-04 ordered CAS inputs must match the capability's CAS port count"
+                )
+            ordered_authorized = tuple(
+                str(object_id).removeprefix("sha256:")
+                for object_id in raw_authorized
+            )
+            for index, name in enumerate(ordered_cas_ports):
+                candidate = values.get(name)
+                if not isinstance(candidate, Mapping) or not isinstance(candidate.get("digest"), str):
+                    raise HostError(f"HC-04 ordered CAS parameter {name!r} is missing a digest")
+                normalized = require_authorized(str(candidate["digest"]), name)
+                if normalized != ordered_authorized[index]:
+                    raise HostError(
+                        f"HC-04 CAS parameter {name!r} does not match ordered input_object_ids[{index}]"
+                    )
         for name in values:
             input_name = Path(str(name))
             if not str(name) or input_name.is_absolute() or ".." in input_name.parts:
@@ -1862,6 +2754,36 @@ class GenericPackHost:
         managed_root.mkdir(parents=True, exist_ok=True)
         materialized_objects: dict[str, str] = {}
         fetched_objects: dict[tuple[str, str], Path] = {}
+        scratch_limit = (
+            int(storage_estimate["scratch_bytes"])
+            if storage_estimate is not None
+            else None
+        )
+        bounded_input_limits = dict(input_size_limits or {})
+
+        def write_scratch(path: Path, payload: bytes, *, name: str) -> None:
+            limit = bounded_input_limits.get(name)
+            if limit is not None and len(payload) > limit:
+                raise HostError(
+                    f"managed input {name!r} is {len(payload)} bytes, "
+                    f"exceeding bounded materialization limit {limit}"
+                )
+            if scratch_limit is not None:
+                existing = _attempt_tree_bytes(attempt)
+                if existing + len(payload) > scratch_limit:
+                    raise HostError(
+                        f"materializing {name!r} would exceed task scratch limit "
+                        f"{scratch_limit} bytes"
+                    )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+            _assert_live_storage_envelope(
+                storage_estimate,
+                attempt,
+                attempt / "outputs",
+            )
+
+        cas_names = set(ordered_cas_ports)
 
         def fetch_object(reference: str, digest: str, name: str, *, filename: str | None = None) -> Path:
             if self.client is None:
@@ -1884,7 +2806,7 @@ class GenericPackHost:
                 if filename is not None
                 else f"{len(list(managed_root.iterdir())):04d}-{hashlib.sha256(reference.encode()).hexdigest()[:16]}"
             )
-            destination.write_bytes(payload)
+            write_scratch(destination, payload, name=name)
             fetched_objects[cache_key] = destination
             return destination
 
@@ -1900,9 +2822,17 @@ class GenericPackHost:
                 if isinstance(value, Mapping)
                 else (
                     value
-                    if name in file_input_names
-                    and isinstance(value, str)
-                    and len(value) == 64
+                    if (
+                        name in file_input_names
+                        and storage_policy_version not in {
+                            "astrid.cloud-i2i.z-image.v1",
+                            "astrid.cloud-edit.qwen-source.v1",
+                            "astrid.cloud-edit.unified.v1",
+                        }
+                        and isinstance(value, str)
+                        and len(value) == 64
+                        and all(character in "0123456789abcdef" for character in value)
+                    )
                     else None
                 )
             )
@@ -1924,6 +2854,17 @@ class GenericPackHost:
                     materialized_objects[str(digest).removeprefix("sha256:")] = str(destination)
                     continue
                 input_name = Path("theme.json") if str(name) == "theme" else Path(str(name))
+                if str(name) in cas_names:
+                    filename = value.get("filename") if isinstance(value, Mapping) else None
+                    if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+                        raise HostError(
+                            f"HC-04 CAS parameter {name!r} requires a safe filename"
+                        )
+                    if len(ordered_cas_ports) > 1:
+                        # Preserve role identity even when two CAS objects
+                        # arrive with the same user filename.
+                        filename = f"{name}--{filename}"
+                    input_name = Path(filename)
                 input_root = (attempt / "inputs").resolve()
                 path = (input_root / input_name).resolve()
                 if not path.is_relative_to(input_root):
@@ -1933,8 +2874,7 @@ class GenericPackHost:
                     data = getattr(data, "data", None)
                 if not isinstance(data, (bytes, bytearray)) or hashlib.sha256(bytes(data)).hexdigest() != normalized:
                     raise HostError(f"input object hash mismatch for {name}")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(bytes(data))
+                write_scratch(path, bytes(data), name=str(name))
                 values[name] = str(path)
 
             if name not in registry_input_names:
@@ -2082,11 +3022,17 @@ class GenericPackHost:
         record: CapabilityRecord,
         descriptors: Sequence[Mapping[str, Any]],
         attempt: Path,
+        generation_intent: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Bind validated harvest descriptors to their declared output ports."""
         outputs: list[dict[str, Any]] = []
         by_name = {output.name: output for output in record.definition.outputs}
+        generation_port, declarations = _generation_selector_declarations(
+            record, generation_intent
+        )
+        matched_declarations: set[tuple[str, str, int, str]] = set()
         seen_identities: set[tuple[str, int]] = set()
+        seen_paths: dict[Path, int] = {}
         for index, harvested in enumerate(descriptors):
             if not isinstance(harvested, Mapping):
                 raise HostError(f"harvested output {index} is not a descriptor")
@@ -2095,17 +3041,33 @@ class GenericPackHost:
                 raise HostError(
                     f"harvested output {index} names undeclared port {name!r}"
                 )
+            role = harvested.get("role", "result")
+            if role not in {"result", "auxiliary"}:
+                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
+            is_generation_result = (
+                generation_port is not None
+                and name == generation_port
+                and role == "result"
+            )
+            # ``harvest_staged_outputs`` always supplies a positional ordinal
+            # when the manifest omits one.  That fallback is valid for the
+            # universal generic manifest contract, but it is not an identity
+            # for an admitted generation selector.  Require the provenance
+            # marker so generation publication can never bind by list order.
+            if is_generation_result and harvested.get("ordinal_explicit") is not True:
+                raise HostError(
+                    f"generation output {name!r} must declare its original ordinal"
+                )
             ordinal = harvested.get("ordinal", index)
             if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
                 raise HostError(
                     f"harvested output {name!r} has invalid ordinal {ordinal!r}"
                 )
             identity = (name, ordinal)
-            if identity in seen_identities:
+            if identity in seen_identities and not is_generation_result:
                 raise HostError(
                     f"harvested output {name!r} repeats ordinal {ordinal}"
                 )
-            seen_identities.add(identity)
             raw_path = harvested.get("path")
             if not isinstance(raw_path, str) or not raw_path:
                 raise HostError(f"harvested output {name!r} has no concrete path")
@@ -2125,19 +3087,150 @@ class GenericPackHost:
             size = path.stat().st_size
             if harvested.get("bytes") != size:
                 raise HostError(f"harvested output {name!r} byte count does not match")
-            role = harvested.get("role", "result")
-            if role not in {"result", "auxiliary"}:
-                raise HostError(f"harvested output {name!r} has invalid role {role!r}")
-            outputs.append({
+            # Settlement output rows intentionally omit host-local paths, but
+            # managed visualization packs need a stable relative name to be
+            # reconstructed after this ephemeral attempt is cleaned up. Keep
+            # that name in the runtime's existing filename field rather than
+            # widening the settlement schema with a new path property.
+            output_root = (attempt / "outputs").resolve()
+            try:
+                relative_filename = path.relative_to(output_root).as_posix()
+            except ValueError:
+                relative_filename = path.name
+            output = {
                 "name": name,
                 "ordinal": ordinal,
                 "artifact_type": getattr(output, "artifact_type", None),
                 "digest": f"sha256:{digest}",
                 "size": size,
                 "path": str(path),
+                "filename": relative_filename,
                 "role": role,
                 "is_primary": bool(harvested.get("is_primary", False)),
-            })
+                **{
+                    field: harvested[field]
+                    for field in (
+                        "producer", "provenance", "durability", "regeneration", "coverage",
+                    )
+                    if field in harvested
+                },
+            }
+
+            existing_index = seen_paths.get(path)
+            if existing_index is not None:
+                existing = outputs[existing_index]
+                existing_priority = (
+                    bool(existing.get("is_primary")),
+                    existing.get("role") == "result",
+                )
+                current_priority = (
+                    bool(output.get("is_primary")),
+                    output.get("role") == "result",
+                )
+                if current_priority == existing_priority:
+                    raise HostError(f"harvested outputs repeat concrete path {path}")
+                if current_priority < existing_priority:
+                    # A manifest directory inventory and an explicit
+                    # manifest_path may name the same concrete file. Publish
+                    # one managed object, retaining the result/primary alias.
+                    continue
+                seen_identities.discard(
+                    (str(existing["name"]), int(existing["ordinal"]))
+                )
+                if all(field in existing for field in ("group_key", "variant_key", "ordinal")):
+                    matched_declarations = {
+                        declaration
+                        for declaration in matched_declarations
+                        if not (
+                            declaration[0] == existing["group_key"]
+                            and declaration[2] == existing["ordinal"]
+                            and declaration[3] == existing["variant_key"]
+                        )
+                    }
+                outputs[existing_index] = output
+            else:
+                seen_paths[path] = len(outputs)
+            seen_identities.add(identity)
+
+            if is_generation_result:
+                ordinal_matches = [
+                    declaration
+                    for declaration in declarations
+                    if declaration["ordinal"] == ordinal
+                ]
+                explicit_fields = (
+                    "output_port", "group_key", "variant_key", "selector"
+                )
+                for field in explicit_fields:
+                    if field not in harvested:
+                        continue
+                    supplied = harvested[field]
+                    if field == "selector":
+                        if not isinstance(supplied, Mapping) or set(supplied) != {"group_key", "variant_key"}:
+                            raise HostError(
+                                f"generation output {name!r} selector metadata must be an object"
+                            )
+                        ordinal_matches = [
+                            declaration
+                            for declaration in ordinal_matches
+                            if declaration["group_key"] == supplied["group_key"]
+                            and declaration["variant_key"] == supplied["variant_key"]
+                        ]
+                    else:
+                        ordinal_matches = [
+                            declaration
+                            for declaration in ordinal_matches
+                            if declaration[field] == supplied
+                        ]
+                if len(ordinal_matches) != 1:
+                    reason = "ambiguous" if len(ordinal_matches) > 1 else "mismatch"
+                    raise HostError(
+                        f"generation output {name!r} ordinal {ordinal} has an unauthorized {reason} binding"
+                    )
+                declaration = ordinal_matches[0]
+                for field in explicit_fields:
+                    if field in harvested and field != "selector" and harvested[field] != declaration[field]:
+                        raise HostError(
+                            f"generation output {name!r} metadata {field!r} disagrees with admitted intent"
+                        )
+                binding_key = (
+                    declaration["group_key"], declaration["selector"],
+                    declaration["ordinal"], declaration["variant_key"],
+                )
+                if binding_key in matched_declarations:
+                    raise HostError(
+                        f"generation output repeats admitted selector {binding_key!r}"
+                    )
+                matched_declarations.add(binding_key)
+                # Runtime validates these values again against the predeclared
+                # effect and derives all generation/variant IDs.
+                output["output_port"] = declaration["output_port"]
+                output["group_key"] = declaration["group_key"]
+                output["variant_key"] = declaration["variant_key"]
+                output["selector"] = {
+                    "group_key": declaration["group_key"],
+                    "variant_key": declaration["variant_key"],
+                }
+            if existing_index is None:
+                outputs.append(output)
+
+        if declarations:
+            missing = [
+                declaration for declaration in declarations
+                if (
+                    declaration["group_key"], declaration["selector"],
+                    declaration["ordinal"], declaration["variant_key"],
+                ) not in matched_declarations
+            ]
+            policy = generation_intent.get("partial_success_policy")
+            if policy == "reject" and missing:
+                raise HostError(
+                    "generation.publish_v1 reject policy is missing declared selectors"
+                )
+            if not matched_declarations:
+                raise HostError(
+                    "generation.publish_v1 produced no successful declared outputs"
+                )
         return outputs
 
     def _child_environment(
@@ -2162,14 +3255,20 @@ class GenericPackHost:
         secrets = {
             name: value
             for name in declared
-            if (value := _resolve_credential_value(self.credential_source, name))
+            if (
+                value := _resolve_credential_value(
+                    self.credential_source,
+                    name,
+                    explicit=self._credential_source_is_explicit,
+                )
+            )
         }
         explicit = dict(explicit_env or {})
         explicit.update({
             name: value
             for name in all_declared
             if name not in declared
-            and (value := _resolve_credential_value(self.credential_source, name))
+            and (value := self.credential_source.get(name))
         })
         # A manifest may set ordinary fixed environment values, but secret
         # values are always sourced by the host and never trusted from YAML.
@@ -2319,7 +3418,18 @@ class GenericPackHost:
             (attempt / "network-evidence.json").write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
             return value
 
-    def _upload_outputs(self, outputs: list[dict[str, Any]], *, project_id: str | None) -> list[dict[str, Any]]:
+    def _upload_outputs(
+        self,
+        outputs: list[dict[str, Any]],
+        *,
+        project_id: str | None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+        lease_id: str | None = None,
+        fence: int | None = None,
+        runtime_epoch: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Publish staged outputs and return settlement-safe object refs."""
         upload_object = getattr(self.client, "upload_object", None)
         if not callable(upload_object):
@@ -2327,14 +3437,24 @@ class GenericPackHost:
                 "runtime client must provide canonical upload_object for output publication"
             )
         uploaded: list[dict[str, Any]] = []
+        seen_filenames: set[str] = set()
         inline = bool(getattr(self.client, "INLINE_SETTLEMENT_OUTPUTS", False))
         for index, descriptor in enumerate(outputs):
             descriptor = dict(descriptor)
             raw_path = descriptor.pop("path", None)
+            staged_filename = descriptor.pop("filename", None)
             if not raw_path:
                 raise HostError("generated output is missing its staged path")
             path = Path(str(raw_path))
-            media_type = str(descriptor.get("artifact_type") or "application/octet-stream")
+            if staged_filename is None:
+                staged_filename = path.name
+            filename = _runtime_output_filename(staged_filename)
+            if filename in seen_filenames:
+                raise HostError(
+                    f"generated outputs collide on managed filename {filename!r}"
+                )
+            seen_filenames.add(filename)
+            media_type = _settlement_media_type({**descriptor, "filename": filename})
             if inline:
                 data = path.read_bytes()
                 descriptor["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
@@ -2342,47 +3462,94 @@ class GenericPackHost:
                 descriptor["size"] = len(data)
                 descriptor["kind"] = "object"
                 descriptor["data_base64"] = base64.b64encode(data).decode("ascii")
-                descriptor.setdefault("ordinal", index)
-                descriptor.setdefault("role", "result")
-                descriptor.setdefault("is_primary", False)
-                uploaded.append({
+                # Result-manifest metadata (ordinal/role/primary) is local
+                # harvest evidence.  Runtime 70872d03 accepts only the
+                # canonical settlement Output fields plus inline bytes.
+                uploaded_row = {
                     key: descriptor[key]
                     for key in (
                         "name",
                         "kind",
+                        "filename",
                         "media_type",
                         "digest",
                         "size",
                         "data_base64",
-                        "ordinal",
-                        "role",
-                        "is_primary",
                     )
                     if key in descriptor
-                })
+                }
+                generation_metadata = (
+                    "output_port", "group_key", "variant_key", "selector"
+                )
+                for field in generation_metadata:
+                    if field in descriptor:
+                        uploaded_row[field] = descriptor[field]
+                if any(field in descriptor for field in generation_metadata) and "ordinal" in descriptor:
+                    uploaded_row["ordinal"] = descriptor["ordinal"]
+                uploaded_row.update(
+                    {
+                        field: descriptor[field]
+                        for field in _SETTLEMENT_OUTPUT_METADATA_FIELDS
+                        if field in descriptor
+                    }
+                )
+                uploaded_row["filename"] = filename
+                uploaded.append(uploaded_row)
                 continue
-            object_row = upload_object(
-                path,
-                project_id=project_id,
-                media_type=media_type,
-                filename=path.name,
-            )
+            upload_kwargs = {
+                "project_id": project_id,
+                "media_type": media_type,
+                "filename": filename,
+            }
+            if all(value is not None for value in (run_id, task_id, attempt_id, lease_id, fence)):
+                upload_kwargs.update(
+                    {
+                        "run_id": run_id,
+                        "task_id": task_id,
+                        "attempt_id": attempt_id,
+                        "lease_id": lease_id,
+                        "fence": fence,
+                        "output_key": str(descriptor.get("name") or ""),
+                        "output_port": str(descriptor.get("output_port") or descriptor.get("name") or ""),
+                    }
+                )
+                if runtime_epoch is not None:
+                    upload_kwargs["runtime_epoch"] = runtime_epoch
+            object_row = upload_object(path, **upload_kwargs)
             digest = getattr(object_row, "digest", None)
             if not digest:
                 raise HostError("generated object upload returned no canonical digest")
-            uploaded.append({
+            uploaded_row = {
                 "name": descriptor.get("name"),
                 "kind": "object",
+                "filename": filename,
                 "media_type": media_type,
                 "digest": digest,
                 "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
-                "ordinal": descriptor.get("ordinal", index),
-                "role": descriptor.get("role", "result"),
-                "is_primary": descriptor.get("is_primary", False),
-            })
+                **{
+                    field: descriptor[field]
+                    for field in (
+                        "output_port", "group_key", "variant_key", "selector",
+                    )
+                    if field in descriptor
+                },
+            }
+            uploaded_row.update(
+                {
+                    field: descriptor[field]
+                    for field in _SETTLEMENT_OUTPUT_METADATA_FIELDS
+                    if field in descriptor
+                }
+            )
+            if any(
+                field in descriptor
+                for field in ("output_port", "group_key", "variant_key", "selector")
+            ) and "ordinal" in descriptor:
+                uploaded_row["ordinal"] = descriptor["ordinal"]
+            uploaded.append(uploaded_row)
         return uploaded
 
-    def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, authority_context: Mapping[str, Any] | None = None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None) -> Any:
+    def _run_command_definition(self, record: CapabilityRecord, inputs: Mapping[str, Any], output_root: Path, attempt: Path, *, cancelled=None, authority_context: Mapping[str, Any] | None = None, admission: Mapping[str, Any] | None = None, network_broker: _NetworkBrokerContext | None = None, storage_estimate: Mapping[str, int] | None = None) -> Any:
         """Run a manifest command without importing Astrid's project authority.
 
         Built-in pipeline steps and command capabilities are both runnable from
@@ -2477,6 +3644,7 @@ class GenericPackHost:
         self._track_process(process)
         try:
             while process.poll() is None:
+                _assert_live_storage_envelope(storage_estimate, attempt, output_root)
                 if cancelled is not None and cancelled():
                     _terminate_process_group(process)
                     raise HostCancelled(f"capability {record.id!r} cancelled")
@@ -2512,6 +3680,8 @@ class GenericPackHost:
                 process_id=process_id,
             )
         finally:
+            if process.poll() is None:
+                _terminate_process_group(process)
             self._untrack_process(process)
             _release_owned_group(process)
             env.clear()
@@ -2528,6 +3698,7 @@ class GenericPackHost:
         definition: Mapping[str, Any] | None = None,
         admission: Mapping[str, Any] | None = None,
         child_env: Mapping[str, str] | None = None,
+        storage_estimate: Mapping[str, int] | None = None,
     ) -> Any:
         """Run one pack capability in a dedicated child process.
 
@@ -2616,6 +3787,7 @@ class GenericPackHost:
         self._track_process(process)
         try:
             while process.poll() is None:
+                _assert_live_storage_envelope(storage_estimate, attempt_path, attempt_path / "outputs")
                 if cancelled is not None and cancelled():
                     _terminate_process_group(process)
                     raise HostCancelled(f"capability {capability_id!r} cancelled")
@@ -2666,6 +3838,8 @@ class GenericPackHost:
                 process_id=process_id,
             )
         finally:
+            if process.poll() is None:
+                _terminate_process_group(process)
             self._untrack_process(process)
             _release_owned_group(process)
             env.clear()
@@ -2774,6 +3948,8 @@ class GenericPackHost:
         keep_attempt: bool = False,
         provider_route_grant: str | None = None,
     ) -> Mapping[str, Any]:
+        if self._cleanup_uncertain:
+            raise HostError("generic host admissions are blocked by cleanup uncertainty")
         if self.client is None:
             raise HostError("runtime client is required to execute a task")
         if self._shutdown.is_set():
@@ -2796,22 +3972,137 @@ class GenericPackHost:
             record = self.capabilities.get(capability_id)
         if record is None:
             raise HostError(f"capability not discovered: {capability_id}")
+
+        def evidence_failure_diagnostic(error: BaseException) -> dict[str, Any] | None:
+            if not isinstance(error, EvidenceCapError):
+                return None
+            raw = getattr(error, "diagnostic", {})
+            diagnostic = dict(raw) if isinstance(raw, Mapping) else {}
+            diagnostic.update(
+                {
+                    "guard": "generated_evidence",
+                    "attempt_id": attempt_id,
+                    "capability_id": capability_id,
+                    "capability_digest": record.capability_digest,
+                    "source_digest": record.source_digest,
+                    "dependency_digest": record.dependency_digest,
+                    "configured_cap_bytes": self.execution_policy.evidence_cap_bytes,
+                }
+            )
+            return diagnostic
+
+        def fail_admission(error: Exception) -> None:
+            """Fence deterministic admission failures as terminal attempts."""
+            try:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    str(error),
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+            except Exception as runtime_exc:
+                raise HostError(
+                    "deterministic admission failure was not recorded by Runtime"
+                ) from runtime_exc
+            raise HostError(str(error)) from error
+
+        if _is_withdrawn(record):
+            fail_admission(
+                HostError(
+                    f"capability {capability_id!r} is {_withdrawn_reason(record)}"
+                )
+            )
         if not record.ready:
             self.preflight(capability_id)
             record = self.capabilities[capability_id]
         if not record.ready:
             raise HostError(f"capability {capability_id!r} is unavailable: {record.preflight}")
+
+        try:
+            _assert_fixed_request_scope(record, task_data)
+            storage_estimate = _task_storage_estimate(task_data)
+            if record.definition.metadata.get("storage_estimate_required"):
+                if storage_estimate is None:
+                    raise HostError(
+                        f"capability {capability_id!r} requires a whole-task storage_estimate"
+                    )
+                expected = {
+                    "scratch_bytes": record.estimated_scratch_bytes,
+                    "output_bytes": record.estimated_output_bytes,
+                }
+                if storage_estimate != expected:
+                    raise HostError(
+                        f"capability {capability_id!r} requires storage_estimate={expected}, "
+                        f"got {storage_estimate}"
+                    )
+            input_size_limits = _storage_input_limits(record.definition.metadata)
+        except Exception as exc:
+            fail_admission(exc)
+        try:
+            self.execution_policy.assert_budget_available()
+        except ExecutionGuardError as exc:
+            self.client.fail(
+                task_id,
+                lease_token,
+                str(exc),
+                retryable=False,
+                attempt_id=attempt_id,
+                fence=fence,
+                failure_diagnostic=evidence_failure_diagnostic(exc),
+            )
+            raise HostError(str(exc)) from exc
         spec = task_data.get("spec", {})
         authorized_input_object_ids = task_data.get("input_object_ids")
+        ephemeral_attempt_root = self.attempt_root is None
         root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
         root.mkdir(parents=True, exist_ok=True)
+        try:
+            scratch_receipt = self.execution_policy.assert_scratch_floor(root)
+        except ExecutionGuardError as exc:
+            fail_error: Exception | None = None
+            try:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    str(exc),
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+            except Exception as runtime_exc:
+                fail_error = runtime_exc
+            finally:
+                if ephemeral_attempt_root:
+                    self._cleanup_ephemeral_attempt_or_latch(root)
+            if fail_error is not None:
+                raise HostError("scratch-floor failure was not recorded by Runtime") from fail_error
+            raise HostError(str(exc)) from exc
+        execution_deadline = self.execution_policy.deadline_from_now()
+        warm_receipt = self.execution_policy.warm_expectation()
+        evidence_receipt: dict[str, Any] | None = None
+        deadline_exceeded = False
         settled = False
         cancelled_attempt = False
         network_broker: _NetworkBrokerContext | None = None
+        pump_stop: threading.Event | None = None
+        pump_thread: threading.Thread | None = None
+        evidence_root: Path | None = None
+        immutable_input_baseline: dict[str, tuple[int, str]] = {}
+        evidence_cap_exceeded = False
+        evidence_failure_receipt: dict[str, Any] | None = None
+        storage_failure_receipt: dict[str, Any] | None = None
+        scratch_floor_breached = False
+        deadline_failed = False
+        storage_receipt: dict[str, int] | None = None
         # Every network attempt gets a fresh host-issued nonce.  It is part of
         # the immutable admission presented to an observable broker, so a
         # handshake captured from another task cannot be replayed.
         network_admission = {
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "fence": fence,
             "capability_digest": record.capability_digest,
             "source_digest": record.source_digest,
             "dependency_digest": record.dependency_digest,
@@ -2822,10 +4113,87 @@ class GenericPackHost:
             "allowed_routes": list((_network_policy(record) or {}).get("allowed_routes", (_network_policy(record) or {}).get("allowed_destinations", ()))),
         }
         cancel_signal = threading.Event()
+        managed_adapter = _ManagedTaskAdapter(
+            cancel_signal,
+            process_census=lambda: bool(self._active_processes),
+        )
+        runtime_instance_id = str(
+            self.runtime_state.get("runtime_instance_id")
+            or self.runtime_state.get("instance_id")
+            or "runtime-local"
+        )
+        runtime_endpoint = str(
+            getattr(self.client, "endpoint", None)
+            or getattr(getattr(self.client, "generated", None), "endpoint", None)
+            or "runtime://local"
+        )
+        managed_binding = SessionBinding(
+            session_id=f"{capability_id}:{task_id}",
+            runtime_instance_id=runtime_instance_id,
+            process_birth_id=process_birth_identity(),
+            endpoint=runtime_endpoint,
+            source_digest=record.source_digest,
+            config_digest=_canonical_digest(
+                {
+                    "capability_digest": record.capability_digest,
+                    "dependency_digest": record.dependency_digest,
+                    "interpreter": str(Path(sys.executable).resolve()),
+                }
+            ),
+        )
+        managed_capability = CapabilityDescriptor(
+            capability_id=capability_id,
+            residency_support="unsupported",
+            resources_claimed=tuple(record.resource_keys),
+            warm_reuse_expected=self.execution_policy.warm_reuse_expected,
+        )
+        readiness_profile = _read_readiness_profile_document()
+        vibe_session = (
+            readiness_profile.get("vibecomfy_session")
+            if isinstance(readiness_profile, Mapping)
+            else None
+        )
+        if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
+            managed_capability = CapabilityDescriptor(
+                capability_id=capability_id,
+                residency_support="observable_releasable",
+                resources_claimed=tuple(record.resource_keys),
+                warm_reuse_expected=self.execution_policy.warm_reuse_expected,
+            )
+            managed_adapter = None
+        managed_token = None
+        managed_settled = False
+        managed_opened = False
+        execution_identity = ""
+        model_id = "vibecomfy.run"
+        template_id = "vibecomfy.run"
 
         def cancelled():
+            nonlocal deadline_exceeded, evidence_cap_exceeded
+            nonlocal evidence_failure_receipt, scratch_floor_breached
+            if self.execution_policy.deadline_expired(execution_deadline):
+                deadline_exceeded = True
+                cancel_signal.set()
+                return True
             if self._shutdown.is_set() or cancel_signal.is_set():
                 return True
+            try:
+                self.execution_policy.assert_scratch_floor(root)
+            except ScratchFloorError:
+                scratch_floor_breached = True
+                cancel_signal.set()
+                return True
+            if evidence_root is not None:
+                try:
+                    self.execution_policy.assert_evidence_cap(
+                        evidence_root,
+                        immutable_inputs=immutable_input_baseline,
+                    )
+                except EvidenceCapError as exc:
+                    evidence_cap_exceeded = True
+                    evidence_failure_receipt = evidence_failure_diagnostic(exc)
+                    cancel_signal.set()
+                    return True
             try:
                 current = self.client.task(task_id)
             except Exception:
@@ -2835,17 +4203,210 @@ class GenericPackHost:
             current_task = current.get("task", current) if isinstance(current, Mapping) else current
             state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
             return state == "cancelled"
+
+        def terminalize_deadline() -> None:
+            """Fence a deadline expiry at Runtime before returning to the worker."""
+            nonlocal deadline_failed
+            try:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    "execution deadline exceeded",
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+                deadline_failed = True
+            except Exception as exc:
+                try:
+                    current = self.client.task(task_id)
+                    current_task = current.get("task", current) if isinstance(current, Mapping) else current
+                    state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
+                except Exception as status_exc:
+                    raise HostError("deadline cancellation could not be verified") from status_exc
+                if state not in {"cancelled", "failed"}:
+                    raise HostError("deadline terminalization was not accepted by Runtime") from exc
+                deadline_failed = state == "failed"
+
+        def handle_guard_abort() -> None:
+            if scratch_floor_breached:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    "scratch free-space floor breached",
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                )
+                raise HostError("scratch free-space floor breached")
+            if evidence_cap_exceeded:
+                self.client.fail(
+                    task_id,
+                    lease_token,
+                    "generated evidence cap exceeded",
+                    retryable=False,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                    failure_diagnostic=evidence_failure_receipt,
+                )
+                raise HostError("generated evidence cap exceeded")
+            if deadline_exceeded:
+                terminalize_deadline()
         try:
+            raw_task_param_ports = record.definition.metadata.get("hc04_param_ports")
+            task_param_ports = (
+                tuple(str(value) for value in raw_task_param_ports)
+                if isinstance(raw_task_param_ports, (list, tuple))
+                else None
+            )
+            raw_cas_param_ports = record.definition.metadata.get("hc04_cas_param_ports")
+            cas_param_ports = (
+                tuple(str(value) for value in raw_cas_param_ports)
+                if isinstance(raw_cas_param_ports, (list, tuple))
+                else None
+            )
+            raw_optional_cas_param_ports = record.definition.metadata.get(
+                "hc04_optional_cas_param_ports"
+            )
+            optional_cas_param_ports = (
+                tuple(str(value) for value in raw_optional_cas_param_ports)
+                if isinstance(raw_optional_cas_param_ports, (list, tuple))
+                else None
+            )
             inputs = self._materialize_inputs(
                 spec,
                 root,
                 authorized_input_object_ids=authorized_input_object_ids,
+                task_param_ports=task_param_ports,
+                cas_param_ports=cas_param_ports,
+                optional_cas_param_ports=optional_cas_param_ports,
+                storage_estimate=storage_estimate,
+                input_size_limits=input_size_limits,
+                storage_policy_version=(
+                    str(record.definition.metadata.get("storage_policy_version"))
+                    if record.definition.metadata.get("storage_policy_version") is not None
+                    else None
+                ),
                 continuation_id=task_id,
                 file_input_names=frozenset(
                     port.name
                     for port in record.definition.inputs
                     if port.type == "file"
                 ),
+            )
+            if record.definition.metadata.get("storage_policy_version") in {
+                "astrid.cloud-i2i.z-image.v1",
+                "astrid.cloud-edit.qwen-source.v1",
+                "astrid.cloud-edit.unified.v1",
+            }:
+                from astrid.core.generation.storage_policy import (
+                    CLOUD_EDIT_STORAGE_POLICY,
+                    CLOUD_I2I_STORAGE_POLICY,
+                    CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
+                    ImageStoragePolicyError,
+                )
+
+                admitted_spec = spec.get("spec") if isinstance(spec, Mapping) else None
+                admitted_params = admitted_spec.get("params") if isinstance(admitted_spec, Mapping) else None
+                descriptor = admitted_params.get("image_ref") if isinstance(admitted_params, Mapping) else None
+                materialized = inputs.get("image_ref")
+                media_type = descriptor.get("media_type") if isinstance(descriptor, Mapping) else None
+                if not isinstance(materialized, str) or not isinstance(media_type, str):
+                    raise HostError("bounded cloud i2i source materialization is incomplete")
+                storage_policy = (
+                    CLOUD_I2I_STORAGE_POLICY
+                    if record.definition.metadata.get("storage_policy_version")
+                    == CLOUD_I2I_STORAGE_POLICY.version
+                    else (
+                        CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+                        if record.definition.metadata.get("storage_policy_version")
+                        == CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version
+                        else CLOUD_EDIT_STORAGE_POLICY
+                    )
+                )
+                try:
+                    if storage_policy is CLOUD_UNIFIED_EDIT_STORAGE_POLICY:
+                        mask_descriptor = admitted_params.get("mask_ref") if isinstance(admitted_params, Mapping) else None
+                        materialized_mask = inputs.get("mask_ref")
+                        mask_media_type = mask_descriptor.get("media_type") if isinstance(mask_descriptor, Mapping) else None
+                        storage_policy.validate_materialized_inputs(
+                            model=str(admitted_params.get("model")),
+                            mode=str(admitted_params.get("mode")),
+                            execution=str(admitted_params.get("execution")),
+                            params={
+                                **dict(admitted_params),
+                                "image_ref": materialized,
+                                "mask_ref": materialized_mask,
+                            },
+                            image_media_type=media_type,
+                            mask_media_type=mask_media_type,
+                        )
+                    else:
+                        storage_policy.validate_materialized_source(
+                            materialized,
+                            media_type=media_type,
+                        )
+                except ImageStoragePolicyError as exc:
+                    raise HostError(str(exc)) from exc
+            _assert_live_storage_envelope(storage_estimate, root, root / "outputs")
+            immutable_input_baseline = {}
+            for input_root in (root / "inputs", root / "managed-objects"):
+                immutable_input_baseline.update(
+                    self.execution_policy.immutable_input_baseline(input_root)
+                )
+            evidence_root = root
+            self.execution_policy.assert_deadline(execution_deadline)
+            if capability_id == "vibecomfy.run":
+                execution_identity, model_id, template_id = (
+                    _prepare_vibecomfy_execution_identity(
+                        inputs,
+                        root / "workflow-identity",
+                        readiness_profile,
+                    )
+                )
+                network_admission["execution_identity"] = execution_identity
+                managed_binding = replace(
+                    managed_binding,
+                    execution_identity=execution_identity,
+                )
+            if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
+                from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
+
+                checkout_adapter = CheckoutServerAdapter.from_host_session(
+                    hc03_profile=readiness_profile,
+                    model_id=model_id,
+                    template_id=template_id,
+                    invocation_identity=f"{task_id}:{attempt_id}:{fence}",
+                )
+                session_id = str(vibe_session.get("session_dir") or "")
+                session_birth = str(vibe_session.get("process_birth_id") or "")
+                session_endpoint = str(vibe_session.get("server_url") or "")
+                session_source = str(vibe_session.get("source_revision") or "")
+                session_config = str(vibe_session.get("config_digest") or "")
+                managed_binding = SessionBinding(
+                    session_id=session_id,
+                    runtime_instance_id=str(
+                        (readiness_profile.get("runtime") or {}).get("runtime_instance_id")
+                        if isinstance(readiness_profile.get("runtime"), Mapping)
+                        else runtime_instance_id
+                    ),
+                    process_birth_id=session_birth,
+                    endpoint=session_endpoint,
+                    source_digest=session_source,
+                    config_digest=session_config,
+                    execution_identity=execution_identity,
+                )
+                managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
+            self.managed_tool_session.open(
+                capability=managed_capability,
+                binding=managed_binding,
+                adapter=managed_adapter,
+            )
+            managed_opened = True
+            self.managed_tool_session.observe(managed_binding)
+            managed_token = self.managed_tool_session.admit(
+                capability_id=capability_id,
+                invocation_id=f"{task_id}:{attempt_id}:{fence}",
             )
             if record.adapter.family == "provider" and record.definition.isolation.network:
                 policy = _network_policy(record)
@@ -2873,6 +4434,7 @@ class GenericPackHost:
             network_broker = self._start_network_broker(record, root, network_admission, inputs)
             output_root = root / "outputs"
             output_root.mkdir(parents=True, exist_ok=True)
+            self.execution_policy.assert_deadline(execution_deadline)
             pump_stop = threading.Event()
             self.client.heartbeat(
                 task_id,
@@ -2925,6 +4487,7 @@ class GenericPackHost:
                         ),
                         admission=network_admission,
                         network_broker=network_broker,
+                        storage_estimate=storage_estimate,
                     )
                 else:
                     # Dispatch through the process boundary.  The immutable
@@ -2951,18 +4514,33 @@ class GenericPackHost:
                             definition=record.definition.to_dict(),
                             admission=worker_admission,
                             child_env=worker_env,
+                            storage_estimate=storage_estimate,
                         )
                     finally:
                         worker_env.clear()
                         worker_secrets.clear()
             finally:
-                pump_stop.set()
+                if pump_stop is not None:
+                    pump_stop.set()
                 if pump_thread is not None:
                     pump_thread.join(timeout=2)
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             harvest_values = {**inputs, "out": str(output_root), "run_root": str(root), "python_exec": sys.executable}
+            try:
+                evidence_receipt = self.execution_policy.assert_evidence_cap(
+                    root,
+                    immutable_inputs=immutable_input_baseline,
+                )
+                self.execution_policy.assert_deadline(execution_deadline)
+            except ExecutionGuardError as exc:
+                if isinstance(exc, EvidenceCapError):
+                    evidence_failure_receipt = evidence_failure_diagnostic(exc)
+                raise HostError(str(exc)) from exc
             try:
                 harvested = harvest_staged_outputs(
                     output_root,
@@ -2973,7 +4551,16 @@ class GenericPackHost:
                 )
             except HarvestError as exc:
                 raise HostError(f"capability {record.id!r}: {exc}") from exc
-            typed_outputs = self._typed_outputs(record, harvested, root)
+            typed_outputs = self._typed_outputs(
+                record,
+                harvested,
+                root,
+                generation_intent=(
+                    task_data.get("generation_intent")
+                    if isinstance(task_data.get("generation_intent"), Mapping)
+                    else None
+                ),
+            )
             publication_result: Mapping[str, Any] | None = None
             if capability_id == "rendering.assemble_timeline":
                 publication_result = self._publish_assembled_timeline(
@@ -3008,13 +4595,42 @@ class GenericPackHost:
                 raise HostError(
                     f"capability {record.id!r} produced no typed settled outputs"
                 )
+            storage_receipt = _task_storage_envelope(task_data, root, typed_outputs)
             project_id = task_data.get("project_id")
             if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
                 raise HostError("runtime task project_id must be a non-empty string or None")
-            outputs = self._upload_outputs(typed_outputs, project_id=project_id) if typed_outputs else []
+            run_id = task_data.get("run_id")
+            runtime_epoch = task_data.get("runtime_epoch")
+            if typed_outputs and getattr(self.client, "REQUIRES_OUTPUT_BINDING", False) and (
+                not isinstance(run_id, str)
+                or not run_id
+                or isinstance(runtime_epoch, bool)
+                or not isinstance(runtime_epoch, int)
+                or runtime_epoch < 1
+            ):
+                raise HostError(
+                    "runtime task output publication requires run_id and runtime_epoch"
+                )
+            outputs = self._upload_outputs(
+                typed_outputs,
+                project_id=project_id,
+                run_id=run_id,
+                task_id=task_id,
+                attempt_id=attempt_id,
+                lease_id=lease_token,
+                fence=fence,
+                runtime_epoch=(
+                    runtime_epoch
+                    if runtime_epoch is not None
+                    else None
+                ),
+            ) if typed_outputs else []
             # Cancellation can arrive while staged outputs are being read or
             # uploaded. Never publish a completed settlement after that point.
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
             # Completion provenance is host-owned.  Keep any backend/B6/model
@@ -3045,6 +4661,30 @@ class GenericPackHost:
             provenance = self.boot_manifest_provenance()
             if provenance is not None:
                 payload["provenance"] = provenance
+            if self.attempt_root is not None:
+                scratch_disposition = "caller_owned_pending"
+                retained_owner = "caller"
+            elif keep_attempt:
+                scratch_disposition = "retention_pending"
+                retained_owner = "generic-pack-host"
+            else:
+                scratch_disposition = "cleanup_pending"
+                retained_owner = "generic-pack-host"
+            payload["execution_guards"] = {
+                "scratch": scratch_receipt,
+                "evidence": evidence_receipt,
+                "deadline_seconds": self.execution_policy.deadline_seconds,
+                "warm_expectation": warm_receipt,
+                "evidence_budget": {
+                    "run_observed_bytes": self.execution_policy.evidence_budget.charged_bytes,
+                    "cap_bytes": self.execution_policy.evidence_cap_bytes,
+                },
+                "scratch_disposition": scratch_disposition,
+                "cleanup_path": str(root),
+                "retained_owner": retained_owner,
+                "retained_bytes": 0,
+                "storage_envelope": storage_receipt,
+            }
             payload["process_evidence"] = _completed_process_evidence(
                 capability_id=capability_id,
                 attempt_id=attempt_id,
@@ -3056,8 +4696,25 @@ class GenericPackHost:
             if isinstance(effect, list):
                 effect = effect[0] if effect else None
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+            # Re-observe the actual engine session after output custody and
+            # immediately before consuming the manager token.  A session
+            # restart or identity change cannot become a Runtime settlement.
+            self.managed_tool_session.observe(managed_binding)
+            managed_envelope = self.managed_tool_session.settle(
+                managed_token,
+                result_evidence={
+                    "generation": managed_token.generation,
+                    "binding_identity": list(managed_token.binding_identity),
+                    "outputs": outputs,
+                },
+            )
+            managed_settled = True
+            payload["managed_tool_session"] = managed_envelope.to_dict()
             settlement = self.client.settle(
                 task_id,
                 lease_token,
@@ -3070,14 +4727,22 @@ class GenericPackHost:
             settled = True
             return settlement
         except HostCancelled:
+            handle_guard_abort()
+            if deadline_failed:
+                return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
             cancelled_attempt = True
             return {"task_id": task_id, "status": "cancelled", "cancelled": True}
         except Exception as exc:
             # A cancellation/lease-loss race must not be turned into a second
             # runtime failure after child work has been contained.
             if cancelled():
+                handle_guard_abort()
+                if deadline_failed:
+                    return {"task_id": task_id, "status": "failed", "deadline_exceeded": True}
                 cancelled_attempt = True
                 return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+            if isinstance(exc, StorageEnvelopeError):
+                storage_failure_receipt = dict(exc.diagnostic)
             self.client.fail(
                 task_id,
                 lease_token,
@@ -3085,13 +4750,113 @@ class GenericPackHost:
                 retryable=False,
                 attempt_id=attempt_id,
                 fence=fence,
+                failure_diagnostic=storage_failure_receipt or evidence_failure_receipt,
             )
             raise
         finally:
+            cleanup_errors: list[str] = []
+            cleanup_receipt: dict[str, Any] = {
+                "path": str(root),
+                "intended_disposition": (
+                    "caller_owned"
+                    if self.attempt_root is not None
+                    else "retained"
+                    if keep_attempt
+                    else "deleted"
+                ),
+                "status": "pending",
+            }
             if network_broker is not None:
-                network_broker.stop()
-            if not keep_attempt and self.attempt_root is None and (settled or cancelled_attempt):
-                shutil.rmtree(root, ignore_errors=True)
+                try:
+                    network_broker.stop()
+                except Exception as exc:
+                    cleanup_errors.append(f"network broker: {exc}")
+            if managed_token is not None and not managed_settled:
+                if deadline_exceeded or cancelled_attempt or cancel_signal.is_set() or self._shutdown.is_set():
+                    try:
+                        self.managed_tool_session.cancel(
+                            managed_token,
+                            outcome="confirmed",
+                        )
+                    except Exception as exc:
+                        cleanup_errors.append(f"managed cancellation: {exc}")
+                        # A missing or stale token is already a fail-closed
+                        # condition; release below preserves the poisoned slot.
+                        try:
+                            self.managed_tool_session.fence(reason="cancel_unconfirmed")
+                        except Exception as fence_exc:
+                            cleanup_errors.append(f"managed fence: {fence_exc}")
+                else:
+                    try:
+                        self.managed_tool_session.fence(reason="task_failed")
+                    except Exception as exc:
+                        cleanup_errors.append(f"managed fence: {exc}")
+            if managed_opened:
+                retain_persistent_session = (
+                    isinstance(managed_adapter, _ManagedVibeSessionAdapter)
+                    and managed_settled
+                    and settled
+                )
+                if not retain_persistent_session:
+                    try:
+                        self.managed_tool_session.release(
+                            reason=(
+                                "task_settled"
+                                if managed_settled
+                                else "task_cancelled"
+                                if cancelled_attempt
+                                else "task_failed"
+                            )
+                        )
+                    except Exception as exc:
+                        cleanup_errors.append(f"managed release: {exc}")
+            if keep_attempt:
+                try:
+                    retained_exists = _strict_root_exists(root)
+                except Exception as exc:
+                    cleanup_errors.append(f"retained observation: {exc}")
+                    retained_exists = False
+                if not retained_exists:
+                    cleanup_errors.append(f"retained attempt disappeared: {root}")
+                else:
+                    try:
+                        retained_bytes = self.execution_policy.evidence_bytes(
+                            root,
+                            immutable_inputs=immutable_input_baseline,
+                        )
+                        cleanup_receipt.update(
+                            {
+                                "status": "retained",
+                                "observed_exists": True,
+                                "bytes": retained_bytes,
+                            }
+                        )
+                    except Exception as exc:
+                        cleanup_errors.append(f"retained evidence: {exc}")
+            elif self.attempt_root is None:
+                try:
+                    self._cleanup_ephemeral_attempt_or_latch(root)
+                    cleanup_receipt.update({"status": "deleted", "observed_absent": True})
+                except Exception as exc:
+                    cleanup_errors.append(f"attempt root: {exc}")
+                    cleanup_receipt.update({"status": "uncertain", "observed_absent": False})
+            else:
+                try:
+                    observed_exists = _strict_root_exists(root)
+                except Exception as exc:
+                    cleanup_errors.append(f"caller-owned observation: {exc}")
+                    observed_exists = False
+                cleanup_receipt.update(
+                    {"status": "caller_owned", "observed_exists": observed_exists}
+                )
+                if not observed_exists:
+                    cleanup_errors.append(f"caller-owned attempt disappeared: {root}")
+            if cleanup_errors:
+                cleanup_receipt.update({"status": "uncertain", "errors": list(cleanup_errors)})
+                self._cleanup_uncertain = True
+            self._last_cleanup_receipt = cleanup_receipt
+            if cleanup_errors:
+                raise HostError("owned cleanup incomplete: " + "; ".join(cleanup_errors))
 
     def cancel_task(
         self,
@@ -3120,6 +4885,8 @@ class GenericPackHost:
 
     def claim_once(self) -> Mapping[str, Any] | None:
         """Claim and execute one queued task through the generated boundary."""
+        if self._cleanup_uncertain:
+            raise HostError("generic host admissions are blocked by cleanup uncertainty")
         if self._shutdown.is_set():
             return None
         claim_next = self._client_operation("claim_next")
@@ -3133,12 +4900,14 @@ class GenericPackHost:
         if not self.capabilities:
             self.discover()
         ready_records = self.preflight()
+        try:
+            self.execution_policy.assert_budget_available()
+        except ExecutionGuardError as exc:
+            raise HostError(str(exc)) from exc
         capability_ids = sorted(
             record.id
             for record in ready_records
-            if record.ready
-            and str(record.matrix.get("disposition", ""))
-            not in {"unsupported", "retired"}
+            if record.ready and not _is_withdrawn(record)
         )
         if not capability_ids:
             return None
@@ -3160,6 +4929,8 @@ class GenericPackHost:
             "input_object_ids": list(getattr(claim, "input_object_ids", ()) or ()),
             "spec": getattr(claim, "spec", None),
             "project_id": getattr(claim, "project_id", None),
+            "expected_effect": getattr(claim, "expected_effect", None),
+            "generation_intent": getattr(claim, "generation_intent", None),
         }
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
@@ -3170,9 +4941,18 @@ class GenericPackHost:
         else:
             task_data = {
                 "id": getattr(task, "task_id", task_id),
+                "run_id": getattr(task, "run_id", None),
                 "capability": getattr(task, "capability_id", ""),
                 "project_id": getattr(task, "project_id", None),
-                "spec": {},
+                "runtime_epoch": getattr(task, "runtime_epoch", claim_data.get("runtime_epoch")),
+                "input_object_ids": list(
+                    getattr(task, "input_object_ids", claim_data.get("input_object_ids", ())) or ()
+                ),
+                "spec": getattr(task, "spec", claim_data.get("spec") or {}),
+                "expected_effect": getattr(task, "expected_effect", claim_data.get("expected_effect")),
+                "generation_intent": getattr(task, "generation_intent", claim_data.get("generation_intent")),
+                "storage_estimate": getattr(task, "storage_estimate", claim_data.get("storage_estimate")),
+                "required_facts": getattr(task, "required_facts", claim_data.get("required_facts")),
             }
         task_data.update(
             {
@@ -3183,6 +4963,8 @@ class GenericPackHost:
         )
         if claim_data.get("project_id") is not None:
             task_data["project_id"] = claim_data["project_id"]
+        if claim_data.get("runtime_epoch") is not None:
+            task_data["runtime_epoch"] = claim_data["runtime_epoch"]
         if claim_data.get("input_object_ids") is not None:
             task_data["input_object_ids"] = claim_data["input_object_ids"]
         # The claim response is the execution snapshot.  Preserve it over
@@ -3191,6 +4973,10 @@ class GenericPackHost:
         # handoff).
         if claim_data.get("spec") is not None:
             task_data["spec"] = claim_data["spec"]
+        if claim_data.get("expected_effect") is not None:
+            task_data["expected_effect"] = claim_data["expected_effect"]
+        if claim_data.get("generation_intent") is not None:
+            task_data["generation_intent"] = claim_data["generation_intent"]
         return self.run_task(
             {"task": task_data},
             lease_token=str(claim_data.get("lease_id") or ""),
@@ -3323,7 +5109,7 @@ def _compose_cli_boot_manifest(
     if args.support_root is None:
         parser.error("generic host requires explicit --support-root")
     try:
-        from astrid.core.integrations.reigh.boot_manifest import (
+        from astrid.core._shared.boot_manifest import (
             load_boot_manifest_hash,
             validate_manifest_path,
         )
@@ -3376,7 +5162,24 @@ def _cli() -> int:
     parser.add_argument("--source-inventory-identity", help="verified managed source inventory identity bound to this host")
     parser.add_argument("--boot-manifest-path", help="existing explicit boot-manifest path")
     parser.add_argument("--boot-manifest-hash", help="expected SHA-256 hash of the boot manifest")
+    parser.add_argument("--readiness-profile-path", help="Worker-published HC-03 readiness profile")
+    parser.add_argument("--readiness-profile-hash", help="expected SHA-256 hash of the readiness profile")
     args = parser.parse_args()
+    if (args.readiness_profile_path is None) != (args.readiness_profile_hash is None):
+        parser.error("--readiness-profile-path and --readiness-profile-hash must be supplied together")
+    if args.readiness_profile_path is not None:
+        readiness_path = Path(args.readiness_profile_path).expanduser()
+        if (
+            not readiness_path.is_absolute()
+            or readiness_path.is_symlink()
+            or not readiness_path.is_file()
+        ):
+            parser.error("--readiness-profile-path must be an absolute non-symlink regular file")
+        actual_readiness_hash = "sha256:" + hashlib.sha256(readiness_path.read_bytes()).hexdigest()
+        if args.readiness_profile_hash != actual_readiness_hash:
+            parser.error("--readiness-profile-hash does not match the readiness profile")
+        os.environ["ASTRID_HOST_READINESS_PROFILE_PATH"] = str(readiness_path)
+        os.environ["ASTRID_HOST_READINESS_PROFILE_HASH"] = actual_readiness_hash
     ready_path = Path(args.ready_file).expanduser() if args.ready_file else None
     if ready_path is not None and (not ready_path.is_absolute() or ready_path.is_symlink()):
         parser.error("--ready-file must be an absolute non-symlink path")

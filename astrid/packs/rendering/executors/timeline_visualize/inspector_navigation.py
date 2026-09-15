@@ -18,9 +18,28 @@ from astrid.core.timeline.duration import clip_end_frame, clip_start_frame
 
 def inspector_scope(snapshot: Mapping) -> dict:
     keys = ('project_slug', 'timeline_id', 'render_run_id', 'video_digest')
-    scope = {key: snapshot[key] for key in keys}
-    if not all(isinstance(value, str) and value for value in scope.values()):
-        raise ValueError('Inspector requires an immutable render identity.')
+    present = {key: snapshot.get(key) not in (None, '') for key in keys}
+    if any(present.values()) and not all(present.values()):
+        raise ValueError('Inspector render identity must be complete when supplied.')
+    if all(present.values()):
+        scope = {key: snapshot[key] for key in keys}
+        if not all(isinstance(value, str) and value for value in scope.values()):
+            raise ValueError('Inspector render identity must contain non-empty strings.')
+        scope['identity_kind'] = 'render'
+    else:
+        if type(snapshot.get('duration_frames')) is not int or snapshot['duration_frames'] < 1:
+            raise ValueError('Stateless inspector scope requires a positive frame extent.')
+        if (not isinstance(snapshot.get('fps_rational'), (list, tuple))
+                or len(snapshot['fps_rational']) != 2):
+            raise ValueError('Stateless inspector scope requires an FPS rational.')
+        scope = {'identity_kind': 'stateless',
+                 'fps_rational': list(snapshot['fps_rational']),
+                 'duration_frames': snapshot['duration_frames']}
+        # These are optional public selectors, not fabricated render ancestry.
+        for key in ('project_slug', 'timeline_id'):
+            value = snapshot.get(key)
+            if isinstance(value, str) and value:
+                scope[key] = value
     scope['scope_id'] = hashlib.sha256(json.dumps(scope, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20]
     scope['fps_rational'] = list(snapshot['fps_rational'])
     scope['duration_frames'] = snapshot['duration_frames']
@@ -38,8 +57,16 @@ def target_for_frame(snapshot: Mapping, frame: int) -> str:
 
 
 def _base(snapshot: Mapping) -> list[str]:
-    return ['python3', '-m', 'astrid', 'timelines', 'visualize', '--project', snapshot['project_slug'],
-        '--timeline-slug', snapshot['timeline_id'], '--view', 'filmstrip', '--render-run', snapshot['render_run_id']]
+    args = ['python3', '-m', 'astrid', 'timelines', 'visualize']
+    if isinstance(snapshot.get('project_slug'), str) and snapshot['project_slug']:
+        args += ['--project', snapshot['project_slug']]
+    if isinstance(snapshot.get('timeline_id'), str) and snapshot['timeline_id']:
+        args += ['--timeline-slug', snapshot['timeline_id']]
+    args += ['--view', 'filmstrip']
+    exact_keys = ('project_slug', 'timeline_id', 'render_run_id', 'video_digest')
+    if all(isinstance(snapshot.get(key), str) and snapshot[key] for key in exact_keys):
+        args += ['--render-run', snapshot['render_run_id']]
+    return args
 
 
 def _seconds(snapshot: Mapping, frame: int) -> str:

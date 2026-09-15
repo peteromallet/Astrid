@@ -393,7 +393,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "request .mov for truthful ProRes 4444 output."
         ),
     )
-    parser.add_argument("--project-dir", type=Path, default=REPO_ROOT / "remotion")
+    # Deployment supplies the server-owned Remotion project through
+    # ASTRID_REMOTION_PROJECT_DIR. Keep the CLI unset by default so the
+    # backend can resolve that supported runtime route instead of pinning the
+    # source checkout's development-only remotion/ directory.
+    parser.add_argument("--project-dir", type=Path, default=None)
     parser.add_argument("--composition", default="TimelineComposition")
     parser.add_argument(
         "--min-free-gb",

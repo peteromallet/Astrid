@@ -78,10 +78,18 @@
   ],
   "outputs": [
     {
-      "name": "run_bundle",
-      "type": "directory",
-      "path_template": "{out}",
-      "description": "Exact prompt, staged references, request record, manifest, and generated video.",
+      "name": "generated_videos",
+      "type": "file",
+      "artifact_type": "video/clip",
+      "description": "Generated H3 video identified by its typed receipt entry.",
+      "mode": "create_or_replace"
+    },
+    {
+      "name": "video_manifest",
+      "type": "file",
+      "path_template": "{out}/manifest.json",
+      "artifact_type": null,
+      "description": "Exact prompt, staged references, request record, and typed generated-video receipt.",
       "mode": "create_or_replace"
     }
   ],

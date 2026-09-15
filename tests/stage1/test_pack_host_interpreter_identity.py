@@ -9,9 +9,10 @@ from urllib.parse import unquote, urlparse
 import pytest
 
 from astrid.core.execution import generic_host
+from astrid.core.generation.vibecomfy_dependency import VIBECOMFY_ENGINE_REVISION
 from astrid.core.gateway.dispatch import compose_profile_handoff
-from astrid.core.integrations.reigh.boot_manifest import load_boot_manifest_hash
 from astrid.sdk import host_bootstrap as bootstrap
+from astrid.core._shared.boot_manifest import load_boot_manifest_hash
 
 
 @pytest.mark.parametrize("source_changed", [False, True])
@@ -46,6 +47,7 @@ def test_bootstrap_reuses_only_the_selected_interpreter(
         "ready_file": str(ready_path), "credential_file": str(worker),
         "support_root": str(support), "source_checkout": str(source),
         "source_checkout_digest": "source-digest", "runtime_instance_id": "instance",
+        "source_inventory_identity": "",
         "runtime_epoch": 1, "schema_digest": "schema", "pid": 101,
         "process_birth_id": "birth",
         "boot_manifest_path": str(boot_manifest),
@@ -129,7 +131,6 @@ def test_pack_host_python_override_must_be_absolute_and_executable(tmp_path, mon
 
 
 def test_selected_pack_host_python_uses_editable_vibecomfy_checkout(tmp_path):
-    expected_checkout = Path(__file__).resolve().parents[3] / "vibecomfy"
     selected_python = bootstrap._pack_host_python_executable()
     probe = (
         "import importlib.metadata as metadata, json, vibecomfy; "
@@ -157,6 +158,172 @@ def test_selected_pack_host_python_uses_editable_vibecomfy_checkout(tmp_path):
     module_file = Path(provenance["module_file"]).resolve()
     direct_url = provenance["direct_url"]
     installed_checkout = Path(unquote(urlparse(direct_url["url"]).path)).resolve()
-    assert module_file == expected_checkout.resolve() / "vibecomfy" / "__init__.py"
-    assert installed_checkout == expected_checkout.resolve()
     assert direct_url["dir_info"].get("editable") is True
+    assert module_file == installed_checkout / "vibecomfy" / "__init__.py"
+    configured_checkout = os.environ.get("ASTRID_VIBECOMFY_CHECKOUT", "").strip()
+    if configured_checkout:
+        assert installed_checkout == Path(configured_checkout).expanduser().resolve()
+
+
+def test_selected_vibecomfy_checkout_survives_generic_host_worker_boundary(
+    tmp_path
+):
+    """Exercise the selected source through GenericPackHost and its worker."""
+    configured_checkout = os.environ.get("ASTRID_VIBECOMFY_CHECKOUT", "").strip()
+    if not configured_checkout:
+        pytest.skip("ASTRID_VIBECOMFY_CHECKOUT is not configured")
+
+    checkout = Path(configured_checkout).expanduser().resolve()
+    source_root = Path(__file__).resolve().parents[2]
+    selected_python = bootstrap._pack_host_python_executable()
+    fixture = (
+        checkout
+        / "tests"
+        / "characterization"
+        / "fixtures"
+        / "agent_edit"
+        / "case_01_widget_set"
+        / "input_ui.json"
+    )
+    assert fixture.is_file()
+    pack_root = tmp_path / "boundary-pack"
+    executor_root = pack_root / "echo"
+    executor_root.mkdir(parents=True)
+    probe = (
+        "import importlib, json; from pathlib import Path; "
+        "import vibecomfy; "
+        "from astrid.packs.vibecomfy.production_engine import "
+        "load_workflow_path, loaded_workflow_execution_identity; "
+        "m=importlib.import_module('vibecomfy.porting.import_service'); "
+        "s=importlib.import_module('vibecomfy.runtime.session'); "
+        "fixture=Path(%r); out=Path('{out}'); "
+        "loaded=load_workflow_path(fixture, out/'child-scratch'); "
+        "payload={'origin':str(Path(vibecomfy.__file__).resolve()), "
+        "'revision':s.current_source_revision(), "
+        "'content_digest':s.current_source_content_digest(), "
+        "'apis':[callable(m.import_workflow_bytes),callable(s.current_source_revision), "
+        "callable(s.current_source_content_digest), "
+        "callable(s._session_composite_ownership_verified)], "
+        "'identity':loaded_workflow_execution_identity(loaded)}; "
+        "(out/'identity.json').write_text(json.dumps(payload,sort_keys=True),encoding='utf-8')"
+        % str(fixture)
+    )
+    (executor_root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "boundary.echo",
+                "name": "Boundary probe",
+                "kind": "external",
+                "version": "1.0",
+                "command": {
+                    "argv": ["{python_exec}", "-c", probe],
+                    # The host owns this checkout; the executor runner adds
+                    # the separately validated VibeComfy root at its boundary.
+                    "env": {"PYTHONPATH": str(source_root)},
+                },
+                "outputs": [
+                    {
+                        "name": "identity",
+                        "type": "file",
+                        "path_template": "{out}/identity.json",
+                        "artifact_type": "application/json",
+                    }
+                ],
+                "metadata": {"resource_keys": ["cpu"], "estimated_scratch_bytes": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    child_env = dict(os.environ)
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        (str(source_root), *bootstrap._dependency_pythonpath())
+    )
+    attempt = tmp_path / "attempt"
+    host_script = """
+import json
+import importlib
+import sys
+from pathlib import Path
+
+from astrid.core.execution.generic_host import GenericPackHost
+from astrid.packs.vibecomfy.production_engine import (
+    load_workflow_path,
+    loaded_workflow_execution_identity,
+)
+from vibecomfy.runtime.session import current_source_content_digest, current_source_revision
+import vibecomfy
+
+import_service = importlib.import_module("vibecomfy.porting.import_service")
+session = importlib.import_module("vibecomfy.runtime.session")
+
+pack_root = Path(sys.argv[1])
+fixture = Path(sys.argv[2])
+attempt = Path(sys.argv[3])
+attempt.mkdir(parents=True, exist_ok=True)
+loaded = load_workflow_path(fixture, attempt / "host-scratch")
+host_payload = {
+    "origin": str(Path(vibecomfy.__file__).resolve()),
+    "revision": current_source_revision(),
+    "content_digest": current_source_content_digest(),
+    "apis": [
+        callable(import_service.import_workflow_bytes),
+        callable(session.current_source_revision),
+        callable(session.current_source_content_digest),
+        callable(session._session_composite_ownership_verified),
+    ],
+    "identity": loaded_workflow_execution_identity(loaded),
+}
+host = GenericPackHost(pack_roots=[pack_root])
+host.discover()
+definition, admission = host.admit("executor", "boundary.echo")
+record = host.capabilities["boundary.echo"]
+env, secrets = host._child_environment(record, attempt)
+try:
+    result = host.invoke_capability(
+        capability_kind="executor",
+        capability_id="boundary.echo",
+        request={
+            "executor_id": "boundary.echo",
+            "project": "boundary-probe",
+            "project_was_auto_resolved": True,
+            "out": str(attempt / "outputs"),
+            "run_root": str(attempt),
+            "inputs": {},
+            "outputs": {},
+        },
+        attempt=attempt,
+        definition=definition,
+        # The worker validates source/version while this fixture deliberately
+        # avoids coupling the test to its ephemeral definition digest.
+        admission={**admission, "capability_digest": ""},
+        child_env=env,
+    )
+finally:
+    env.clear()
+    secrets.clear()
+child_payload = json.loads(
+    (attempt / "outputs" / "identity.json").read_text(encoding="utf-8")
+)
+print(json.dumps({"host": host_payload, "child": child_payload, "ok": result.ok}, sort_keys=True))
+"""
+    host_result = subprocess.run(
+        [selected_python, "-c", host_script, str(pack_root), str(fixture), str(attempt)],
+        cwd=source_root,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert host_result.returncode == 0, host_result.stderr
+    evidence = json.loads(host_result.stdout)
+    host = evidence["host"]
+    executor = evidence["child"]
+    assert evidence["ok"] is True
+    expected_origin = str(checkout / "vibecomfy" / "__init__.py")
+    assert host["origin"] == executor["origin"] == expected_origin
+    assert host["revision"] == executor["revision"] == VIBECOMFY_ENGINE_REVISION
+    assert host["content_digest"] == executor["content_digest"]
+    assert host["content_digest"].startswith("sha256:")
+    assert host["apis"] == executor["apis"] == [True, True, True, True]
+    assert executor["identity"] == host["identity"]

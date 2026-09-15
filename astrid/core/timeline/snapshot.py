@@ -106,7 +106,7 @@ def snapshot_from_runtime(
     adapter; this path never opens a project directory or repairs a sidecar.
     """
     if not isinstance(timeline_id, str) or not timeline_id:
-        raise SnapshotIntegrityError("runtime timeline_id must be a non-empty UUID")
+        raise SnapshotIntegrityError("runtime timeline_id must be a non-empty string")
     if not isinstance(timeline_ulid, str) or _ULID_RE.fullmatch(timeline_ulid) is None:
         raise SnapshotIntegrityError("runtime timeline_ulid must be an uppercase canonical ULID")
     raw_events, parsed_events = _parse_events(list(events))

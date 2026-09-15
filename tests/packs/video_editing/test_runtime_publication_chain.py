@@ -19,6 +19,15 @@ if str(RUNTIME_CHECKOUT) not in sys.path:
     sys.path.insert(0, str(RUNTIME_CHECKOUT))
 
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 
 def _digest(value: str | bytes) -> str:

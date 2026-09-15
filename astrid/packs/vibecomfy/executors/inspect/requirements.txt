@@ -1,1 +1,2 @@
-vibecomfy @ git+https://github.com/peteromallet/VibeComfy.git@054bce5bdc9c63d68ac7e6141063e1f029a70dcb
+# Publish AstridAnon/VibeComfy at this SHA before installing this dependency.
+vibecomfy @ git+https://github.com/AstridAnon/VibeComfy.git@a6a0cdb493c2f8bea4115740b96ec4c118af7ad1

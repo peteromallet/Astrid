@@ -59,7 +59,7 @@ _RESULT_MANIFEST_REL = "manifest.json"
 """The pack's own generation manifest, the single primary output."""
 
 _INTEGER_FIELDS = frozenset({"count", "seed", "timeout", "steps"})
-_FLOAT_FIELDS = frozenset({"strength", "guidance_scale"})
+_FLOAT_FIELDS = frozenset({"strength", "guidance_scale", "upscale_factor", "noise_scale"})
 _OPTIONAL_STRING_FIELDS = frozenset(
     {
         "negative_prompt",
@@ -68,6 +68,8 @@ _OPTIONAL_STRING_FIELDS = frozenset(
         "quality",
         "background",
         "loras",
+        "upscale_mode",
+        "target_resolution",
     }
 )
 _REQUIRED_STRING_FIELDS = ("model", "mode", "execution", "prompt")
@@ -221,10 +223,11 @@ class GenerationInputs:
             "--model", self.model,
             "--mode", self.mode,
             "--execution", self.execution,
-            "--prompt", self.prompt,
             "--count", str(self.count),
             "--out", str(staging_dir),
         ]
+        if self.prompt:
+            argv.extend(["--prompt", self.prompt])
         if self.seed is not None:
             argv.extend(["--seed", str(self.seed)])
         if self.shot_generation_recipe is not None:
@@ -273,7 +276,15 @@ def _decode_inputs(
     model = _require_non_empty_string(spec.get("model"), "model")
     mode = _require_non_empty_string(spec.get("mode"), "mode")
     execution = _require_non_empty_string(spec.get("execution"), "execution")
-    prompt = _require_non_empty_string(spec.get("prompt"), "prompt")
+    raw_prompt = spec.get("prompt", "")
+    if mode == "upscale":
+        if raw_prompt is None:
+            raw_prompt = ""
+        if not isinstance(raw_prompt, str):
+            raise GenerateImageAdapterError("task spec field 'prompt' must be a string")
+        prompt = raw_prompt.strip()
+    else:
+        prompt = _require_non_empty_string(raw_prompt, "prompt")
     count = _coerce_integer(spec.get("count", 1), "count")
     if count < 1:
         raise GenerateImageAdapterError(

@@ -188,6 +188,83 @@ class TestPartialOutputManifestOnLoopFailure:
             # No manifest should be written when zero outputs were produced.
             mock_write.assert_not_called()
 
+    def test_bounded_partial_manifest_is_removed_when_it_exceeds_limit(
+        self, tmp_path: Path,
+    ) -> None:
+        """A failed bounded task never leaves an over-limit partial receipt."""
+        from astrid.core.generation.storage_policy import CLOUD_T2I_STORAGE_POLICY
+        from astrid.packs.generation.executors.generate_image import run as run_mod
+
+        out = tmp_path / "out"
+        (out / "images").mkdir(parents=True)
+        fake_img = out / "images" / "fake_001.png"
+        fake_img.write_bytes(b"fake_png_data")
+
+        mock_entry = MagicMock(id="flux-dev", modality="image")
+        mock_mode_spec = MagicMock(
+            requires=(),
+            supports={"prompt", "negative_prompt", "seed", "count", "size"},
+            backends={"cloud": MagicMock()},
+        )
+        mock_registry = MagicMock()
+        mock_registry.get_by_mode.return_value = (mock_entry, mock_mode_spec)
+        mock_registry.backend_available.return_value = True
+        mock_adapter = MagicMock()
+        mock_adapter.generate.side_effect = [
+            GenerationResult(
+                image_paths=[fake_img],
+                seed_used=42,
+                model_actual="flux-dev",
+            ),
+            ValueError("bounded failure"),
+        ]
+
+        import argparse
+
+        args = argparse.Namespace(
+            model="flux-dev",
+            mode="t2i",
+            prompt="bounded partial proof",
+            count=2,
+            execution="cloud",
+            out=out,
+            prompts_file=None,
+            env_file=None,
+            seed=42,
+            image_ref=None,
+            negative_prompt=None,
+            size="1536x1024",
+            loras=None,
+            strength=None,
+            guidance_scale=None,
+            steps=28,
+            storage_policy_version=CLOUD_T2I_STORAGE_POLICY.version,
+        )
+        real_build_manifest = run_mod.build_generation_manifest
+
+        def oversized_manifest(**kwargs):
+            manifest = real_build_manifest(**kwargs)
+            manifest["padding"] = "x" * CLOUD_T2I_STORAGE_POLICY.manifest_max_bytes
+            return manifest
+
+        with patch(
+            "astrid.packs.generation.executors.generate_image.run.ModelRegistry.load_default",
+            return_value=mock_registry,
+        ), patch(
+            "astrid.packs.generation.executors.generate_image.run."
+            "load_default_generation_backend_registry",
+            return_value=MagicMock(),
+        ), patch(
+            "astrid.packs.generation.executors.generate_image.run._create_backend_adapter",
+            return_value=mock_adapter,
+        ), patch(
+            "astrid.packs.generation.executors.generate_image.run.embed_png_text",
+        ), patch.object(run_mod, "build_generation_manifest", oversized_manifest):
+            with pytest.raises(ValueError, match="bounded failure"):
+                run_mod.generate_core(args)
+
+        assert not (out / "manifest.json").exists()
+
     def test_manifest_content_matches_success_path_equivalent(
         self, tmp_path: Path,
     ) -> None:

@@ -501,6 +501,18 @@ def _durations(model: TimelineInspectionModel) -> dict[str, Any]:
             "frames": model.extents.composition_frames,
             "seconds": model.extents.composition_seconds,
         },
+        "authored_all_track_composition": {
+            "frames": (
+                model.extents.authored_composition_frames
+                if model.extents.authored_composition_frames is not None
+                else model.extents.composition_frames
+            ),
+            "seconds": (
+                model.extents.authored_composition_seconds
+                if model.extents.authored_composition_seconds is not None
+                else model.extents.composition_seconds
+            ),
+        },
     }
 
 
@@ -1570,6 +1582,10 @@ def emit_asset_index(
                 "integrity_state": integrity.state,
                 "expected_sha256": integrity.expected_sha256,
                 "observed_sha256": integrity.observed_sha256,
+                # Runtime-managed media is not represented by a local source
+                # locator. Keep the schema-required provenance slot explicit
+                # and null rather than leaking an ambient filesystem path.
+                "contained_path": None,
             }
         )
     return {
@@ -1992,6 +2008,16 @@ def emit_structure_md(
     occurrences: list[SpeechOccurrence] | None = None,
 ) -> str:
     """Return the factual ``structure.md`` content (breadcrumb + next actions)."""
+    authored_frames = (
+        model.extents.authored_composition_frames
+        if model.extents.authored_composition_frames is not None
+        else model.extents.composition_frames
+    )
+    authored_seconds = (
+        model.extents.authored_composition_seconds
+        if model.extents.authored_composition_seconds is not None
+        else model.extents.composition_seconds
+    )
     lines: list[str] = [
         "# Structure",
         "",
@@ -2008,6 +2034,8 @@ def emit_structure_md(
         f"- fps: {model.fps}",
         f"- composition extent: {model.extents.composition_frames} frames / "
         f"{model.extents.composition_seconds:g} seconds",
+        f"- authored composition extent: {authored_frames} frames / "
+        f"{authored_seconds:g} seconds",
         f"- visual extent: {model.extents.visual_frames} frames / "
         f"{model.extents.visual_seconds:g} seconds",
         f"- audible extent: {model.extents.audible_frames} frames / "

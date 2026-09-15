@@ -315,7 +315,7 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     timeline_slug = parsed.timeline_slug or parsed.timeline_ref
     for name in (
         "layout", "filmstrip", "rendered_video", "shot",
-        "view", "sample", "every", "every_frames", "render_run", "columns", "page_size",
+        "view", "sample", "every", "every_frames", "render_run", "columns", "page_size", "resolution",
         "include_media", "range", "at", "clip", "asset", "context", "neighbors", "from_view",
         "focus",
     ):
@@ -684,6 +684,8 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
                            help="Filmstrip contact sheet columns (default: 5).")
     subparser.add_argument("--page-size", type=int, default=None,
                            help="Filmstrip cards per static page (default: 50).")
+    subparser.add_argument("--resolution", default=None, metavar="WIDTHxHEIGHT",
+                           help="Filmstrip frame resolution, recorded and applied exactly by the executor.")
     subparser.add_argument(
         "--include-media", action="store_true", default=None,
         help="Include a relative, digest-verified rendered video for offline filmstrip playback.",
@@ -693,7 +695,14 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
         "--filmstrip", choices=("auto", "off", "assets", "rendered"), default=None,
         help="Filmstrip policy for visual evidence.",
     )
-    subparser.add_argument("--rendered-video", default=None, help="Optional project-owned rendered video path.")
+    subparser.add_argument(
+        "--rendered-video",
+        default=None,
+        help=(
+            "Legacy structural thumbnail source; not valid with --view filmstrip. "
+            "Use the project-owned managed render selected by --render-run instead."
+        ),
+    )
     subparser.add_argument("--from-view", default=None, help="Prior visualization manifest for frozen navigation.")
     subparser.add_argument("--focus", default=None, help="Qualified object/timestamp focus within --from-view.")
     subparser.add_argument(

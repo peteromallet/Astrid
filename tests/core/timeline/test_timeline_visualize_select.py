@@ -14,6 +14,7 @@ UUID_A = "11111111-2222-4333-8444-555555555555"
 UUID_B = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 ULID_A = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 ULID_B = "01ARZ3NDEKTSV4RRFFQ69G5FB0"
+OPAQUE_ID = "astrid-v1-timeline-full-20260912"
 
 
 class _Runtime:
@@ -71,6 +72,17 @@ def test_runtime_selection_reads_rows_and_honors_default_and_slug() -> None:
     )
     assert diagnostics == []
     assert selected[0].timeline_id == UUID_A
+
+
+def test_runtime_selection_preserves_opaque_timeline_id() -> None:
+    runtime = _Runtime([_row(OPAQUE_ID, ULID_A, "full-fixture")])
+
+    selected, diagnostics = select_kernel_timelines(
+        None, project_slug="demo", slug="full-fixture", runtime_client=runtime
+    )
+
+    assert diagnostics == []
+    assert selected[0].timeline_id == OPAQUE_ID
 
 
 def test_runtime_selection_accepts_public_astrid_client_family_readers() -> None:
@@ -169,3 +181,22 @@ def test_frozen_manifest_selection_is_detached_from_project_tree() -> None:
     assert selected is not None
     assert selected.timeline_dir is None
     assert selected.is_frozen_manifest is True
+
+
+def test_frozen_manifest_selection_accepts_opaque_runtime_timeline_id() -> None:
+    selected = select_from_manifest(
+        {
+            "schema_version": 1,
+            "kind": "timeline_visualize",
+            "timeline": {
+                "stable_id": "TL01",
+                "qualified_ref": "TL01",
+                "uuid": OPAQUE_ID,
+                "ulid": ULID_A,
+                "slug": "full-fixture",
+            },
+        }
+    )
+
+    assert selected is not None
+    assert selected.timeline_id == OPAQUE_ID

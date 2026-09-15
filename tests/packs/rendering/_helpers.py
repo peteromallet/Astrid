@@ -58,10 +58,14 @@ def _runtime_for(slug: str) -> dict[str, Any]:
         if str(runtime_checkout) not in sys.path:
             sys.path.insert(0, str(runtime_checkout))
         from runtime_protocol.daemon import RuntimeDaemon
+        from runtime_protocol.store import RealmStore
         from astrid.sdk.workspace_client import WorkspaceClient
 
+        realm_root = _RUNTIME_STORAGE_ROOT / "realm"
+        if not realm_root.exists():
+            RealmStore.initialize(realm_root).close()
         daemon = RuntimeDaemon(
-            _RUNTIME_STORAGE_ROOT / "realm",
+            realm_root,
             support_root=_RUNTIME_STORAGE_ROOT / "support",
         ).start()
         os.environ["BANODOCO_RUNTIME_ENDPOINT"] = daemon.endpoint

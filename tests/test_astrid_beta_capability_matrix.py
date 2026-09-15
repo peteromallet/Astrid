@@ -10,7 +10,13 @@ from astrid.core.execution.generic_host import GenericPackHost
 def test_beta_matrix_covers_every_discovered_capability_and_declaration():
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])
     records = host.discover()
-    assert len(records) == len(host.matrix) == 59
+    external_contracts = {
+        capability_id
+        for capability_id in host.matrix
+        if capability_id.startswith(("discord_local.", "hivemind.", "seedance_local."))
+    }
+    assert len(records) == 69
+    assert {record.id for record in records} == set(host.matrix) - external_contracts
     assert {record.matrix["disposition"] for record in records} <= {"required", "optional", "unsupported", "retired"}
     for record in records:
         assert record.matrix["evidence_reason"]
@@ -66,6 +72,18 @@ def test_beta_reference_family_preflight_is_truthful_on_this_machine():
     assert local.adapter.family == "local_generation"
     if not local.ready:
         assert local.preflight["packages"]["missing"]
+
+
+def test_bounded_typed_media_is_optional_until_gpu_output_proof():
+    host = GenericPackHost(pack_roots=[Path("astrid/packs")])
+    host.discover()
+    host.preflight()
+
+    for capability_id in ("vibecomfy.video_enhance", "vibecomfy.character_animation"):
+        record = host.capabilities[capability_id]
+        assert record.matrix["disposition"] == "optional"
+        assert "GPU" in record.matrix["evidence_reason"]
+        assert record.adapter.family == "local_generation"
 
 
 def test_provider_ledger_rows_are_networked_and_credential_dispositions_match():

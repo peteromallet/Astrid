@@ -11,6 +11,12 @@ from .exceptions import CapabilityValidationError
 from .pagination import paged_rows
 from .project_render import _SUCCESS_STATES, _identifier, _render_capability, _state
 
+_AUTHORITY_IDENTITY_FIELDS = (
+    'project_id', 'project_slug', 'timeline_id', 'timeline_slug', 'timeline_ulid',
+    'config_version', 'head_event_id', 'head_hash', 'config_hash', 'registry_hash',
+    'materialized_registry_hash',
+)
+
 
 def _fail(message: str) -> None:
     raise CapabilityValidationError(message)
@@ -23,6 +29,44 @@ def _envelope(task: Mapping) -> Mapping:
             return value
         value = value.get('spec', {}) if isinstance(value, Mapping) else {}
     _fail('Render has no immutable input snapshot; rerender the selected timeline.')
+
+
+def _authority(envelope: Mapping) -> Mapping:
+    """Resolve the renderer's frozen authority from both supported envelopes."""
+    inputs = envelope.get('inputs', {})
+    if not isinstance(inputs, Mapping):
+        _fail('Render has malformed frozen inputs; rerender the selected timeline.')
+    legacy = envelope.get('authority_context')
+    canonical = inputs.get('timeline_authority')
+    if legacy is not None and not isinstance(legacy, Mapping):
+        _fail('Render has malformed legacy authority; rerender the selected timeline.')
+    if canonical is not None and not isinstance(canonical, Mapping):
+        _fail('Render has malformed timeline authority; rerender the selected timeline.')
+    if isinstance(legacy, Mapping) and isinstance(canonical, Mapping):
+        for field in _AUTHORITY_IDENTITY_FIELDS:
+            if (legacy.get(field) is not None and canonical.get(field) is not None
+                    and legacy.get(field) != canonical.get(field)):
+                _fail('Render authority sources disagree; rerender the selected timeline.')
+    return legacy or canonical or {}
+
+
+def _timeline_snapshot(envelope: Mapping) -> Mapping:
+    """Resolve the frozen snapshot in legacy and direct-render envelopes."""
+    inputs = envelope.get('inputs', {})
+    if not isinstance(inputs, Mapping):
+        _fail('Render has malformed frozen inputs; rerender the selected timeline.')
+    nested_present = 'timeline_snapshot' in inputs
+    sibling_present = 'timeline_snapshot' in envelope
+    nested = inputs.get('timeline_snapshot')
+    sibling = envelope.get('timeline_snapshot')
+    if nested_present and not isinstance(nested, Mapping):
+        _fail('Render has malformed frozen timeline snapshot; rerender the selected timeline.')
+    if sibling_present and not isinstance(sibling, Mapping):
+        _fail('Render has malformed frozen timeline snapshot; rerender the selected timeline.')
+    if nested_present and sibling_present and nested != sibling:
+        _fail('Render frozen timeline snapshots disagree; rerender the selected timeline.')
+    snapshot = nested if nested_present else sibling if sibling_present else {}
+    return snapshot
 
 
 def _digest(value: Any) -> str:
@@ -62,11 +106,27 @@ def _is_spoken_binding(binding: Mapping) -> bool:
     return kind in {'transcript', 'transcript_text'} and binding.get('spoken') is True
 
 
+def _is_verified_speech_annotation(annotation: Mapping) -> bool:
+    """Allow only frozen speech annotations, never prompt/transcript traps."""
+    source_type = str(annotation.get('source_type') or annotation.get('kind')
+                      or annotation.get('type') or '').strip().lower()
+    if source_type in {'generation_prompt', 'prompt', 'positive_prompt', 'negative_prompt',
+                       'unmarked_transcript', 'unmarked-transcript'}:
+        return False
+    if source_type in {'transcript', 'transcript_text'}:
+        return annotation.get('spoken') is True or annotation.get('verified') is True
+    if source_type in {'verified_speech', 'verified-speech', 'spoken_transcript', 'spoken-transcript'}:
+        return True
+    # Preserve the existing frozen annotation shape when no source classifier
+    # is present; explicit negative markers still cannot enter captions.
+    return annotation.get('spoken') is not False and annotation.get('verified') is not False
+
+
 def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, run_id: str, video_digest: str) -> dict:
     """Pure snapshot mapping except verified reads of pinned immutable text objects."""
     inputs = envelope.get('inputs', {})
-    authority = envelope.get('authority_context') or inputs.get('timeline_authority', {})
-    timeline = inputs.get('timeline_snapshot', {})
+    authority = _authority(envelope)
+    timeline = _timeline_snapshot(envelope)
     config = timeline.get('config', {})
     if not isinstance(config.get('clips'), list) or not authority.get('timeline_id'):
         _fail('Render lacks a frozen canonical timeline; rerender it before visual review.')
@@ -88,63 +148,82 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         clip_end_frame,
         clip_start_frame,
         timeline_duration_frames,
+        timeline_render_duration_frames,
     )
+    authored_duration_frames = timeline_duration_frames(config, float(fps))
+    rendered_duration_frames = timeline_render_duration_frames(config, float(fps))
     clips = []
     for raw in config['clips']:
         clip = deepcopy(dict(raw))
+        # These fields are render-admission provenance, not authored timeline
+        # input.  Do not expose caller-authored/fabricated labels until an
+        # admission-owned occurrence below proves the identity.
+        for key in ('shot_id', 'shot_name', 'occurrence_id', 'occurrence_ids'):
+            clip.pop(key, None)
         clip.update(kind=tracks.get(raw.get('track'), ''), duration=_duration(raw),
             start_frame=clip_start_frame(raw, float(fps)), end_frame=clip_end_frame(raw, float(fps)))
         clips.append(clip)
     # These occurrences were admitted by the renderer from canonical registered
     # shots. Never infer a shot from a filename, ordinal, or current document.
-    # New renders carry an admission-owned occurrence envelope and explicit
-    # identity on every flattened child.  Keep the old review_context path for
-    # legacy renders only; it is intentionally never used to infer identity
-    # when the new fields are present.
-    expansion_occurrences = authority.get('expansion', {}).get('occurrences', [])
-    occurrences = expansion_occurrences or inputs.get('review_context', {}).get('shots', [])
-    explicit_occurrences = bool(expansion_occurrences)
-    frozen_shots = {s['shot_id']: s for s in authority.get('expansion', {}).get('shots', [])}
+    # Only admission-owned flattened occurrences prove a rendered shot
+    # identity.  Legacy review_context entries carry authored timing only and
+    # must never be used to infer a shot label or occurrence by overlap.
+    occurrences = authority.get('expansion', {}).get('occurrences', [])
+    if not isinstance(occurrences, list):
+        occurrences = []
+    frozen_shots = {
+        s['shot_id']: s for s in authority.get('expansion', {}).get('shots', [])
+        if isinstance(s, Mapping) and s.get('shot_id')
+    }
+    verified_text = {}
+
+    def verified_binding_text(binding: Mapping) -> str:
+        """Verify each frozen spoken binding once without projecting identity."""
+        key = binding.get('binding_id') or binding.get('media_id')
+        if key not in verified_text:
+            verified_text[key] = _read_text(client, binding)
+        return verified_text[key]
+
+    # Integrity of a frozen spoken script remains authoritative even when the
+    # render carries no admitted occurrence.  This validates bytes only; it
+    # does not create a shot label, timing, or script projection.
+    for shot in frozen_shots.values():
+        for binding in shot.get('text_bindings', []):
+            if _is_spoken_binding(binding):
+                verified_binding_text(binding)
     scripts = []
     shot_occurrences = []
-    for occurrence_index, occurrence in enumerate(occurrences):
-        shot_id = occurrence.get('shot_id')
-        shot = frozen_shots.get(shot_id)
-        if not shot:
+    for occurrence in occurrences:
+        if not isinstance(occurrence, Mapping):
             continue
-        occurrence_id = occurrence.get('shot_occurrence_id') or f"occurrence-{occurrence_index:04d}-{shot_id}"
+        shot_id = occurrence.get('shot_id')
+        occurrence_id = occurrence.get('shot_occurrence_id')
+        shot = frozen_shots.get(shot_id)
+        if not shot or not occurrence_id:
+            continue
         start_frame = clip_start_frame(occurrence, float(fps))
         end_frame = clip_end_frame(occurrence, float(fps))
+        start_frame = max(0, min(start_frame, authored_duration_frames))
+        end_frame = max(start_frame, min(end_frame, authored_duration_frames))
+        if end_frame <= start_frame:
+            continue
         start = start_frame / float(fps); end = end_frame / float(fps)
         shot_occurrences.append({'occurrence_id': occurrence_id, 'shot_id': shot_id,
             'shot_name': shot['name'], 'start': start, 'end': end,
             'start_frame': start_frame, 'end_frame': end_frame})
-        if explicit_occurrences:
-            # Admission stamped the exact occurrence onto every flattened
-            # payload.  A missing stamp is not silently repaired by timing.
-            for clip in clips:
-                if clip.get('shot_occurrence_id') == occurrence_id:
-                    clip.setdefault('occurrence_ids', []).append(occurrence_id)
-                    clip.update(shot_id=shot_id, shot_name=shot['name'], occurrence_id=occurrence_id)
-        else:
-            active = [c for c in clips if c['start_frame'] < end_frame and c['end_frame'] > start_frame]
-            for clip in active:
-                if clip['start_frame'] >= start_frame and clip['end_frame'] <= end_frame:
-                    clip.setdefault('occurrence_ids', []).append(occurrence_id)
-                    if len(clip['occurrence_ids']) == 1:
-                        clip.update(shot_id=shot_id, shot_name=shot['name'], occurrence_id=occurrence_id)
-                    else:
-                        # Overlapping placements without explicit child identity are
-                        # ambiguous. Retain candidates, never overwrite ownership.
-                        for key in ('shot_id', 'shot_name', 'occurrence_id'):
-                            clip.pop(key, None)
+        # Admission stamped the exact occurrence onto every flattened payload.
+        # A missing stamp is not silently repaired by timing or authored order.
+        for clip in clips:
+            if clip.get('shot_occurrence_id') == occurrence_id:
+                clip.setdefault('occurrence_ids', []).append(occurrence_id)
+                clip.update(shot_id=shot_id, shot_name=shot['name'], occurrence_id=occurrence_id)
         for binding in shot.get('text_bindings', []):
             # Prompt bindings describe how a frame was generated; they are not
             # narration.  The filmstrip is a spoken-word review surface, so
             # never leak positive/negative generation prompts into its cards.
             if not _is_spoken_binding(binding):
                 continue
-            text = _read_text(client, binding)
+            text = verified_binding_text(binding)
             # A canonical shot script is not an aligned audio transcript. Even
             # a single overlapping audio clip could be music: don't invent timing.
             scripts.append({'start': start, 'end': end, 'text': text,
@@ -168,6 +247,9 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
     audio = deepcopy(audio_analysis) if isinstance(audio_analysis, Mapping) else None
     if raw_annotations is not None or audio is not None:
         audio = audio or {}
+        if isinstance(raw_annotations, list):
+            raw_annotations = [annotation for annotation in raw_annotations
+                               if isinstance(annotation, Mapping) and _is_verified_speech_annotation(annotation)]
         audio['speech'] = project_speech_annotations(
             raw_annotations if isinstance(raw_annotations, list) else [],
             raw_occurrences if isinstance(raw_occurrences, list) else [],
@@ -182,10 +264,12 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         'timeline_name': authority.get('timeline_slug', authority['timeline_id']),
         'render_run_id': run_id, 'video_digest': video_digest,
         'fps_rational': [fps.numerator, fps.denominator],
-        'duration_frames': timeline_duration_frames(config, float(fps)),
+        'duration_frames': rendered_duration_frames,
         'clips': clips, 'scripts': scripts, 'occurrences': shot_occurrences,
         'tracks': deepcopy(config.get('tracks', [])),
         'metadata': {'canonical_timeline': deepcopy(authority),
+            'authored_duration_frames': authored_duration_frames,
+            'rendered_duration_frames': rendered_duration_frames,
             'script_timing': 'shot_script',
             'script_mapping_available': bool(occurrences and frozen_shots),
             'script_mapping_note': 'Frozen shot script; no word alignment.' if occurrences and frozen_shots else 'Render did not pin shot placements and scripts; rerender for script labels.'}}
@@ -232,7 +316,7 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
         if len(tasks) != 1:
             continue
         task = tasks[0]; envelope = _envelope(task)
-        authority = envelope.get('authority_context', {})
+        authority = _authority(envelope)
         if timeline_row and authority.get('timeline_id') != _identifier(timeline_row, 'timeline_id', 'id'):
             continue
         selected = (run, task, envelope, authority)
@@ -264,7 +348,16 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
     run_id = _identifier(run, 'id', 'run_id')
     snapshot = build_filmstrip_snapshot(envelope, client=client, project=canonical_project, run_id=run_id, video_digest=digest)
     snapshot['metadata']['selection'] = 'explicit_render' if exact else 'latest_current_render'
+    from .managed_transcript import transcript_input_from_snapshot
+    timeline_snapshot = _timeline_snapshot(envelope)
+    config = timeline_snapshot.get('config', {})
+    registry = timeline_snapshot.get('registry', {})
+    try:
+        transcript_input = transcript_input_from_snapshot(config, registry)
+    except ValueError as exc:
+        _fail(str(exc))
     return {'mode': 'filmstrip', 'filmstrip_snapshot': snapshot,
         'video_object_id': digest, 'video_digest': digest, 'render_run_id': run_id,
         'project_id': project_id, 'timeline_id': authority['timeline_id'],
-        'include_media': bool(inputs.get('include_media', False))}
+        'include_media': bool(inputs.get('include_media', False)),
+        'transcript_input': transcript_input}

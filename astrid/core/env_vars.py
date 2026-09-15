@@ -38,6 +38,9 @@ ASTRID_TIMELINE_SCHEMA_PYTHONPATH = "ASTRID_TIMELINE_SCHEMA_PYTHONPATH"
 """Absolute server-owned Python install root containing
 ``banodoco_timeline_schema`` for Remotion timeline validation."""
 
+ASTRID_VIBECOMFY_CHECKOUT = "ASTRID_VIBECOMFY_CHECKOUT"
+"""Absolute, server-selected VibeComfy checkout at the supported revision."""
+
 # ---------------------------------------------------------------------------
 # Project run context
 # ---------------------------------------------------------------------------
@@ -160,6 +163,7 @@ __all__ = [
     "ASTRID_NODE_EXECUTABLE",
     "ASTRID_REMOTION_PROJECT_DIR",
     "ASTRID_TIMELINE_SCHEMA_PYTHONPATH",
+    "ASTRID_VIBECOMFY_CHECKOUT",
     "ASTRID_STATE_HOME",
     "ASTRID_STRICT_INSTRUCTION_SUBST",
     "ASTRID_TASK_ITEM_ID",

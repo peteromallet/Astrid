@@ -3,8 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
-from astrid.core.execution.generic_host import GenericPackHost
+import pytest
+
+from astrid.core.execution.generic_host import (
+    GenericPackHost,
+    _prepare_vibecomfy_execution_identity,
+)
+from astrid.packs.vibecomfy import production_engine
+from astrid.packs.vibecomfy.executors._bundle_inputs import staged_workflow_path
 from tests.test_generic_host import FakeRuntime
 
 
@@ -74,6 +82,62 @@ def test_materialization_does_not_treat_revision_hash_as_file_digest(
     assert Path(values["python"]).read_bytes() == source_bytes
     assert values["parent_revision"] == revision_id
     assert runtime.fetched_inputs == [source_digest]
+
+
+def test_host_child_rejects_modified_canonical_member_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = {
+        "python": tmp_path / "workflow.py",
+        "companion": tmp_path / "workflow.vibe.json",
+        "source": tmp_path / "source.json",
+    }
+    members["python"].write_bytes(b"workflow = load('fixture')\n")
+    members["companion"].write_bytes(b'{"revision_id":"rev-1"}\n')
+    members["source"].write_bytes(b'{"nodes":[],"links":[]}\n')
+
+    def fake_loader(path, _scratch, **_kwargs):
+        return production_engine.LoadedWorkflow(
+            resolved=object(),
+            model_id="vibecomfy",
+            template_id="fixture-workflow",
+            workflow_identity="fixture-workflow",
+            workflow_revision="rev-1",
+            workflow_content_digest=production_engine._workflow_content_digest(
+                Path(path)
+            ),
+        )
+
+    monkeypatch.setattr(production_engine, "load_workflow_path", fake_loader)
+    inputs = {"workflow": "", **members}
+    host_identity, model_id, template_id = _prepare_vibecomfy_execution_identity(
+        inputs,
+        tmp_path / "host-attempt",
+        None,
+    )
+    assert (model_id, template_id) == ("vibecomfy", "fixture-workflow")
+
+    members["source"].write_bytes(b'{"nodes":[{"id":1}],"links":[]}\n')
+    launch = Mock()
+    monkeypatch.setattr(production_engine, "_run_profile", launch)
+    with staged_workflow_path(
+        workflow=None,
+        python=members["python"],
+        companion=members["companion"],
+        source=members["source"],
+        scratch=tmp_path / "child-attempt",
+    ) as (workflow_path, _authority):
+        with pytest.raises(
+            production_engine.ProductionEngineError,
+            match="execution identity changed before launch",
+        ):
+            production_engine.run_workflow_path(
+                workflow_path,
+                tmp_path / "child-attempt" / "outputs",
+                task_identity="task-1",
+                expected_execution_identity=host_identity,
+            )
+    launch.assert_not_called()
 
 
 def test_generic_host_materializes_named_sibling_inputs_and_settles_four_outputs(

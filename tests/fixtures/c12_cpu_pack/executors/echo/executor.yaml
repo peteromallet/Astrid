@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "c12_cpu.echo",
+  "name": "C12 CPU Echo",
+  "kind": "external",
+  "version": "1.0",
+  "command": {
+    "argv": [
+      "{python_exec}",
+      "-c",
+      "from pathlib import Path; Path('{out}/answer.txt').write_text('c12-runtime-output', encoding='utf-8')"
+    ]
+  },
+  "outputs": [
+    {
+      "name": "answer",
+      "type": "file",
+      "path_template": "{out}/answer.txt",
+      "artifact_type": "text/plain"
+    }
+  ],
+  "metadata": {
+    "resource_keys": ["cpu"]
+  }
+}

@@ -160,6 +160,17 @@ def test_root_id_map_rejects_kind_and_timeline_allocation_conflicts() -> None:
         root.add((TIMELINE_UUID, "clip", "two"), "TL02.CL02")
 
 
+def test_root_id_map_preserves_opaque_runtime_timeline_id() -> None:
+    timeline_id = "astrid-v1-timeline-full-20260912"
+    root = RootIdMap()
+
+    root.add((timeline_id, "timeline", timeline_id), "TL01")
+    root.add((timeline_id, "clip", "clip-1"), "TL01.CL01")
+
+    assert root.lookup((timeline_id, "timeline", timeline_id)) == "TL01"
+    assert root.lookup((timeline_id, "clip", "clip-1")) == "TL01.CL01"
+
+
 def _snapshot(**overrides: object) -> dict[str, object]:
     snapshot: dict[str, object] = {
         "schema_version": 1,
@@ -237,6 +248,14 @@ def test_sha256_bytes_is_bare_lowercase_hex() -> None:
     assert sha256_bytes(b"abc") == (
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )
+
+
+def test_sns_digest_preserves_opaque_runtime_timeline_id() -> None:
+    fields = _snapshot(timeline_uuid="astrid-v1-timeline-full-20260912")
+    digest = sns_digest(fields)
+
+    assert digest.startswith("SNS:")
+    assert fields["timeline_uuid"] == "astrid-v1-timeline-full-20260912"
 
 
 def test_sns_rejects_unrecognized_identity_fields_instead_of_silently_omitting_them() -> None:

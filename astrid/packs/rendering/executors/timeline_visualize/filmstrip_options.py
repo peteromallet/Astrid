@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Mapping
 
 
@@ -27,6 +28,26 @@ def seconds(value: Any) -> float:
     return result
 
 
+def resolution(value: Any) -> list[int] | None:
+    """Normalize an optional exact thumbnail resolution the executor consumes."""
+    if value in (None, ''):
+        return None
+    if isinstance(value, str):
+        match = re.fullmatch(r'([1-9][0-9]*)x([1-9][0-9]*)', value.strip().lower())
+        if not match:
+            raise ValueError('resolution must be WIDTHxHEIGHT')
+        width, height = (int(part) for part in match.groups())
+    elif isinstance(value, (list, tuple)) and len(value) == 2:
+        width, height = value
+        if type(width) is not int or type(height) is not int:
+            raise ValueError('resolution must be WIDTHxHEIGHT')
+    else:
+        raise ValueError('resolution must be WIDTHxHEIGHT')
+    if not 16 <= width <= 4096 or not 16 <= height <= 4096:
+        raise ValueError('resolution dimensions must be between 16 and 4096')
+    return [width, height]
+
+
 def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize only public controls; never accept an unbounded sampling job."""
     sample = values.get('sample') or 'interval'
@@ -42,8 +63,11 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError('every must be a finite positive number of seconds')
     if sample != 'interval' and (every is not None or frames is not None):
         raise ValueError('every/every_frames apply only to sample=interval')
-    result: dict[str, Any] = {'sample': sample, 'every': every if every is not None else (None if frames else 0.5),
-                              'every_frames': frames, 'max_frames': 2000,
+    normalized_every = every if every is not None else (None if frames else 0.5)
+    density = ({'mode': 'every_frames', 'value': frames}
+               if frames is not None else {'mode': 'every_seconds', 'value': normalized_every})
+    result: dict[str, Any] = {'sample': sample, 'every': normalized_every,
+                              'every_frames': frames, 'density': density, 'max_frames': 2000,
                               'include_media': bool(values.get('include_media', False))}
     for name, default, maximum in [('columns', 5, 8), ('page_size', 50, 100)]:
         n = values.get(name, default)
@@ -66,6 +90,15 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
         result['range'] = [start, end]
     if at is not None:
         result['at'] = seconds(at)
+    result.setdefault('range', None)
+    result.setdefault('at', None)
+    result['resolution'] = resolution(values.get('resolution'))
+    result['request'] = {
+        'range': result['range'],
+        'at': result['at'],
+        'density': density,
+        'resolution': result['resolution'],
+    }
     context = values.get('context', 3.0)
     result['context'] = seconds(3.0 if context is None else context)
     if at is not None and result['context'] <= 0:

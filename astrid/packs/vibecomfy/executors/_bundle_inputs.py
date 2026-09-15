@@ -20,6 +20,7 @@ def staged_workflow_path(
     python: str | Path | None,
     companion: str | Path | None,
     source: str | Path | None,
+    scratch: str | Path | None = None,
 ) -> Iterator[tuple[Path, str]]:
     """Yield one workflow path and authority label, staging canonical siblings.
 
@@ -55,7 +56,16 @@ def staged_workflow_path(
             "canonical bundle member is missing or unreadable: " + ", ".join(missing)
         )
 
-    staging = Path(tempfile.mkdtemp(prefix="astrid-vibecomfy-bundle-"))
+    scratch_root = None
+    if scratch is not None:
+        scratch_root = Path(scratch).expanduser().resolve()
+        scratch_root.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix="astrid-vibecomfy-bundle-",
+            dir=scratch_root,
+        )
+    )
     try:
         staged_python = staging / "workflow.py"
         staged_companion = staging / "workflow.vibe.json"

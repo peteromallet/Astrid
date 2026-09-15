@@ -72,7 +72,7 @@
   "name": "Generate Image (OpenAI)",
   "outputs": [
     {
-      "description": "Generated image files identified by receipt entries.",
+      "description": "Generated image files identified by typed receipt entries.",
       "mode": "create_or_replace",
       "name": "generated_images",
       "type": "file",

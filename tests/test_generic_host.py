@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from astrid.core.execution import process_group
+from astrid.core.execution.guards import ExecutionGuardPolicy
 from astrid.core.execution.generic_host import (
     AdapterRegistry,
     GenericPackHost,
@@ -20,9 +21,24 @@ from astrid.core.execution.generic_host import (
     HostError,
     HostRegistrationError,
     RuntimeProtocolClient,
+    _assert_live_storage_envelope,
+    _attempt_tree_bytes,
     _completed_process_evidence,
+    _storage_tree_bytes,
+    _task_storage_envelope,
     _terminate_process_group,
 )
+
+
+@pytest.fixture(autouse=True)
+def _small_fixture_scratch_floor(monkeypatch):
+    # These CPU fixtures write tiny files. Keep them independent of the
+    # workstation's free space; test_execution_guards covers the production
+    # floor and low-space rejection explicitly.
+    monkeypatch.setattr(
+        "astrid.core.execution.generic_host.ExecutionGuardPolicy",
+        lambda: ExecutionGuardPolicy(scratch_floor_bytes=1),
+    )
 
 
 class FakeRuntime:
@@ -31,6 +47,7 @@ class FakeRuntime:
     def __init__(self):
         self.registrations = []
         self.settlements = []
+        self.uploaded_objects = {}
         self.failures = []
         self.heartbeats = []
         self.capability_registrations = []
@@ -70,9 +87,16 @@ class FakeRuntime:
 
     def upload_object(self, path, *, project_id, media_type, filename=None):
         data = Path(path).read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        self.uploaded_objects[digest] = {
+            "data": data,
+            "filename": filename,
+            "project_id": project_id,
+            "media_type": media_type,
+        }
         return SimpleNamespace(
-            object_id=f"object-{hashlib.sha256(data).hexdigest()[:12]}",
-            digest=hashlib.sha256(data).hexdigest(),
+            object_id=f"object-{digest[:12]}",
+            digest=digest,
             size=len(data),
             media_type=media_type,
             filename=filename,
@@ -86,6 +110,42 @@ class FakeRuntime:
             status="unavailable",
             unavailable_reason=reason,
         )
+
+
+def test_runtime_failure_preserves_structured_guard_diagnostic() -> None:
+    class Generated:
+        def health(self):
+            return {"runtime_epoch": 7}
+
+        def fail_attempt(self, attempt_id, **kwargs):
+            self.failure = (attempt_id, kwargs)
+            return {"status": "failed"}
+
+    generated = Generated()
+    client = object.__new__(RuntimeProtocolClient)
+    client.generated = generated
+    client._runtime_epoch = None
+
+    client.fail(
+        "task-1",
+        "lease-1",
+        "generated evidence cap exceeded",
+        attempt_id="attempt-1",
+        fence=3,
+        failure_diagnostic={
+            "guard": "generated_evidence",
+            "category": "run_budget_exceeded",
+            "capability_id": "rendering.render",
+            "source_digest": "source-digest",
+            "observed_bytes": 12,
+            "configured_cap_bytes": 10,
+        },
+    )
+
+    attempt_id, kwargs = generated.failure
+    assert attempt_id == "attempt-1"
+    assert kwargs["error"]["diagnostic"]["category"] == "run_budget_exceeded"
+    assert kwargs["error"]["diagnostic"]["source_digest"] == "source-digest"
 
 
 def _write_manifest(
@@ -195,6 +255,90 @@ def test_child_environment_carries_explicit_runtime_connection(tmp_path):
         secrets.clear()
 
 
+def _write_credential_manifest(root: Path) -> None:
+    (root / "pack.yaml").write_text(
+        "schema_version: 1\nid: credential_test\nname: Credential Test\n"
+        "version: 1.0\ncontent:\n  executors: executors\n",
+        encoding="utf-8",
+    )
+    executor_root = root / "executors" / "credential_echo"
+    executor_root.mkdir(parents=True)
+    (executor_root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "credential_test.echo",
+                "name": "Credential Echo",
+                "kind": "external",
+                "version": "1.0",
+                "command": {"argv": ["{python_exec}", "-c", "pass"]},
+                "outputs": [],
+                "isolation": {
+                    "mode": "subprocess",
+                    "network": False,
+                    "secrets_required": ["FAL_KEY"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_manifest_credentials_use_shared_precedence_at_host_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Readiness and injection agree on shared-file precedence and scope."""
+    _write_credential_manifest(tmp_path)
+    shared = tmp_path / "astrid.env"
+    shared.write_text("FAL_KEY=from-shared\nUNRELATED_SECRET=must-not-cross\n", encoding="utf-8")
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(shared))
+    monkeypatch.setenv("FAL_KEY", "stale-process")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-process")
+
+    host = GenericPackHost(pack_roots=[tmp_path], credential_source={})
+    record = host.discover()[0]
+    host.preflight(record.id)
+    record = host.capabilities[record.id]
+    assert record.preflight["credentials"] == {"ok": True, "missing": []}
+
+    child_env, secrets = host._child_environment(record, tmp_path / "attempt")
+    try:
+        assert child_env["FAL_KEY"] == "from-shared"
+        assert child_env.get("OPENAI_API_KEY") is None
+        assert child_env.get("UNRELATED_SECRET") is None
+    finally:
+        child_env.clear()
+        secrets.clear()
+
+    explicit_host = GenericPackHost(
+        pack_roots=[tmp_path], credential_source={"FAL_KEY": "from-explicit"}
+    )
+    explicit_record = explicit_host.discover()[0]
+    explicit_host.preflight(explicit_record.id)
+    explicit_record = explicit_host.capabilities[explicit_record.id]
+    child_env, secrets = explicit_host._child_environment(
+        explicit_record, tmp_path / "explicit-attempt"
+    )
+    try:
+        assert child_env["FAL_KEY"] == "from-explicit"
+    finally:
+        child_env.clear()
+        secrets.clear()
+
+
+def test_manifest_credential_missing_from_all_sources_blocks_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_credential_manifest(tmp_path)
+    monkeypatch.setenv("ASTRID_ENV_FILE", str(tmp_path / "missing.env"))
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    host = GenericPackHost(pack_roots=[tmp_path], credential_source={})
+    record = host.discover()[0]
+    host.preflight(record.id)
+    record = host.capabilities[record.id]
+    assert record.preflight["credentials"] == {"ok": False, "missing": ["FAL_KEY"]}
+
+
 def test_input_materialization_rejects_traversal_names(tmp_path):
     _write_manifest(tmp_path / "echo")
 
@@ -216,6 +360,356 @@ def test_input_materialization_rejects_traversal_names(tmp_path):
             },
             tmp_path / "attempt",
         )
+
+
+def test_hc04_params_bind_only_definition_declared_ports(tmp_path):
+    host = GenericPackHost(pack_roots=[tmp_path])
+    bound = host._materialize_inputs(
+        {
+            "input_object_ids": [],
+            "spec": {
+                "family": "generation.generate_image",
+                "params": {"prompt": "a lighthouse", "model": "z-image"},
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt",
+        task_param_ports=("prompt", "model"),
+    )
+    assert bound["prompt"] == "a lighthouse"
+    assert bound["model"] == "z-image"
+
+    with pytest.raises(HostError, match="undeclared parameter"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [],
+                "spec": {
+                    "family": "generation.generate_image",
+                    "params": {"prompt": "a lighthouse", "unknown": True},
+                    "output_policy": {},
+                },
+            },
+            tmp_path / "attempt-unknown",
+            task_param_ports=("prompt",),
+        )
+
+
+def test_input_materialization_preserves_exact_length_ordinary_path(tmp_path):
+    """A 64-character non-hex path is an executor value, not a CAS digest."""
+    marker = Path("/tmp") / ("control-marker-" + "x" * 44)
+    assert len(str(marker)) == 64
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            raise AssertionError(f"ordinary path was fetched as {object_digest!r}")
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [],
+            "spec": {"inputs": {"control_marker": str(marker)}},
+        },
+        tmp_path / "attempt-exact-marker",
+    )
+
+    assert values["control_marker"] == str(marker)
+
+
+def test_hc04_cas_param_materializes_authorized_image_reference(tmp_path):
+    payload = b"source-image"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            assert object_digest == digest
+            return payload
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [f"sha256:{digest}"],
+            "spec": {
+                "family": "generation.generate_image",
+                "params": {
+                    "mode": "i2i",
+                    "image_ref": {
+                        "digest": f"sha256:{digest}",
+                        "filename": "source.jpg",
+                    },
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt",
+        task_param_ports=("mode", "image_ref"),
+        cas_param_ports=("image_ref",),
+    )
+    staged = Path(values["image_ref"])
+    assert staged == tmp_path / "attempt" / "inputs" / "source.jpg"
+    assert staged.read_bytes() == payload
+
+
+def test_hc04_multi_cas_materialization_preserves_role_order_and_names(tmp_path):
+    image = b"character-image"
+    video = b"driving-video"
+    image_digest = hashlib.sha256(image).hexdigest()
+    video_digest = hashlib.sha256(video).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            return {image_digest: image, video_digest: video}[object_digest]
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [image_digest, video_digest],
+            "spec": {
+                "family": "vibecomfy.character_animation",
+                "params": {
+                    "reference_image_ref": {"digest": image_digest, "filename": "source.bin"},
+                    "driving_video_ref": {"digest": video_digest, "filename": "source.bin"},
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-ordered",
+        task_param_ports=("reference_image_ref", "driving_video_ref"),
+        cas_param_ports=("reference_image_ref", "driving_video_ref"),
+    )
+    image_path = Path(values["reference_image_ref"])
+    video_path = Path(values["driving_video_ref"])
+    assert image_path.name == "reference_image_ref--source.bin"
+    assert video_path.name == "driving_video_ref--source.bin"
+    assert image_path.read_bytes() == image
+    assert video_path.read_bytes() == video
+
+    with pytest.raises(HostError, match="ordered input_object_ids\\[0\\]"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [video_digest, image_digest],
+                "spec": {
+                    "family": "vibecomfy.character_animation",
+                    "params": {
+                        "reference_image_ref": {"digest": image_digest, "filename": "source.png"},
+                        "driving_video_ref": {"digest": video_digest, "filename": "source.mp4"},
+                    },
+                    "output_policy": {},
+                },
+            },
+            tmp_path / "attempt-swapped",
+            task_param_ports=("reference_image_ref", "driving_video_ref"),
+            cas_param_ports=("reference_image_ref", "driving_video_ref"),
+        )
+
+
+def test_hc04_optional_video_end_frame_preserves_ordered_flf_roles(tmp_path):
+    start = b"start-image"
+    end = b"end-image"
+    start_digest = hashlib.sha256(start).hexdigest()
+    end_digest = hashlib.sha256(end).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            return {start_digest: start, end_digest: end}[object_digest]
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [start_digest, end_digest],
+            "spec": {
+                "family": "generation.generate_video",
+                "params": {
+                    "mode": "flf",
+                    "image_ref": {"digest": start_digest, "filename": "start.png"},
+                    "image_end_ref": {"digest": end_digest, "filename": "end.png"},
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-flf",
+        task_param_ports=("mode", "image_ref", "image_end_ref"),
+        cas_param_ports=("image_ref", "image_end_ref"),
+        optional_cas_param_ports=("image_end_ref",),
+    )
+    assert Path(values["image_ref"]).read_bytes() == start
+    assert Path(values["image_end_ref"]).read_bytes() == end
+
+    i2v_values = host._materialize_inputs(
+        {
+            "input_object_ids": [start_digest],
+            "spec": {
+                "family": "generation.generate_video",
+                "params": {
+                    "mode": "i2v",
+                    "image_ref": {"digest": start_digest, "filename": "start.png"},
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-i2v",
+        task_param_ports=("mode", "image_ref", "image_end_ref"),
+        cas_param_ports=("image_ref", "image_end_ref"),
+        optional_cas_param_ports=("image_end_ref",),
+    )
+    assert Path(i2v_values["image_ref"]).read_bytes() == start
+    assert "image_end_ref" not in i2v_values
+
+
+def test_hc04_cas_materialization_enforces_declared_size_before_write(tmp_path):
+    payload = b"source-image"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            assert object_digest == digest
+            return payload
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    with pytest.raises(HostError, match="exceeding bounded materialization limit"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [digest],
+                "spec": {
+                    "inputs": {},
+                    "params": {
+                        "image_ref": {
+                            "digest": digest,
+                            "filename": "source.png",
+                            "media_type": "image/png",
+                        }
+                    },
+                },
+            },
+            tmp_path / "attempt-limit",
+            authorized_input_object_ids=[digest],
+            task_param_ports=("image_ref",),
+            cas_param_ports=("image_ref",),
+            storage_estimate={"scratch_bytes": 1024, "output_bytes": 0},
+            input_size_limits={"image_ref": 3},
+        )
+    assert not (tmp_path / "attempt-limit" / "inputs" / "source.png").exists()
+
+    with pytest.raises(HostError, match="CAS parameter 'image_ref'"):
+        host._materialize_inputs(
+            {
+                "input_object_ids": [f"sha256:{digest}"],
+                "spec": {
+                    "family": "generation.generate_image",
+                    "params": {"image_ref": "https://example.test/source.png"},
+                    "output_policy": {},
+                },
+            },
+            tmp_path / "attempt-url",
+            task_param_ports=("image_ref",),
+            cas_param_ports=("image_ref",),
+        )
+
+
+def test_bounded_qwen_admission_rejects_legacy_media_authority(tmp_path):
+    digest = "a" * 64
+    host = GenericPackHost(pack_roots=[tmp_path])
+    params = {
+        "model": "qwen-image-edit-2511",
+        "mode": "edit",
+        "execution": "cloud",
+        "prompt": "a" * 64,
+        "count": 1,
+        "size": "1024x1024",
+        "seed": 19,
+        "image_ref": {
+            "digest": digest,
+            "filename": "source.png",
+            "media_type": "image/png",
+        },
+    }
+    base = {
+        "input_object_ids": [digest],
+        "spec": {
+            "family": "generation.generate_image_edit",
+            "params": params,
+            "output_policy": {},
+        },
+    }
+    with pytest.raises(HostError, match="legacy spec.inputs authority"):
+        host._materialize_inputs(
+            {
+                **base,
+                "spec": {
+                    **base["spec"],
+                    "inputs": {"image_ref": {"digest": digest}},
+                },
+            },
+            tmp_path / "attempt-qwen-legacy-input",
+            authorized_input_object_ids=[digest],
+            task_param_ports=("model", "mode", "execution", "prompt", "image_ref", "count", "size", "seed"),
+            cas_param_ports=("image_ref",),
+            storage_policy_version="astrid.cloud-edit.qwen-source.v1",
+        )
+    with pytest.raises(HostError, match="legacy input_digests authority"):
+        host._materialize_inputs(
+            {
+                **base,
+                "spec": {
+                    **base["spec"],
+                    "input_digests": [{"name": "image_ref", "digest": digest}],
+                },
+            },
+            tmp_path / "attempt-qwen-legacy-digests",
+            authorized_input_object_ids=[digest],
+            task_param_ports=("model", "mode", "execution", "prompt", "image_ref", "count", "size", "seed"),
+            cas_param_ports=("image_ref",),
+            storage_policy_version="astrid.cloud-edit.qwen-source.v1",
+        )
+
+
+def test_unified_edit_materialization_allows_optional_mask_for_source_profile(tmp_path):
+    payload = b"source-image"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Objects(FakeRuntime):
+        def get_object(self, object_digest):
+            assert object_digest == digest
+            return payload
+
+    host = GenericPackHost(pack_roots=[tmp_path], client=Objects())
+    values = host._materialize_inputs(
+        {
+            "input_object_ids": [digest],
+            "spec": {
+                "family": "generation.generate_image_edit",
+                "params": {
+                    "model": "qwen-image-edit-2511",
+                    "mode": "edit",
+                    "execution": "cloud",
+                    "prompt": "source edit",
+                    "count": 1,
+                    "size": "1024x1024",
+                    "image_ref": {
+                        "digest": digest,
+                        "filename": "source.png",
+                        "media_type": "image/png",
+                    },
+                },
+                "output_policy": {},
+            },
+        },
+        tmp_path / "attempt-unified-source",
+        authorized_input_object_ids=[digest],
+        task_param_ports=(
+            "model",
+            "mode",
+            "execution",
+            "prompt",
+            "image_ref",
+            "mask_ref",
+            "count",
+            "size",
+        ),
+        cas_param_ports=("image_ref", "mask_ref"),
+        storage_policy_version="astrid.cloud-edit.unified.v1",
+    )
+    assert Path(values["image_ref"]).read_bytes() == payload
+    assert "mask_ref" not in values
 
 
 def test_input_materialization_rejects_foreign_nested_digest(tmp_path):
@@ -958,6 +1452,15 @@ def test_cli_writes_terminal_correlated_registration_failure_marker(
                 "runtime_epoch": 1,
             }
 
+        def register_capability(self, _capability_id, **_payload):
+            raise ApiError(
+                503,
+                "registration_unavailable",
+                "executor registration unavailable for worker-token",
+                request_id="request-cli-1",
+                details={"retryable": False},
+            )
+
         def register_executor(self, _executor_id, **_payload):
             raise ApiError(
                 503,
@@ -1063,6 +1566,10 @@ def test_register_with_profile_missing_verified_facts_fails_closed(
     profile = tmp_path / "readiness.json"
     profile.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
     monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest(),
+    )
     runtime = FakeRuntime()
     host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
 
@@ -1084,6 +1591,10 @@ def test_register_with_profile_publishes_valid_verified_facts(
     profile = tmp_path / "readiness.json"
     profile.write_text(json.dumps({"verified_facts": facts}), encoding="utf-8")
     monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest(),
+    )
     runtime = FakeRuntime()
     host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
 
@@ -1109,6 +1620,10 @@ def test_register_rejects_malformed_verified_facts(
     profile = tmp_path / "readiness.json"
     profile.write_text(json.dumps(profile_value), encoding="utf-8")
     monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile.read_bytes()).hexdigest(),
+    )
     runtime = FakeRuntime()
 
     with pytest.raises(HostError, match="verified_facts"):
@@ -1178,12 +1693,9 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert isinstance(evidence["process_id"], int) and evidence["process_id"] > 0
     assert outputs[0]["name"] == "answer"
     assert set(outputs[0]) <= {
-        "name", "kind", "digest", "media_type", "size", "data_base64",
-        "ordinal", "role", "is_primary",
+        "name", "filename", "kind", "digest", "media_type", "size", "data_base64",
+        "role", "is_primary",
     }
-    assert outputs[0]["ordinal"] == 0
-    assert outputs[0]["role"] == "result"
-    assert outputs[0]["is_primary"] is False
     assert "path" not in outputs[0]
     assert "artifact_type" not in outputs[0]
     assert outputs[0]["digest"]
@@ -1197,6 +1709,437 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert result["process_evidence"]["returncode"] == 0
     assert isinstance(result["process_evidence"]["process_id"], int)
     assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_structure_pack_members_survive_harvest_cleanup_and_reopen(tmp_path):
+    root = tmp_path / "timeline"
+    root.mkdir()
+    (root / "executor.yaml").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "test.timeline",
+                "name": "Timeline",
+                "kind": "external",
+                "version": "1.0",
+                "command": {
+                    "argv": [
+                        "{python_exec}",
+                        "-c",
+                        (
+                            "from pathlib import Path; import json, hashlib; "
+                            "from astrid.core._shared.result_manifest import build_manifest, write_manifest; "
+                            "out=Path('{out}'); pack=out/'agent-view'; pack.mkdir(parents=True, exist_ok=True); "
+                            "md=pack/'structure.md'; md.write_text('# structure\\n', encoding='utf-8'); "
+                            "idx=pack/'transcript-index.json'; idx.write_text(json.dumps({'speech': [{'text': 'We stay with the ending.'}]}), encoding='utf-8'); "
+                            "png=pack/'PG001.png'; png.write_bytes(b'PNG fixture bytes'); "
+                            "inner=build_manifest(kind='timeline_visualization', inputs={}, created='t', outputs=["
+                            "{'name':'structure','path':'structure.md'},"
+                            "{'name':'transcript_index','path':'transcript-index.json'},"
+                            "{'name':'page','path':'PG001.png'}]); "
+                            "write_manifest(pack/'manifest.json', inner); "
+                            "write_manifest(out/'manifest.json', build_manifest(kind='timeline_visualization_result', inputs={}, created='t', outputs=["
+                            "{'name':'pack_root','path':'agent-view','role':'auxiliary'},"
+                            "{'name':'manifest_path','path':'agent-view/manifest.json','role':'result','is_primary':True}]))"
+                        ),
+                    ]
+                },
+                "outputs": [
+                    {
+                        "name": "pack_root",
+                        "type": "directory",
+                        "path_template": "{out}/agent-view",
+                        "artifact_type": "evidence/timeline-visualization",
+                    },
+                    {
+                        "name": "manifest_path",
+                        "type": "file",
+                        "path_template": "{out}/agent-view/manifest.json",
+                        "artifact_type": "metadata/result-manifest",
+                    },
+                ],
+                "metadata": {"output_result_manifest": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-timeline",
+            "capability": "test.timeline",
+            "project_id": "demo",
+            "attempt_id": "attempt-timeline",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-timeline"] = task
+
+    host.run_task(task, lease_token="lease-1")
+
+    settled = runtime.settlements[0][2]
+    outputs = settled["outputs"]
+    filenames = [
+        item["filename"]
+        for item in runtime.uploaded_objects.values()
+        if item["filename"] is not None
+    ]
+    assert "structure.md" in filenames
+    assert "transcript-index.json" in filenames
+    assert "PG001.png" in filenames
+    assert all(not filename.startswith("agent-view/") for filename in filenames)
+    assert any(
+        item["name"] == "manifest_path"
+        and item["filename"] == "manifest.json"
+        for item in outputs
+    )
+    assert len({item["digest"] for item in outputs}) == len(outputs)
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+    # Reopen the returned managed product from its runtime-owned bytes. This
+    # is the post-cleanup path the frozen viewer uses; no attempt-local file is
+    # consulted.
+    reopened = tmp_path / "reopened"
+    for item in runtime.uploaded_objects.values():
+        filename = item["filename"]
+        assert isinstance(filename, str)
+        relative = Path(filename.removeprefix("agent-view/"))
+        assert not relative.is_absolute() and ".." not in relative.parts
+        destination = reopened / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(item["data"])
+    assert (reopened / "structure.md").read_text(encoding="utf-8") == "# structure\n"
+    assert json.loads((reopened / "transcript-index.json").read_text(encoding="utf-8"))["speech"][0]["text"] == "We stay with the ending."
+    assert (reopened / "PG001.png").read_bytes() == b"PNG fixture bytes"
+
+
+def test_mid_render_evidence_abort_keeps_measurement_on_runtime_failure(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["command"]["argv"] = [
+        "{python_exec}",
+        "-c",
+        "from pathlib import Path; import time; Path('{out}/answer.txt').write_text('ok'); time.sleep(2)",
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(
+        pack_roots=[tmp_path],
+        client=runtime,
+        execution_policy=ExecutionGuardPolicy(
+            scratch_floor_bytes=1,
+            evidence_cap_bytes=1,
+            deadline_seconds=5,
+        ),
+    )
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-evidence-abort",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-evidence-abort",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-evidence-abort"] = task
+
+    with pytest.raises(HostError, match="generated evidence cap exceeded"):
+        host.run_task(task, lease_token="lease-evidence-abort")
+
+    assert runtime.settlements == []
+    assert len(runtime.failures) == 1
+    diagnostic = runtime.failures[0][3]["failure_diagnostic"]
+    assert diagnostic["category"] == "run_budget_exceeded"
+    assert diagnostic["observed_bytes"] == 2
+    assert diagnostic["configured_cap_bytes"] == 1
+    assert diagnostic["largest_paths"] == [
+        {"path": "outputs/answer.txt", "bytes": 2, "classification": "generated"}
+    ]
+    assert diagnostic["source_digest"] == host.capabilities["test.echo"].source_digest
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_explicit_task_storage_envelope_rejects_output_overrun_and_cleans_up(tmp_path):
+    _write_manifest(tmp_path / "echo")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-storage-overrun",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-storage-overrun",
+            "fence": 1,
+            "storage_estimate": {"scratch_bytes": 1024, "output_bytes": 1},
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-storage-overrun"] = task
+    with pytest.raises(HostError, match="output bytes 2 exceed task output limit 1"):
+        host.run_task(task, lease_token="lease-storage-overrun")
+    assert runtime.settlements == []
+    assert runtime.failures and "output bytes 2" in runtime.failures[0][2]
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_live_storage_overrun_preserves_bounded_scratch_diagnostic_before_cleanup(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["command"]["argv"] = [
+        "{python_exec}",
+        "-c",
+        (
+            "from pathlib import Path; import time; "
+            "root=Path('{out}').parent; "
+            "(root/'.remotion-runtime-fixture').mkdir(); "
+            "(root/'managed-objects'/'source.bin').write_bytes(b'x'*7); "
+            "(root/'.remotion-runtime-fixture'/'frame.bin').write_bytes(b'x'*80); "
+            "time.sleep(2)"
+        ),
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-storage-scratch-diagnostic",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-storage-scratch-diagnostic",
+            "fence": 1,
+            "storage_estimate": {"scratch_bytes": 10, "output_bytes": 1},
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-storage-scratch-diagnostic"] = task
+
+    with pytest.raises(HostError, match="scratch bytes"):
+        host.run_task(task, lease_token="lease-storage-scratch-diagnostic")
+
+    assert runtime.settlements == []
+    assert runtime.failures and "scratch bytes" in runtime.failures[0][2]
+    diagnostic = runtime.failures[0][3]["failure_diagnostic"]
+    assert diagnostic["guard"] == "storage_envelope"
+    assert diagnostic["category"] == "scratch_overrun"
+    assert diagnostic["configured_scratch_bytes"] == 10
+    assert diagnostic["observed_scratch_bytes"] >= 87
+    assert diagnostic["path_classes"]["managed_inputs"] == {"files": 1, "bytes": 7}
+    assert diagnostic["path_classes"]["renderer_workspace"] == {"files": 1, "bytes": 80}
+    assert diagnostic["largest_scratch_paths"][0] == {
+        "path": ".remotion-runtime-fixture/frame.bin",
+        "bytes": 80,
+        "classification": "renderer_workspace",
+    }
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_live_storage_envelope_charges_atomic_temps_to_scratch(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    output.mkdir(parents=True)
+    (output / "image.png").write_bytes(b"12345")
+    (output / ".image.png.temporary.png.tmp").write_bytes(b"x" * 80)
+
+    _assert_live_storage_envelope(
+        {"scratch_bytes": 80, "output_bytes": 5},
+        attempt,
+        output,
+    )
+
+
+def test_live_storage_envelope_charges_render_workspace_to_scratch(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    render_workspace = attempt / ".video.mp4.render-service-fixture"
+    output.mkdir(parents=True)
+    (render_workspace / "outputs").mkdir(parents=True)
+    (output / "video.mp4").write_bytes(b"12345")
+    (render_workspace / "outputs" / "element-0001.jpeg").write_bytes(b"x" * 80)
+
+    _assert_live_storage_envelope(
+        {"scratch_bytes": 80, "output_bytes": 5},
+        attempt,
+        output,
+    )
+
+
+@pytest.mark.parametrize("counter", (_attempt_tree_bytes, _storage_tree_bytes))
+def test_live_storage_counters_tolerate_a_file_vanishing_during_scan(
+    tmp_path, monkeypatch, counter
+):
+    root = tmp_path / "attempt"
+    root.mkdir()
+    vanished = root / "element-2744.jpeg"
+    retained = root / "element-2745.jpeg"
+    vanished.write_bytes(b"gone")
+    retained.write_bytes(b"kept")
+
+    original_stat = Path.stat
+
+    def stat_without_vanished(path, *args, **kwargs):
+        if path == vanished:
+            vanished.unlink(missing_ok=True)
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_without_vanished)
+    assert counter(root) == len(b"kept")
+
+
+def test_final_storage_envelope_counts_published_temps_and_rejects_escape(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    output.mkdir(parents=True)
+    published_temp = output / "published.png.tmp"
+    published_temp.write_bytes(b"x" * 10)
+    with pytest.raises(HostError, match="output bytes 10 exceed task output limit 0"):
+        _task_storage_envelope(
+            {"storage_estimate": {"scratch_bytes": 10, "output_bytes": 0}},
+            attempt,
+            [{"path": str(published_temp), "name": "generated_images"}],
+        )
+
+    outside = attempt / "outside.png"
+    outside.write_bytes(b"x")
+    with pytest.raises(HostError, match="escapes the output directory"):
+        _task_storage_envelope(
+            {"storage_estimate": {"scratch_bytes": 10, "output_bytes": 10}},
+            attempt,
+            [{"path": str(outside), "name": "generated_images"}],
+        )
+
+
+def test_final_storage_envelope_counts_stable_and_published_paths_as_a_union(tmp_path):
+    attempt = tmp_path / "attempt"
+    output = attempt / "outputs"
+    output.mkdir(parents=True)
+    stable = output / "image.png"
+    published_temp = output / "image.png.tmp"
+    stable.write_bytes(b"x" * 6)
+    published_temp.write_bytes(b"y" * 6)
+
+    with pytest.raises(HostError, match="output bytes 12 exceed task output limit 10"):
+        _task_storage_envelope(
+            {"storage_estimate": {"scratch_bytes": 10, "output_bytes": 10}},
+            attempt,
+            [{"path": str(published_temp), "name": "generated_images"}],
+        )
+
+
+def test_required_storage_admission_failure_is_terminal_and_not_dispatched(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"].update({
+        "storage_estimate_required": True,
+        "storage_estimate_exact": True,
+        "estimated_scratch_bytes": 7,
+        "estimated_output_bytes": 11,
+    })
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-invalid-storage-admission",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-invalid-storage-admission",
+            "fence": 1,
+            "storage_estimate": {"scratch_bytes": 7, "output_bytes": 12},
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-invalid-storage-admission"] = task
+    with pytest.raises(HostError, match="requires storage_estimate"):
+        host.run_task(task, lease_token="lease-invalid-storage-admission")
+    assert runtime.settlements == []
+    assert runtime.failures
+    assert runtime.failures[0][3]["retryable"] is False
+    assert not list(tmp_path.glob("astrid-attempt-*"))
+
+
+def test_fixed_request_scope_rejects_conflicting_task_parameters(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["inputs"] = [
+        {"name": "model", "type": "string", "required": True},
+        {"name": "mode", "type": "string", "required": True},
+        {"name": "execution", "type": "string", "required": True},
+    ]
+    manifest["metadata"]["fixed_inputs"] = {"model": "z-image", "mode": "i2i", "execution": "cloud"}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-fixed-scope",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-fixed-scope",
+            "fence": 1,
+            "spec": {
+                "spec": {
+                    "params": {"model": "other-model", "mode": "i2i", "execution": "cloud"},
+                    "inputs": {},
+                }
+            },
+        }
+    }
+    runtime.tasks["task-fixed-scope"] = task
+    with pytest.raises(HostError, match="request escapes fixed scope"):
+        host.run_task(task, lease_token="lease-fixed-scope")
+    assert runtime.failures and runtime.failures[0][3]["retryable"] is False
+
+
+def test_fixed_request_scope_rejects_unsupported_legacy_inputs(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["inputs"] = [
+        {"name": "model", "type": "string", "required": True},
+        {"name": "mode", "type": "string", "required": True},
+        {"name": "execution", "type": "string", "required": True},
+    ]
+    manifest["metadata"]["fixed_inputs"] = {
+        "model": "qwen-image-edit-2511",
+        "mode": "edit",
+        "execution": "cloud",
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    task = {
+        "task": {
+            "id": "task-fixed-legacy-input",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-fixed-legacy-input",
+            "fence": 1,
+            "spec": {
+                "spec": {
+                    "params": {
+                        "model": "qwen-image-edit-2511",
+                        "mode": "edit",
+                        "execution": "cloud",
+                    },
+                    "inputs": {"mask_ref": "/tmp/mask.png"},
+                }
+            },
+        }
+    }
+    runtime.tasks["task-fixed-legacy-input"] = task
+    with pytest.raises(HostError, match="unsupported legacy input"):
+        host.run_task(task, lease_token="lease-fixed-legacy-input")
+    assert runtime.failures and runtime.failures[0][3]["retryable"] is False
 
 
 def test_completed_process_evidence_reads_settlement_payload_when_result_omits_identity():
@@ -1232,6 +2175,62 @@ def test_unready_capability_is_not_dispatched(tmp_path, monkeypatch):
     # python_exec is resolved by the runner; with PATH empty the source still
     # remains a valid manifest and readiness is determined by its declaration.
     assert host.capabilities["test.echo"].ready
+
+
+def test_optional_capability_still_requires_storage_admission(tmp_path):
+    manifest_path = _write_manifest(
+        tmp_path / "media",
+        capability_id="vibecomfy.video_enhance",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"].update(
+        {
+            "storage_estimate_required": True,
+            "storage_estimate_exact": True,
+            "estimated_scratch_bytes": 7,
+            "estimated_output_bytes": 11,
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "capabilities": [
+                    {
+                        "id": "vibecomfy.video_enhance",
+                        "disposition": "optional",
+                        "evidence_reason": "bounded test capability",
+                        "adapter_family": "local_generation",
+                        "resource_keys": ["gpu"],
+                        "required_packages": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = FakeRuntime()
+    host = GenericPackHost(
+        pack_roots=[tmp_path],
+        capability_matrix=matrix,
+        client=runtime,
+    )
+    host.discover()
+
+    task = {
+        "id": "task-optional-media",
+        "capability": "vibecomfy.video_enhance",
+        "attempt_id": "attempt-optional-media",
+        "fence": 1,
+    }
+    with pytest.raises(HostError, match="requires a whole-task storage_estimate"):
+        host.run_task(task, lease_token="lease-optional-media")
+
+    assert runtime.settlements == []
+    assert runtime.failures
+    assert runtime.failures[0][3]["retryable"] is False
 
 
 def test_claim_loop_fails_explicitly_without_canonical_claim_operation(tmp_path):
@@ -1493,14 +2492,12 @@ def test_command_host_harvests_result_manifest_media(tmp_path: Path) -> None:
     assert all(
         set(item)
         <= {
-            "name", "kind", "digest", "media_type", "size", "data_base64",
-            "ordinal", "role", "is_primary",
+            "name", "kind", "filename", "digest", "media_type", "size", "data_base64",
+            "role", "is_primary",
         }
         for item in settled
     )
-    assert [item["ordinal"] for item in settled] == [0, 1]
-    assert [item["role"] for item in settled] == ["result", "result"]
-    assert [item["is_primary"] for item in settled] == [True, False]
+    assert [item["filename"] for item in settled] == ["a.mp4", "b.mp4"]
     assert all("path" not in item and "artifact_type" not in item for item in settled)
 
 

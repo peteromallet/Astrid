@@ -506,6 +506,10 @@ def _validate_timeline_visualize_inputs(
         )
     if "filmstrip_authority" in values:
         raise CapabilityValidationError("filmstrip_authority is host-owned and cannot be supplied")
+    if "transcript_file" in values or "transcript.json" in values:
+        raise CapabilityValidationError(
+            "transcript input is host-owned; config.app.transcript supplies the CAS object"
+        )
     view = values.get("view", "structure")
     if view not in {"structure", "filmstrip"}:
         raise CapabilityValidationError("view must be structure or filmstrip")
@@ -527,7 +531,7 @@ def _validate_timeline_visualize_inputs(
             raise CapabilityValidationError(str(exc)) from exc
         return prepare_filmstrip(values, project=project, client=_client)
     if any(values.get(key) is not None for key in (
-        "render_run", "sample", "every", "every_frames", "columns", "page_size", "include_media"
+        "render_run", "sample", "every", "every_frames", "columns", "page_size", "include_media", "resolution"
     )):
         raise CapabilityValidationError("filmstrip controls require view=filmstrip")
 
@@ -720,6 +724,27 @@ def _validate_timeline_visualize_inputs(
         detail = "; ".join(diagnostics) or "no eligible managed timeline was selected"
         raise CapabilityValidationError(f"timeline selection failed: {detail}")
 
+    transcript_input: dict[str, str] | None = None
+    if len(selected) == 1:
+        from .managed_transcript import transcript_input_from_snapshot
+
+        try:
+            transcript_input = transcript_input_from_snapshot(
+                selected[0].config,
+                selected[0].registry,
+            )
+        except ValueError as exc:
+            raise CapabilityValidationError(str(exc)) from exc
+    elif any(
+        isinstance(getattr(row, "config", None), Mapping)
+        and isinstance(row.config.get("app"), Mapping)
+        and "transcript" in row.config["app"]
+        for row in selected
+    ):
+        raise CapabilityValidationError(
+            "a multi-timeline visualization cannot stage multiple config.app.transcript files"
+        )
+
     return {
         "mode": "kernel",
         "timelines": [
@@ -731,6 +756,7 @@ def _validate_timeline_visualize_inputs(
             }
             for row in selected
         ],
+        "transcript_input": transcript_input,
         # The worker token used by the generic host is intentionally not
         # granted projects:read. Carry the already-authenticated admission
         # snapshot into the child so execution verifies the same rows without
@@ -894,6 +920,55 @@ def _validate_managed_profile_theme_compatibility(
             "use the default profile from timelines render --help or set "
             "theme_overrides.visual.canvas to the requested width, height, and fps, then retry"
         )
+
+
+def _validate_managed_speech_inputs(values: Mapping[str, Any]) -> None:
+    """Validate frozen speech metadata before managed-render admission.
+
+    Speech annotations and their render occurrences are an immutable render
+    input contract.  Keep the projector as the single semantic validator so
+    filmstrip preparation and render admission cannot disagree about digest,
+    timing, or occurrence shape.  This helper deliberately does not discover
+    transcript files or infer missing occurrences.
+    """
+
+    fields = (
+        "speech_annotations",
+        "transcript_annotations",
+        "speech_occurrences",
+        "source_audio_digest",
+        "transcript_digest",
+        "annotation_digest",
+        "correction_version",
+        "timing_method",
+        "speech_coverage",
+    )
+    if not any(key in values and values[key] is not None for key in fields):
+        return
+    annotations = values.get("speech_annotations", values.get("transcript_annotations"))
+    occurrences = values.get("speech_occurrences")
+    if annotations is not None and not isinstance(annotations, list):
+        raise CapabilityValidationError("speech_annotations must be a list of objects")
+    if occurrences is not None and not isinstance(occurrences, list):
+        raise CapabilityValidationError("speech_occurrences must be a list of objects")
+    from astrid.packs.rendering.executors.timeline_visualize.speech_projection import (
+        SpeechProjectionError,
+        project_speech_annotations,
+    )
+
+    try:
+        project_speech_annotations(
+            annotations or [],
+            occurrences or [],
+            source_audio_digest=values.get("source_audio_digest"),
+            transcript_digest=values.get("transcript_digest"),
+            annotation_digest=values.get("annotation_digest"),
+            correction_version=values.get("correction_version", 0),
+            timing_method=values.get("timing_method"),
+            coverage=values.get("speech_coverage"),
+        )
+    except SpeechProjectionError as exc:
+        raise CapabilityValidationError(f"invalid frozen speech metadata: {exc}") from exc
 
 
 def _prepare_managed_render_inputs(
@@ -1121,6 +1196,21 @@ def _prepare_managed_render_inputs(
         raise CapabilityValidationError(str(exc), details=exc.details) from exc
     except ValueError as exc:
         raise CapabilityValidationError(str(exc)) from exc
+    _validate_managed_speech_inputs(values)
+    from .managed_transcript import transcript_input_from_snapshot
+
+    try:
+        transcript_input = transcript_input_from_snapshot(snapshot.config, snapshot.registry)
+    except ValueError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
+    if transcript_input is not None and any(
+        values.get(key) is not None for key in ("speech_annotations", "transcript_annotations", "speech_occurrences")
+    ):
+        supplied_transcript_digest = values.get("transcript_digest")
+        if supplied_transcript_digest != transcript_input["digest"]:
+            raise CapabilityValidationError(
+                "frozen speech transcript_digest must match config.app.transcript.sha256"
+            )
     _validate_managed_profile_theme_compatibility(
         values.get("profile"),
         timeline=snapshot.config,
@@ -1448,6 +1538,208 @@ def _project_scope(capability: Any) -> str:
     return str(scope)
 
 
+def _validate_generation_intent(
+    value: Any,
+    *,
+    modality: str,
+) -> dict[str, Any]:
+    """Validate and copy the opaque D1 generation intent envelope."""
+    if not isinstance(value, Mapping):
+        raise CapabilityValidationError("generation_intent must be an object")
+    if set(value) != {"version", "modality", "partial_success_policy", "groups"}:
+        raise CapabilityValidationError(
+            "generation_intent must contain exactly version, modality, "
+            "partial_success_policy, and groups"
+        )
+    version = value["version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise CapabilityValidationError("generation_intent.version must be 1")
+    if value["modality"] != modality:
+        raise CapabilityValidationError(
+            f"generation_intent.modality must match generation modality {modality!r}"
+        )
+    partial_success_policy = value["partial_success_policy"]
+    if not isinstance(partial_success_policy, str) or partial_success_policy not in {
+        "reject", "allow"
+    }:
+        raise CapabilityValidationError(
+            "generation_intent.partial_success_policy must be 'reject' or 'allow'"
+        )
+    groups = value["groups"]
+    if not isinstance(groups, list):
+        raise CapabilityValidationError("generation_intent.groups must be a list")
+    if not groups:
+        raise CapabilityValidationError(
+            "generation_intent.groups must contain at least one group"
+        )
+
+    copied_groups: list[dict[str, Any]] = []
+    seen_group_keys: set[str] = set()
+    for group_index, group in enumerate(groups):
+        if not isinstance(group, Mapping) or set(group) != {"group_key", "selectors"}:
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}] must contain exactly "
+                "group_key and selectors"
+            )
+        group_key = group["group_key"]
+        if not isinstance(group_key, str) or not group_key.strip():
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].group_key must be non-empty"
+            )
+        if group_key in seen_group_keys:
+            raise CapabilityValidationError(
+                f"generation_intent has duplicate group_key {group_key!r}"
+            )
+        seen_group_keys.add(group_key)
+
+        selectors = group["selectors"]
+        if not isinstance(selectors, list):
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].selectors must be a list"
+            )
+        if not selectors:
+            raise CapabilityValidationError(
+                f"generation_intent.groups[{group_index}].selectors must contain "
+                "at least one selector"
+            )
+        copied_selectors: list[dict[str, Any]] = []
+        seen_ordinals: set[int] = set()
+        seen_variant_keys: set[str] = set()
+        for selector_index, selector in enumerate(selectors):
+            if not isinstance(selector, Mapping) or set(selector) != {
+                "selector", "ordinal", "variant_key"
+            }:
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "must contain exactly selector, ordinal, and variant_key"
+                )
+            selector_name = selector["selector"]
+            ordinal = selector["ordinal"]
+            variant_key = selector["variant_key"]
+            if not isinstance(selector_name, str) or not selector_name.strip():
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "selector must be non-empty"
+                )
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "ordinal must be a non-negative integer"
+                )
+            if not isinstance(variant_key, str) or not variant_key.strip():
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "variant_key must be non-empty"
+                )
+            if ordinal in seen_ordinals:
+                raise CapabilityValidationError(
+                    f"generation_intent group {group_key!r} has duplicate ordinal {ordinal}"
+                )
+            if variant_key in seen_variant_keys:
+                raise CapabilityValidationError(
+                    f"generation_intent group {group_key!r} has duplicate variant_key "
+                    f"{variant_key!r}"
+                )
+            seen_ordinals.add(ordinal)
+            seen_variant_keys.add(variant_key)
+            copied_selectors.append(
+                {
+                    "selector": selector_name,
+                    "ordinal": ordinal,
+                    "variant_key": variant_key,
+                }
+            )
+        copied_groups.append({"group_key": group_key, "selectors": copied_selectors})
+
+    return {
+        "version": 1,
+        "modality": modality,
+        "partial_success_policy": partial_success_policy,
+        "groups": copied_groups,
+    }
+
+
+def _generation_capability_modality(capability_id: str) -> str | None:
+    """Resolve the modality for every shipped generation executor family."""
+    if capability_id.startswith("generation.generate_image"):
+        return "image"
+    if capability_id.startswith("generation.generate_video"):
+        return "video"
+    if capability_id.startswith("generation.generate_audio"):
+        return "audio"
+    return None
+
+
+def _generation_publish_effect(
+    capability: Any,
+    *,
+    project: str | None,
+    generation_intent: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compose the sole typed publication effect from validated GEN intent."""
+    if not isinstance(project, str) or not project.strip():
+        raise CapabilityValidationError(
+            "generation publication requires a project-scoped task"
+        )
+    modality = generation_intent["modality"]
+    expected_port = {
+        "image": "generated_images",
+        "video": "generated_videos",
+        "audio": "generated_audio",
+    }[modality]
+    declared_outputs = getattr(capability, "outputs", None)
+    if not declared_outputs:
+        definition = getattr(capability, "definition", None)
+        if isinstance(definition, Mapping):
+            declared_outputs = definition.get("outputs", ())
+        else:
+            declared_outputs = getattr(definition, "outputs", ())
+
+    def output_field(output: Any, field: str) -> Any:
+        if isinstance(output, Mapping):
+            return output.get(field)
+        return getattr(output, field, None)
+
+    matching_ports = [
+        output_field(output, "name")
+        for output in declared_outputs
+        if output_field(output, "name") == expected_port
+        and output_field(output, "type") == "file"
+        and not str(output_field(output, "name") or "").endswith("_manifest")
+        and output_field(output, "artifact_type")
+    ]
+    if matching_ports != [expected_port]:
+        raise CapabilityValidationError(
+            f"generation capability must declare exactly one primary {expected_port!r} output"
+        )
+    groups = []
+    for group in generation_intent["groups"]:
+        groups.append({
+            "group_key": group["group_key"],
+            "selectors": [
+                {
+                    "selector": selector["selector"],
+                    "ordinal": selector["ordinal"],
+                    "variant_key": selector["variant_key"],
+                    "output_port": expected_port,
+                }
+                for selector in group["selectors"]
+            ],
+        })
+    return {
+        "effect_type": "generation.publish_v1",
+        "target_id": project,
+        "payload": {
+            "version": 1,
+            "modality": modality,
+            "generation_type": str(capability.id),
+            "metadata": {},
+            "partial_success_policy": generation_intent["partial_success_policy"],
+            "groups": groups,
+        },
+    }
+
+
 def _kernel_invoke(
     capability: Any,
     *,
@@ -1458,6 +1750,7 @@ def _kernel_invoke(
     extra_pack_roots: tuple[str, ...] = (),
     idempotency_context: Mapping[str, Any] | None = None,
     admission_metadata: Mapping[str, Any] | None = None,
+    generation_intent: Mapping[str, Any] | None = None,
     storage_estimate: Mapping[str, int] | None = None,
     registry: Any | None = None,
     _client: Any | None = None,
@@ -1558,13 +1851,33 @@ def _kernel_invoke(
             raise CapabilityValidationError("filmstrip video admission identity mismatch")
         input_manifest.append(video_id)
 
+    if str(capability.id) == "rendering.timeline_visualize":
+        transcript_input = request_inputs.get("transcript.json")
+        if transcript_input is not None:
+            if (
+                not isinstance(transcript_input, Mapping)
+                or not isinstance(transcript_input.get("digest"), str)
+                or not isinstance(transcript_input.get("object_id"), str)
+                or transcript_input["digest"] != transcript_input["object_id"]
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", transcript_input["digest"])
+            ):
+                raise CapabilityValidationError(
+                    "transcript_file admission identity must be a matching sha256 digest/object_id"
+                )
+            input_manifest.append(transcript_input["digest"])
+
+    idempotency_material: dict[str, Any] = {
+        "spec": spec,
+        "input_object_ids": sorted(input_manifest),
+        "storage_estimate": dict(storage_estimate or {}),
+    }
+    if generation_intent is not None:
+        idempotency_material["generation_intent"] = _json_safe_mapping(
+            dict(generation_intent)
+        )
     idempotency_key = hashlib.sha256(
         json.dumps(
-            {
-                "spec": spec,
-                "input_object_ids": sorted(input_manifest),
-                "storage_estimate": dict(storage_estimate or {}),
-            },
+            idempotency_material,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -1582,14 +1895,20 @@ def _kernel_invoke(
         raise CapabilityInvocationError(
             "runtime client does not expose generated task admission"
         )
-    result = create_task(
-        project_id=project,
-        capability=str(capability.id),
-        spec=spec,
-        input_manifest=input_manifest,
-        idempotency_key=idempotency_key,
-        storage_estimate=dict(storage_estimate) if storage_estimate is not None else None,
-    )
+    admission = {
+        "project_id": project,
+        "capability": str(capability.id),
+        "spec": spec,
+        "input_manifest": input_manifest,
+        "idempotency_key": idempotency_key,
+        "storage_estimate": dict(storage_estimate) if storage_estimate is not None else None,
+    }
+    if generation_intent is not None:
+        admission["generation_intent"] = generation_intent
+        admission["settlement_effect"] = _generation_publish_effect(
+            capability, project=project, generation_intent=generation_intent
+        )
+    result = create_task(**admission)
     result_ok = bool(getattr(result, "ok", isinstance(result, Mapping)))
     data = getattr(result, "data", result if isinstance(result, Mapping) else None)
     if not result_ok:
@@ -1626,6 +1945,49 @@ def _kernel_invoke(
     return run_id, task_id, attempt_id, None, raw_result, True, None
 
 
+def _read_task_managed_outputs(
+    client: Any,
+    task_id: str,
+) -> tuple[list[Any] | None, dict[str, Any] | None]:
+    """Read the Runtime-owned managed-output page for one completed task."""
+    tasks = getattr(client, "tasks", None)
+    reader = getattr(tasks, "list_managed_outputs", None)
+    if not callable(reader):
+        return None, {
+            "code": "managed_output_readback_unavailable",
+            "message": "runtime client does not expose task managed-output readback",
+            "details": {"task_id": task_id},
+        }
+    try:
+        value = reader(task_id)
+    except Exception as exc:
+        return None, {
+            "code": "managed_output_readback_unavailable",
+            "message": "managed outputs could not be read for the completed task",
+            "details": {"task_id": task_id, "error_type": type(exc).__name__},
+        }
+    if hasattr(value, "ok") and hasattr(value, "data"):
+        if not bool(value.ok):
+            error = getattr(value, "error", None)
+            if hasattr(error, "as_dict"):
+                error = error.as_dict()
+            return None, {
+                "code": "managed_output_readback_unavailable",
+                "message": "managed outputs could not be read for the completed task",
+                "details": _json_safe(error) if error is not None else {"task_id": task_id},
+            }
+        value = value.data
+    if isinstance(value, (list, tuple)) and len(value) == 2 and isinstance(value[0], list):
+        return list(value[0]), None
+    if isinstance(value, list):
+        return value, None
+    return None, {
+        "code": "managed_output_readback_invalid",
+        "message": "managed-output readback returned an invalid page",
+        "details": {"task_id": task_id},
+    }
+
+
 def _wait_for_kernel_task(
     client: Any,
     *,
@@ -1633,6 +1995,7 @@ def _wait_for_kernel_task(
     run_id: str,
     timeout_seconds: float,
     poll_seconds: float,
+    read_managed_outputs: bool = False,
 ) -> tuple[dict[str, Any], bool, str]:
     """Follow one admitted task to a terminal runtime-owned result."""
     if not math.isfinite(float(timeout_seconds)) or timeout_seconds <= 0:
@@ -1674,7 +2037,7 @@ def _wait_for_kernel_task(
             settled = task.get("result")
             settled = dict(settled) if isinstance(settled, Mapping) else {}
             output_rows = settled.get("outputs")
-            return {
+            completed = {
                 "ok": True,
                 "run_id": run_id,
                 "kernel_run_id": run_id,
@@ -1688,7 +2051,15 @@ def _wait_for_kernel_task(
                     if isinstance(output_rows, list)
                     else []
                 },
-            }, True, attempt_id
+            }
+            if read_managed_outputs:
+                managed_outputs, read_error = _read_task_managed_outputs(client, task_id)
+                if read_error is not None:
+                    completed["error"] = read_error
+                    completed["ok"] = False
+                    return completed, False, attempt_id
+                completed["managed_outputs"] = managed_outputs or []
+            return completed, True, attempt_id
         if state in {"failed", "cancelled"}:
             settled = task.get("result")
             settled = dict(settled) if isinstance(settled, Mapping) else {}
@@ -1782,6 +2153,27 @@ def invoke(
     if capability.capability_type == "element":
         raise UnsupportedCapabilityError(f"elements are not invokable via the SDK: {capability.id}")
 
+    generation_modalities = {
+        "generation.generate_image": "image",
+        "generation.generate_video": "video",
+        "generation.generate_audio": "audio",
+    }
+    modality = generation_modalities.get(capability.id)
+    intent_modality = _generation_capability_modality(str(capability.id))
+    request_inputs = dict(inputs or {})
+    generation_intent: dict[str, Any] | None = None
+    if "generation_intent" in request_inputs:
+        if intent_modality is None:
+            raise CapabilityValidationError(
+                "generation_intent is only accepted for generation capabilities"
+            )
+        generation_intent = _validate_generation_intent(
+            request_inputs["generation_intent"],
+            modality=intent_modality,
+        )
+        # Intent is admission metadata, not an executor-facing input port.
+        request_inputs.pop("generation_intent")
+
     if isinstance(project, str) and not project.strip():
         project = None
     project_scope = _project_scope(capability)
@@ -1815,6 +2207,14 @@ def invoke(
                 out=out,
                 _client=_client,
             )
+            transcript_input = invocation_authority_context.get("transcript_input")
+            if transcript_input is not None:
+                inputs = dict(inputs or {})
+                if inputs.get("transcript.json") not in (None, ""):
+                    raise CapabilityValidationError(
+                        "transcript input is host-owned; config.app.transcript supplies the CAS object"
+                    )
+                inputs["transcript.json"] = transcript_input
             if invocation_authority_context.get("mode") == "filmstrip":
                 # Only preflight may turn a successful project-owned render
                 # into a file input. Public paths were rejected above.
@@ -1828,12 +2228,21 @@ def invoke(
                     invocation_authority_context, sort_keys=True, separators=(",", ":"),
                     ensure_ascii=False,
                 )
+            # Preflight may add host-owned transcript/video bindings. Forward
+            # those enriched inputs to kernel admission; retaining the initial
+            # caller mapping would desynchronize the filmstrip identity guard.
+            request_inputs = dict(inputs or {})
         elif capability.id == "rendering.render":
             inputs, invocation_authority_context = _prepare_managed_render_inputs(
                 inputs,
                 project=project,
                 _client=_client,
             )
+            # Managed render admission adds the frozen snapshot and authority
+            # after the initial request copy above. Keep the task payload in
+            # sync so the Runtime host can materialize the attempt-local
+            # timeline before expanding the renderer command.
+            request_inputs = dict(inputs)
             snapshot = (inputs or {}).get("timeline_snapshot")
             snapshot_config = snapshot.get("config") if isinstance(snapshot, Mapping) else None
             snapshot_registry = snapshot.get("registry") if isinstance(snapshot, Mapping) else None
@@ -1879,14 +2288,7 @@ def invoke(
     # and live invocation.  This keeps generic ``sdk.invoke`` from accepting
     # an impossible model/mode/backend cell (or FLF request missing its end
     # frame) and discovering the problem only after kernel admission.
-    generation_modalities = {
-        "generation.generate_image": "image",
-        "generation.generate_video": "video",
-        "generation.generate_audio": "audio",
-    }
-    modality = generation_modalities.get(capability.id)
     if modality is not None:
-        request_inputs = dict(inputs or {})
         model_registry = sdk_module._load_model_registry(
             project_root=project_root,
             extra_pack_roots=extra_pack_roots,
@@ -1937,7 +2339,7 @@ def invoke(
         try:
             raw_result, preview_ok = _manifest_dry_run_result(
                 capability,
-                inputs=inputs,
+                inputs=request_inputs,
                 outputs=outputs,
                 brief=brief,
                 python_exec=python_exec,
@@ -1998,13 +2400,15 @@ def invoke(
         kernel_kwargs: dict[str, Any] = {
             "kind": kind,
             "project": project,
-            "inputs": inputs,
+            "inputs": request_inputs,
             "outputs": outputs,
             "extra_pack_roots": extra_pack_roots,
             "idempotency_context": invocation_authority_context,
             "admission_metadata": invocation_admission_metadata,
             "storage_estimate": invocation_storage_estimate,
         }
+        if generation_intent is not None:
+            kernel_kwargs["generation_intent"] = generation_intent
         if registry is not None:
             kernel_kwargs["registry"] = registry
         kr, kt, ka, mpath, raw_result, ok, _ = _kernel_invoke(
@@ -2019,6 +2423,10 @@ def invoke(
                 run_id=kr,
                 timeout_seconds=timeout_seconds,
                 poll_seconds=poll_seconds,
+                read_managed_outputs=(
+                    capability.capability_type == "executor"
+                    and capability.id.startswith("generation.generate_")
+                ),
             )
             if waited_attempt_id:
                 ka = waited_attempt_id

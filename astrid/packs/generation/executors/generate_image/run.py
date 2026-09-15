@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import random
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,13 @@ from astrid.core._shared.result_manifest import complete_output_metadata
 from astrid.core.cli_choices import add_choice_arg
 from astrid.core.foundation.atomic_io import write_json_atomic
 from astrid.core.generation import GENERATION_RESULT_KEY
+from astrid.core.generation.storage_policy import (
+    CLOUD_EDIT_STORAGE_POLICY,
+    CLOUD_I2I_STORAGE_POLICY,
+    CLOUD_T2I_STORAGE_POLICY,
+    CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
+    ImageStoragePolicyError,
+)
 from astrid.core.generation.backends import (
     BackendAdapter,
     GenerationBackendRegistry,
@@ -73,6 +81,7 @@ _IMAGE_CLI_FEATURES: tuple[str, ...] = (
     "count",
     "size",
     "image_ref",
+    "mask_ref",
     "strength",
     "guidance_scale",
     "steps",
@@ -88,6 +97,7 @@ _IMAGE_ARGV_FLAG_NAMES: tuple[str, ...] = (
     "prompts_file",
     "model",
     "image_ref",
+    "mask_ref",
     "execution",
     "count",
     "seed",
@@ -246,9 +256,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reference image path or URL for i2i/edit modes.",
     )
     p.add_argument(
+        "--mask-ref",
+        dest="mask_ref",
+        help="Mask image path or URL for the bounded inpaint edit profile.",
+    )
+    p.add_argument(
         "--execution",
         required=True,
         help="Backend: 'local' (vibecomfy) or 'cloud' (fal).",
+    )
+    p.add_argument(
+        "--storage-policy-version",
+        dest="storage_policy_version",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--count",
@@ -413,6 +434,38 @@ def generate_core(
             recovery_command="check available models and modes with --help and retry with a valid (model, mode) pair",
         ) from exc
 
+    bounded_profile = getattr(args, "storage_policy_version", None)
+    bounded_profiles = {
+        CLOUD_T2I_STORAGE_POLICY.version: (None, "t2i"),
+        CLOUD_I2I_STORAGE_POLICY.version: ("z-image", "i2i"),
+        CLOUD_EDIT_STORAGE_POLICY.version: ("qwen-image-edit-2511", "edit"),
+        CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version: (None, None),
+    }
+    selected_storage_policy = None
+    if bounded_profile is not None:
+        expected_identity = bounded_profiles.get(bounded_profile)
+        identity_matches = (
+            expected_identity is not None
+            and (
+                expected_identity[1] is None
+                or (
+                    expected_identity[1] == mode_name
+                    and (expected_identity[0] is None or expected_identity[0] == entry.id)
+                )
+            )
+        )
+        if not identity_matches or args.execution != "cloud":
+            raise AstridError(
+                f"storage policy {bounded_profile!r} does not match the admitted model/mode/backend",
+                recovery_command="use the capability's declared storage policy",
+            )
+        selected_storage_policy = {
+            CLOUD_T2I_STORAGE_POLICY.version: CLOUD_T2I_STORAGE_POLICY,
+            CLOUD_I2I_STORAGE_POLICY.version: CLOUD_I2I_STORAGE_POLICY,
+            CLOUD_EDIT_STORAGE_POLICY.version: CLOUD_EDIT_STORAGE_POLICY,
+            CLOUD_UNIFIED_EDIT_STORAGE_POLICY.version: CLOUD_UNIFIED_EDIT_STORAGE_POLICY,
+        }[bounded_profile]
+
     warnings: list[dict[str, str]] = []
     dropped_features: list[str] = []
     fallback_warning = _resolve_execution_with_codex_fallback(args, mode_spec)
@@ -437,6 +490,43 @@ def generate_core(
             valid_options=list(_available_backend_ids(mode_spec)),
             recovery_command=f"choose one of the available backends: {available}",
         )
+
+    if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY:
+        try:
+            selected_storage_policy.validate_task_request(
+                model=entry.id,
+                mode=mode_name,
+                execution=args.execution,
+                params=vars(args),
+            )
+        except ImageStoragePolicyError as exc:
+            raise AstridError(
+                str(exc),
+                recovery_command=(
+                    "use a typed cloud t2i request within the declared count "
+                    "and size bounds"
+                ),
+            ) from exc
+    elif (
+        selected_storage_policy is CLOUD_UNIFIED_EDIT_STORAGE_POLICY
+        and isinstance(getattr(args, "image_ref", None), Mapping)
+    ):
+        # GenericPackHost performs this descriptor admission before it
+        # materializes CAS inputs. Standalone SDK callers may still supply a
+        # typed descriptor, but the subprocess receives the host-materialized
+        # path and must validate that path in the provider-boundary pass below.
+        try:
+            selected_storage_policy.validate_admission_request(
+                model=entry.id,
+                mode=mode_name,
+                execution=args.execution,
+                params=vars(args),
+            )
+        except ImageStoragePolicyError as exc:
+            raise AstridError(
+                str(exc),
+                recovery_command="use one admitted source-only, Klein, or source-plus-mask edit profile",
+            ) from exc
 
     # --- setup output directory ----------------------------------------------
     out = args.out.expanduser().resolve()
@@ -477,8 +567,25 @@ def generate_core(
     loras_parsed = _parse_loras_arg(args.loras)
     all_outputs: list[dict[str, Any]] = []
     generated_paths: list[Path] = []
-    count = max(1, args.count or 1)
+    raw_count = args.count
+    if (
+        selected_storage_policy is not None
+        and selected_storage_policy is not CLOUD_T2I_STORAGE_POLICY
+        and raw_count != selected_storage_policy.max_count
+    ):
+        raise AstridError(
+            "bounded cloud image profile requires one output for the whole task",
+            recovery_command="use --count 1 for the declared bounded image profile",
+        )
+    count = max(1, raw_count or 1)
     prompt_text: str | None = None
+    implicit_base_seed = (
+        random.randint(0, 2**31 - 1)
+        if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY
+        and args.seed is None
+        else None
+    )
+    first_seed: int | None = None
     final_seed: int = 0
     model_actual: str = ""
     cost_usd: float | None = None
@@ -487,6 +594,7 @@ def generate_core(
     source_urls: list[str] | None = None
     all_applied_features: list[str] = []
     result_error = None
+    bounded_policy = None
 
     for i in range(count):
         # Determine the prompt entry for this iteration
@@ -548,7 +656,10 @@ def generate_core(
             )
             warnings.extend(extra_warns)
             dropped_features.extend(extra_drops)
-            seed = _resolve_seed(params.get("seed", args.seed), i)
+            requested_seed = params.get("seed", args.seed)
+            if requested_seed is None and implicit_base_seed is not None:
+                requested_seed = implicit_base_seed
+            seed = _resolve_seed(requested_seed, i)
         else:
             prompt_text = args.prompt
             requested_params = _build_requested_params(args, prompt_text=prompt_text)
@@ -561,11 +672,24 @@ def generate_core(
             )
             warnings.extend(extra_warns)
             dropped_features.extend(extra_drops)
-            seed = _resolve_seed(args.seed, i)
+            requested_seed = args.seed
+            if requested_seed is None and implicit_base_seed is not None:
+                requested_seed = implicit_base_seed
+            seed = _resolve_seed(requested_seed, i)
+
+        if first_seed is None:
+            first_seed = seed
 
         # --- build canonical params dict for adapter -------------------------
         params["seed"] = seed
+        # Backend adapters must receive the execution identity that was
+        # admitted at the task boundary.  In particular, the bounded cloud
+        # i2i policy must not depend on a CLI-only value that was dropped by
+        # the generic feature compiler.
+        params["execution"] = args.execution
         params["count"] = 1  # N=1 per loop iteration
+        if bounded_profile is not None:
+            params["storage_policy_version"] = bounded_profile
         if loras_parsed:
             params["loras"] = loras_parsed
         if args.execution == CODEX_BACKEND_ID:
@@ -574,6 +698,23 @@ def generate_core(
                 params["quality"] = args.quality
             if args.background:
                 params["background"] = args.background
+
+        if bounded_profile is not None:
+            bounded_policy = selected_storage_policy
+            try:
+                bounded_policy.validate_request(
+                    model=entry.id,
+                    mode=mode_name,
+                    execution=args.execution,
+                    params=params,
+                )
+            except ImageStoragePolicyError as exc:
+                raise AstridError(
+                    str(exc),
+                    recovery_command="use one bounded cloud image output with explicit dimensions",
+                ) from exc
+        else:
+            bounded_policy = None
 
         # --- dispatch to adapter (SD-004) ------------------------------------
         try:
@@ -601,6 +742,15 @@ def generate_core(
                 if params.get("loras"):
                     _embed_fields["loras"] = str(params["loras"])
                 embed_png_text(img_path, _embed_fields)
+
+                if bounded_policy is not None:
+                    try:
+                        bounded_policy.validate_final_output(
+                            img_path,
+                            index=len(generated_paths) - 1,
+                        )
+                    except ImageStoragePolicyError as exc:
+                        raise AstridError(str(exc), recovery_command="retry with a smaller bounded image") from exc
 
                 # Embedding metadata mutates the PNG, so settle the final bytes.
                 content_hash = (
@@ -630,8 +780,15 @@ def generate_core(
         except BaseException:
             if all_outputs:
                 try:
+                    manifest_seed = (
+                        first_seed
+                        if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY
+                        and count > 1
+                        and first_seed is not None
+                        else final_seed
+                    )
                     inputs, request = _build_inputs_request(
-                        args, entry, mode_name, final_seed, prompt_text, image_ref_resolved,
+                        args, entry, mode_name, manifest_seed, prompt_text, image_ref_resolved,
                     )
                     manifest = build_generation_manifest(
                         kind="generation.generate_image",
@@ -645,7 +802,7 @@ def generate_core(
                         model_actual=model_actual,
                         execution=args.execution,
                         request=request,
-                        seed=final_seed,
+                        seed=manifest_seed,
                         dropped_features=dropped_features if dropped_features else None,
                         applied_features=all_applied_features if all_applied_features else None,
                         cost_usd=cost_usd,
@@ -661,13 +818,25 @@ def generate_core(
                         manifest["outputs"], root_dir=out,
                     )
                     write_json_atomic(manifest_path, manifest)
+                    if bounded_policy is not None:
+                        try:
+                            bounded_policy.validate_manifest(manifest_path)
+                        except ImageStoragePolicyError:
+                            manifest_path.unlink(missing_ok=True)
                 except Exception:
                     pass
             raise
 
     # --- emit manifest -------------------------------------------------------
+    manifest_seed = (
+        first_seed
+        if selected_storage_policy is CLOUD_T2I_STORAGE_POLICY
+        and count > 1
+        and first_seed is not None
+        else final_seed
+    )
     inputs, request = _build_inputs_request(
-        args, entry, mode_name, final_seed, prompt_text, image_ref_resolved,
+        args, entry, mode_name, manifest_seed, prompt_text, image_ref_resolved,
     )
     manifest = build_generation_manifest(
         kind="generation.generate_image",
@@ -681,7 +850,7 @@ def generate_core(
         model_actual=model_actual,
         execution=args.execution,
         request=request,
-        seed=final_seed,
+        seed=manifest_seed,
         dropped_features=dropped_features if dropped_features else None,
         applied_features=all_applied_features if all_applied_features else None,
         cost_usd=cost_usd,
@@ -697,6 +866,11 @@ def generate_core(
         manifest["outputs"], root_dir=out,
     )
     write_json_atomic(manifest_path, manifest)
+    if bounded_policy is not None:
+        try:
+            bounded_policy.validate_manifest(manifest_path)
+        except ImageStoragePolicyError as exc:
+            raise AstridError(str(exc), recovery_command="retry with a smaller bounded image") from exc
 
     generation_result = GenerationResult(
         image_paths=generated_paths,
@@ -731,6 +905,7 @@ def _build_inputs_request(
         "seed": seed,
         "count": max(1, args.count or 1),
         "size": getattr(args, "size", None),
+        "mask_ref": getattr(args, "mask_ref", None),
         "image_ref_resolved": image_ref_resolved,
     }
     inputs: dict[str, Any] = {
@@ -741,7 +916,7 @@ def _build_inputs_request(
         "seed": seed,
         "count": max(1, args.count or 1),
     }
-    for key in ("negative_prompt", "size", "image_ref", "strength", "guidance_scale", "steps"):
+    for key in ("negative_prompt", "size", "image_ref", "mask_ref", "strength", "guidance_scale", "steps"):
         val = getattr(args, key, None)
         if val is not None:
             inputs[key] = val

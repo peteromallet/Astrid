@@ -1,5 +1,5 @@
 import type {ReactElement} from 'react';
-import {Img, interpolate, staticFile, useCurrentFrame} from 'remotion';
+import {Easing, Img, interpolate, staticFile, useCurrentFrame} from 'remotion';
 import {Video} from '@remotion/media';
 import {type ElementComponentProps, narrowParams} from '../../../../rendering/elements/_shared/contracts';
 
@@ -66,6 +66,12 @@ const CARD_HEIGHT = 135;
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
 const phase = (value: number, start: number, end: number): number => interpolate(value, [start, end], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+const easedPhase = (value: number, start: number, duration: number): number => interpolate(
+  value,
+  [start, start + Math.max(0.001, duration)],
+  [0, 1],
+  {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad)},
+);
 const positive = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 
 const phaseValues = (params: Params, clipSeconds: number): [number, number, number, number] => {
@@ -117,7 +123,11 @@ function TimelineStrip({segments, cards, rowY, progress, selectedIndex, mode, ur
       // The words/timing phase is the only phase that reorders cards. Anchors
       // and workflow show the source timeline in canonical chronological order.
       const targetSlot = mode === 'iteration' ? ITERATION_ORDER[index] ?? index : index;
-      const slot = mode === 'prep' ? index : interpolate(progress, [0, 1], [index, targetSlot], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+      const slot = mode === 'prep'
+        ? index
+        : mode === 'anchors'
+          ? interpolate(progress, [0, 1], [ITERATION_ORDER[index] ?? index, index], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
+          : interpolate(progress, [0, 1], [index, targetSlot], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
       const x = ROW_LEFT + slot * ROW_STEP;
       const entering = mode === 'prep' ? phase(progress, index / segments.length * 0.78, index / segments.length * 0.78 + 0.12) : 1;
       const active = selectedIndex === index;
@@ -130,13 +140,13 @@ function TimelineStrip({segments, cards, rowY, progress, selectedIndex, mode, ur
   </div>;
 }
 
-function Heading({text}: {text: string}): ReactElement {
-  return <div style={{position: 'absolute', left: 220, right: 220, top: 790, color: AMBER, fontFamily: 'monospace', fontSize: 27, letterSpacing: 8, textAlign: 'center', textTransform: 'uppercase'}}>{text}</div>;
+function Heading({text, opacity}: {text: string; opacity: number}): ReactElement {
+  return <div style={{position: 'absolute', left: 220, right: 220, top: 790, opacity, color: AMBER, fontFamily: 'monospace', fontSize: 27, letterSpacing: 8, textAlign: 'center', textTransform: 'uppercase'}}>{text}</div>;
 }
 
-function IterationWords({progress}: {progress: number}): ReactElement {
+function IterationWords({progress, opacity}: {progress: number; opacity: number}): ReactElement {
   const index = Math.min(ITERATION_WORDS.length - 1, Math.floor(clamp(progress) * ITERATION_WORDS.length));
-  return <div style={{position: 'absolute', left: 320, right: 320, top: 738, height: 30, color: '#fff0db', fontFamily: 'monospace', fontSize: 22, letterSpacing: 3, textAlign: 'center', textTransform: 'uppercase', whiteSpace: 'nowrap'}}>
+  return <div style={{position: 'absolute', left: 320, right: 320, top: 738, height: 30, opacity, color: '#fff0db', fontFamily: 'monospace', fontSize: 22, letterSpacing: 3, textAlign: 'center', textTransform: 'uppercase', whiteSpace: 'nowrap'}}>
     {ITERATION_WORDS.map((word, wordIndex) => <span key={word} style={{position: 'absolute', inset: 0, opacity: wordIndex === index ? 1 : 0, transition: 'opacity 80ms linear'}}>{word}</span>)}
   </div>;
 }
@@ -149,9 +159,11 @@ export default function EndSpanningLayer({clip, params: rawParams, assetEntry, f
   const prepEnd = prepSeconds;
   const iterationEnd = prepEnd + iterationSeconds;
   const anchorsEnd = iterationEnd + anchorsSeconds;
+  const moveUpSeconds = Math.min(0.75, iterationSeconds * 0.2);
+  const moveDownSeconds = Math.min(0.75, anchorsSeconds * 0.2);
+  const workflowMoveSeconds = Math.min(0.35, workflowSeconds * 0.12);
   const elapsed = frame / fps;
   const prepP = phase(elapsed, 0, prepEnd);
-  const iterationP = phase(elapsed, prepEnd, iterationEnd);
   const anchorsP = phase(elapsed, iterationEnd, anchorsEnd);
   const workflowP = phase(elapsed, anchorsEnd, anchorsEnd + workflowSeconds);
   const mode: TimelineStripProps['mode'] = elapsed < prepEnd ? 'prep' : elapsed < iterationEnd ? 'iteration' : elapsed < anchorsEnd ? 'anchors' : 'workflow';
@@ -176,35 +188,79 @@ export default function EndSpanningLayer({clip, params: rawParams, assetEntry, f
   const prepSourceEnd = positive(params.prepSourceEnd) ?? 84.3;
   const prepSourceSpeed = positive(params.prepSourceSpeed) ?? 1;
   const sourceUrl = renderableFile(assetEntry?.file);
-  const heading = params.headings?.[mode] ?? DEFAULT_HEADINGS[mode];
   const fadeOut = mode === 'workflow' ? 1 - phase(workflowP, 0.92, 1) : 1;
   const flickerIndex = Math.floor(anchorsP * 12) % cards.length;
   const flickerPrevious = (flickerIndex + cards.length - 1) % cards.length;
-  const stripProgress = mode === 'prep' ? prepP : mode === 'iteration' ? iterationP : mode === 'anchors' ? anchorsP : workflowP;
+  // The strip remains mounted while the shared visual group moves between
+  // phases. Start its reorder after the upward move is mostly settled so the
+  // cards read as one continuous timeline instead of a phase cut.
+  const reorderStart = prepEnd + moveUpSeconds * 0.72;
+  const iterationStripProgress = easedPhase(elapsed, reorderStart, Math.max(0.001, iterationEnd - reorderStart));
+  const iterationToAnchors = easedPhase(elapsed, iterationEnd, moveDownSeconds);
+  const stripProgress = mode === 'prep'
+    ? prepP
+    : mode === 'iteration'
+      ? iterationStripProgress
+      : mode === 'anchors'
+        ? iterationToAnchors
+        : workflowP;
+  const prepToIteration = easedPhase(elapsed, prepEnd, moveUpSeconds);
+  const anchorsToWorkflow = easedPhase(elapsed, anchorsEnd, workflowMoveSeconds);
+  const headingOpacity: Record<'prep' | 'iteration' | 'anchors' | 'workflow', number> = {
+    prep: 1 - prepToIteration,
+    iteration: prepToIteration * (1 - iterationToAnchors),
+    anchors: iterationToAnchors * (1 - anchorsToWorkflow),
+    workflow: anchorsToWorkflow,
+  };
+  const iterationWordsOpacity = elapsed < iterationEnd
+    ? easedPhase(elapsed, prepEnd + moveUpSeconds * 0.5, moveUpSeconds * 0.5)
+    : 1 - iterationToAnchors;
+  const iterationWordsProgress = elapsed < iterationEnd ? iterationStripProgress : 1;
+  const prepVideoOpacity = 1 - prepToIteration;
+  const prepVideoVisible = Boolean(sourceUrl) && elapsed < prepEnd + moveUpSeconds;
+  const anchorsPanelOpacity = easedPhase(elapsed, iterationEnd, moveDownSeconds);
+  const workflowPanelOpacity = easedPhase(elapsed, anchorsEnd, workflowMoveSeconds);
   // Center the effect's own visual bounds on the authored canvas. These
   // offsets are deliberately independent of ReviewOverlay subtitles: the
   // content should occupy the frame naturally and captions may overlay it.
-  const contentShiftY = mode === 'iteration' ? -140 : mode === 'anchors' ? 100 : 105;
+  const contentShiftY = elapsed < prepEnd
+    ? 105
+    : elapsed < prepEnd + moveUpSeconds
+      ? interpolate(elapsed, [prepEnd, prepEnd + moveUpSeconds], [105, -140], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad)})
+      : elapsed < iterationEnd
+        ? -140
+        : elapsed < iterationEnd + moveDownSeconds
+          ? interpolate(elapsed, [iterationEnd, iterationEnd + moveDownSeconds], [-140, 100], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad)})
+          : elapsed < anchorsEnd
+            ? 100
+            : elapsed < anchorsEnd + workflowMoveSeconds
+              ? interpolate(elapsed, [anchorsEnd, anchorsEnd + workflowMoveSeconds], [100, 105], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad)})
+              : 105;
 
   return <div style={{position: 'absolute', inset: 0, overflow: 'hidden', opacity: fadeOut, backgroundColor: 'transparent'}}>
     <div style={{position: 'absolute', inset: 0, transform: `translateY(${contentShiftY}px)`}}>
-      {mode === 'prep' && sourceUrl ? <div style={{position: 'absolute', left: 520, top: 44, width: 880, height: 430, border: `4px solid ${AMBER}`, boxShadow: '0 0 45px rgba(255,160,46,0.5)', overflow: 'hidden', backgroundColor: INK}}>
+      {prepVideoVisible && sourceUrl ? <div style={{position: 'absolute', left: 520, top: 44, width: 880, height: 430, opacity: prepVideoOpacity, border: `4px solid ${AMBER}`, boxShadow: '0 0 45px rgba(255,160,46,0.5)', overflow: 'hidden', backgroundColor: INK}}>
         <Video src={sourceUrl} trimBefore={prepSourceStart * fps} trimAfter={prepSourceEnd * fps} playbackRate={prepSourceSpeed} muted loop style={{width: '100%', height: '100%', objectFit: 'cover'}} />
         <div style={{position: 'absolute', left: 24, top: 18, color: '#fff0db', fontFamily: 'monospace', fontSize: 22, letterSpacing: 4, textShadow: '0 2px 8px #000'}}>ORIGINAL CLIP + ROUGH VOICEOVER</div>
       </div> : null}
-      {mode === 'anchors' ? <div style={{position: 'absolute', left: 570, top: 62, width: 780, height: 438, border: `3px solid ${AMBER}`, boxShadow: `0 0 42px rgba(255,160,46,${0.25 + anchorsP * 0.35})`, overflow: 'hidden', backgroundColor: INK}}>
+      {mode === 'anchors' ? <div style={{position: 'absolute', left: 570, top: 62, width: 780, height: 438, opacity: anchorsPanelOpacity, border: `3px solid ${AMBER}`, boxShadow: `0 0 42px rgba(255,160,46,${0.25 + anchorsP * 0.35})`, overflow: 'hidden', backgroundColor: INK}}>
         <Img src={url(cards[flickerPrevious])} style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: 1 - anchorsP}} />
         <Img src={url(cards[flickerIndex])} style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: 0.55 + anchorsP * 0.45}} />
         <div style={{position: 'absolute', inset: 0, background: 'linear-gradient(180deg, transparent 35%, rgba(8,5,2,0.88) 100%)'}} />
         <div style={{position: 'absolute', left: 24, bottom: 20, color: '#fff0db', fontFamily: 'monospace', fontSize: 22, letterSpacing: 4}}>KEYFRAME REFERENCE</div>
       </div> : null}
-      {mode === 'workflow' && sourceUrl && selected ? <div style={{position: 'absolute', left: 520, top: 44, width: 880, height: 430, border: `4px solid ${AMBER}`, boxShadow: '0 0 45px rgba(255,160,46,0.5)', overflow: 'hidden', backgroundColor: INK}}>
+      {mode === 'workflow' && sourceUrl && selected ? <div style={{position: 'absolute', left: 520, top: 44, width: 880, height: 430, opacity: workflowPanelOpacity, border: `4px solid ${AMBER}`, boxShadow: '0 0 45px rgba(255,160,46,0.5)', overflow: 'hidden', backgroundColor: INK}}>
         <Video src={sourceUrl} trimBefore={sourceStart * fps} trimAfter={sourceEnd * fps} playbackRate={sourceSpeed} muted loop style={{width: '100%', height: '100%', objectFit: 'cover'}} />
         <div style={{position: 'absolute', left: 24, top: 18, color: '#fff0db', fontFamily: 'monospace', fontSize: 22, letterSpacing: 4, textShadow: '0 2px 8px #000'}}>MINKHOLE OUTPUT · {selected.label}</div>
       </div> : null}
       <TimelineStrip segments={segments} cards={cards} rowY={460} progress={stripProgress} selectedIndex={selectedIndex} mode={mode} url={url} />
-      {mode === 'iteration' ? <IterationWords progress={iterationP} /> : null}
-      <Heading text={heading} />
+      {mode === 'iteration' || (mode === 'anchors' && elapsed < iterationEnd + moveDownSeconds)
+        ? <IterationWords progress={iterationWordsProgress} opacity={iterationWordsOpacity} />
+        : null}
+      <Heading text={params.headings?.prep ?? DEFAULT_HEADINGS.prep} opacity={headingOpacity.prep} />
+      <Heading text={params.headings?.iteration ?? DEFAULT_HEADINGS.iteration} opacity={headingOpacity.iteration} />
+      <Heading text={params.headings?.anchors ?? DEFAULT_HEADINGS.anchors} opacity={headingOpacity.anchors} />
+      <Heading text={params.headings?.workflow ?? DEFAULT_HEADINGS.workflow} opacity={headingOpacity.workflow} />
     </div>
   </div>;
 }

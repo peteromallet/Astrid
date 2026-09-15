@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 PROTOCOL = "workspace.v1"
-SCHEMA_DIGEST = "sha256:3afdae3b095086ffa7e793a45008940da78d5ea36caf571033d10201f8e6bf2c"
-OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
+SCHEMA_DIGEST = "sha256:fd1fa0185ecdf183e1f42d25c2d933bc5c110ad609dbdc86a458d6f7e5dc0eec"
+OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'getProjectObjectLocation', 'listProjectTasks', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
 
 
 @dataclass(frozen=True)
@@ -179,6 +179,22 @@ class ManagedObject:
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "ManagedObject":
         return cls(object_id=value["object_id"], digest=value["digest"], media_type=value["media_type"], size=int(value["size"]), version=int(value["version"]), created_at=value["created_at"], filename=value.get("filename"), relation=value.get("relation"))
+
+
+@dataclass(frozen=True)
+class ObjectLocation:
+    object_id: str
+    digest: str
+    size: int
+    media_type: str
+    local_path: str
+    storage: str
+    verified: bool
+    filename: str | None = None
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> "ObjectLocation":
+        return cls(object_id=str(value["object_id"]), digest=str(value["digest"]), size=int(value["size"]), media_type=str(value["media_type"]), local_path=str(value["local_path"]), storage=str(value["storage"]), verified=bool(value["verified"]), filename=value.get("filename"))
 
 
 @dataclass(frozen=True)
@@ -853,6 +869,10 @@ class WorkspaceClient:
         value = self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/objects" + query)[2])
         items, next_cursor = self._page(value)
         return [ManagedObject.from_json(item) for item in items], next_cursor
+
+    def get_project_object_location(self, project_id: str, object_id: str) -> ObjectLocation:
+        value = self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/objects/{_path_part(object_id)}/location")[2])
+        return ObjectLocation.from_json(value)
 
 
     def create_media_relation(self, project_id: str, from_object_id: str, to_object_id: str, kind: str, *, idempotency_key: str, metadata: Mapping[str, Any] | None = None, ordinal: int = 0) -> MutationResult:

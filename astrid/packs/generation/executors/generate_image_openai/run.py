@@ -28,6 +28,7 @@ from urllib.request import Request, urlopen
 from astrid.core._shared.result_manifest import complete_output_metadata
 from astrid.core.audit import AuditContext
 from astrid.core.cli_choices import add_choice_arg
+from astrid.core.contracts.errors import AstridError
 from astrid.core.foundation.atomic_io import write_json_atomic
 from astrid.core.util.credentials_scope import CredentialsScope
 
@@ -273,7 +274,10 @@ def _build_openai_manifest(
             rel = str(p.relative_to(out_dir))
         except ValueError:
             rel = p.name
-        outputs.append({"path": rel})
+        # The runtime receipt harvester binds every concrete file to a
+        # declared output port.  Keep all generated files on the media port;
+        # the manifest itself remains the receipt, not a second artifact.
+        outputs.append({"name": "generated_images", "path": rel})
 
     inputs: dict[str, Any] = {
         "model": args.model,
@@ -308,6 +312,17 @@ def _build_openai_manifest(
 
 
 def generate(args: argparse.Namespace) -> int:
+    if args.out_dir in (None, ""):
+        raise AstridError(
+            "generation.generate_image_openai requires an explicit --out-dir staging directory; "
+            "invoke through the SDK/runtime for managed output",
+            recovery_command="invoke generation.generate_image_openai with a runtime project, or pass --out-dir for explicit isolated tooling",
+        )
+    args.out_dir = Path(args.out_dir)
+    if args.manifest in (None, ""):
+        args.manifest = args.out_dir / "manifest.json"
+    else:
+        args.manifest = Path(args.manifest)
     jobs = _jobs_from_args(args)
     api_key = None if args.dry_run else _resolve_key(env_file=args.env_file)
     out_dir = args.out_dir
@@ -435,8 +450,18 @@ def build_parser() -> argparse.ArgumentParser:
     add("--output-compression", type=int)
     add_choice_arg(parser, "--background", values=sorted(BACKGROUNDS))
     add_choice_arg(parser, "--moderation", values=sorted(MODERATION))
-    add("--out-dir", type=Path, default=Path("output/gpt-image"))
-    add("--manifest", type=Path, default=Path("output/gpt-image/manifest.json"))
+    add(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Explicit output/staging directory (required; the runtime supplies this for managed tasks).",
+    )
+    add(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="Optional manifest receipt path; defaults beside --out-dir when omitted.",
+    )
     add("--env-file", type=Path)
     add("--timeout", type=int, default=180)
     add("--force", action="store_true")

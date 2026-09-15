@@ -37,6 +37,7 @@ _EXPORTS = {
     "UnsupportedCapabilityError": ("exceptions", "UnsupportedCapabilityError"),
     "RenderContext": ("rendering", "RenderContext"),
     "renderer_main": ("rendering", "renderer_main"),
+    "resolve_runtime_data_root": ("storage_root", "resolve_runtime_data_root"),
     "support": ("rendering", "support"),
     "GenerationFacade": ("generation", "GenerationFacade"),
     "generate": ("generation", "generate"),

@@ -1,15 +1,76 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
+from astrid.core._shared.result_manifest import harvest_staged_outputs
 from astrid.core.contracts.errors import AstridError
-from astrid.core.util.secrets import load_api_key
-from astrid.packs.generation.executors.generate_image_openai.run import main
-from astrid.packs.rendering.executors.sprite_sheet.run import load_fal_key
-from astrid.packs.editorial.executors.transcribe.run import load_api_key as load_transcribe_api_key
+from astrid.core.execution.executor.schema import load_executor_manifest
 from astrid.core.util.llm_clients import _load_api_key
+from astrid.core.util.secrets import load_api_key
+from astrid.packs.editorial.executors.transcribe.run import load_api_key as load_transcribe_api_key
+from astrid.packs.generation.executors.generate_image_openai.run import (
+    build_parser,
+    generate as openai_generate,
+    main,
+)
+from astrid.packs.rendering.executors.sprite_sheet.run import load_fal_key
+
+_OPENAI_EXECUTOR_YAML = (
+    Path(__file__).resolve().parents[2]
+    / "astrid/packs/generation/executors/generate_image_openai/executor.yaml"
+)
+
+
+def test_fake_openai_provider_receipt_binds_generated_images_port(
+    tmp_path, monkeypatch
+):
+    """A provider response produces a receipt the runtime can harvest."""
+    out_dir = tmp_path / "outputs"
+    manifest_path = out_dir / "manifest.json"
+    args = build_parser().parse_args(
+        [
+            "--prompt",
+            "a red triangle",
+            "--n",
+            "2",
+            "--out-dir",
+            str(out_dir),
+            "--manifest",
+            str(manifest_path),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "astrid.packs.generation.executors.generate_image_openai.run._resolve_key",
+        lambda **_kwargs: "fake-key",
+    )
+    monkeypatch.setattr(
+        "astrid.packs.generation.executors.generate_image_openai.run._call_image_api",
+        lambda *_args: {
+            "data": [{"b64_json": "dGVzdA=="}, {"b64_json": "dGVzdA=="}],
+            "created": 1,
+        },
+    )
+
+    assert openai_generate(args) == 0
+
+    definition = load_executor_manifest(str(_OPENAI_EXECUTOR_YAML))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["outputs"][0]["name"] == "generated_images"
+    harvested = harvest_staged_outputs(
+        out_dir,
+        definition=definition,
+        declared_outputs=definition.outputs,
+    )
+    assert [item["name"] for item in harvested] == [
+        "generated_images",
+        "generated_images",
+    ]
+    assert [item["ordinal"] for item in harvested] == [0, 1]
+    assert all(Path(item["path"]).is_file() for item in harvested)
 
 
 def test_generate_image_dry_run_multiple_variants(capsys, tmp_path):

@@ -15,6 +15,8 @@ def _dispatch(raw: list[str]) -> int:
         return 0
 
     first = raw[0]
+    if first not in _CORE_ROUTE_NAMES:
+        _register_installed_pack_routes()
     if first not in _top_level_commands():
         raise AstridError(
             f"unknown command '{first}'",
@@ -226,6 +228,13 @@ def _dispatch_backup(args: list[str]) -> int:
     return 0
 
 
+def _dispatch_pack(pack: str, args: list[str]) -> int:
+    """Run a declared external-pack command through the Astrid runtime."""
+    from .hivemind import dispatch
+
+    return dispatch(pack, args)
+
+
 def _dispatch_product(args: list[str]) -> int:
     """Run one product-family command through the remote SDK boundary."""
     from astrid.core.cli.domain_product import PRODUCT_FAMILY_SET, run_product_family
@@ -303,6 +312,35 @@ _TOP_LEVEL_HANDLERS = {
     "doctor": _dispatch_doctor,
     "backup": _dispatch_backup,
 }
+_CORE_ROUTE_NAMES = frozenset(_TOP_LEVEL_HANDLERS)
+
+# External packs opt into the CLI through the same declarative registry. This
+# keeps pack installation and command exposure separate: a pack is available
+# to the runtime without automatically claiming a top-level command.
+from .hivemind import PACK_COMMANDS as _PACK_COMMANDS, installed_pack_ids as _installed_pack_ids
+
+# Pack ids are discoverable, but never allowed to shadow a core family or an
+# outer launcher command. This is a blocklist/precedence rule, not a second
+# hand-maintained pack allowlist.
+_PACK_ROUTE_BLOCKLIST = frozenset(
+    {"agent", "auth", "help", "login", "status", "logout", "revoke", "--help", "--version"}
+)
+_DYNAMIC_PACK_ROUTE_NAMES: set[str] = set()
+
+
+def _register_installed_pack_routes() -> None:
+    """Register discovered pack ids lazily, preserving core route precedence."""
+    for pack_name in _DYNAMIC_PACK_ROUTE_NAMES:
+        _TOP_LEVEL_HANDLERS.pop(pack_name, None)
+    _DYNAMIC_PACK_ROUTE_NAMES.clear()
+    core_names = _CORE_ROUTE_NAMES
+    for pack_name in sorted({spec.pack for spec in _PACK_COMMANDS} | _installed_pack_ids()):
+        if pack_name in _PACK_ROUTE_BLOCKLIST or pack_name in core_names:
+            continue
+        _TOP_LEVEL_HANDLERS[pack_name] = (
+            lambda args, pack=pack_name: _dispatch_pack(pack, args)
+        )
+        _DYNAMIC_PACK_ROUTE_NAMES.add(pack_name)
 
 
 def compose_profile_handoff(

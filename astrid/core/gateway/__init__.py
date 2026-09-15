@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Astrid top-level command gateway.
 
-The gateway dispatches to exactly seven families: the five product families
-(``projects``, ``timelines``, ``media``, ``tasks``, ``runs``) plus the three
-operational families (``doctor``, ``backup``). ``--help``/``-h``
+The gateway dispatches to the five product families (``projects``,
+``timelines``, ``media``, ``tasks``, ``runs``), the two operational families
+(``doctor``, ``backup``), and installed external pack tools. ``--help``/``-h``
 and ``help`` print documentation (help is documentation and never requires a
 session); ``--version`` prints the version. Everything else is dispatched to
-one of the seven family handlers.
+a core family or a discovered pack route.
 
 The settled unbound allowlist is recorded in
 ``SPRINT1_UNBOUND_ALLOWLIST_CONTRACT`` below: ``doctor`` and
@@ -41,7 +41,7 @@ from astrid.version import ASTRID_VERSION
 from . import dispatch as _gateway_dispatch
 
 
-# Canonical accepted unbound contract for the seven-family gateway. Only the
+# Canonical accepted unbound contract for the gateway. Only the
 # two operational families (which must run before any session exists) and
 # help/version documentation are sessionless; everything else dispatches to a
 # family handler.
@@ -75,7 +75,7 @@ def _main_impl(raw: list[str]) -> int:
         _print_entrypoint_help()
         return 0
     # `astrid help` is the product-focused executable help (m4 plan step
-    # 24, task T26): the seven families, nested mounts, the --json envelope
+    # 24, task T26): the seven core families, external pack routes, nested mounts, the --json envelope
     # convention, and stable exit codes. It is session-free by construction
     # (help is documentation).
     if first_arg == "help":

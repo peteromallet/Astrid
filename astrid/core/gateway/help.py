@@ -5,7 +5,8 @@ gateway facade focused while preserving the help-printing entrypoint that
 callers rely on via ``astrid.core.gateway._print_entrypoint_help``.
 
 ``_product_help_text`` / ``_print_product_help`` (m4 plan step 24, task
-T26) are the executable help. They document the seven-family surface: the
+T26) are the executable help. They document the seven-family core surface
+plus discovered external pack routes: the
 five product families from the explicit registry
 (``astrid/core/cli/domain_product.py``) with their kernel/pack ownership,
 the two manifest-declared nested mounts, the ``--json`` envelope
@@ -21,9 +22,8 @@ def _print_entrypoint_help() -> None:
         """Astrid command gateway — Python SDK + CLI
 
 The canonical Python boundary is ``import astrid`` (see docs/reference/sdk.md).
-This gateway is the CLI entry point for the seven families: the five product
-families (projects, timelines, media, tasks, runs) and the two operational
-families (doctor, backup).
+This gateway is the CLI entry point for the five product families, two
+operational families (doctor, backup), and the external Hivemind tool.
 
 Usage:
   python3 -m astrid <family> <command> [options]
@@ -46,6 +46,9 @@ Latest project render:
 Operational families:
   python3 -m astrid doctor [--json]
   python3 -m astrid backup {create,restore,export,tombstone,recover,purge} [--json]
+
+External tools:
+  python3 -m astrid hivemind search QUERY [--limit N] [--json]
 
 Nested mounts (manifest-owned):
   python3 -m astrid timelines shots ...
@@ -71,7 +74,7 @@ Ownership handoff:
 
 
 def _product_help_text() -> str:
-    """Return the executable help for the seven-family gateway surface.
+    """Return the executable help for the gateway surface.
 
     The text is generated from the explicit product registry plus the two
     operational families, so the advertised census can never drift from
@@ -80,18 +83,18 @@ def _product_help_text() -> str:
     the ``--json`` envelope convention, the stable exit codes, and the
     two operational families (``doctor``, ``backup``).
     """
-    families = "projects timelines media tasks runs doctor backup"
-    return f"""Astrid product commands — the seven runtime-client families
+    families = "projects timelines media tasks runs doctor backup hivemind"
+    return f"""Astrid commands — runtime families and external tools
 
-The gateway owns exactly seven families: the five product families and the
-two operational families. ``shots`` mounts beneath ``timelines`` and
+The gateway owns five product families, two operational families, and the
+external Hivemind tool. ``shots`` mounts beneath ``timelines`` and
 ``references`` mounts beneath ``media``.
 
 Usage:
   python3 -m astrid <family> <command> [options]
   python3 -m astrid <family> --help
 
-Family census (exactly seven families): {families}
+Command census: {families}
 
 Product families:
   projects    [kernel] project create/list/show/update/select/current
@@ -103,6 +106,11 @@ Product families:
 Operational families:
   doctor      [runtime] read-only runtime health diagnostics
   backup      [runtime] create/restore/export/tombstone/recover/purge
+
+External tools:
+  hivemind    [managed pack] search current messages and resources
+  installed pack routes are discovered from pack manifests; packs without a
+  declared CLI command remain available through ``astrid agent``
 
 Nested mounts (manifest-owned):
   timelines shots       [pack: shots] project-level reusable shot list/create/show/add/remove/reorder

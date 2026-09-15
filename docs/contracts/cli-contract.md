@@ -5,11 +5,12 @@ agentic consumers (both human operators and AI agents).  It covers stream
 discipline, output modes, error signaling, and the behavioral guarantees
 that agents can rely on when invoking Astrid subcommands.
 
-The gateway owns **exactly seven families** — the five product families
+The gateway owns **seven core families** — the five product families
 (`projects`, `timelines`, `media`, `tasks`, `runs`) and the two
 operational families (`doctor`, `backup`) — plus the two
 manifest-declared nested mounts (`timelines shots`, `media references`).
-One verb = one SDK call. No other top-level command exists; see
+Installed external packs may additionally expose top-level commands through
+the declarative pack-command registry. One verb = one SDK call. See
 [the CLI census](../getting-started.md) and
 [CLI journeys](../guides/cli-journeys.md).
 
@@ -126,9 +127,20 @@ Nested mounts (manifest-declared, never top-level):
 - **`timelines shots`** — project-level reusable `list`, `create`, `show`, `add`, `remove`, `reorder`.
 
 There is no `next` / `status` / `attach` / `start` / `ack` surface: the
-legacy task-mode CLI was retired with the filesystem task-run store.  Pack
-capabilities are not gateway commands either — they run through the SDK
-(`astrid.sdk.invoke`, `astrid.sdk.client.AstridClient`).
+legacy task-mode CLI was retired with the filesystem task-run store. Pack
+capabilities without a declared CLI mapping still run through the SDK
+(`astrid.sdk.invoke`, `astrid.sdk.client.AstridClient`). Installed pack ids
+are discovered at launch; reserved launcher words are the only blocklist.
+
+For example, the managed Hivemind pack exposes:
+
+```text
+astrid hivemind search QUERY [--limit N] [--json]
+```
+
+Adding another pack command requires a declaration of its pack id, public
+operation, capability id, and invocation kind. It does not require another
+hand-written top-level dispatch branch.
 
 ## Error Contract
 

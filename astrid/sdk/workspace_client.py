@@ -206,7 +206,7 @@ class WorkspaceClient:
                 "recover_project_reference", "associate_reference", "set_primary_reference",
                 "link_references", "create_document", "list_documents", "get_document",
                 "update_document", "ingest_object", "ingest_project_object",
-                "list_project_objects", "create_media_relation", "list_media_relations",
+                "list_project_objects", "get_project_object_location", "create_media_relation", "list_media_relations",
                 "get_object", "head_object", "admit_task", "get_task", "list_project_tasks",
                 "cancel_task", "retry_task", "cancel_run", "retry_run", "get_run",
                 "list_project_runs", "list_events", "list_run_events", "list_generations",
@@ -559,6 +559,10 @@ class WorkspaceClient:
 
     def list_project_objects(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_project_objects", project_id, cursor=cursor, limit=limit)
+
+    def get_project_object_location(self, project_id: str, object_id: str) -> Any:
+        """Resolve a verified canonical local object path from the runtime."""
+        return self._call_generated("get_project_object_location", project_id, object_id)
 
     def create_media_relation(
         self,

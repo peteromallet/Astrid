@@ -50,6 +50,8 @@ remotion/out/
 runs/
 cache/
 .astrid/
+.astrid-data/
+**/.astrid-data/
 **/.cas/
 */cache/
 out/

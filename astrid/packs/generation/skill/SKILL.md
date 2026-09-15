@@ -3,8 +3,7 @@ name: generation
 description: >
   Generate images and videos from text prompts using the elegant
   `astrid.generate` facade.  Image, audio, and video generation route through
-  the same executor code path (SDK, project-bound, or ad-hoc output
-  directory).  Covers generate_image, generate_video, and
+  the same runtime-owned executor code path. Covers generate_image, generate_video, and
   generate_audio, and generate_image_openai (executor-only).
 ---
 
@@ -14,33 +13,40 @@ The generation pack provides a first-class **library facade** for image, audio,
 and video generation and also exposes the underlying executors for direct (SDK)
 and automation use.
 
-## Quick-start — the `astrid.generate` facade
+## Quick-start — runtime-backed generation
 
-Import `astrid` and call `.image()`, `.audio()`, or `.video()`.  Every call returns a typed
-`GenerationResult` with `.path`, `.ok`, `.image_paths` / `.video_paths`,
-`.model_actual`, `.seed_used`, `.manifest`, and `.run_dir`.
+Use the runtime-backed SDK generation facade. Successful managed calls return
+runtime artifact references (digest, media type, size, and name); the runtime
+owns durable storage and task/run state.
 
 ### Image
 
 ```python
-import astrid
+import astrid.sdk as sdk
 
-# Simplest: text-to-image, default project, automatic mode/execution inference
-img = astrid.generate.image(
-    model="flux-schnell",
-    prompt="a serene mountain lake at dawn",
+# Simplest: text-to-image in the selected runtime project
+img = sdk.invoke(
+    "generation.generate_image",
+    kind="executor",
+    project="demo",
+    inputs={
+        "model": "flux-schnell",
+        "mode": "t2i",
+        "execution": "cloud",
+        "prompt": "a serene mountain lake at dawn",
+    },
+    wait=True,
 )
-img.path          # Path to the output PNG
-img.ok            # True on success
-img.seed_used     # the seed that was actually used
-img.manifest      # full manifest dict (schema v2)
+img.outputs["artifacts"]  # runtime-published image artifact references
+img.ok                    # True on success
 ```
 
 Mode (`t2i` / `i2i`) and execution (`cloud` / `local`) are inferred when
 possible (SD-002).  Pass them explicitly to override:
 
 ```python
-# Image-to-image (image_ref triggers i2i inference)
+# Image-to-image (image_ref triggers i2i inference); input files must be
+# runtime-owned references or an admitted materialization.
 img = astrid.generate.image(
     model="flux-dev",
     image_ref="./sketch.png",
@@ -70,24 +76,37 @@ backend list and creates no run.
 
 ```python
 # Text-to-video (cloud)
-clip = astrid.generate.video(
-    model="wan-2.2",
-    mode="t2v",
-    prompt="a wave crashing on rocks",
+clip = sdk.invoke(
+    "generation.generate_video",
+    kind="executor",
+    project="demo",
+    inputs={
+        "model": "wan-2.2",
+        "mode": "t2v",
+        "execution": "cloud",
+        "prompt": "a wave crashing on rocks",
+    },
+    wait=True,
 )
-clip.path          # first output .mp4
-clip.video_paths   # list[Path] — same object as .image_paths
+clip.outputs["artifacts"]  # runtime-published video artifact references
 ```
 
 ### Audio
 
 ```python
 # Audio currently has a cloud-only `music` route in the model catalog.
-sound = astrid.generate.audio(
-    model="stable-audio-3-medium",
-    prompt="a two-second gentle water splash",
-    duration=2.0,
-    execution="cloud",
+sound = sdk.invoke(
+    "generation.generate_audio",
+    kind="executor",
+    project="demo",
+    inputs={
+        "model": "stable-audio-3-medium",
+        "mode": "music",
+        "execution": "cloud",
+        "prompt": "a two-second gentle water splash",
+        "duration": 2.0,
+    },
+    wait=True,
 )
 sound.ok
 ```
@@ -135,74 +154,82 @@ img = astrid.generate.image(
 
 ### Output routing
 
-The facade supports three mutually-exclusive routing strategies:
+Managed generation has one output route: an admitted runtime project. The
+generic host writes to an attempt-local staging directory, publishes each
+declared file to the runtime content-addressed store, and records the digest
+and project relation in the runtime database. Staging paths are temporary.
 
 ```python
-# 1. Explicit output directory
-img = astrid.generate.image(
-    model="flux-schnell",
-    prompt="test",
-    out="./my-outputs",
-)
+import astrid.sdk as sdk
 
-# 2. Explicit project (assets land in the project's canonical run dir)
-img = astrid.generate.image(
-    model="flux-schnell",
-    prompt="test",
+result = sdk.invoke(
+    "generation.generate_image",
+    kind="executor",
     project="my-project",
+    inputs={
+        "model": "flux-schnell",
+        "mode": "t2i",
+        "execution": "cloud",
+        "prompt": "test",
+    },
+    wait=True,
 )
-
-# 3. Neither — resolves the configured default project automatically
-#    (no ceremony, no session mutation)
-img = astrid.generate.image(
-    model="flux-schnell",
-    prompt="test",
-)
-# .run_dir is now inside the default project's run tree
+result.outputs["artifacts"]  # digest, media type, size, and name
 ```
 
-When both `out` and `project` are supplied, `out` wins and `project` is
-ignored.
+Do not pass `out` with `project`, and do not invoke a generation `run.py`
+directly. A custom filesystem destination is an explicit export operation
+after runtime publication; it is not an executor default and must not create a
+second unregistered output cache.
 
 ### Self-describing outputs
 
 Every generated file carries its own provenance, so an image stays identifiable
-after it leaves its run directory:
+after it is materialized from its runtime artifact reference:
 
 - **PNG outputs** get the generation metadata embedded as `astrid_*` tEXt chunks
   (`astrid_prompt`, `astrid_model`, `astrid_model_actual` = the actual endpoint,
   `astrid_seed`, `astrid_request_id`, `astrid_created`, plus `astrid_loras` when
   used). Local (vibecomfy/ComfyUI) outputs additionally keep ComfyUI's own
   `prompt`/`workflow` chunks — both are preserved.
-- A full `manifest.json` sidecar (schema v2) sits beside the outputs in the run
-  dir with the complete record (request, outputs + sha256 hashes, cost, timings).
+- The universal manifest is a receipt produced inside host staging; durable
+  results are runtime artifact references and task/run evidence. Do not depend
+  on a local run-directory sidecar after settlement.
 
-Read the embedded fields with `PIL.Image.open(path).text` or any PNG tEXt reader.
+Read embedded fields after materializing the runtime artifact with
+`PIL.Image.open(path).text` or any PNG tEXt reader.
 
 ## Scratchpad convention
 
-For quick experiments and throwaway scripts, drop a `.py` file that calls the
-`astrid.generate` facade and run it with plain Python — the facade resolves
-the configured default project automatically, so there is zero boilerplate:
+For experiments, use a selected runtime project and the SDK. This keeps
+generation and registration together even when the script is launched from
+another working directory:
 
 ```python
 # my_experiment.py
-import astrid
+import astrid.sdk as sdk
 
-img = astrid.generate.image(
-    model="flux-schnell",
-    prompt="a glass teapot on basalt",
+result = sdk.invoke(
+    "generation.generate_image",
+    kind="executor",
+    project="my-project",
+    inputs={
+        "model": "flux-schnell",
+        "mode": "t2i",
+        "execution": "cloud",
+        "prompt": "a glass teapot on basalt",
+    },
+    wait=True,
 )
-print(img.path)
-print(img.seed_used)
+print(result.outputs["artifacts"])
 ```
 
 ```bash
 python my_experiment.py
 ```
 
-The facade resolves the configured default project itself and provides the
-same `astrid.generate` surface — no manual context management.
+The runtime selection may be used instead of `project="my-project"`; the
+working directory never determines ownership or output location.
 
 ## Plugin verbs
 
@@ -246,8 +273,8 @@ the executor-level skill at
 ### Quick-start (SDK)
 
 Pass every declared input as a snake_case entry in `inputs` (each is forwarded
-to the executor's `run.py` as a `--kebab-case` flag); pass the output
-directory as the `out` kwarg, not inside `inputs`.
+to the executor's `run.py` as a `--kebab-case` flag). Bind a runtime project;
+the host supplies its private staging `out` value.
 
 ```python
 import astrid.sdk as sdk
@@ -256,24 +283,24 @@ import astrid.sdk as sdk
 result = sdk.invoke("generation.generate_image", inputs={
     "model": "flux-schnell", "mode": "t2i", "execution": "cloud",
     "prompt": "a serene mountain lake at dawn",
-}, out="./out")
+}, project="demo", wait=True)
 
 # Image from text (local, open model)
 result = sdk.invoke("generation.generate_image", inputs={
     "model": "z-image", "mode": "t2i", "execution": "local",
     "prompt": "a serene mountain lake at dawn",
-}, out="./out")
+}, project="demo", wait=True)
 
 # Video from text (cloud)
 result = sdk.invoke("generation.generate_video", inputs={
     "model": "wan-2.2", "mode": "t2v", "execution": "cloud",
     "prompt": "a wave crashing on rocks",
-}, out="./out")
+}, project="demo", wait=True)
 
 # OpenAI image generation from a prompt file
 result = sdk.invoke("generation.generate_image_openai", inputs={
     "prompts_file": "./prompts.jsonl",
-}, out="./out")
+}, project="demo", wait=True)
 ```
 
 ## When to use

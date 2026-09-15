@@ -406,8 +406,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--out",
         type=Path,
-        default=Path.cwd() / "generated_output",
-        help="Output directory (default: ./generated_output).",
+        default=None,
+        help="Explicit output/staging directory (required; the runtime supplies this for managed tasks).",
     )
     p.add_argument(
         "--env-file",
@@ -426,6 +426,13 @@ def generate_core(
     args_or_request: argparse.Namespace | list[str] | tuple[str, ...] | Any | None,
 ) -> GenerationResult:
     args = _coerce_args(args_or_request)
+
+    if args.out in (None, ""):
+        raise AstridError(
+            "generation.generate_video requires an explicit --out staging directory; "
+            "invoke through the SDK/runtime for managed output",
+            recovery_command="invoke generation.generate_video with a runtime project, or pass --out for explicit isolated tooling",
+        )
 
     # --- validate mode (hard-reject v2v/video-edit before anything) ----------
     mode_name: str = _validate_mode(args.mode)

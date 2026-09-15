@@ -34,8 +34,9 @@ result = sdk.invoke(
         "prompt": "a serene mountain lake at dawn",
     },
     project="demo",                # every executor run belongs to exactly one project
+    wait=True,
 )
-print(result.ok, result.manifest_path)
+print(result.ok, result.outputs.get("artifacts", []))
 ```
 
 ```bash
@@ -47,6 +48,12 @@ python3 -m astrid runs list --project demo --json
 ```
 
 **`--mode` is required** (SD-005).  No auto-inference from inputs.
+
+The runtime supplies the executor's private staging directory, publishes
+declared media files to its content-addressed store, and records the task and
+generation associations. Do not invoke `run.py` with a cwd-relative output
+directory or maintain a second workspace cache. A custom filesystem path is
+an explicit export after the runtime result has settled.
 
 ## Canonical image modes
 

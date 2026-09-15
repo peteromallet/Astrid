@@ -212,7 +212,12 @@ class DomainResult(Generic[T]):
         idempotency_key: str = "",
     ) -> DomainResult[None]:
         """Build a failure envelope (``data`` is always ``None``)."""
-        return DomainResult[None](
+        # Instantiate through ``cls`` without subscripting the generic.  On
+        # Python 3.12 ``DomainResult[None](...)`` makes ``typing`` assign an
+        # ``__orig_class__`` attribute after construction.  The frozen,
+        # slotted dataclass rejects that assignment with the misleading
+        # ``super(type, obj)`` TypeError, hiding the actual command error.
+        return cls(
             ok=False,
             data=None,
             error=error,

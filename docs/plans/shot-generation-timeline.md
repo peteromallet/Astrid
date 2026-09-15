@@ -82,7 +82,7 @@ Candidate previews must not promote themselves. Support both per-segment human a
 
 Compile provider-independent shot intent into a frozen, validated request. Advertise support for multiple images, timed anchors, video roles, audio policies, duration/frame grids, and endpoint fidelity. Reject unsupported essential intent; never quietly drop an end image or preserve constraint.
 
-For the initial H3 adapter, derive from the corrected Seitanism AV Extension bundle in [the intro guide](../../guides/astrid-intro-anchor-video-generation.md). Wire endpoint controls into every applicable extension, retain native 24-fps context, validate H3's frame grids, and record overlap removal separately from the target timeline duration. Soft keyframes are guidance, not exact-pixel guarantees.
+For the initial H3 adapter, derive from the corrected Seitanism AV Extension bundle in the [general anchor-to-anchor guide](../../guides/anchor-to-anchor-video-generation.md), with the [Astrid Intro worked example](../../guides/astrid-intro-anchor-video-generation.md) as a project-specific reference. Wire endpoint controls into every applicable extension, retain native 24-fps context, validate H3's frame grids, and record overlap removal separately from the target timeline duration. Soft keyframes are guidance, not exact-pixel guarantees.
 
 Input materialization must use the runtime's authorized managed-media boundary. Resolve media to attempt-local files there; do not make local source paths the durable identity or assume a public export API exists.
 
@@ -112,7 +112,7 @@ Finishing/upscaling is a derived take with provenance. It must not silently repl
 
 ## Documentation ownership
 
-Do not leave the final behavior documented only in this plan or the intro-specific guide.
+Do not leave the final behavior documented only in this plan or the reusable guide; keep project-specific timing evidence in a worked-example page when useful.
 
 1. **Neutral runtime repository:** authoritative schema/API contract for shot bindings, time bounds, selection transactions, generation snapshots, approval/dependency lifecycle, and migrations. Locate and extend its existing owner documents before creating a parallel specification.
 2. **`docs/contracts/shot-generation.md` (proposed):** Astrid-facing normative mapping and invariants, linked to the runtime contract. Explicitly distinguish intent, references, generated takes, and playback.
@@ -120,6 +120,6 @@ Do not leave the final behavior documented only in this plan or the intro-specif
 4. **`docs/generation/31-video-contract.md` and `00-features.md` (existing):** supported generation roles and backend capability matrix, with honest unavailable states.
 5. **Rendering and references pack skills (existing):** agent entry points and division of responsibilities. Link the shared contract; avoid copying competing schemas into skills.
 6. **`guides/shot-generation.md` (proposed):** reusable human workflow: attach inputs → author intent/prompts → generate → approve → select → render.
-7. **`guides/astrid-intro-anchor-video-generation.md` (existing):** project-specific Seitanism recipe, exact anchors/timings and overlay exceptions. Link to the reusable guide/contract when delivered.
+7. **`guides/anchor-to-anchor-video-generation.md` (existing):** reusable Seitanism recipe, interval/gap timing, approval, provenance, and assembly procedure for any timeline. **`guides/astrid-intro-anchor-video-generation.md`** is the worked example with exact anchors/timings and overlay exceptions.
 
 Decisions to settle in phase 1: whether shot duration is already independently authoritative; exact permitted role vocabulary; shared-shot placement overrides; initial human-review UI; and backend-specific preservation guarantees. These must be explicit contract choices, not inferred metadata conventions.

@@ -2,8 +2,8 @@
 
 The runtime repository owns generation. Astrid deliberately does not invoke
 that repository's generator at test time: this gate proves that the checked-in
-client and metadata are the exact reviewed vendored artifacts, including the
-explicit object-location backport, identified by immutable file hashes.
+client is the exact reviewed upstream artifact, identified by immutable file
+hashes and an upstream commit pin alongside the contract metadata.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from banodoco_workspace_client.contract_metadata import (
     OPERATIONS,
     PROTOCOL,
     SCHEMA_DIGEST,
-    VENDORED_BACKPORT_OPERATIONS,
+    SOURCE_COMMIT,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,9 +33,9 @@ METADATA_PATH = ROOT / "banodoco_workspace_client" / "contract_metadata.py"
 # silently alter the shipped transport.
 PINNED_PROTOCOL = "workspace.v1"
 PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:dc91a45390f33582f0299f81285d165128e1885a9fd62b4ccffa7b8e465ed63a"
-PINNED_SCHEMA_DIGEST = "sha256:2043e7bc9b06fc19e20906aff8eaa429fcb8ab335bedc31bd34bff9ab5b71b75"
-PINNED_GENERATED_SHA256 = "95304724be5c2659df0d2e7be9094436fac89f63d096054d5af42462ec098664"
-PINNED_METADATA_SHA256 = "52cc308d3a751bd72d134b9e9e9ed21c63d3eb0f11de99a90809587885c3cf68"
+PINNED_SCHEMA_DIGEST = "sha256:e64d2bd291f7e746d66cc688e673ee98dd240117e42131dbcde613080993c2d4"
+PINNED_GENERATED_SHA256 = "fd4f8e29701785e6b9e635032a9146abb3264a1816044bdb99617df98673ac2a"
+PINNED_METADATA_SHA256 = "0e09db73e5ec357ca6b39fe022fdbc8b4f4436c41b82f183e09aee6aba7c933b"
 
 
 def _camel_to_snake(value: str) -> str:
@@ -44,6 +44,7 @@ def _camel_to_snake(value: str) -> str:
 
 
 def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
+    assert SOURCE_COMMIT == "fff23d01d53b874defdd3654fb23dc9051220122"
     assert PROTOCOL == PINNED_PROTOCOL == generated.PROTOCOL
     assert COMPONENT_MANIFEST_SHA256 == PINNED_COMPONENT_MANIFEST_SHA256
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST
@@ -80,7 +81,7 @@ def test_frozen_mutation_signatures_require_idempotency_keys() -> None:
         assert parameter.default is inspect.Parameter.empty
 
 
-def test_object_location_backport_preserves_typed_wire_contract(monkeypatch) -> None:
+def test_object_location_preserves_typed_wire_contract(monkeypatch) -> None:
     payload = {
         "object_id": "object", "digest": "sha256:abc", "size": 12,
         "media_type": "video/mp4", "local_path": "/runtime/object.mp4",
@@ -103,8 +104,7 @@ def test_object_location_backport_preserves_typed_wire_contract(monkeypatch) -> 
 def test_both_api_families_are_exported() -> None:
     assert ObjectLocation is generated.ObjectLocation
     assert ManagedOutput is generated.ManagedOutput
-    assert VENDORED_BACKPORT_OPERATIONS == ("getProjectObjectLocation",)
-    assert set(VENDORED_BACKPORT_OPERATIONS) <= set(OPERATIONS)
+    assert "getProjectObjectLocation" in OPERATIONS
     for name in (
         "list_managed_outputs", "get_managed_output", "export_managed_output",
         "adopt_managed_output", "update_managed_output_lifecycle",

@@ -257,7 +257,7 @@ you created instead of guessing from ids alone.
 - The `STAGE.md` says when to use it and gives the canonical invocation.
 - Inputs, outputs, cache behavior, isolation, dependencies, and network use are
   declared in metadata.
-- Runtime outputs go under `runs/` or another ignored directory.
+- Runtime outputs are published through the runtime and stored in its configured data folder; alternate exports must be explicit.
 - Focused tests cover registry discovery and the behavior that can break.
 
 ## Related Guides

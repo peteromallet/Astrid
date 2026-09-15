@@ -18,6 +18,11 @@ def test_shipped_ledger_reconciles_historical_capability_sets():
     assert sources["coverage"]["historical_source_labels"]["complete"]
     assert not sources["coverage"]["executor_inventory"]["missing"]
     assert not sources["coverage"]["legacy_ids"]["missing"]
+    assert not {
+        row["pack"]
+        for row in sources["pack_labels"]
+        if row["pack"] in {"discord_local", "seedance_local"}
+    }
 
 
 def test_ledger_has_only_canonical_ids_models_backends_and_explicit_unmapped_labels():

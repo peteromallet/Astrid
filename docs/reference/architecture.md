@@ -145,7 +145,7 @@ uses runtime run/task/generation/variant relations.
 
 ## Generated Files and Dirty Worktrees
 
-Normal generated outputs belong under `runs/` or another ignored directory. Do not commit source media, rendered videos, local dependency environments, or secrets.
+Normal generated outputs are stored and registered by the runtime in the configured Astrid data folder. Alternate export locations must be explicit. Do not commit source media, rendered videos, local dependency environments, or secrets.
 
 Element changes may require generated Remotion registry updates. Keep `.ts`, `.js`, `.d.ts`, and `.map` siblings synchronized in `remotion/src`, then scan for stale element aliases:
 

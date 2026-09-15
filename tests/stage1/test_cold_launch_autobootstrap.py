@@ -15,6 +15,20 @@ from astrid.sdk.workspace_client import WorkspaceClientError
 from banodoco_workspace_client.contract_metadata import SCHEMA_DIGEST
 
 
+def test_launcher_wait_outlasts_runtime_admission(monkeypatch):
+    monkeypatch.delenv("BANODOCO_RUNTIME_ADMISSION_TIMEOUT_SECONDS", raising=False)
+    assert autobootstrap._launcher_timeout() == 135.0
+    monkeypatch.setenv("BANODOCO_RUNTIME_ADMISSION_TIMEOUT_SECONDS", "300")
+    assert autobootstrap._launcher_timeout() == 315.0
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-1", "0", "invalid"])
+def test_invalid_admission_budget_is_rejected(monkeypatch, value):
+    monkeypatch.setenv("BANODOCO_RUNTIME_ADMISSION_TIMEOUT_SECONDS", value)
+    with pytest.raises(autobootstrap.AutoBootstrapError):
+        autobootstrap._launcher_timeout()
+
+
 @pytest.fixture(autouse=True)
 def _isolated_home(monkeypatch, tmp_path):
     """Keep upgrade-guard tests hermetic around the operator's live home."""

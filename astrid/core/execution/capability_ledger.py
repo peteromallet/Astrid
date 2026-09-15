@@ -105,6 +105,11 @@ _HISTORICAL_SOURCE_LABELS: tuple[dict[str, Any], ...] = (
     },
 )
 
+# These personal adapters are opt-in project packs.  They may be present in
+# an editable checkout, but they are not part of the canonical source census;
+# their executor contracts remain represented by the optional matrix rows.
+_OPTIONAL_PROJECT_PACK_IDS = frozenset({"discord_local", "seedance_local"})
+
 _HISTORICAL_EXECUTOR_ROWS: tuple[dict[str, Any], ...] = (
     {
         "id": "iteration.prepare",
@@ -193,6 +198,8 @@ def _repo_root_for_matrix(path: Path) -> Path | None:
 def _source_labels(repo_root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for manifest in sorted((repo_root / "astrid" / "packs").glob("*/pack.yaml")):
+        if manifest.parent.name in _OPTIONAL_PROJECT_PACK_IDS:
+            continue
         raw = _load_manifest_payload(manifest)
         labels = raw.get("capabilities", []) if isinstance(raw, Mapping) else []
         if not isinstance(labels, list):
@@ -353,8 +360,8 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
     expected_hivemind = sorted(row["id"] for row in executors if row["id"].startswith("hivemind."))
     # Blessed census baseline. Hivemind remains represented by the optional
     # external contract below; it is deliberately absent from the in-tree
-    # source-label census. Only labels backed by manifests in this checkout
-    # advance these counts.
+    # source-label census. Optional project packs remain represented by their
+    # matrix contracts, but do not advance the canonical source counts.
     coverage = {
         "source_labels": {"source": 89, "ledger": len(labels), "missing": [], "complete": len(labels) == 89},
         "historical_source_labels": {"source": 94, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 94},

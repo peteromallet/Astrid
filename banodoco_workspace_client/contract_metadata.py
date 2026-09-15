@@ -7,4 +7,4 @@ OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'rest
 
 # Astrid provenance: generated.py and __init__.py are byte-identical to this commit.
 SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
-SOURCE_COMMIT = "fff23d01d53b874defdd3654fb23dc9051220122"
+SOURCE_COMMIT = "90f4a9f22764bc66fa8b30d7d9081c6ac6307328"

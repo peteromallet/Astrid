@@ -30,8 +30,8 @@ def _safe_absolute(value: str | Path, *, base: Path) -> Path:
     return path
 
 
-def resolve_runtime_data_root() -> Path | None:
-    """Return the configured absolute support root, if one is available.
+def resolve_runtime_data_root() -> Path:
+    """Return the configured absolute support root.
 
     An environment override wins. Otherwise the checked-in install config
     anchors the default ``.astrid-data`` beside the Astrid source checkout.

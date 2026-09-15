@@ -110,7 +110,9 @@ _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
     "coverage",
 )
 
-_RUNTIME_OUTPUT_NAMESPACES = frozenset(("images", "videos", "audio", "agent-view"))
+_RUNTIME_OUTPUT_NAMESPACES = frozenset(
+    ("images", "videos", "audio", "agent-view", "filmstrip-view")
+)
 
 
 def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:

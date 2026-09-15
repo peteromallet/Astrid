@@ -101,7 +101,8 @@ there is no verified rendered-video source. The returned manifest and pack root
 are navigation artifacts for the selected frozen runtime state, not editable
 timeline input.
 
-For a successful managed render, `--view filmstrip` opens the unified
+For a successful managed render, `timelines visualize` defaults to
+`--view filmstrip`, which opens the primary unified
 inspector: composited frame cards plus expandable visual/audio lanes on one
 absolute-time ruler. When a render carries audio, bounded waveform bins and
 measured low-amplitude “Quiet gap” intervals are available; immutable speech

@@ -84,6 +84,7 @@ def test_upload_outputs_preserves_explicit_contract_fields_without_gen_metadata(
         ("videos/output_000.mp4", "output_000.mp4", "video/mp4", "generated_videos"),
         ("audio/output_000.wav", "output_000.wav", "audio/wav", "generated_audio"),
         ("agent-view/structure.md", "structure.md", "text/markdown", "structure"),
+        ("filmstrip-view/filmstrip.html", "filmstrip.html", "text/html", "html"),
     ],
 )
 def test_upload_outputs_maps_known_namespaces_at_runtime_boundary(

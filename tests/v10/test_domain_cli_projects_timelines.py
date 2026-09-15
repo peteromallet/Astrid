@@ -1110,6 +1110,7 @@ def test_timelines_visualize_routes_public_sdk_and_normalizes_formats(capsys) ->
         "formats": ["png", "svg", "md"],
         "timeline_slug": "01TIMELINE",
         "all": True,
+        "view": "filmstrip",
     }
     envelope = json.loads(capsys.readouterr().out)
     assert set(envelope) == ENVELOPE_KEYS

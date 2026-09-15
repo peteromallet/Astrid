@@ -510,15 +510,20 @@ python3 -m astrid timelines history --project demo primary --json
 # diff — deterministic adjacent-version diffs (read)
 python3 -m astrid timelines diff --project demo primary --json
 
-# visualize — deterministic run-owned evidence (filmstrip off is the safe
-# first pass when no verified rendered-video source is available)
+# visualize before a render — explicitly request the diagnostic structural
+# evidence view when no verified rendered-video source exists yet.
 python3 -m astrid timelines visualize primary --project demo \
-  --format md --filmstrip off --json
+  --view structure --format md --filmstrip off --json
 
 # render — version-pinned canonical render; waits for completion by default
 python3 -m astrid timelines render primary --project demo \
   --expected-version 1 --backend rendering.remotion \
   --output-name primary.mp4 --json
+
+# visualize the delivered render — rendered filmstrip/storyboard is the
+# default, so --view filmstrip is optional; --include-media enables playback.
+python3 -m astrid timelines visualize primary --project demo \
+  --render-run latest --include-media --json
 
 # queue only — explicit admission semantics, returned state is "admitted"
 python3 -m astrid timelines render primary --project demo --detach --json

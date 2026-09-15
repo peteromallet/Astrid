@@ -77,3 +77,14 @@ def test_visualize_help_exposes_managed_render_provenance(parser):
     assert "not valid with --view filmstrip" in help_text
     assert "--preset" not in help_text
     assert "--resolution" in help_text
+
+
+def test_visualize_defaults_to_rendered_filmstrip(parser):
+    parsed = parser.parse_args(["visualize", "main", "--project", "demo"])
+
+    assert parsed.view == "filmstrip"
+    help_text = " ".join(
+        parser._subparsers._group_actions[0].choices["visualize"].format_help().split()
+    )
+    assert "Rendered storyboard/filmstrip" in help_text
+    assert "default" in help_text

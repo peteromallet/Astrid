@@ -39,6 +39,7 @@ Product families:
 Timeline evidence:
   python3 -m astrid timelines visualize --project PROJECT [--timeline-slug REF]
       [--format FORMAT[,FORMAT...]] [--json]
+      (rendered filmstrip/storyboard by default; use --view structure for the diagnostic diagram)
 
 Latest project render:
   python3 -m astrid runs open [RUN_ID] [--project PROJECT] [--json]

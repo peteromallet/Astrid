@@ -62,7 +62,8 @@ managed-project convenience surface.
 ### Managed-project surface
 
 ```bash
-# Default timeline, both layouts, all output formats
+# Default timeline; the current default presentation is the rendered
+# filmstrip/storyboard (after a successful managed render).
 astrid timelines visualize --project desert-plant-growth
 
 # One named timeline
@@ -99,18 +100,21 @@ astrid timelines visualize plant-growth-storyboard \
 # Snapshot-consistent drill-down from an existing visualization run
 astrid timelines visualize \
   --project desert-plant-growth \
+  --view structure \
   --from-view /absolute/path/to/agent-view/manifest.json \
   --focus TL01.CL03
 
 # An arbitrary timestamp inside that same frozen snapshot
 astrid timelines visualize \
   --project desert-plant-growth \
+  --view structure \
   --from-view /absolute/path/to/agent-view/manifest.json \
   --focus TL01@00:12.000
 
 # Every non-tombstoned timeline in the project
 astrid timelines visualize \
   --project desert-plant-growth \
+  --view structure \
   --all
 
 # Select one or both geometric readings
@@ -191,6 +195,7 @@ uses one learned operation:
 ```bash
 astrid timelines visualize \
   --project desert-plant-growth \
+  --view structure \
   --from-view /absolute/path/to/agent-view/manifest.json \
   --focus TL01.CL03 \
   --context 2
@@ -257,6 +262,7 @@ shell-escaped strings:
         "kind": "visualize",
         "argv": [
           "python3", "-m", "astrid", "timelines", "visualize",
+          "--view", "structure",
           "--project", "desert-plant-growth",
           "--from-view", "/absolute/.../manifest.json",
           "--focus", "TL01.CL03",

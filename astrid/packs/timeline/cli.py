@@ -669,8 +669,15 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
         metavar="FORMAT[,FORMAT...]",
         help="Repeatable/comma-separated png, svg, md, or all (default: all).",
     )
-    subparser.add_argument("--view", choices=("structure", "filmstrip"), default=None,
-                           help="Timeline diagram (default) or rendered contact sheet with an offline HTML viewer.")
+    subparser.add_argument(
+        "--view",
+        choices=("structure", "filmstrip"),
+        default="filmstrip",
+        help=(
+            "Rendered storyboard/filmstrip with an offline HTML viewer (default); "
+            "use structure for the diagnostic timeline diagram."
+        ),
+    )
     subparser.add_argument("--sample", choices=("interval", "clips", "cuts", "shots"), default=None,
                            help="Filmstrip sampling: interval (default), picture clips, cut boundaries, or authored story beats.")
     sampling = subparser.add_mutually_exclusive_group()

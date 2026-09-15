@@ -157,8 +157,8 @@
       "name": "view",
       "type": "string",
       "required": false,
-      "description": "Presentation: timeline diagram or rendered filmstrip contact sheet with an offline HTML viewer.",
-      "default": "structure"
+      "description": "Presentation: rendered filmstrip/storyboard with an offline HTML viewer (default), or the structural timeline diagram.",
+      "default": "filmstrip"
     },
     {
       "name": "sample",

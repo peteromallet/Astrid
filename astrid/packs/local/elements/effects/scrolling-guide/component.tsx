@@ -9,6 +9,7 @@ type GuideSection = {
 };
 
 type Params = {
+  side?: 'left' | 'right';
   heading?: string;
   subheading?: string;
   scrollStart?: number;
@@ -87,7 +88,7 @@ export default function ScrollingGuide({clip, params: rawParams, fps}: ElementCo
   // backend --scale at export time.
   return <div style={{position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none'}}>
     <div style={{position: 'absolute', left: 0, top: 0, width: DESIGN_WIDTH, height: DESIGN_HEIGHT, transform: `scale(${scale})`, transformOrigin: 'top left'}}>
-      <div style={{position: 'absolute', left: 850, top: 126, width: 900, height: 748, color: CREAM, backgroundColor: 'rgba(9,6,3,0.96)', border: `4px solid ${AMBER}`, boxShadow: `0 0 42px rgba(255,160,46,0.38)`}}>
+      <div style={{position: 'absolute', left: params.side === 'left' ? 170 : 850, top: 126, width: 900, height: 748, color: CREAM, backgroundColor: 'rgba(9,6,3,0.96)', border: `4px solid ${AMBER}`, boxShadow: `0 0 42px rgba(255,160,46,0.38)`}}>
         <div style={{position: 'absolute', left: 28, right: 28, top: 22, height: 76, borderBottom: `3px solid ${AMBER}`}}>
           <div style={{color: AMBER, fontFamily: 'monospace', fontSize: 43, fontWeight: 700, letterSpacing: 5}}>{heading}</div>
           <div style={{marginTop: 8, color: MUTED, fontFamily: 'monospace', fontSize: 17, letterSpacing: 3}}>{subheading}</div>

@@ -17,6 +17,7 @@ metadata:
   clipTypeAliases:
     - scrolling-guide
 defaults:
+  side: right
   heading: MAKING VIDEOS
   subheading: A SMALL GUIDE TO THE REVIEW LOOP
   scrollStart: 0
@@ -25,6 +26,9 @@ schema:
   type: object
   additionalProperties: true
   properties:
+    side:
+      type: string
+      enum: [left, right]
     heading:
       type: string
     subheading:

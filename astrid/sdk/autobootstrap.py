@@ -96,9 +96,21 @@ def ensure_runtime(*, start_pack_host: bool = True) -> Mapping[str, Any]:
     needs the generic pack host to be registered and preflight-ready.
     """
     manifest = _manifest_from_environment()
+    try:
+        from astrid.sdk.storage_root import ensure_no_unmigrated_runtime, resolve_runtime_data_root
+
+        data_root = resolve_runtime_data_root()
+        if data_root is not None:
+            ensure_no_unmigrated_runtime(data_root)
+    except ValueError as exc:
+        raise AutoBootstrapError(
+            f"Astrid runtime data-root is not ready: {exc}; {RECONFIGURE_ACTION}"
+        ) from exc
     command = [*_launcher_command(), "up", "--profile", PROFILE]
     if manifest is not None:
         command.extend(("--source-manifest", str(manifest)))
+    if data_root is not None:
+        command.extend(("--data-root", str(data_root)))
     command.append("--json")
     started = time.monotonic()
     try:

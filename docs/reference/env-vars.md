@@ -12,6 +12,7 @@ does not select a project root or open a local database/CAS.
 |---|---|---|
 | `BANODOCO_RUNTIME_CREDENTIAL` | Runtime launcher / operator | Path to the credential/token file used by the generated workspace client. |
 | `BANODOCO_LOCAL_SOURCE_MANIFEST` | Astrid launcher / operator | Existing Astrid source-profile manifest passed to neutral bootstrap. |
+| `BANODOCO_LOCAL_DATA_ROOT` | Astrid launcher / operator | Absolute installation-owned support root. Defaults to `Astrid/.astrid-data` from the checkout config (or `~/.astrid-data` for a wheel install); overrides the macOS `Library/Application Support/Banodoco` location. |
 | `ASTRID_COMPUTE_PROFILE` | RunPod executor / operator | Optional user compute-profile id loaded from `~/.astrid/compute-profiles/<id>.json`. |
 
 These are runtime composition variables, not project-store overrides. Product

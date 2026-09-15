@@ -193,8 +193,14 @@ is needed.
 
 ## Safety and ownership
 
-Keep generated files under `runs/` or another ignored output directory. Do not
-commit source media, rendered videos, local dependency environments, or
+Use Astrid's configured, runtime-owned storage for generated assets. Never
+derive durable output paths from the shell's current directory or create a
+workspace-relative `runs/` tree as an implicit export. An alternate output
+location must be explicitly requested by the user. Keep run evidence and
+supporting artifacts associated with their runtime project and run; a local
+file alone does not establish database registration. Open managed outputs
+through the runtime rather than downloading another convenience copy.
+Do not commit source media, rendered videos, local dependency environments, or
 secrets. Runtime-owned media and timeline references must be changed through
 the CLI/SDK. A route that the connected runtime does not expose returns a
 typed `unavailable` result; do not fall back to a local store or invent a

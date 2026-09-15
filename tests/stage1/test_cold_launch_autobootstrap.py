@@ -15,6 +15,12 @@ from astrid.sdk.workspace_client import WorkspaceClientError
 from banodoco_workspace_client.contract_metadata import SCHEMA_DIGEST
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    """Keep upgrade-guard tests hermetic around the operator's live home."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
 def _runtime_checkout(tmp_path: Path) -> Path:
     checkout = tmp_path / "runtime"
     (checkout / "banodoco_local").mkdir(parents=True)
@@ -221,6 +227,8 @@ def test_installed_runtime_module_is_used_when_console_script_is_off_path(
         "up",
         "--profile",
         "astrid",
+        "--data-root",
+        str(Path(__file__).resolve().parents[2] / ".astrid-data"),
         "--json",
     ]
 
@@ -306,7 +314,10 @@ def test_persisted_source_profile_relaunches_without_environment(monkeypatch, tm
     result = autobootstrap.ensure_runtime()
 
     assert result["status"] == "reconnected"
-    assert seen["command"] == [str(launcher), "up", "--profile", "astrid", "--json"]
+    assert seen["command"] == [
+        str(launcher), "up", "--profile", "astrid", "--data-root",
+        str(Path(__file__).resolve().parents[2] / ".astrid-data"), "--json"
+    ]
 
 
 def test_envless_bootstrap_delegates_missing_profile_to_neutral_launcher(monkeypatch, tmp_path):
@@ -328,7 +339,10 @@ def test_envless_bootstrap_delegates_missing_profile_to_neutral_launcher(monkeyp
     monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
     with pytest.raises(autobootstrap.AutoBootstrapError, match="not ready"):
         autobootstrap.ensure_runtime()
-    assert seen["command"] == [str(launcher), "up", "--profile", "astrid", "--json"]
+    assert seen["command"] == [
+        str(launcher), "up", "--profile", "astrid", "--data-root",
+        str(Path(__file__).resolve().parents[2] / ".astrid-data"), "--json"
+    ]
 
 
 def test_envless_bootstrap_never_infers_checkout_authority(monkeypatch, tmp_path):

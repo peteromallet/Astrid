@@ -17,6 +17,7 @@ from .workspace_client import WorkspaceClientError
 
 _SUCCESS_STATES = frozenset({"completed", "succeeded", "success"})
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm", ".mkv"})
+_MACOS_VIDEO_BUNDLE = "com.apple.QuickTimePlayerX"
 
 
 def _failure(code: str, message: str, **details: Any) -> DomainResult[Any]:
@@ -100,6 +101,40 @@ def _materialize(data: bytes, *, digest: str, filename: str, cache_root: Path) -
             pass
         raise
     return destination
+
+
+def _verified_runtime_path(value: Any, *, digest: str, size: int) -> Path:
+    """Validate a path returned by the authenticated local runtime.
+
+    The runtime has already checked the CAS object while resolving it.  The
+    client repeats the final file check to close the response/open race and to
+    ensure a stale or tampered path is never handed to macOS.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("runtime object location has no local path")
+    path = Path(value)
+    if not path.is_absolute() or path.is_symlink():
+        raise ValueError("runtime object location must be an absolute regular path")
+    current = path
+    while current != current.parent:
+        if current.is_symlink():
+            raise ValueError("runtime object location contains a symlink")
+        current = current.parent
+    if not path.is_file():
+        raise ValueError("runtime object location is not a regular file")
+    data = path.read_bytes()
+    if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError("runtime object location failed digest verification")
+    return path
+
+
+def _open_path(path: Path, *, canonical_runtime_path: bool) -> None:
+    """Open a canonical extensionless media path with an explicit app hint."""
+    argv = ["open"]
+    if canonical_runtime_path:
+        argv.extend(["-b", _MACOS_VIDEO_BUNDLE])
+    argv.append(str(path))
+    subprocess.run(argv, check=True)
 
 
 def open_project_render(
@@ -271,24 +306,46 @@ def open_project_render(
         if media is None:
             return _failure("not_found", "render output is not owned by the selected project", digest=digest, project_id=project_id)
         object_id = _identifier(media, "object_id") or digest
-        response = client.get_object(object_id)
-        data = response.get("data") if isinstance(response, Mapping) else None
-        if not isinstance(data, bytes):
-            return _failure("protocol_error", "runtime object download returned no bytes", object_id=object_id)
-        actual_digest = hashlib.sha256(data).hexdigest()
-        raw_size = output.get("size", media.get("size", len(data)))
+        raw_size = output.get("size", media.get("size"))
         if isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
             return _failure("protocol_error", "render output has no valid byte size", object_id=object_id)
         expected_size = raw_size
-        if actual_digest != normalized_digest or len(data) != expected_size:
-            return _failure("integrity_error", "downloaded render does not match its runtime digest and size", object_id=object_id)
 
         media_filename = _identifier(media, "filename")
         if Path(media_filename).suffix.lower() not in _VIDEO_SUFFIXES:
             media_filename = ""
         filename = _output_name(task.get("spec")) or media_filename or "render.mp4"
-        path = _materialize(data, digest=digest, filename=filename, cache_root=cache_root or _default_cache_root())
-        subprocess.run(["open", str(path)], check=True)
+        canonical_runtime_path = cache_root is None
+        if canonical_runtime_path:
+            resolver = getattr(client, "get_project_object_location", None)
+            if not callable(resolver):
+                return _failure(
+                    "runtime_location_unavailable",
+                    "the runtime cannot expose a verified local object location; update the runtime or pass an explicit cache_root",
+                    object_id=object_id,
+                )
+            location = resolver(project_id, object_id)
+            if not isinstance(location, Mapping):
+                return _failure("protocol_error", "runtime object location response is malformed", object_id=object_id)
+            location_digest = location.get("digest")
+            if not isinstance(location_digest, str) or location_digest.removeprefix("sha256:").lower() != normalized_digest or location.get("storage") != "runtime_cas" or location.get("verified") is not True:
+                return _failure("integrity_error", "runtime object location is not a verified canonical CAS object", object_id=object_id)
+            try:
+                path = _verified_runtime_path(location.get("local_path"), digest=normalized_digest, size=expected_size)
+            except (OSError, ValueError) as exc:
+                return _failure("integrity_error", "runtime object location failed local verification", object_id=object_id, detail=str(exc))
+            opened_size = expected_size
+        else:
+            response = client.get_object(object_id)
+            data = response.get("data") if isinstance(response, Mapping) else None
+            if not isinstance(data, bytes):
+                return _failure("protocol_error", "runtime object download returned no bytes", object_id=object_id)
+            actual_digest = hashlib.sha256(data).hexdigest()
+            if actual_digest != normalized_digest or len(data) != expected_size:
+                return _failure("integrity_error", "downloaded render does not match its runtime digest and size", object_id=object_id)
+            path = _materialize(data, digest=digest, filename=filename, cache_root=cache_root)
+            opened_size = len(data)
+        _open_path(path, canonical_runtime_path=canonical_runtime_path)
         return DomainResult.success(
             {
                 "project_id": project_id,
@@ -296,7 +353,7 @@ def open_project_render(
                 "task_id": _identifier(task, "task_id", "id"),
                 "object_id": object_id,
                 "digest": "sha256:" + normalized_digest,
-                "size": len(data),
+                "size": opened_size,
                 "local_path": str(path),
                 "opened": True,
                 **({"timeline_ref": selected_timeline} if selected_timeline else {}),

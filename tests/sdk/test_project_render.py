@@ -50,6 +50,20 @@ class _Runtime:
         assert object_id == "O-video"
         return {"data": self.data, "status": 200, "headers": {}}
 
+    def get_project_object_location(self, project_id, object_id):
+        assert project_id == "P-1" and object_id == "O-video"
+        path = Path(self._canonical_path)
+        return {
+            "object_id": self.digest,
+            "digest": self.digest,
+            "size": len(self.data),
+            "media_type": "video/mp4",
+            "filename": "video.mp4",
+            "local_path": str(path),
+            "storage": "runtime_cas",
+            "verified": True,
+        }
+
 
 def test_open_selects_latest_successful_runtime_render(monkeypatch, tmp_path: Path) -> None:
     runtime = _Runtime()
@@ -65,6 +79,24 @@ def test_open_selects_latest_successful_runtime_render(monkeypatch, tmp_path: Pa
     assert Path(result.data["local_path"]).read_bytes() == runtime.data
     assert Path(result.data["local_path"]).suffix == ".mp4"
     assert launched == [["open", result.data["local_path"]]]
+
+
+def test_open_uses_runtime_canonical_path_by_default_without_cache_copy(monkeypatch, tmp_path: Path) -> None:
+    runtime = _Runtime()
+    canonical = tmp_path / "runtime" / "cas" / "canonical-object"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(runtime.data)
+    runtime._canonical_path = canonical
+    launched: list[list[str]] = []
+    monkeypatch.setattr("astrid.sdk.project_render.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("astrid.sdk.project_render.subprocess.run", lambda argv, check: launched.append(argv))
+
+    result = RemoteRuns(runtime).open()
+
+    assert result.ok
+    assert result.data["local_path"] == str(canonical)
+    assert not (tmp_path / "renders").exists()
+    assert launched == [["open", "-b", "com.apple.QuickTimePlayerX", str(canonical)]]
 
 
 def test_open_exact_run_rejects_cross_project_before_download(monkeypatch, tmp_path: Path) -> None:

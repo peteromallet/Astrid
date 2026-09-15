@@ -34,8 +34,18 @@ def test_caller_cannot_supply_authority():
 def test_filmstrip_cache_parent_is_project_namespaced(tmp_path, monkeypatch):
     monkeypatch.setattr(invocation.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(invocation, "_runtime_data_root", lambda: None)
     assert invocation._filmstrip_cache_parent(project="astrid intro/v1") == (
         tmp_path / "Library" / "Caches" / "Astrid" / "timeline-visualize" / "astrid_intro_v1"
+    )
+
+
+def test_filmstrip_default_uses_installation_owned_data_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(invocation, "_runtime_data_root", lambda: tmp_path / ".astrid-data")
+    (tmp_path / "elsewhere").mkdir()
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    assert invocation._filmstrip_cache_parent(project="astrid intro/v1") == (
+        tmp_path / ".astrid-data" / "timeline-visualize" / "astrid_intro_v1"
     )
 
 

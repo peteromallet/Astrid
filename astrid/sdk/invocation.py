@@ -1209,12 +1209,26 @@ def _filmstrip_cache_parent(
     """Return the durable, project-namespaced filmstrip cache parent."""
     if cache_root is not None:
         base = Path(cache_root).expanduser().resolve()
+    elif (runtime_data_root := _runtime_data_root()) is not None:
+        base = runtime_data_root / "timeline-visualize"
     elif platform.system() == "Darwin":
         base = Path.home() / "Library" / "Caches" / "Astrid" / "timeline-visualize"
     else:
         base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrid" / "timeline-visualize"
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", str(project or "unscoped")).strip("._") or "unscoped"
     return base / slug
+
+
+def _runtime_data_root() -> Path | None:
+    """Return the installation-owned data root used by the neutral runtime."""
+    try:
+        from .storage_root import resolve_runtime_data_root
+
+        return resolve_runtime_data_root()
+    except (ImportError, OSError, ValueError):
+        # Older installed Astrid packages have no storage-root composition;
+        # retain their cache behavior until the launcher is upgraded.
+        return None
 
 
 def _materialize_filmstrip_outputs(

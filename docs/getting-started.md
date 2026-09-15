@@ -23,6 +23,17 @@ python3 -m astrid --help
 python3 -m astrid projects list --json
 ```
 
+The checked-in `config/astrid-runtime.json` gives this Astrid checkout a
+stable neutral-runtime support root at `Astrid/.astrid-data`. A wheel install
+uses `~/.astrid-data`. Both defaults are independent of the current working
+directory and are ignored by Git. The root contains the
+launcher catalog, credentials, and the runtime realm directory; the runtime
+continues to own the database and content-addressed objects. To choose another
+installation-owned location explicitly, set `BANODOCO_LOCAL_DATA_ROOT` or pass
+`--data-root /absolute/path` to `banodoco-local up` and subsequent lifecycle
+commands. `BANODOCO_LOCAL_HOME` retains its macOS-home meaning and should not be
+pointed at the Astrid checkout.
+
 ### Optional provider credentials
 
 If you use provider-backed tools, set each API key once with the hidden prompt:
@@ -151,6 +162,35 @@ lifecycle operations, with `--json` for a machine-readable result.
 Runtime health, project identity, media objects, timeline versions, task/run
 state, receipts, and events are authoritative only in the workspace runtime.
 The SDK never opens a local Astrid database or content-addressed store.
+
+### Moving an existing runtime realm
+
+Realm relocation is a controlled operator workflow. Start with a read-only plan
+bound to the selected owner:
+
+```bash
+banodoco-local relocate --plan \
+  --backup /absolute/path/relocation-backup \
+  --destination /absolute/path/new-realm --json
+```
+
+After reviewing the plan, the explicit execution form creates a verified backup,
+restores it into a new destination, checks the generated
+`activation-handoff.json`, stops the owner through a birth-checked process
+boundary, atomically publishes the selected catalog root, cold-starts the
+candidate, and retires the old realm only after the candidate is healthy:
+
+```bash
+banodoco-local relocate \
+  --backup /absolute/path/relocation-backup \
+  --destination /absolute/path/new-realm \
+  --confirm 'RELOCATE <selected-realm-id>' --json
+```
+
+Do not copy the SQLite/CAS tree or edit `catalog.json` by hand. Keep the
+verified backup until the new owner has been inspected and the rollback window
+has ended. Review the plan and storage capacity before running the execution
+form; no live relocation is performed by setup or by the Astrid SDK.
 
 Historical pre-runtime project trees and local-store migration plans are not
 part of the Stage1 live path. Preserve them as immutable source artifacts and

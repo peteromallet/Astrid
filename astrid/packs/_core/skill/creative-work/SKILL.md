@@ -64,8 +64,16 @@ project. Use the exact qualified capability id, required `kind`, inputs, and
 project binding from the selected skill and its `STAGE.md`. Inspect the
 returned result, run evidence, and artifacts through the runtime; do not read a
 local task store or call a pack's `run.py` directly.
-Keep temporary and generated files under the output location required by the
-selected pack, normally a project `runs/` tree.
+The runtime supplies the selected pack's temporary output workspace and owns
+publication of the resulting assets. Use Astrid's configured storage for
+durable outputs, independent of the shell's current directory. Do not create
+an extra `runs/` tree, download managed assets into a convenience directory,
+or choose an alternate output path unless the user explicitly asks for an
+export there. Supporting prompts, manifests, and review evidence that need
+preserving must also be registered with the project/run; leaving them beside
+a local video does not register them. External generation tools must return
+their outputs through the managed import/publication boundary before those
+outputs are used as project assets.
 
 ## Hivemind before creative decisions
 

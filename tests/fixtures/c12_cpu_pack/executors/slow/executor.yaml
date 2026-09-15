@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "c12_cpu.slow",
+  "name": "C12 CPU Slow",
+  "kind": "external",
+  "version": "1.0",
+  "inputs": [
+    {
+      "name": "marker",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "port_marker",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "command": {
+    "argv": [
+      "{python_exec}",
+      "-c",
+      "import os, socket, time; from pathlib import Path; listener=socket.socket(); listener.bind(('127.0.0.1', 0)); listener.listen(1); Path('{marker}').write_text(str(os.getpid()), encoding='utf-8'); Path('{port_marker}').write_text(str(listener.getsockname()[1]), encoding='utf-8'); time.sleep(30); Path('{out}/answer.txt').write_text('late-output', encoding='utf-8')"
+    ]
+  },
+  "outputs": [
+    {
+      "name": "answer",
+      "type": "file",
+      "path_template": "{out}/answer.txt",
+      "artifact_type": "text/plain"
+    }
+  ],
+  "metadata": {
+    "resource_keys": ["cpu"]
+  }
+}

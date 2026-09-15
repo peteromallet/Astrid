@@ -25,7 +25,6 @@ _DEFAULT_PROFILE_ORDER = ("pip_embedded", "checkout_server")
 _REGISTRY_ENTRY_FIELDS = ("definition_version", "binding", "output_policy", "probe")
 _SECRET_WORDS = ("secret", "token", "password", "credential", "api_key", "private_key")
 
-
 _MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -48,6 +47,7 @@ class BootManifestCorrupt(BootManifestError):
 
 class BootManifestDrift(BootManifestError):
     """Live registry/fixture identity differs from the stamped manifest."""
+
 
 def _json_value(value: Any) -> Any:
     if hasattr(value, "to_dict") and callable(value.to_dict):
@@ -271,6 +271,7 @@ def assert_secret_free(manifest: Mapping[str, Any]) -> None:
                     f"boot manifest field {field!r} contains an invalid digest"
                 )
 
+
 def _reject_lexical_symlinks(path: Path, *, label: str) -> None:
     """Reject symlinks in a lexical path before any resolution occurs."""
     cursor = path
@@ -321,8 +322,6 @@ def validate_manifest_path(
             "boot manifest must be an existing absolute regular non-symlink "
             f"file: {path}"
         )
-    # Check the lexical path before resolving it.  Resolving first would hide
-    # a symlinked parent that happens to point back inside the support root.
     lexical_root = Path(os.path.abspath(raw_root))
     lexical_path = Path(os.path.abspath(path))
     try:
@@ -403,6 +402,7 @@ def stamp_boot_manifest(
             Path(handle.name).unlink(missing_ok=True)
         raise
     return current
+
 
 def load_boot_manifest_hash(
     manifest_path: str | Path, *, support_root: str | Path

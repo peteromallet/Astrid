@@ -106,12 +106,47 @@ def test_manifest_loads() -> None:
     manifest = load_executor_manifest(str(_EXECUTOR_YAML))
     assert manifest.id == "generation.generate_image"
     assert manifest.kind == "built_in"
-    assert manifest.version == "2.0"
+    assert manifest.version == "2.1"
     assert manifest.metadata["runtime_entrypoint"] == "run_sdk"
+    assert {"prompt", "model", "execution", "count", "seed", "steps", "size"}.issubset(
+        set(manifest.metadata["hc04_param_ports"])
+    )
+    assert {"image_ref", "strength"}.isdisjoint(set(manifest.metadata["hc04_param_ports"]))
+    assert manifest.metadata["fixed_inputs"] == {"mode": "t2i", "execution": "cloud"}
+    assert manifest.metadata["hc04_cas_param_ports"] == []
     # v2 executor inputs include backend controls for Codex in addition to
     # core model/mode generation fields.
     assert len(manifest.inputs) == 22
     assert len(manifest.outputs) == 2  # generated_images, image_manifest
+
+
+def test_bounded_profile_rejects_zero_negative_and_fanout_counts_before_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from astrid.packs.generation.executors.generate_image.run import main
+    import astrid.core.util.http as http_mod
+
+    instrumented = http_mod.HttpClient(transport=_logging_transport_with_upload)
+    monkeypatch.setattr(http_mod, "_default_client", instrumented)
+    for count in (0, -1, 2):
+        _logging_transport_with_upload.calls.clear()
+        with pytest.raises(AstridError, match="one output for the whole task"):
+            main(
+                [
+                    "--model", "z-image",
+                    "--mode", "i2i",
+                    "--execution", "cloud",
+                    "--storage-policy-version", "astrid.cloud-i2i.z-image.v1",
+                    "--prompt", "bounded count proof",
+                    "--image-ref", str((Path(__file__).parent / "fixtures/input.png").resolve()),
+                    "--size", "1024x1024",
+                    "--strength", "0.5",
+                    "--count", str(count),
+                    "--out", str(tmp_path / f"out-{count}"),
+                ]
+            )
+        assert _logging_transport_with_upload.calls == []
 
 
 def test_generate_core_returns_enriched_generation_result(

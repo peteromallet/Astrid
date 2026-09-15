@@ -6,7 +6,9 @@ import json
 import math
 import subprocess
 import zipfile
+from collections.abc import Mapping
 from copy import deepcopy
+from fractions import Fraction
 from pathlib import Path
 
 from astrid.core._shared.result_manifest import build_manifest, write_manifest
@@ -16,32 +18,232 @@ from .filmstrip_cards import build_filmstrip_pack
 from .filmstrip_options import filmstrip_options
 
 
-def _rendered_frame_count(video: Path, fps) -> int:
-    """Return the actual video-frame count, not the authored timeline length.
+_FILMSTRIP_CAPABILITY_ID = "rendering.timeline_visualize"
+_MANAGED_COVERAGE_REASONS = frozenset(
+    {"interval", "before_cut", "after_cut", "clip_first", "shot_midpoint"}
+)
 
-    A managed render can contain an explicit tail (for example the current
-    intro has a long black hold) that is absent from the authored picture
-    timeline.  Filmstrip sampling must follow the bytes being reviewed.
+
+def _filmstrip_managed_coverage(frame_index: Mapping[str, object]) -> dict[str, object]:
+    """Project the verified frame index into the managed-output V1 shape.
+
+    The frame index intentionally contains richer viewer-only coverage fields
+    (boundary counts, page layout, and overview reason labels). Runtime
+    managed outputs accept the stable sampling subset; retain exact frame
+    bounds, density, step, and cards whenever their reason vocabulary is
+    already part of that contract.
+    """
+    sampling = frame_index.get("sampling")
+    coverage = frame_index.get("coverage")
+    provenance = frame_index.get("provenance")
+    if not isinstance(sampling, Mapping) or not isinstance(coverage, Mapping):
+        raise ValueError("filmstrip frame index is missing canonical coverage")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("filmstrip frame index is missing timing provenance")
+    raw_fps = provenance.get("fps_rational")
+    if (
+        not isinstance(raw_fps, (list, tuple))
+        or len(raw_fps) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in raw_fps)
+    ):
+        raise ValueError("filmstrip frame index has invalid fps provenance")
+    fps = Fraction(raw_fps[0], raw_fps[1])
+    raw_window = coverage.get("window_seconds")
+    if (
+        not isinstance(raw_window, (list, tuple))
+        or len(raw_window) != 2
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_window)
+        or any(not math.isfinite(float(value)) for value in raw_window)
+    ):
+        raise ValueError("filmstrip coverage has an invalid rendered window")
+
+    def frame_boundary(seconds: int | float) -> int:
+        value = Fraction(str(seconds)) * fps
+        return (value.numerator + value.denominator - 1) // value.denominator
+
+    start, end = (frame_boundary(value) for value in raw_window)
+    if start < 0 or end <= start:
+        raise ValueError("filmstrip coverage has an empty rendered window")
+    mode = sampling.get("mode")
+    if mode == "overview":
+        mode = "interval"
+    if mode not in {"interval", "clips", "cuts", "shots"}:
+        raise ValueError("filmstrip sampling mode is not managed-output compatible")
+    managed_sampling: dict[str, object] = {
+        "mode": mode,
+        "range": {"start": start, "end": end},
+    }
+    raw_step = sampling.get("step_frames_rational")
+    if (
+        isinstance(raw_step, (list, tuple))
+        and len(raw_step) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) for value in raw_step)
+        and raw_step[0] >= 0
+        and raw_step[1] > 0
+    ):
+        managed_sampling["step_frames_rational"] = {
+            "numerator": raw_step[0], "denominator": raw_step[1]
+        }
+    density = sampling.get("density")
+    if isinstance(density, Mapping):
+        density_mode, density_value = density.get("mode"), density.get("value")
+        if (
+            mode == "interval"
+            and density_mode == "every_seconds"
+            and isinstance(density_value, (int, float))
+            and not isinstance(density_value, bool)
+            and math.isfinite(float(density_value))
+            and density_value > 0
+        ):
+            managed_sampling["every"] = density_value
+        elif (
+            mode == "interval"
+            and density_mode == "every_frames"
+            and isinstance(density_value, int)
+            and not isinstance(density_value, bool)
+            and density_value > 0
+        ):
+            managed_sampling["every_frames"] = density_value
+
+    cards = frame_index.get("cards")
+    if isinstance(cards, list):
+        normalized_cards = []
+        for card in cards:
+            if not isinstance(card, Mapping):
+                normalized_cards = []
+                break
+            reasons = card.get("sample_reasons")
+            if (
+                not isinstance(reasons, list)
+                or not reasons
+                or not all(isinstance(reason, str) for reason in reasons)
+                or not set(reasons).issubset(_MANAGED_COVERAGE_REASONS)
+            ):
+                normalized_cards = []
+                break
+            frame = card.get("frame")
+            time_seconds = card.get("time_seconds")
+            if (
+                isinstance(frame, bool)
+                or not isinstance(frame, int)
+                or frame < 0
+                or isinstance(time_seconds, bool)
+                or not isinstance(time_seconds, (int, float))
+                or not math.isfinite(float(time_seconds))
+                or time_seconds < 0
+            ):
+                normalized_cards = []
+                break
+            time_rational = card.get("time_rational")
+            if (
+                not isinstance(time_rational, (list, tuple))
+                or len(time_rational) != 2
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in time_rational)
+                or time_rational[0] < 0
+                or time_rational[1] <= 0
+            ):
+                normalized_cards = []
+                break
+            normalized_cards.append(
+                {
+                    "frame": frame,
+                    "time_seconds": time_seconds,
+                    "time_rational": {
+                        "numerator": time_rational[0],
+                        "denominator": time_rational[1],
+                    },
+                    "sample_reasons": list(reasons),
+                }
+            )
+        if normalized_cards:
+            managed_sampling["cards"] = normalized_cards
+    return {"sampling": managed_sampling}
+
+
+def _filmstrip_output_contract(
+    snapshot: Mapping[str, object],
+    options: Mapping[str, object],
+    video_digest: str,
+    coverage: Mapping[str, object],
+) -> dict[str, object]:
+    """Return explicit lifecycle metadata for one derived filmstrip result."""
+
+    exact_inputs = {
+        "render_run_id": snapshot["render_run_id"],
+        "timeline_id": snapshot["timeline_id"],
+        "video_digest": video_digest,
+        "options": dict(options),
+    }
+    recipe = {
+        "capability_id": _FILMSTRIP_CAPABILITY_ID,
+        "view": "filmstrip",
+        "exact_inputs": exact_inputs,
+    }
+    recipe_digest = "sha256:" + hashlib.sha256(
+        json.dumps(recipe, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return {
+        "producer": {"capability_id": _FILMSTRIP_CAPABILITY_ID, "view": "filmstrip"},
+        "provenance": {
+            "render_run_id": snapshot["render_run_id"],
+            "timeline_id": snapshot["timeline_id"],
+            "video_digest": video_digest,
+        },
+        "regeneration": {
+            "available": True,
+            "capability_id": _FILMSTRIP_CAPABILITY_ID,
+            "source_refs": [video_digest],
+            "recipe_digest": recipe_digest,
+            "exact_inputs": exact_inputs,
+        },
+        "coverage": _filmstrip_managed_coverage(coverage),
+    }
+
+
+def _rendered_timing(video: Path, fps) -> tuple[int, float]:
+    """Return decoded frame extent and duration, not authored timeline length.
+
+    A managed render can contain an explicit tail that is absent from the
+    authored picture timeline. Filmstrip sampling must follow the bytes being
+    reviewed.
     """
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=nb_frames,duration,r_frame_rate",
+        ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames,nb_frames,duration,r_frame_rate",
          "-of", "json", str(video)],
         capture_output=True, text=True, check=False,
     )
     if probe.returncode:
         raise ValueError("Unable to probe rendered video duration: " + probe.stderr[-1000:])
     try:
-        stream = json.loads(probe.stdout)["streams"][0]
-        frames = int(stream.get("nb_frames") or 0)
-        if frames > 0:
-            return frames
-        duration = float(stream.get("duration") or 0)
+        payload = json.loads(probe.stdout)
+        stream = payload["streams"][0]
+        try:
+            frames = int(stream.get("nb_read_frames") or stream.get("nb_frames") or 0)
+        except (TypeError, ValueError):
+            frames = 0
+        format_info = payload.get("format") or {}
+        duration_value = stream.get("duration") or format_info.get("duration") or 0
+        try:
+            duration = float(duration_value)
+        except (TypeError, ValueError):
+            duration = 0.0
     except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
         raise ValueError("Rendered video duration probe was invalid.") from exc
-    if duration <= 0:
+    if frames <= 0 and duration <= 0:
         raise ValueError("Rendered video has no usable duration.")
-    return max(1, math.ceil(duration * float(fps)))
+    if frames <= 0:
+        frames = max(1, math.ceil(duration * float(fps)))
+    if duration <= 0:
+        duration = frames / float(fps)
+    return frames, duration
+
+
+def _rendered_frame_count(video: Path, fps) -> int:
+    """Return the decoded video-frame count for compatibility with callers."""
+    return _rendered_timing(video, fps)[0]
 
 
 def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
@@ -54,38 +256,70 @@ def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
     from fractions import Fraction
 
     fps = Fraction(*snapshot["fps_rational"])
-    rendered_frames = _rendered_frame_count(video, fps)
-    authored_frames = int(snapshot.get("duration_frames") or 0)
+    rendered_frames, decoded_duration = _rendered_timing(video, fps)
+    metadata = snapshot.get("metadata")
+    authored_frames = int(
+        metadata.get("authored_duration_frames")
+        if isinstance(metadata, Mapping) and metadata.get("authored_duration_frames") is not None
+        else snapshot.get("duration_frames") or 0
+    )
     snapshot["duration_frames"] = rendered_frames
     snapshot.setdefault("metadata", {})["rendered_duration_frames"] = rendered_frames
-    snapshot["metadata"]["rendered_duration_seconds"] = rendered_frames / float(fps)
+    snapshot["metadata"]["rendered_duration_seconds"] = decoded_duration
     snapshot["metadata"]["authored_duration_frames"] = authored_frames
+    snapshot["metadata"]["authored_duration_seconds"] = authored_frames / float(fps)
     snapshot["metadata"]["duration_basis"] = "rendered_video"
-    if rendered_frames > authored_frames:
-        # Some media clips already encode the rendered black hold as a source
-        # duration beginning at a later `at`.  Do not add a duplicate tail when
-        # the normalized clip already reaches the video EOF.
-        covered_until = max(
-            (int(c.get("end_frame", 0)) for c in snapshot.get("clips", [])
-             if c.get("kind") not in {"audio", "voiceover", "music", "sound"}),
-            default=authored_frames,
-        )
-        tail_start = max(authored_frames, covered_until)
-        tail_id = "__rendered_tail_black__"
-        if tail_start < rendered_frames and not any(c.get("id") == tail_id for c in snapshot.get("clips", [])):
-            snapshot.setdefault("clips", []).append({
-                "id": tail_id, "asset": "black_frame", "at": tail_start / float(fps),
-                "from": 0.0, "to": (rendered_frames - tail_start) / float(fps),
-                "duration": (rendered_frames - tail_start) / float(fps),
-                "start_frame": tail_start, "end_frame": rendered_frames,
-                "track": "picture", "kind": "visual", "clipType": "media",
-                "render_tail": True,
-            })
+    # Authored clips and proven shot occurrences cannot own frames beyond the
+    # authored clock. Clamp both clocks to the decoded render EOF so no label
+    # leaks into the excess region or points past a shorter materialization.
+    for clip in snapshot.get("clips", []):
+        start = min(max(int(clip.get("start_frame", 0)), 0), authored_frames, rendered_frames)
+        end = min(max(int(clip.get("end_frame", rendered_frames)), 0), authored_frames, rendered_frames)
+        clip["start_frame"], clip["end_frame"] = start, max(start, end)
+        if clip.get("duration") is not None:
+            clip["duration"] = max(0.0, (clip["end_frame"] - start) / float(fps))
+    clamped_occurrences = []
+    for occurrence in snapshot.get("occurrences", []):
+        start = min(max(int(occurrence.get("start_frame", 0)), 0), authored_frames, rendered_frames)
+        end = min(max(int(occurrence.get("end_frame", 0)), 0), authored_frames, rendered_frames)
+        if end <= start:
+            continue
+        item = dict(occurrence, start_frame=start, end_frame=end,
+                    start=start / float(fps), end=end / float(fps))
+        clamped_occurrences.append(item)
+    snapshot["occurrences"] = clamped_occurrences
+    clamped_scripts = []
+    for script in snapshot.get("scripts", []):
+        start = min(max(float(script.get("start", 0)), 0.0), rendered_frames / float(fps))
+        end = min(max(float(script.get("end", 0)), 0.0), rendered_frames / float(fps))
+        if end > start:
+            clamped_scripts.append(dict(script, start=start, end=end))
+    snapshot["scripts"] = clamped_scripts
+    tail_start = min(max(authored_frames, 0), rendered_frames)
+    tail = None
+    if tail_start < rendered_frames:
+        tail = {
+            "id": "__rendered_tail__",
+            "label": "Unmapped rendered tail",
+            "status": "unmapped",
+            "mapping_status": "unmapped",
+            "start_frame": tail_start,
+            "end_frame": rendered_frames,
+            "start_seconds": tail_start / float(fps),
+            "end_seconds": rendered_frames / float(fps),
+        }
+        snapshot["unmapped_regions"] = [tail]
+        snapshot.setdefault("clips", []).append({
+            "id": tail["id"], "label": tail["label"], "status": tail["status"],
+            "mapping_status": tail["mapping_status"], "at": tail["start_seconds"],
+            "duration": tail["end_seconds"] - tail["start_seconds"],
+            "start_frame": tail_start, "end_frame": rendered_frames,
+            "track": "picture", "kind": "render_tail", "clipType": "render_tail",
+            "render_tail": True,
+        })
     else:
-        # A shorter output must not cause cards to point past EOF.
-        for clip in snapshot.get("clips", []):
-            clip["start_frame"] = min(int(clip.get("start_frame", 0)), rendered_frames)
-            clip["end_frame"] = min(int(clip.get("end_frame", rendered_frames)), rendered_frames)
+        snapshot["unmapped_regions"] = []
+    snapshot["metadata"]["rendered_tail"] = tail
 
 
 def _audio_cache_path(parent: Path, render_digest: str, settings: object) -> Path:
@@ -178,6 +412,7 @@ def execute_filmstrip(args, *, authority=None):
         kind='timeline_filmstrip', created='1970-01-01T00:00:00Z',
         inputs={'render_run_id': snapshot['render_run_id'], 'video_digest': digest,
                 'timeline_id': snapshot['timeline_id'], 'options': options,
+                'request': options.get('request'),
                 'analysis_identity': analysis.get('analysis_identity'),
                 'media': result.get('frame_index', {}).get('media'),
                 'audio_sidecar': result.get('frame_index', {}).get('audio_sidecar')},
@@ -186,6 +421,7 @@ def execute_filmstrip(args, *, authority=None):
                   'label': p.relative_to(pack_root).as_posix()} for p in files],
         entrypoints={'html': 'filmstrip.html', 'frames': 'frame-index.json'},
         timeline_ids=[snapshot['timeline_id']],
+        request=options.get('request'),
     )
     manifest_path = pack_root / 'manifest.json'
     write_manifest(manifest_path, manifest)
@@ -201,6 +437,13 @@ def execute_filmstrip(args, *, authority=None):
     # (the host reports "missing result manifest receipt").  Publish a small
     # host receipt at the assigned output root and keep the domain manifest
     # nested and authoritative for offline evidence verification.
+    output_contract = _filmstrip_output_contract(
+        snapshot,
+        options,
+        digest,
+        result["frame_index"],
+    )
+
     def _receipt_entry(name: str, path: Path, *, role: str = "auxiliary", primary: bool = False) -> dict:
         relative = path.relative_to(out_root).as_posix()
         return {
@@ -210,6 +453,11 @@ def execute_filmstrip(args, *, authority=None):
             "bytes": path.stat().st_size,
             "role": role,
             "is_primary": primary,
+            # Runtime disallows temporary primary outputs.  Keep the existing
+            # bundle primary while the auxiliary nested manifest follows the
+            # derived-artifact temporary lifecycle.
+            "durability": "durable" if primary else "temporary",
+            **output_contract,
         }
 
     # Keep the host receipt small and self-contained.  The bundle is the
@@ -226,15 +474,57 @@ def execute_filmstrip(args, *, authority=None):
                 "render_run_id": snapshot["render_run_id"],
                 "timeline_id": snapshot["timeline_id"],
                 "video_digest": digest,
+                "request": options.get("request"),
             },
+            request=options.get("request"),
             outputs=[
                 _receipt_entry("filmstrip_manifest", pack_root / "manifest.json"),
                 _receipt_entry("filmstrip_bundle", bundle, role="result", primary=True),
             ],
         ),
     )
+    # Keep the read-only result envelope explicit about the identities that
+    # the host can publish to CAS.  These are content locators, not local-path
+    # authority and not a mutation receipt.  Entrypoints stay relative to the
+    # assigned result root so both the disposable attempt and a rehydrated
+    # bundle can resolve them without guessing from filenames.
+    host_manifest = out_root / "manifest.json"
+    manifest_digest = "sha256:" + hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    bundle_digest = "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
+    host_manifest_digest = "sha256:" + hashlib.sha256(host_manifest.read_bytes()).hexdigest()
+    identity = {
+        "render": {
+            "render_run_id": snapshot["render_run_id"],
+            "timeline_id": snapshot["timeline_id"],
+            "video_digest": digest,
+        },
+        "manifest": {
+            "kind": "timeline_filmstrip",
+            "content_hash": manifest_digest,
+        },
+        "host_receipt": {
+            "kind": "timeline_filmstrip_result",
+            "content_hash": host_manifest_digest,
+        },
+        "bundle": {"content_hash": bundle_digest},
+    }
+    cas = {
+        "rendered_video": digest,
+        "filmstrip_manifest": manifest_digest,
+        "filmstrip_bundle": bundle_digest,
+    }
+    entrypoints = {
+        "manifest": "filmstrip-view/manifest.json",
+        "html": "filmstrip-view/filmstrip.html",
+        "frame_index": "filmstrip-view/frame-index.json",
+        "bundle": "filmstrip-bundle.zip",
+    }
     return {'returncode': 0, 'run_root': str(out_root),
             'manifest_path': str(manifest_path), 'timeline_ids': [snapshot['timeline_id']],
+            'identity': identity, 'cas': cas, 'entrypoints': entrypoints,
+            'request': options.get('request'),
             'outputs': {'pack_root': str(pack_root), 'manifest_path': str(manifest_path),
+                        'identity': identity, 'cas': cas, 'entrypoints': entrypoints,
+                        'request': options.get('request'),
                         **result['paths'], 'pages': result['paths']['png'],
                         'filmstrip_bundle': str(bundle)}}

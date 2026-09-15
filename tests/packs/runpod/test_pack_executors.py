@@ -7,7 +7,7 @@ import inspect
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -943,6 +943,52 @@ def test_session_transient_handle_exists_during_detached_exec_and_is_removed_aft
         assert not (produces_dir / "pod_handle.json").exists()
         assert (produces_dir / "exec_result.json").is_file()
         assert (produces_dir / "cost.json").is_file()
+    finally:
+        if os.environ.get("RUNPOD_API_KEY") == "test-key-rpa_0000000000000000000000000000000000000000000000":
+            del os.environ["RUNPOD_API_KEY"]
+
+
+def test_session_captures_pod_id_before_readiness_failure_and_terminates(
+    produces_dir: Path,
+    mock_launch: MagicMock,
+    mock_pod: MagicMock,
+) -> None:
+    """A post-allocation readiness failure still has provider cleanup custody."""
+    import os
+
+    os.environ["RUNPOD_API_KEY"] = "test-key-rpa_0000000000000000000000000000000000000000000000"
+    mock_pod.wait_ready = AsyncMock(side_effect=TimeoutError("readiness timeout"))
+    try:
+        with patch("runpod_lifecycle.launch", mock_launch), \
+             patch("runpod_lifecycle.get_pod", AsyncMock(return_value=mock_pod)), \
+             patch("runpod_lifecycle.RunPodConfig", MagicMock()), \
+             patch("astrid.packs.runpod.executors._common._terminate_pod_id", AsyncMock(return_value=False)) as cleanup:
+            from astrid.packs.runpod.executors.provision.run import cmd_session
+
+            class Args:
+                gpu_type = None
+                storage_name = None
+                require_storage = False
+                max_runtime_seconds = None
+                name_prefix = None
+                image = None
+                container_disk_gb = None
+                datacenter_id = None
+                local_root = None
+                remote_root = None
+                remote_script = "echo never"
+                timeout = None
+                upload_mode = None
+                excludes = None
+                produces_dir = produces_dir
+
+            with pytest.raises(AstridError, match="readiness timeout"):
+                cmd_session(Args(), produces_dir)
+
+            provisional = json.loads((produces_dir / "pod_handle.json").read_text(encoding="utf-8"))
+            assert provisional["pod_id"] == "pod-abc123"
+            assert provisional["state"] == "provisioning"
+            cleanup.assert_awaited_once_with("pod-abc123", ANY, name="astrid-test-pod-1700000000")
     finally:
         if os.environ.get("RUNPOD_API_KEY") == "test-key-rpa_0000000000000000000000000000000000000000000000":
             del os.environ["RUNPOD_API_KEY"]

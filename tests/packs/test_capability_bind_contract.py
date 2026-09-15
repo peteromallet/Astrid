@@ -122,6 +122,31 @@ def test_cwd_and_env_placeholders_are_binding_evidence() -> None:
     assert result.env == {"FIXTURE_TOKEN": "prefix-abc"}
 
 
+def test_manifest_fixed_inputs_reject_profile_escape_before_expansion() -> None:
+    command = CommandSpec(
+        argv=("run", "--model", "{model}", "--mode", "{mode}", "--execution", "{execution}")
+    )
+    ports = (
+        Port("model", type="string", required=True),
+        Port("mode", type="string", required=True),
+        Port("execution", type="string", required=True),
+    )
+    metadata = {
+        "fixed_inputs": {"model": "z-image", "mode": "i2i", "execution": "cloud"}
+    }
+    values = {"model": "z-image", "mode": "i2i", "execution": "cloud"}
+    result = expand_command(command, ports, values, metadata)
+    assert result.argv == (
+        "run", "--model", "z-image", "--mode", "i2i", "--execution", "cloud"
+    )
+    for field, value in (("model", "qwen-image-edit"), ("mode", "edit"), ("execution", "local")):
+        conflicting = {**values, field: value}
+        with pytest.raises(BindingError, match=f"fixed input {field!r}"):
+            expand_command(command, ports, conflicting, metadata)
+    with pytest.raises(BindingError, match="must be a non-empty object"):
+        expand_command(command, ports, values, {"fixed_inputs": {}})
+
+
 def test_generic_host_run_command_definition_calls_shared_expander() -> None:
     module = ast.parse(GENERIC_HOST.read_text(encoding="utf-8"))
     methods = [

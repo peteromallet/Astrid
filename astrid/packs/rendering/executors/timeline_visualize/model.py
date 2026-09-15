@@ -35,6 +35,7 @@ from astrid.core.timeline.duration import (
     clip_start_frame,
     resolve_transition_duration_frames,
     timeline_duration_frames,
+    timeline_render_duration_frames,
     visual_tracks_paint_order,
 )
 from astrid.core.timeline.resolution import AssetIntegrity, classify_registry
@@ -192,6 +193,11 @@ class ModelExtents:
     visual_seconds: float
     audible_frames: int
     fps: int
+    # Authored composition extent stays available when the renderer declares
+    # an explicit render-only tail. Frozen views produced before this field
+    # existed leave it unset and retain their original composition extent.
+    authored_composition_frames: int | None = None
+    authored_composition_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,7 +548,7 @@ def build_model(
             )
         )
 
-    composition_frames = timeline_duration_frames(assembly, fps)
+    composition_frames = timeline_render_duration_frames(assembly, fps)
     visual_frames = max(
         (clip.frames.end_frame for clip in clips if track_kinds.get(clip.track_id) == "visual"),
         default=0,
@@ -558,6 +564,8 @@ def build_model(
         visual_seconds=visual_frames / fps,
         audible_frames=audible_frames,
         fps=fps,
+        authored_composition_frames=timeline_duration_frames(assembly, fps),
+        authored_composition_seconds=timeline_duration_frames(assembly, fps) / fps,
     )
     registry_entries = _registry_entries(snapshot.registry)
     preliminary = TimelineInspectionModel(

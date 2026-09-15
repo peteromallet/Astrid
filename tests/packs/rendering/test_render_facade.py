@@ -202,6 +202,36 @@ def test_main_accepts_output_name_and_forward_parses_any_order(
     assert fake_service.calls[0][1]["selector"] == "rendering.ffmpeg"
 
 
+def test_main_leaves_remotion_project_selection_to_deployment(
+    fake_service: _FakeService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeline, assets, out = _inputs(tmp_path)
+    fake_service.sentinel = out
+    monkeypatch.setenv(
+        "ASTRID_REMOTION_PROJECT_DIR",
+        str(tmp_path / "server-owned-remotion"),
+    )
+
+    result = render_run.main(
+        [
+            "--timeline",
+            str(timeline),
+            "--assets",
+            str(assets),
+            "--out",
+            str(out),
+        ]
+    )
+
+    assert result == 0
+    request = fake_service.calls[-1][0][0]
+    assert request.backend_config["rendering.remotion"] == {
+        "composition_id": "TimelineComposition"
+    }
+
+
 def test_main_rejects_traversal_output_name(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

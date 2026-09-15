@@ -45,7 +45,10 @@ export type {
 export type { Theme, RuntimeTheme } from "./ThemeContext";
 
 // Duration helper used by the bundle root for calculateMetadata.
-export { getTimelineDurationInFrames } from "./lib/duration";
+export {
+  getTimelineDurationInFrames,
+  getTimelineRenderDurationInFrames,
+} from "./lib/duration";
 
 // Plugin registry — codegenned from installed `@banodoco/timeline-theme-*`
 // packages (Reigh-side) and from `themes/<id>/effects/` (Banodoco-side).

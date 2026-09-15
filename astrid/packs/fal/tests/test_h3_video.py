@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 from pathlib import Path
 
 os.environ.setdefault("ASTRID_INTERNAL_INVOCATION", "1")
 
+from astrid.core.execution.executor.schema import load_executor_manifest
 from astrid.packs.fal.executors.h3_video import run
 
 
@@ -39,6 +41,23 @@ def _args(tmp_path: Path, **overrides: object) -> argparse.Namespace:
 def _downloader(_client: object, _url: str, destination: Path, _timeout: int) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"video")
+
+
+def test_h3_executor_declares_typed_video_port_and_manifest() -> None:
+    manifest = load_executor_manifest(
+        str(
+            Path(__file__).resolve().parents[4]
+            / "astrid/packs/fal/executors/h3_video/executor.yaml"
+        )
+    )
+
+    assert [
+        (output.name, output.type, output.artifact_type, output.path_template)
+        for output in manifest.outputs
+    ] == [
+        ("generated_videos", "file", "video/clip", None),
+        ("video_manifest", "file", None, "{out}/manifest.json"),
+    ]
 
 
 def test_exact_overlong_prompt_fails_before_paid_submit(tmp_path: Path) -> None:
@@ -116,6 +135,21 @@ def test_reference_mode_uploads_ordered_images_and_downloads_video(tmp_path: Pat
     }
     assert (tmp_path / "out" / "outputs" / "minimax-h3-reference-to-video.mp4").is_file()
     saved = json.loads((tmp_path / "out" / "manifest.json").read_text())
+    assert saved["outputs"] == [
+        {
+            "name": "generated_videos",
+            "path": "outputs/minimax-h3-reference-to-video.mp4",
+            "type": "file",
+            "artifact_type": "video/clip",
+            "media_type": "video/mp4",
+            "ordinal": 0,
+            "role": "result",
+            "is_primary": True,
+            "bytes": 5,
+            "content_hash": "sha256:"
+            + hashlib.sha256(b"video").hexdigest(),
+        }
+    ]
     assert [item["reference_label"] for item in saved["inputs"]["ordered_artifacts"]] == [
         "Image 1",
         "Image 2",

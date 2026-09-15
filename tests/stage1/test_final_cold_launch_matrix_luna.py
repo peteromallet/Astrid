@@ -46,8 +46,20 @@ ASTRID_SOURCE = Path(
         text=True,
     ).stdout.strip()
 ).parent
-RUNTIME_CHECKOUT = ASTRID_SOURCE.parent / "banodoco-workspace-runtime-execution-20260909"
-RUNTIME_COMMIT = "afccb430e2a983c968b6a8a96fd630ba3a6262fc"
+RUNTIME_CHECKOUT = Path(
+    os.environ.get(
+        "ASTRID_STAGE1_RUNTIME_CHECKOUT",
+        str(ASTRID_SOURCE.parent / "Runtime"),
+    )
+)
+# Keep the historical frozen pin as the default, while allowing a caller to
+# name the exact reviewed Runtime candidate used by the current composition.
+# This makes the identity transition explicit instead of silently substituting
+# current main or weakening the historical check.
+RUNTIME_COMMIT = os.environ.get(
+    "ASTRID_STAGE1_RUNTIME_COMMIT",
+    "9b0a4432673e79b8acdcf7db1aee8db63c1c3621",
+)
 
 
 def _archive_runtime(destination: Path) -> Path:
@@ -499,7 +511,12 @@ def test_final_cold_launch_matrix_no_mocks(tmp_path: Path) -> None:
             "from pathlib import Path; import hashlib, json, subprocess; "
             "out=Path('{out}'); video=out/'render.mp4'; "
             f"subprocess.run([{ffmpeg!r}, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=10:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(video)], check=True); "
-            "(out/'render.mp4.provenance.json').write_text(json.dumps({'renderer':'ffmpeg','sha256':hashlib.sha256(video.read_bytes()).hexdigest()}))"
+            "provenance=out/'render.mp4.provenance.json'; "
+            "provenance.write_text(json.dumps({'renderer':'ffmpeg','sha256':hashlib.sha256(video.read_bytes()).hexdigest()})); "
+            "(out/'manifest.json').write_text(json.dumps({'outputs':["
+            "{'name':'render','path':'render.mp4','artifact_type':'video/mp4','content_hash':'sha256:'+hashlib.sha256(video.read_bytes()).hexdigest(),'bytes':video.stat().st_size,'ordinal':0,'role':'result','is_primary':True},"
+            "{'name':'provenance','path':'render.mp4.provenance.json','artifact_type':'application/json','content_hash':'sha256:'+hashlib.sha256(provenance.read_bytes()).hexdigest(),'bytes':provenance.stat().st_size,'ordinal':1,'role':'auxiliary','is_primary':False}"
+            "]}, sort_keys=True))"
         )
         (render_pack / "executor.yaml").write_text(
             json.dumps(

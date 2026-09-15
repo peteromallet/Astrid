@@ -68,6 +68,30 @@ class ExecutorSchemaCapabilityTest(unittest.TestCase):
         with self.assertRaisesRegex(ExecutorValidationError, "project_scope"):
             validate_executor_definition(_manifest(metadata={"project_scope": "none"}))
 
+    def test_fixed_inputs_require_declared_string_ports_and_match_defaults(self) -> None:
+        valid = validate_executor_definition(
+            _manifest(
+                inputs=[
+                    {"name": "model", "type": "string", "required": True},
+                    {"name": "mode", "type": "string", "required": True},
+                ],
+                metadata={"fixed_inputs": {"model": "z-image", "mode": "i2i"}},
+            )
+        )
+        self.assertEqual(valid.metadata["fixed_inputs"]["model"], "z-image")
+        cases = [
+            ({"fixed_inputs": {"missing": "value"}}, "undeclared"),
+            ({"fixed_inputs": {"model": 1}}, "non-empty string"),
+            ({"fixed_inputs": {"model": "other"}}, "conflicts with default"),
+        ]
+        for metadata, message in cases:
+            inputs = [
+                {"name": "model", "type": "string", "required": False, "default": "z-image"},
+                {"name": "mode", "type": "string", "required": True},
+            ]
+            with self.assertRaisesRegex(ExecutorValidationError, message):
+                validate_executor_definition(_manifest(inputs=inputs, metadata=metadata))
+
     def test_retired_produces_for_alias_is_rejected(self) -> None:
         with self.assertRaisesRegex(ExecutorValidationError, "produces_for is retired"):
             validate_executor_definition(_manifest(produces_for=["AUDIO", "TEXT"]))

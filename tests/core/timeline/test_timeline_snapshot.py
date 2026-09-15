@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("banodoco_timeline_schema")
 
+from astrid.core.timeline.events.schema import TimelineActor, TimelineEvent, with_event_hash
 from astrid.core.timeline.snapshot import (
     SnapshotIntegrityError,
     snapshot_from_runtime,
@@ -31,6 +32,39 @@ def test_empty_runtime_materialization_is_deterministic_and_verifiable() -> None
     assert snapshot.assembly == {"clips": [], "tracks": []}
     assert snapshot.registry == {"assets": {}}
     assert snapshot.head_version == 0
+    assert verify_frozen(snapshot) == list(snapshot.diagnostics)
+
+
+def test_opaque_runtime_timeline_id_survives_event_snapshot_and_sns() -> None:
+    timeline_id = "astrid-v1-timeline-full-20260912"
+    event = TimelineEvent(
+        event_id="01KZS6CCD73SYEC924B5XR12XG",
+        timeline_id=timeline_id,
+        ts="2026-09-12T00:00:00+00:00",
+        actor=TimelineActor(type="system", id="astrid.kernel", display="Astrid kernel"),
+        prev_hash=None,
+        hash=None,
+        kind="timeline.config_replaced",
+        payload={"config": {"tracks": [], "clips": []}, "source": "other"},
+        expected_version=0,
+        source_backend="astrid.kernel",
+        source_timeline_id=timeline_id,
+        source_event_id="timeline-head",
+        source_version=1,
+        source_hash="a" * 64,
+    )
+    event = with_event_hash(event, prev_hash=None)
+
+    snapshot = snapshot_from_runtime(
+        timeline_id=timeline_id,
+        timeline_ulid=TIMELINE_ULID,
+        slug="full-fixture",
+        project_slug="demo",
+        events=[event.to_json_obj()],
+    )
+
+    assert snapshot.timeline_id == timeline_id
+    assert snapshot.sns().startswith("SNS:")
     assert verify_frozen(snapshot) == list(snapshot.diagnostics)
 
 

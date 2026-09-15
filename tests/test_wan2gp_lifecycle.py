@@ -10,6 +10,7 @@ import pytest
 from astrid.packs.wan2gp.src.compiler import (
     compile_from_inputs,
     portable_digest,
+    resident_key,
     runner_fingerprint,
     warmth_identity,
 )
@@ -124,6 +125,50 @@ def test_runner_and_warmth_identity_are_portable_and_deterministic(
         settings, warmth_profile="cpu-fake-v2"
     )
     assert runner_fingerprint(settings) == runner_fingerprint(settings)
+
+
+def test_resident_key_excludes_task_identity_but_tracks_artifacts_and_policy(
+    settings: dict[str, object],
+) -> None:
+    task_variant = dict(settings)
+    task_variant.update(
+        {
+            "prompt": "a different scene",
+            "seed": 99,
+            "resolution": "640x360",
+            "video_length": 17,
+            "force_fps": "24",
+            "num_inference_steps": 12,
+            "guidance_scale": 7.5,
+            "attempt_root": "/different/private/spool",
+        }
+    )
+    assert resident_key(settings) == resident_key(task_variant)
+    assert runner_fingerprint(settings) != runner_fingerprint(task_variant)
+
+    model_variant = dict(task_variant)
+    model_variant["model_artifact_digest"] = "sha256:model-a"
+    assert resident_key(settings) != resident_key(model_variant)
+
+    policy_variant = dict(settings)
+    policy_variant["attention_backend"] = "flash-attn"
+    assert resident_key(settings) != resident_key(policy_variant)
+
+    assert resident_key(settings, warmth_profile="cpu-fake") != resident_key(
+        settings, warmth_profile="cpu-fake-v2"
+    )
+
+    lora_variant = dict(settings)
+    lora_variant.update(
+        {
+            "lora_artifact_digests": ["sha256:lora-a"],
+            "lora_activation": "fused",
+        }
+    )
+    assert resident_key(settings) != resident_key(lora_variant)
+
+    with pytest.raises(ValueError, match="unclassified settings"):
+        resident_key({**settings, "unknown_retained_switch": True})
 
 
 def test_fake_output_containment_rejects_escape_without_writing_outside(

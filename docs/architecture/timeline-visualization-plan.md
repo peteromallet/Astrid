@@ -145,7 +145,7 @@ Proposed arguments:
 | `--layout time-scaled\|linear\|both` | Geometry; default `both` |
 | `--format png\|svg\|md\|all` | Optional presentation formats; repeatable, default `all` |
 | `--filmstrip auto\|off\|assets\|rendered` | Boundary-sampled strip; default `auto` |
-| `--rendered-video PATH` | Required only for exact rendered filmstrip sampling |
+| `--view filmstrip --render-run RUN_ID\|latest` | Inspect the exact successful managed render; `latest` applies current freshness checks |
 | `--project SLUG` | Normal explicit project selector |
 
 `--shot`, `--range`, `--at`, `--clip`, `--asset`, and `--all` are mutually
@@ -706,12 +706,13 @@ be labeled "linear — widths are not time-scaled" on every page.
 
 Filmstrips are derived, not silently authoritative:
 
-- `--filmstrip auto`: use rendered sampling when `--rendered-video` is
-  provided; otherwise use asset sampling and label it as approximate.
+- `--view filmstrip --render-run RUN_ID|latest`: use the exact successful
+  managed render. `latest` is freshness-checked; an exact run id preserves
+  its pinned render provenance.
 - `--filmstrip assets`: choose deterministic representative frames from the
   active media assets at scope boundaries; label these "source approximation."
-- `--filmstrip rendered --rendered-video PATH`: sample the composited video at
-  boundaries and midpoints using ffmpeg; label these "rendered output."
+- The public managed filmstrip route does not accept a caller-supplied video
+  path; it samples the project-owned managed video selected by `--render-run`.
 - `--filmstrip off`: no filmstrip.
 
 Sampling points are deterministic and listed in `ground-truth.json`. Avoid

@@ -118,6 +118,22 @@ class TestHttpClientConstruction:
         c2 = default_client()
         assert c1 is c2
 
+    def test_get_bytes_enforces_bounded_response_without_content_length(self):
+        client = HttpClient(transport=_canned_transport(200, b"12345"))
+        assert client.get_bytes("https://example.com/output.png", max_bytes=5) == b"12345"
+        with pytest.raises(AstridError, match="bounded body limit"):
+            client.get_bytes("https://example.com/output.png", max_bytes=4)
+
+    def test_json_response_limit_applies_to_injected_transport(self):
+        client = HttpClient(transport=_canned_transport(200, {"value": "1234"}))
+        with pytest.raises(AstridError, match="bounded body limit"):
+            client.get_json("https://example.com/result", max_response_bytes=10)
+
+    def test_json_error_body_uses_the_same_response_limit(self):
+        client = HttpClient(transport=_error_transport(502, "x" * 32))
+        with pytest.raises(AstridError, match="bounded body limit"):
+            client.get_json("https://example.com/result", max_response_bytes=8)
+
 
 # ---------------------------------------------------------------------------
 # Secret scrubbing
@@ -373,6 +389,25 @@ class TestFalSubmitAndPoll:
             transport=_canned_transport(200, {"request_id": "req123"})
         )
         with pytest.raises(AstridError):
+            fal_submit_and_poll(
+                client,
+                "fal-ai/flux/dev",
+                {"prompt": "test"},
+                api_key="test-key",
+            )
+
+    @pytest.mark.parametrize("field", ["status_url", "response_url"])
+    def test_submit_rejects_untrusted_authenticated_queue_url(self, field):
+        submission = {
+            "status_url": "https://queue.fal.run/status/req123",
+            "response_url": "https://queue.fal.run/response/req123",
+            "request_id": "req123",
+        }
+        submission[field] = "https://attacker.example/steal"
+        client = HttpClient(
+            transport=_sequence_transport((200, submission))
+        )
+        with pytest.raises(AstridError, match="authenticated queue origin"):
             fal_submit_and_poll(
                 client,
                 "fal-ai/flux/dev",

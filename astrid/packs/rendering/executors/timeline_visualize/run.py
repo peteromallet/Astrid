@@ -314,7 +314,7 @@ def _verify_selected_execution_authority(
     if mode != "kernel" or not isinstance(expected_rows, list):
         raise ValueError("timeline visualization authority mode changed before execution")
     def comparable_timeline_id(value: Any) -> Any:
-        """Compare compact runtime UUIDs and canonical UUID text alike."""
+        """Compare compact runtime IDs and canonical UUID text alike."""
 
         try:
             return str(uuid.UUID(str(value)))
@@ -375,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--render-run")
     parser.add_argument("--columns", type=int)
     parser.add_argument("--page-size", type=int)
+    parser.add_argument("--resolution", metavar="WIDTHxHEIGHT")
     parser.add_argument("--filmstrip-authority", help=argparse.SUPPRESS)
     parser.add_argument("--timeline-slug")
     parser.add_argument("--all", action="store_true", dest="select_all")
@@ -413,6 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--materialized-root", type=Path)
     parser.add_argument("--materialized-objects")
+    parser.add_argument("--transcript-file", type=Path)
     return parser
 
 
@@ -528,10 +530,8 @@ def _materialize_kernel_timeline(
 
     del project_root, project_slug, destination
     timeline_ulid = row.timeline_ulid.upper()
-    # The workspace DTO currently uses a compact 32-hex UUID, while the
-    # visualization snapshot digest contract requires canonical UUID text.
-    # Keep selector authority in the DTO form, and normalize only at the
-    # materialization boundary.
+    # Compact UUID DTOs retain their historical normalization; opaque Runtime
+    # IDs are preserved exactly through the materialization boundary.
     try:
         timeline_id = str(uuid.UUID(str(row.timeline_id)))
     except ValueError:
@@ -1260,20 +1260,33 @@ def _discover_snapshot_attachment(
     project_root: Path,
     timeline_dir: Path,
     snapshot: TimelineSnapshot,
+    transcript_file: Path | None = None,
 ) -> tuple[TranscriptAttachment | None, TimelineSnapshot]:
     pipeline_metadata, pipeline_base, pipeline_root = _pipeline_metadata_for_timeline(
         project_root,
         timeline_dir,
     )
     timeline_metadata = snapshot.assembly.get("app")
-    attachment = discover_attachment(
-        project_root,
-        timeline_dir=timeline_dir,
-        timeline_metadata=(timeline_metadata if isinstance(timeline_metadata, Mapping) else None),
-        pipeline_metadata=pipeline_metadata,
-        pipeline_metadata_base=pipeline_base,
-        pipeline_root=pipeline_root,
-    )
+    if transcript_file is not None:
+        # Runtime generic-host materializes this one digest-authorized input
+        # below the attempt.  It is the only file path override accepted here;
+        # declaration identity and bytes remain authoritative.
+        attachment_root = transcript_file.expanduser().resolve().parent
+        attachment = discover_attachment(
+            attachment_root,
+            timeline_dir=attachment_root,
+            timeline_metadata=(timeline_metadata if isinstance(timeline_metadata, Mapping) else None),
+            materialized_file=transcript_file,
+        )
+    else:
+        attachment = discover_attachment(
+            project_root,
+            timeline_dir=timeline_dir,
+            timeline_metadata=(timeline_metadata if isinstance(timeline_metadata, Mapping) else None),
+            pipeline_metadata=pipeline_metadata,
+            pipeline_metadata_base=pipeline_base,
+            pipeline_root=pipeline_root,
+        )
     if attachment is None or attachment.integrity != "uncontained":
         return attachment, snapshot
     diagnostic = "TRANSCRIPT_PATH_UNCONTAINED: declared transcript path escaped its owning root"
@@ -1326,6 +1339,7 @@ def _render_one(
         project_root=project_root,
         timeline_dir=project_root,
         snapshot=snapshot,
+        transcript_file=getattr(args, "transcript_file", None),
     )
     if attachment is not None and attachment.integrity == "ok":
         snapshot = replace(snapshot, transcript_sha256=attachment.transcript_sha256)
@@ -1435,6 +1449,7 @@ def refresh_root(
         project_root=project_root,
         timeline_dir=project_root,
         snapshot=snapshot,
+        transcript_file=getattr(args, "transcript_file", None),
     )
     if attachment is not None and attachment.integrity == "ok":
         snapshot = replace(snapshot, transcript_sha256=attachment.transcript_sha256)
@@ -1744,9 +1759,9 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
 
     # The generic host requires a receipt at the assigned output root even
     # though the domain evidence manifest intentionally lives under
-    # ``agent-view/``.  Keep the domain manifest authoritative and publish a
-    # tiny host receipt that points at it; without this boundary receipt the
-    # child succeeds but the admitted task is reported as missing outputs.
+    # ``agent-view/``. Keep the domain manifest authoritative, and publish the
+    # complete evidence directory as a declared output so its members survive
+    # the host's managed-object upload and attempt cleanup.
     write_manifest(
         out_root / "manifest.json",
         build_manifest(
@@ -1754,6 +1769,11 @@ def execute(argv: list[str] | None = None) -> dict[str, Any]:
             created="1970-01-01T00:00:00Z",
             inputs={"timeline_ids": timeline_ids},
             outputs=[
+                {
+                    "name": "pack_root",
+                    "path": str(pack_root.relative_to(out_root)),
+                    "role": "auxiliary",
+                },
                 {
                     "name": "manifest_path",
                     "path": str(manifest_path.relative_to(out_root)),

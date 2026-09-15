@@ -39,6 +39,7 @@ _EXPORTS = {
     "renderer_main": ("rendering", "renderer_main"),
     "resolve_runtime_data_root": ("storage_root", "resolve_runtime_data_root"),
     "support": ("rendering", "support"),
+    "open_render": ("project_render", "open_render"),
     "GenerationFacade": ("generation", "GenerationFacade"),
     "generate": ("generation", "generate"),
     "discover": ("invocation", "discover"),

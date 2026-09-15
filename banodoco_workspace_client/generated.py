@@ -1,4 +1,8 @@
-"""Generated from contract/openapi/workspace-v1.yaml; do not edit by hand."""
+"""Vendored generated client with Astrid's object-location backport.
+
+SCHEMA_DIGEST identifies the PR90 base schema, not a regenerated combined
+upstream schema. See contract_metadata.py for the two source artifacts.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 PROTOCOL = "workspace.v1"
-SCHEMA_DIGEST = "sha256:fd1fa0185ecdf183e1f42d25c2d933bc5c110ad609dbdc86a458d6f7e5dc0eec"
-OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'getProjectObjectLocation', 'listProjectTasks', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
+SCHEMA_DIGEST = "sha256:2043e7bc9b06fc19e20906aff8eaa429fcb8ab335bedc31bd34bff9ab5b71b75"
+OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'getProjectObjectLocation', 'listProjectTasks', 'listManagedOutputs', 'getManagedOutput', 'adoptManagedOutput', 'exportManagedOutput', 'updateManagedOutputLifecycle', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
 
 
 @dataclass(frozen=True)
@@ -198,6 +202,65 @@ class ObjectLocation:
 
 
 @dataclass(frozen=True)
+class ManagedOutput:
+    association_id: str
+    project_id: str | None
+    run_id: str
+    task_id: str
+    attempt_id: str
+    output_port: str
+    group_key: str
+    variant_key: str
+    selector: Mapping[str, Any]
+    object_id: str
+    digest: str
+    manifest_ref: str | None
+    size: int
+    filename: str
+    media_type: str
+    ordinal: int
+    role: str
+    producer: Mapping[str, Any]
+    provenance: Mapping[str, Any]
+    durability: str
+    state: str
+    version: int
+    lifecycle: Mapping[str, Any]
+    generation_id: str | None = None
+    regeneration: Mapping[str, Any] | None = None
+    coverage: Mapping[str, Any] | None = None
+    expires_at: str | None = None
+    pinned_at: str | None = None
+    lease_id: str | None = None
+    lease_owner: str | None = None
+    lease_expires_at: str | None = None
+    lifecycle_updated_at: str = ""
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Any]) -> "ManagedOutput":
+        return cls(
+            association_id=str(value["association_id"]), project_id=value.get("project_id"),
+            run_id=str(value["run_id"]), task_id=str(value["task_id"]), attempt_id=str(value["attempt_id"]),
+            output_port=str(value["output_port"]), group_key=str(value["group_key"]),
+            variant_key=str(value["variant_key"]), selector=dict(value.get("selector") or {}),
+            object_id=str(value["object_id"]), digest=str(value.get("digest", value["object_id"])),
+            manifest_ref=value.get("manifest_ref"), size=int(value["size"]), filename=str(value["filename"]),
+            media_type=str(value["media_type"]), ordinal=int(value["ordinal"]), role=str(value["role"]),
+            producer=dict(value.get("producer") or {}), provenance=dict(value.get("provenance") or {}),
+            durability=str(value["durability"]), state=str(value["state"]), version=int(value["version"]),
+            lifecycle=dict(value.get("lifecycle") or {}), generation_id=value.get("generation_id"),
+            regeneration=dict(value["regeneration"]) if value.get("regeneration") is not None else None,
+            coverage=dict(value["coverage"]) if value.get("coverage") is not None else None,
+            expires_at=value.get("expires_at"), pinned_at=value.get("pinned_at"),
+            lease_id=value.get("lease_id"), lease_owner=value.get("lease_owner"),
+            lease_expires_at=value.get("lease_expires_at"), lifecycle_updated_at=str(value.get("lifecycle_updated_at", "")),
+        )
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+
+@dataclass(frozen=True)
 class ShotTextBinding:
     binding_id: str
     project_id: str
@@ -247,6 +310,7 @@ class Task:
     runtime_epoch: int
     input_object_ids: list[str]
     spec: Mapping[str, Any]
+    generation_intent: Mapping[str, Any] | None = None
     project_id: str | None = None
     attempt_id: str | None = None
     result: Mapping[str, Any] | None = None
@@ -255,7 +319,7 @@ class Task:
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "Task":
-        return cls(task_id=value["task_id"], run_id=value["run_id"], state=value["state"], version=int(value["version"]), capability_id=value["capability_id"], capability_digest=value["capability_digest"], idempotency_key=value["idempotency_key"], created_at=value["created_at"], updated_at=value["updated_at"], input_object_ids=list(value.get("input_object_ids") or []), spec=dict(value.get("spec") or {}), project_id=value.get("project_id"), attempt_id=value.get("attempt_id"), runtime_epoch=int(value["runtime_epoch"]), result=value.get("result"), storage_estimate=dict(value["storage_estimate"]) if value.get("storage_estimate") is not None else None, required_facts=dict(value["required_facts"]) if value.get("required_facts") is not None else None)
+        return cls(task_id=value["task_id"], run_id=value["run_id"], state=value["state"], version=int(value["version"]), capability_id=value["capability_id"], capability_digest=value["capability_digest"], idempotency_key=value["idempotency_key"], created_at=value["created_at"], updated_at=value["updated_at"], input_object_ids=list(value.get("input_object_ids") or []), spec=dict(value.get("spec") or {}), generation_intent=dict(value["generation_intent"]) if value.get("generation_intent") is not None else None, project_id=value.get("project_id"), attempt_id=value.get("attempt_id"), runtime_epoch=int(value["runtime_epoch"]), result=value.get("result"), storage_estimate=dict(value["storage_estimate"]) if value.get("storage_estimate") is not None else None, required_facts=dict(value["required_facts"]) if value.get("required_facts") is not None else None)
 
 
 @dataclass(frozen=True)
@@ -268,13 +332,15 @@ class AttemptFence:
     runtime_epoch: int
     input_object_ids: list[str]
     spec: Mapping[str, Any]
+    generation_intent: Mapping[str, Any] | None = None
     project_id: str | None = None
+    expected_effect: Mapping[str, Any] | None = None
     storage_estimate: Mapping[str, int] | None = None
     required_facts: Mapping[str, Any] | None = None
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "AttemptFence":
-        return cls(attempt_id=value["attempt_id"], task_id=value["task_id"], lease_id=value["lease_id"], fence=int(value["fence"]), lease_expires_at=value["lease_expires_at"], runtime_epoch=int(value["runtime_epoch"]), input_object_ids=list(value.get("input_object_ids") or []), spec=dict(value.get("spec") or {}), project_id=value.get("project_id"), storage_estimate=dict(value["storage_estimate"]) if value.get("storage_estimate") is not None else None, required_facts=dict(value["required_facts"]) if value.get("required_facts") is not None else None)
+        return cls(attempt_id=value["attempt_id"], task_id=value["task_id"], lease_id=value["lease_id"], fence=int(value["fence"]), lease_expires_at=value["lease_expires_at"], runtime_epoch=int(value["runtime_epoch"]), input_object_ids=list(value.get("input_object_ids") or []), spec=dict(value.get("spec") or {}), generation_intent=dict(value["generation_intent"]) if value.get("generation_intent") is not None else None, project_id=value.get("project_id"), expected_effect=dict(value["expected_effect"]) if value.get("expected_effect") is not None else None, storage_estimate=dict(value["storage_estimate"]) if value.get("storage_estimate") is not None else None, required_facts=dict(value["required_facts"]) if value.get("required_facts") is not None else None)
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
@@ -851,10 +917,12 @@ class WorkspaceClient:
     def current_project(self) -> Mapping[str, Any]:
         return self._json(self._request("GET", "/v1/projects/selection")[2])
 
-    def ingest_object(self, data: bytes, *, media_type: str, idempotency_key: str, filename: str | None = None) -> MutationResult:
+    def ingest_object(self, data: bytes, *, media_type: str, idempotency_key: str, filename: str | None = None, upload_binding: Mapping[str, Any] | None = None) -> MutationResult:
         headers = {"Content-Type": media_type, "Idempotency-Key": idempotency_key}
         if filename:
             headers["X-Filename"] = filename
+        if upload_binding is not None:
+            headers["X-Output-Binding"] = json.dumps(upload_binding, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         _, _, body = self._request("POST", "/v1/objects", body=bytes(data), headers=headers, expected=(200, 201))
         return self._mutation_json(body)
 
@@ -869,10 +937,6 @@ class WorkspaceClient:
         value = self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/objects" + query)[2])
         items, next_cursor = self._page(value)
         return [ManagedObject.from_json(item) for item in items], next_cursor
-
-    def get_project_object_location(self, project_id: str, object_id: str) -> ObjectLocation:
-        value = self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/objects/{_path_part(object_id)}/location")[2])
-        return ObjectLocation.from_json(value)
 
 
     def create_media_relation(self, project_id: str, from_object_id: str, to_object_id: str, kind: str, *, idempotency_key: str, metadata: Mapping[str, Any] | None = None, ordinal: int = 0) -> MutationResult:
@@ -905,12 +969,13 @@ class WorkspaceClient:
         status, response_headers, body = self._request("HEAD", f"/v1/objects/{_path_part(object_id)}", headers=headers, expected=(200, 206))
         return ByteResponse(body, status, response_headers)
 
-    def admit_task(self, *, capability_id: str, capability_digest: str, input_object_ids: list[str], idempotency_key: str, schema_version: str = "1", settlement_effect: Mapping[str, Any] | None = None, project_id: str | None = None, spec: Mapping[str, Any] | None = None, storage_estimate: Mapping[str, int] | None = None, required_facts: Mapping[str, Any] | None = None) -> MutationResult:
+    def admit_task(self, *, capability_id: str, capability_digest: str, input_object_ids: list[str], idempotency_key: str, schema_version: str = "1", settlement_effect: Mapping[str, Any] | None = None, project_id: str | None = None, spec: Mapping[str, Any] | None = None, generation_intent: Mapping[str, Any] | None = None, storage_estimate: Mapping[str, int] | None = None, required_facts: Mapping[str, Any] | None = None) -> MutationResult:
         payload: dict[str, Any] = {"capability_id": capability_id, "capability_digest": capability_digest, "schema_version": schema_version, "input_object_ids": input_object_ids}
         if settlement_effect is not None:
             payload["settlement_effect"] = settlement_effect
         if project_id is not None: payload["project"] = project_id
         if spec is not None: payload["spec"] = spec
+        if generation_intent is not None: payload["generation_intent"] = dict(generation_intent)
         if storage_estimate is not None: payload["storage_estimate"] = dict(storage_estimate)
         if required_facts is not None: payload["required_facts"] = dict(required_facts)
         _, _, body = self._request("POST", "/v1/tasks", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key}, expected=(200, 201))
@@ -920,11 +985,49 @@ class WorkspaceClient:
         _, _, body = self._request("GET", f"/v1/tasks/{_path_part(task_id)}")
         return Task.from_json(self._json(body))
 
+    def get_project_object_location(self, project_id: str, object_id: str) -> ObjectLocation:
+        value = self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/objects/{_path_part(object_id)}/location")[2])
+        return ObjectLocation.from_json(value)
+
+
     def list_project_tasks(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> tuple[list[Task], str | None]:
         query = f"?limit={int(limit)}" + (f"&cursor={_path_part(cursor)}" if cursor else "")
         value = self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/tasks" + query)[2])
         items, next_cursor = self._page(value)
         return [Task.from_json(item) for item in items], next_cursor
+
+
+    def list_managed_outputs(self, task_id: str) -> tuple[list[ManagedOutput], str | None]:
+        value = self._json(self._request("GET", f"/v1/tasks/{_path_part(task_id)}/managed-outputs")[2])
+        items, next_cursor = self._page(value)
+        return [ManagedOutput.from_json(item) for item in items], next_cursor
+
+    def get_managed_output(self, association_id: str) -> ManagedOutput:
+        return ManagedOutput.from_json(self._json(self._request("GET", f"/v1/managed-outputs/{_path_part(association_id)}")[2]))
+
+    def export_managed_output(self, association_id: str, *, destination_filename: str, idempotency_key: str, expected: Mapping[str, Any] | None = None) -> MutationResult:
+        payload: dict[str, Any] = {"destination_filename": destination_filename}
+        if expected is not None: payload["expected"] = dict(expected)
+        return self._mutation_json(self._request("POST", f"/v1/managed-outputs/{_path_part(association_id)}/export", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})[2])
+
+    def adopt_managed_output(self, association_id: str, *, idempotency_key: str, assertions: Mapping[str, Any] | None = None) -> MutationResult:
+        payload = dict(assertions or {})
+        _, _, body = self._request("POST", f"/v1/managed-outputs/{_path_part(association_id)}/adopt", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})
+        return self._mutation_json(body)
+
+    def update_managed_output_lifecycle(
+        self, association_id: str, *, operation: str, expected_version: int,
+        idempotency_key: str, lease_id: str | None = None,
+        lease_owner: str | None = None, lease_seconds: int | None = None,
+        provenance: Mapping[str, Any] | None = None,
+    ) -> MutationResult:
+        payload: dict[str, Any] = {"operation": operation, "expected_version": expected_version}
+        if lease_id is not None: payload["lease_id"] = lease_id
+        if lease_owner is not None: payload["lease_owner"] = lease_owner
+        if lease_seconds is not None: payload["lease_seconds"] = lease_seconds
+        if provenance is not None: payload["provenance"] = dict(provenance)
+        _, _, body = self._request("POST", f"/v1/managed-outputs/{_path_part(association_id)}/lifecycle", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})
+        return self._mutation_json(body)
 
 
     def claim_task(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str, runtime_epoch: int) -> AttemptFence | ClaimWaiting | None:

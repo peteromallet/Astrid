@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -11,29 +12,86 @@ from pathlib import Path
 
 import pytest
 
-ASTRID_SOURCE = Path(
-    subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-).parent
-RUNTIME_WORKTREE = ASTRID_SOURCE.parent / "banodoco-workspace-runtime-execution-20260909"
-RUNTIME_COMMIT = "afccb430e2a983c968b6a8a96fd630ba3a6262fc"
+ASTRID_SOURCE = Path(__file__).resolve().parents[2]
+RUNTIME_COMMIT = "8b890b2d81bea0e7c0e9cb66da979177fcd53173"
+
+
+def _runtime_archive() -> bytes:
+    """Find the optional runtime's pinned acceptance revision."""
+    override = os.environ.get("BANODOCO_RUNTIME_CHECKOUT")
+    if override:
+        candidates = [Path(override).expanduser().resolve()]
+    else:
+        sibling_roots = [ASTRID_SOURCE.parent]
+        # Linked worktrees may live in /tmp; use the common checkout only to
+        # discover runtime siblings, never as the Astrid source under test.
+        try:
+            common = subprocess.run(
+                ["git", "-C", str(ASTRID_SOURCE), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                check=False, capture_output=True, text=True,
+            )
+        except OSError:
+            common = None
+        if common is not None and common.returncode == 0:
+            sibling_roots.append(Path(common.stdout.strip()).parent.parent)
+        candidates = [
+            root / name
+            for root in dict.fromkeys(sibling_roots)
+            for name in (
+                "runtime-export-candidate",
+                "banodoco-workspace-runtime",
+                "banodoco-workspace-runtime-execution-20260909",
+            )
+        ]
+    reasons = []
+    for checkout in candidates:
+        if not checkout.is_dir():
+            reasons.append(f"{checkout}: absent")
+            continue
+        try:
+            pinned = subprocess.run(
+                ["git", "-C", str(checkout), "cat-file", "-e", f"{RUNTIME_COMMIT}^{{commit}}"],
+                check=False, capture_output=True,
+            )
+            if pinned.returncode != 0:
+                reasons.append(f"{checkout}: missing acceptance revision {RUNTIME_COMMIT}")
+                continue
+            revision = RUNTIME_COMMIT
+            archive = subprocess.run(
+                ["git", "-C", str(checkout), "archive", "--format=tar", revision],
+                check=False, capture_output=True,
+            )
+        except OSError as exc:
+            reasons.append(f"{checkout}: {exc}")
+            continue
+        if archive.returncode == 0:
+            return archive.stdout
+        reasons.append(f"{checkout}: cannot archive {revision}: {archive.stderr.decode(errors='replace').strip()}")
+    pytest.skip(
+        "Optional Banodoco runtime unavailable; set BANODOCO_RUNTIME_CHECKOUT "
+        "to a runtime Git checkout. " + "; ".join(reasons),
+        allow_module_level=True,
+    )
+
+
+archive = _runtime_archive()
 _RUNTIME_TMP = tempfile.TemporaryDirectory(prefix="astrid-runtime-archive-")
 RUNTIME = Path(_RUNTIME_TMP.name)
-archive = subprocess.run(
-    ["git", "-C", str(RUNTIME_WORKTREE), "archive", "--format=tar", RUNTIME_COMMIT],
-    check=True,
-    capture_output=True,
-).stdout
 with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
     tar.extractall(RUNTIME)
 sys.path.insert(0, str(RUNTIME))
 
-pytest.importorskip("runtime_protocol.daemon")
+pytest.importorskip("runtime_protocol.daemon", reason="Optional runtime checkout does not provide runtime_protocol.daemon or its dependencies")
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 from astrid.core.gateway import dispatch  # noqa: E402
 from astrid.core.gateway import main as gateway_main
@@ -658,6 +716,6 @@ def test_operational_gateway_uses_typed_runtime_backup_and_lifecycle(tmp_path, m
         restored_path = tmp_path / "restored"
         restored = client.restore_backup(str(backup_path), str(restored_path))
         assert restored["destination"] == str(restored_path)
-        assert restored["verification"]["realm_id"] == backup["manifest"]["realm_id"]
+        assert restored["verification"]["realm"]["id"] == backup["manifest"]["realm"]["id"]
     finally:
         daemon.stop()

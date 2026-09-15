@@ -218,6 +218,62 @@
       "required": false,
       "artifact_type": null,
       "description": "Admission-owned snapshot of registered shot names and timeline ranges."
+    },
+    {
+      "name": "speech_annotations",
+      "type": "json",
+      "required": false,
+      "artifact_type": null,
+      "description": "Explicit verified speech annotations retained in the immutable render envelope."
+    },
+    {
+      "name": "speech_occurrences",
+      "type": "json",
+      "required": false,
+      "artifact_type": null,
+      "description": "Explicit render occurrences linked to verified speech annotations."
+    },
+    {
+      "name": "source_audio_digest",
+      "type": "string",
+      "required": false,
+      "artifact_type": null,
+      "description": "Hash-bound source media digest for frozen speech projection."
+    },
+    {
+      "name": "transcript_digest",
+      "type": "string",
+      "required": false,
+      "artifact_type": null,
+      "description": "Hash-bound transcript digest for frozen speech projection."
+    },
+    {
+      "name": "annotation_digest",
+      "type": "string",
+      "required": false,
+      "artifact_type": null,
+      "description": "Hash-bound annotation-source digest for frozen speech projection."
+    },
+    {
+      "name": "correction_version",
+      "type": "integer",
+      "required": false,
+      "artifact_type": null,
+      "description": "Frozen correction revision for the verified speech annotation set."
+    },
+    {
+      "name": "timing_method",
+      "type": "string",
+      "required": false,
+      "artifact_type": null,
+      "description": "Frozen timing method for explicit speech projection."
+    },
+    {
+      "name": "speech_coverage",
+      "type": "json",
+      "required": false,
+      "artifact_type": null,
+      "description": "Frozen speech projection coverage summary."
     }
   ],
   "isolation": {
@@ -238,7 +294,15 @@
   "metadata": {
     "auto_forward_skip": [
       "timeline_ref",
-      "expected_version"
+      "expected_version",
+      "speech_annotations",
+      "speech_occurrences",
+      "source_audio_digest",
+      "transcript_digest",
+      "annotation_digest",
+      "correction_version",
+      "timing_method",
+      "speech_coverage"
     ],
     "requires_remotion": true,
     "requires_timeline": false,

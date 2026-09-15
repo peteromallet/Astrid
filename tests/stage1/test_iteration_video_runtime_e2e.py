@@ -38,6 +38,15 @@ sys.path.insert(0, str(RUNTIME))
 pytest.importorskip("runtime_protocol.daemon")
 
 from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
+from tests.helpers.runtime import initialize_runtime_realm
+
+
+_RuntimeDaemon = RuntimeDaemon
+
+
+def RuntimeDaemon(root, *args, **kwargs):
+    initialize_runtime_realm(root)
+    return _RuntimeDaemon(root, *args, **kwargs)
 
 from astrid.packs.video_editing.orchestrators.iteration_video import (
     run as iteration_video,  # noqa: E402

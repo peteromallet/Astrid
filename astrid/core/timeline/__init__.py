@@ -99,6 +99,13 @@ from .banodoco_schema import (
     validate_timeline,
     validate_timeline_config_for_container,
 )
+from .duration import (
+    render_clock,
+    timeline_duration_frames,
+    timeline_duration_seconds,
+    timeline_render_duration_frames,
+    timeline_render_duration_seconds,
+)
 
 __all__ = [
     "ARRANGEMENT_VERSION",
@@ -194,4 +201,9 @@ __all__ = [
     "validate_registry",
     "validate_timeline",
     "validate_timeline_config_for_container",
+    "render_clock",
+    "timeline_duration_frames",
+    "timeline_duration_seconds",
+    "timeline_render_duration_frames",
+    "timeline_render_duration_seconds",
 ]

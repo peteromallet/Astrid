@@ -154,6 +154,35 @@ def _expand_one_input_arg(
     return expanded
 
 
+def _validate_fixed_inputs(
+    metadata: Mapping[str, Any],
+    ports: tuple[Any, ...],
+    values: Mapping[str, Any],
+) -> None:
+    """Enforce manifest-owned exact values for a narrow capability profile."""
+    raw = metadata.get("fixed_inputs")
+    if raw is None:
+        return
+    if not isinstance(raw, Mapping) or not raw:
+        raise BindingError("metadata.fixed_inputs must be a non-empty object")
+    port_by_name = {_port_name(port): port for port in ports}
+    for name, expected in raw.items():
+        if not isinstance(name, str) or not name:
+            raise BindingError("metadata.fixed_inputs keys must be non-empty strings")
+        port = port_by_name.get(name)
+        if port is None:
+            raise BindingError(f"metadata.fixed_inputs references undeclared input {name!r}")
+        if _port_type(port) not in {"string", "text"}:
+            raise BindingError(f"metadata.fixed_inputs input {name!r} must be a string port")
+        if not isinstance(expected, str) or not expected:
+            raise BindingError(f"metadata.fixed_inputs value for {name!r} must be a non-empty string")
+        actual = values.get(name)
+        if not isinstance(actual, str) or actual != expected:
+            raise BindingError(
+                f"fixed input {name!r} requires {expected!r}, got {actual!r}"
+            )
+
+
 def expand_command(
     command: Any,
     ports: Any,
@@ -173,6 +202,8 @@ def expand_command(
         default = _field(port, "default")
         if name not in effective_values and default is not None:
             effective_values[name] = default
+
+    _validate_fixed_inputs(_metadata(metadata), declared_ports, effective_values)
 
     replacements = {
         str(name): _stringify(value)

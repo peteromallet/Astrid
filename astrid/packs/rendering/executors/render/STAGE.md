@@ -100,6 +100,20 @@ result = sdk.invoke(
 The equivalent product command is
 `astrid timelines render main --project demo --expected-version 4`.
 
+### Render-only tail clock
+
+Managed timelines may declare an explicit render-only tail under
+`app.astrid_render_clock`. The authored clip clock remains authoritative for
+clip placement and identity; the declared render clock may extend the decoded
+output only when it names a runtime-admitted registry asset and declares the
+tail as `unmapped_excess_rendered_region`. For example, an authored 297-second
+timeline at 30 FPS can declare 8910 authored frames and 9000 rendered frames,
+with a source interval `[8910, 9000)` from the immutable tail asset. Managed
+validation rejects missing, malformed, shorter, or unbound clocks before
+render admission. Remotion renders the tail explicitly, while storage
+estimation, filmstrip snapshots, and visualization extents use the rendered
+clock and retain authored clip intervals for provenance.
+
 ## Inputs
 
 | Name            | Type   | Required | Description |

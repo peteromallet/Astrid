@@ -1079,6 +1079,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "visualize",
         help="Build a timeline evidence pack synchronously through the public SDK.",
         configure=_configure_visualize,
+        requires_pack_host=True,
     ),
     CommandSpec(
         "inspect",
@@ -1089,6 +1090,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "render",
         help="Render a canonical kernel timeline with optional version pinning.",
         configure=_configure_render,
+        requires_pack_host=True,
     ),
 )
 

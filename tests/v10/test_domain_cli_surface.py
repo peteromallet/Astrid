@@ -425,7 +425,19 @@ def test_dispatch_product_skips_pack_host_for_runtime_only_reads(monkeypatch) ->
     assert dispatch._dispatch_product(["runs", "open", "--project", "demo"]) == 0
     assert seen["start_pack_host"] is False
     assert dispatch._dispatch_product(["runs", "retry", "RUN1"]) == 0
-    assert seen["start_pack_host"] is True
+    assert seen["start_pack_host"] is False
+
+
+def test_pack_host_requirement_is_declared_by_command_not_read_allowlist() -> None:
+    from astrid.core.cli.domain_product import command_requires_pack_host
+
+    assert command_requires_pack_host("projects", ["list"]) is False
+    assert command_requires_pack_host("runs", ["retry"]) is False
+    assert command_requires_pack_host("timelines", ["visualize"]) is True
+    assert command_requires_pack_host("timelines", ["render"]) is True
+    assert command_requires_pack_host("timelines", ["shots", "list"]) is False
+    assert command_requires_pack_host("media", ["references", "show"]) is False
+    assert command_requires_pack_host("timelines", ["future-command"]) is True
 
 
 def test_dispatch_product_help_does_not_open_client(monkeypatch, capsys) -> None:

@@ -438,3 +438,109 @@ def test_diagnostics_can_remain_side_effect_free(monkeypatch):
     )
     with pytest.raises(Exception, match="banodoco-local up --profile astrid"):
         AstridClient.open(endpoint="http://127.0.0.1:1", credential="token", realm_id="realm", actor_id="actor", client_name="test", client_version="1", protocol_version="workspace.v1")
+
+
+def test_warm_acquisition_connects_before_considering_bootstrap(monkeypatch, tmp_path):
+    data_root = tmp_path / "support"
+    discovery = data_root / "runtime" / "discovery.json"
+    discovery.parent.mkdir(parents=True)
+    discovery.write_text("{}", encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({
+                "status": "reconnected",
+                "realm_id": "realm-1",
+                "endpoint": "http://127.0.0.1:1",
+                "actor_id": "actor-1",
+            }),
+            "",
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+
+    result = autobootstrap.ensure_runtime(start_pack_host=False, data_root=data_root)
+
+    assert result["status"] == "reconnected"
+    assert len(seen) == 1
+    assert seen[0][:4] == ["/usr/bin/banodoco-local", "connect", "--profile", "astrid"]
+
+
+def test_stale_discovery_falls_back_to_authoritative_bootstrap(monkeypatch, tmp_path):
+    data_root = tmp_path / "support"
+    discovery = data_root / "runtime" / "discovery.json"
+    discovery.parent.mkdir(parents=True)
+    discovery.write_text(json.dumps({"pid": 999999}), encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command)
+        if command[1] == "connect":
+            return subprocess.CompletedProcess(
+                command, 1, '{"ok":false,"error":"Runtime discovery is stale"}', ""
+            )
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            '{"status":"started","realm_id":"realm-1","endpoint":"http://127.0.0.1:1","actor_id":"actor-1"}',
+            "",
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+
+    result = autobootstrap.ensure_runtime(start_pack_host=False, data_root=data_root)
+
+    assert result["status"] == "started"
+    assert [command[1] for command in seen] == ["connect", "up"]
+
+
+def test_connect_protocol_rejection_is_not_masked_by_bootstrap(monkeypatch, tmp_path):
+    data_root = tmp_path / "support"
+    discovery = data_root / "runtime" / "discovery.json"
+    discovery.parent.mkdir(parents=True)
+    discovery.write_text("{}", encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(
+            command, 1, '{"ok":false,"error":"Source profile is incompatible"}', ""
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+
+    with pytest.raises(autobootstrap.AutoBootstrapError, match="incompatible"):
+        autobootstrap.ensure_runtime(start_pack_host=False, data_root=data_root)
+    assert [command[1] for command in seen] == ["connect"]
+
+
+def test_interrupted_bootstrap_gets_one_bounded_recovery_attempt(monkeypatch, tmp_path):
+    data_root = tmp_path / "support"
+    seen: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command)
+        if len(seen) == 1:
+            raise subprocess.TimeoutExpired(command, timeout=1)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            '{"status":"reconnected","realm_id":"realm-1","endpoint":"http://127.0.0.1:1","actor_id":"actor-1"}',
+            "",
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+
+    result = autobootstrap.ensure_runtime(start_pack_host=False, data_root=data_root)
+
+    assert result["status"] == "reconnected"
+    assert len(seen) == 2
+    assert all(command[1] == "up" for command in seen)

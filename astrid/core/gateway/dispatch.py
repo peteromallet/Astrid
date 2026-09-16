@@ -191,7 +191,10 @@ def _dispatch_backup(args: list[str]) -> int:
         from astrid.sdk.exceptions import ServiceUnavailableError
         from astrid.sdk.workspace_client import WorkspaceClientError
 
-        with AstridClient.open_from_launcher() as client:
+        # Backup is a workspace-service operation.  It must remain available
+        # while the optional pack worker is busy/down and must not reconcile a
+        # caller's source checkout or interpreter.
+        with AstridClient.open_from_launcher(start_pack_host=False) as client:
             if parsed.operation == "create":
                 destination = parsed.destination or parsed.out
                 if not destination:
@@ -283,21 +286,16 @@ def _dispatch_product(args: list[str]) -> int:
 
 
 def _product_command_needs_pack_host(family: str, args: list[str]) -> bool:
-    """Return whether this product route can execute pack-host work.
+    """Return the declarative worker-host requirement for one product route.
 
-    Keep this allowlist deliberately narrow.  A missing/unknown verb retains
-    the execution-backed default so adding a new command cannot accidentally
-    bypass host setup.
+    The command registry is the dependency source of truth: workspace CRUD
+    and reads default to no pack host, while a capability that actually runs
+    pack code opts in on its ``CommandSpec``. Unknown routes fail closed until
+    argparse can return their normal usage error.
     """
-    if not args:
-        return True
-    command = args[0]
-    read_only = {
-        "projects": {"list", "show", "current"},
-        "runs": {"list", "show", "events", "open"},
-        "timelines": {"list", "show", "history", "diff"},
-    }
-    return command not in read_only.get(family, set())
+    from astrid.core.cli.domain_product import command_requires_pack_host
+
+    return command_requires_pack_host(family, args)
 
 
 def _product_top_level_commands() -> frozenset[str]:

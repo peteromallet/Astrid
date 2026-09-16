@@ -57,12 +57,16 @@ class CommandSpec:
         aliases: Optional list of alternative subcommand names.
         configure: Callable that configures the subparser.  Must not be
             ``None`` (enforced at registration time).
+        requires_pack_host: Whether this command performs pack-worker work and
+            therefore needs explicit worker-host readiness during admission.
+            Workspace CRUD/read commands stay false by default.
     """
 
     name: str
     help: str
     aliases: Sequence[str] = field(default_factory=tuple)
     configure: Callable[[argparse.ArgumentParser], None] | None = None
+    requires_pack_host: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -143,6 +147,7 @@ def register_product_commands(
             help=spec.help,
             aliases=spec.aliases,
             configure=configure,
+            requires_pack_host=spec.requires_pack_host,
         )
 
     stamped = [_stamp(spec) for spec in commands]

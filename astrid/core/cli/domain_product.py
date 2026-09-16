@@ -45,6 +45,7 @@ __all__ = [
     "is_registered_family",
     "product_top_level_commands",
     "read_runtime_cli_mounts",
+    "command_requires_pack_host",
     "run_product_family",
 ]
 
@@ -284,6 +285,33 @@ FAMILY_PARSER_MODULES: dict[str, str] = {
     "tasks": "astrid.core.cli.domain_tasks",
     "runs": "astrid.core.cli.domain_runs",
 }
+
+
+def command_requires_pack_host(family: str, args: Sequence[str]) -> bool:
+    """Resolve worker-host readiness from the command's declaration.
+
+    Product routes are workspace-service operations by default.  Only a
+    command explicitly marked ``requires_pack_host`` may request the optional
+    generic pack host.  Unknown routes fail closed while the real parser is
+    still responsible for reporting the usage error.  This keeps lifecycle
+    acquisition independent from an expanding, hand-maintained read allowlist.
+    """
+    if family not in PRODUCT_FAMILY_SET:
+        return True
+    module_name = FAMILY_PARSER_MODULES.get(family)
+    if not module_name or not args:
+        return True
+    module = importlib.import_module(module_name)
+    commands = getattr(module, "COMMANDS", ())
+    command = str(args[0])
+    spec = next((item for item in commands if isinstance(item, CommandSpec) and item.name == command), None)
+    if spec is None:
+        # Nested mounts (shots/references) are workspace CRUD families and do
+        # not need a pack host merely to compose their parser/client.
+        if command in {"shots", "references"}:
+            return False
+        return True
+    return bool(spec.requires_pack_host)
 
 
 def run_product_family(

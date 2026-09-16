@@ -343,6 +343,58 @@ def test_launcher_bootstrap_preserves_typed_install_action(monkeypatch):
     assert caught.value.details["next_action"] == autobootstrap.INSTALL_RUNTIME_ACTION
 
 
+def test_launcher_rejection_preserves_structured_runtime_cause(monkeypatch, tmp_path):
+    """A neutral admission failure remains actionable at the Astrid boundary."""
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
+
+    response = {
+        "ok": False,
+        "error": {
+            "code": "realm_admission_failed",
+            "message": "realm failed startup admission",
+            "details": {
+                "checks": {"sqlite": "timeout"},
+                "recovery_action": "inspect the realm admission report",
+            },
+        },
+    }
+    monkeypatch.setattr(
+        autobootstrap.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, json.dumps(response), ""
+        ),
+    )
+
+    with pytest.raises(autobootstrap.AutoBootstrapError) as caught:
+        autobootstrap.ensure_runtime(start_pack_host=False, data_root=tmp_path / "support")
+
+    assert caught.value.code == "runtime_bootstrap_rejected"
+    assert caught.value.details["cause_code"] == "realm_admission_failed"
+    assert caught.value.details["checks"]["sqlite"] == "timeout"
+    assert caught.value.details["recovery_action"] == "inspect the realm admission report"
+
+
+def test_open_from_launcher_relays_lifecycle_code_and_cause(monkeypatch):
+    def rejected():
+        raise autobootstrap.AutoBootstrapError(
+            "runtime rejected",
+            code="runtime_bootstrap_rejected",
+            details={"cause_code": "realm_admission_failed", "state": "blocked"},
+        )
+
+    monkeypatch.setattr(autobootstrap, "ensure_runtime", rejected)
+
+    with pytest.raises(ServiceUnavailableError) as caught:
+        AstridClient.open_from_launcher()
+
+    assert caught.value.code == "unavailable"
+    assert caught.value.details["lifecycle_code"] == "runtime_bootstrap_rejected"
+    assert caught.value.details["cause_code"] == "realm_admission_failed"
+    assert caught.value.details["next_action"] == autobootstrap.RECONFIGURE_ACTION
+
+
 def test_configured_manifest_does_not_require_editable_source_inference(monkeypatch, tmp_path):
     runtime = _runtime_checkout(tmp_path)
     manifest = tmp_path / "source-profile.json"

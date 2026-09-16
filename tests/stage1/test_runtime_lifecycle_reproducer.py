@@ -31,18 +31,18 @@ def _run_harness(tmp_path: Path, mode: str) -> dict[str, object]:
 
 
 @pytest.mark.timeout(30)
-def test_cold_concurrent_acquisition_has_one_owner_and_typed_lifecycle_failures(tmp_path: Path) -> None:
+def test_cold_concurrent_acquisition_serializes_to_one_owner(tmp_path: Path) -> None:
     report = _run_harness(tmp_path, "cold")
     assert report["owner_count"] == 1
     assert report["launcher_invocations"] == 3
     assert report["discovery"]["runtime_instance_id"] == "fixture-instance"
     assert report["classification"]["lifecycle"]["attempted"] == 3
-    assert report["classification"]["lifecycle"]["successes"] == 1
-    assert report["classification"]["lifecycle"]["failures"] == 2
+    assert report["classification"]["lifecycle"]["successes"] == 3
+    assert report["classification"]["lifecycle"]["failures"] == 0
     assert sorted(report["lifecycle_events"]) == [
+        "reconnected",
+        "reconnected",
         "started",
-        "startup_in_progress",
-        "startup_in_progress",
     ]
     assert report["classification"]["pack_worker"]["attempted"] == 0
     assert report["classification"]["timeline_visualization"]["attempted"] == 0

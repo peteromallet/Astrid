@@ -33,10 +33,12 @@ class AutoBootstrapError(RuntimeError):
         *,
         next_action: str = RECONFIGURE_ACTION,
         code: str = "runtime_lifecycle_error",
+        details: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.next_action = next_action
         self.code = code
+        self.details = dict(details or {})
 
 
 # The neutral launcher remains the cross-process authority.  This lock only
@@ -88,6 +90,36 @@ def _result(stdout: str) -> Mapping[str, Any]:
             f"neutral runtime bootstrap returned an invalid result; {RECONFIGURE_ACTION}"
         )
     return value
+
+
+def _bounded_details(value: Any, *, limit: int = 16_384) -> dict[str, Any]:
+    """Keep launcher-provided diagnostic details typed and bounded.
+
+    The neutral launcher owns the underlying cause.  Preserve its small,
+    machine-readable diagnostic fields instead of stringifying the whole
+    response, while refusing an accidentally huge error payload.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, Any] = {}
+    for key, item in list(value.items())[:32]:
+        if not isinstance(key, str):
+            continue
+        if isinstance(item, str):
+            result[key] = item[:1_000]
+        elif isinstance(item, (bool, int, float)) or item is None:
+            result[key] = item
+        elif isinstance(item, Mapping):
+            result[key] = _bounded_details(item, limit=limit)
+        elif isinstance(item, (list, tuple)):
+            result[key] = list(item)[:32]
+    try:
+        encoded = json.dumps(result, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return {"details_truncated": True}
+    if len(encoded.encode("utf-8")) > limit:
+        return {"details_truncated": True}
+    return result
 
 
 def _launcher_command() -> list[str]:
@@ -217,10 +249,26 @@ def _lifecycle_result(
 ) -> Mapping[str, Any]:
     """Validate a launcher result while preserving its lifecycle cause."""
     if value.get("ok") is False:
-        reason = str(value.get("error") or "launcher rejected the request")
+        raw_error = value.get("error")
+        if isinstance(raw_error, Mapping):
+            raw_details = _bounded_details(raw_error.get("details"))
+            cause_code = raw_error.get("code")
+            cause_message = raw_error.get("message")
+            if isinstance(cause_code, str) and cause_code:
+                raw_details.setdefault("cause_code", cause_code)
+            if isinstance(cause_message, str) and cause_message:
+                raw_details.setdefault("cause_message", cause_message[:1_000])
+            for key in ("next_action", "recovery_action", "state"):
+                if key in raw_error and key not in raw_details:
+                    raw_details[key] = raw_error[key]
+            reason = str(cause_message or cause_code or "launcher rejected the request")
+        else:
+            raw_details = {}
+            reason = str(raw_error or "launcher rejected the request")
         raise AutoBootstrapError(
             f"neutral runtime {action} was not ready: {reason}; {RECONFIGURE_ACTION}",
             code="runtime_" + action + "_rejected",
+            details=raw_details,
         )
     status = str(value.get("status", ""))
     if status not in allowed_statuses:

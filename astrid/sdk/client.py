@@ -226,8 +226,11 @@ class AstridClient:
                 else ensure_runtime(start_pack_host=False)
             )
         except AutoBootstrapError as exc:
+            lifecycle_details = dict(getattr(exc, "details", {}) or {})
+            lifecycle_details.setdefault("lifecycle_code", exc.code)
+            lifecycle_details.setdefault("next_action", exc.next_action)
             raise ServiceUnavailableError(
-                str(exc), details={"next_action": exc.next_action}
+                str(exc), details=lifecycle_details
             ) from exc
         if credential is not None:
             credential_value: str | Path = credential

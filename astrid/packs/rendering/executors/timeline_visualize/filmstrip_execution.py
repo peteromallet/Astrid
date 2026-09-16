@@ -164,7 +164,11 @@ def execute_input_only(args, authority):
     attach_input_audio_waveforms(projection, integrity=integrity, out_root=pack_root)
     _materialize_input_previews(projection, pack_root)
     _attach_input_navigation(index, projection, track_meta=snapshot.get("tracks"))
-    png_pages = _render_input_projection_png(projection, snapshot, pack_root)
+    # Input-only is a first-class filmstrip view, so its public pages use the
+    # same ``filmstrip-###.png`` entrypoint naming as rendered/paired output.
+    png_pages = _render_input_projection_png(
+        projection, snapshot, pack_root, filename_prefix="filmstrip",
+    )
     (pack_root / "render-snapshot.json").write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
     # Input-only deliveries use the same compact v2 receipt as output and
     # paired deliveries. The rich projection remains available in memory for

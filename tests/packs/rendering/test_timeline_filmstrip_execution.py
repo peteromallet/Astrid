@@ -38,6 +38,8 @@ def test_input_only_is_a_materializable_compact_filmstrip_bundle(tmp_path):
     assert manifest['kind'] == 'timeline_filmstrip'
     assert index['schema'] == 'astrid.filmstrip.v2'
     assert 'navigation' not in index
+    assert result['outputs']['pages']
+    assert all(Path(page).name.startswith('filmstrip-') for page in result['outputs']['pages'])
     assert (manifest_path.parent / 'render-snapshot.json').is_file()
     assert len(json.dumps(index, separators=(',', ':')).encode()) < 8192
 
@@ -50,6 +52,8 @@ def test_input_only_is_a_materializable_compact_filmstrip_bundle(tmp_path):
     audio = inspect_filmstrip(manifest_path, section='audio')
     assert audio['ok']
     assert audio['data']['records'][0]['status'] == 'not_available'
+    pages = inspect_filmstrip(manifest_path, section='pages')
+    assert pages['ok'] and pages['data']['records']
 
     bundle_bytes = Path(result['outputs']['filmstrip_bundle']).read_bytes()
     raw = {'outputs': {'artifacts': [{

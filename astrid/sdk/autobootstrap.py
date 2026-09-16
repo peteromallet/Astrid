@@ -178,7 +178,19 @@ def _lifecycle_result(
         "credential_file": value.get("credential_file", ""),
         "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
     }
-    for field in ("worker_credential_file", "worker_actor", "worker_scopes"):
+    # Keep the non-secret fields that the existing generic pack-host contract
+    # consumes.  The launcher owns source selection; dropping source_checkout
+    # here makes a real worker handoff look incomplete and silently skips host
+    # startup.  Runtime identity fields are likewise carried through when the
+    # launcher provides them so host reuse can remain bound to this runtime.
+    for field in (
+        "worker_credential_file",
+        "worker_actor",
+        "worker_scopes",
+        "source_checkout",
+        "runtime_epoch",
+        "schema_digest",
+    ):
         if field in value:
             result[field] = value[field]
     credential_file = result["credential_file"]

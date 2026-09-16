@@ -103,6 +103,9 @@ def test_neutral_launcher_is_invoked_with_ephemeral_profile(monkeypatch, tmp_pat
     manifest_path.write_text(json.dumps({"profile": "astrid", "runtime_checkout": str(runtime), "source_checkout": str(source)}), encoding="utf-8")
     monkeypatch.setenv("BANODOCO_LOCAL_SOURCE_MANIFEST", str(manifest_path))
     monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    # This test exercises the explicit cold/up command.  Keep it hermetic
+    # when the developer checkout happens to have a live discovery file.
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
 
     seen: dict[str, object] = {}
 
@@ -154,6 +157,7 @@ def test_read_runtime_connection_skips_pack_host_setup(monkeypatch, tmp_path):
         )
 
     monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
     monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
     monkeypatch.setattr(
         host_bootstrap,
@@ -212,6 +216,70 @@ def test_default_runtime_connection_still_starts_pack_host(monkeypatch, tmp_path
     assert seen == [True]
 
 
+def test_real_worker_source_handoff_starts_pack_host_after_lifecycle_filter(
+    monkeypatch, tmp_path
+):
+    """Lifecycle filtering must retain the fields needed by host bootstrap."""
+    from astrid.sdk import host_bootstrap
+
+    worker = tmp_path / "worker.token"
+    worker.write_text("worker-secret", encoding="utf-8")
+    credential = tmp_path / "astrid.json"
+    credential.write_text("{}", encoding="utf-8")
+    source = tmp_path / "source-checkout"
+    source.mkdir()
+    handoffs: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                {
+                    "status": "started",
+                    "realm_id": "realm-1",
+                    "endpoint": "http://127.0.0.1:1",
+                    "actor_id": "owner",
+                    "credential_file": str(credential),
+                    "worker_credential_file": str(worker),
+                    "worker_actor": "astrid-pack-host",
+                    "worker_scopes": [
+                        "handshake",
+                        "worker:register",
+                        "worker:execute",
+                        "tasks:read",
+                        "objects:read",
+                        "objects:write",
+                    ],
+                    "source_checkout": str(source),
+                    "runtime_instance_id": "runtime-1",
+                    "coordinator_epoch": "coordinator-1",
+                    "runtime_epoch": 7,
+                    "schema_digest": "schema-7",
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", "/usr/bin/banodoco-local")
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
+    monkeypatch.setattr(autobootstrap.subprocess, "run", fake_run)
+
+    def fake_ensure_pack_host(value, **kwargs):
+        handoffs.append(dict(value))
+        return {"host_status": "ready"}
+
+    monkeypatch.setattr(host_bootstrap, "ensure_pack_host", fake_ensure_pack_host)
+
+    result = autobootstrap.ensure_runtime(start_pack_host=True)
+
+    assert result["host_status"] == "ready"
+    assert len(handoffs) == 1
+    assert handoffs[0]["source_checkout"] == str(source)
+    assert handoffs[0]["runtime_epoch"] == 7
+    assert handoffs[0]["schema_digest"] == "schema-7"
+
+
 def test_installed_runtime_module_is_used_when_console_script_is_off_path(
     monkeypatch, tmp_path
 ):
@@ -219,6 +287,7 @@ def test_installed_runtime_module_is_used_when_console_script_is_off_path(
     monkeypatch.delenv("BANODOCO_LOCAL_SOURCE_MANIFEST", raising=False)
     monkeypatch.setattr(autobootstrap.shutil, "which", lambda _name: None)
     monkeypatch.setattr(autobootstrap, "find_spec", lambda name: object())
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
     seen: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
@@ -312,6 +381,7 @@ def test_persisted_source_profile_relaunches_without_environment(monkeypatch, tm
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", str(launcher))
     monkeypatch.delenv("BANODOCO_LOCAL_SOURCE_MANIFEST", raising=False)
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
 
     seen: dict[str, object] = {}
 
@@ -339,6 +409,7 @@ def test_envless_bootstrap_delegates_missing_profile_to_neutral_launcher(monkeyp
     monkeypatch.setenv("HOME", str(tmp_path / "fresh-home"))
     monkeypatch.setenv("BANODOCO_LOCAL_LAUNCHER", str(launcher))
     monkeypatch.delenv("BANODOCO_LOCAL_SOURCE_MANIFEST", raising=False)
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
     seen: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
@@ -368,6 +439,7 @@ def test_envless_bootstrap_never_infers_checkout_authority(monkeypatch, tmp_path
     monkeypatch.setenv("BANODOCO_ASTRID_SOURCE_CHECKOUT", str(tmp_path / "attacker-source"))
     monkeypatch.setenv("ASTRID_SOURCE_CHECKOUT", str(tmp_path / "other-source"))
     monkeypatch.delenv("BANODOCO_LOCAL_SOURCE_MANIFEST", raising=False)
+    monkeypatch.setattr(autobootstrap, "_discovery_present", lambda _root: False)
     seen: dict[str, object] = {}
 
     def fake_run(command, **kwargs):

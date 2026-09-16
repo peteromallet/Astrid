@@ -206,7 +206,7 @@ def test_pack_uses_rendered_frames_without_html_artifact(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg required')
-def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
+def test_pack_keeps_audio_navigation_links_separate_from_compact_receipt(tmp_path):
     video = tmp_path / 'render.mp4'
     subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=24:duration=4', '-c:v', 'libx264', '-y', str(video)], check=True)
     raw_audio = {
@@ -240,7 +240,7 @@ def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg required')
-def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
+def test_pack_keeps_audio_navigation_in_rich_result_index(tmp_path):
     video = tmp_path / 'render.mp4'
     subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=24:duration=4', '-c:v', 'libx264', '-y', str(video)], check=True)
     raw_audio = {
@@ -265,11 +265,12 @@ def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
     index = json.loads(Path(result['paths']['json']).read_text())
     sidecar = json.loads((tmp_path / 'pack' / 'audio-analysis.json').read_text())
     assert len(index['cards']) == 4
-    assert index['audio'] == raw_audio
+    assert index['schema'] == 'astrid.filmstrip.v2'
+    assert 'audio' not in index
     assert sidecar == raw_audio
-    assert 'waveform_targets' not in index['audio']
+    assert index['audio_sidecar']['path'] == 'audio-analysis.json'
 
-    navigation = index['navigation']
+    navigation = result['frame_index']['navigation']
     assert navigation['audio']['waveform_targets']
     target = navigation['waveforms'][0]
     assert navigation['targets'][target['target']] == target

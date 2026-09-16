@@ -207,7 +207,7 @@ def _execution_authority_context() -> dict[str, Any] | None:
     return value
 
 
-_FORMATS = frozenset({"png", "svg", "md"})
+_FORMATS = frozenset({"png", "md"})
 _CROCKFORD32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -335,9 +335,9 @@ def _format_argument(value: str) -> str:
     """Validate one CLI format token while accepting comma-separated lists.
 
     Discovery exposes the SDK field as plural ``formats`` while the runtime
-    command uses repeatable singular ``--format``.  Accepting both
-    ``--format png --format svg`` and the common ``--format png,svg`` spelling
-    keeps the two public forms semantically identical.
+    command uses repeatable singular ``--format``. Accept both repeatable and
+    comma-separated PNG/Markdown spellings while rejecting retired SVG/all
+    output before execution.
     """
 
     values = [part.strip().lower() for part in value.split(",") if part.strip()]

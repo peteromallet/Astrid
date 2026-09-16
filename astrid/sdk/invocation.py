@@ -1199,7 +1199,6 @@ def _materialize_filmstrip_outputs(
             "pack_root": str(root),
             "manifest_path": str(manifest),
             "pages": [str(p) for p in sorted(root.glob("filmstrip-*.png"))],
-            "svg_pages": [str(p) for p in sorted(root.glob("filmstrip-*.svg"))],
             "frame_index": str(root / "frame-index.json"),
         }
         markdown = root / "filmstrip.md"
@@ -1265,11 +1264,6 @@ def _invocation_outputs(
                 if "filmstrip" not in path.relative_to(pack_root).parts
             ]
             if page_pattern == "filmstrip-*.png":
-                outputs["svg_pages"] = [
-                    str(path)
-                    for path in sorted(pack_root.rglob("filmstrip-*.svg"))
-                    if "filmstrip" not in path.relative_to(pack_root).parts
-                ]
                 markdown = pack_root / "filmstrip.md"
                 if markdown.is_file():
                     outputs["markdown"] = str(markdown)

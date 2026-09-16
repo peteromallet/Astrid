@@ -1,7 +1,6 @@
 """Deterministic contact sheets sampled from the exact rendered video."""
 from __future__ import annotations
 
-import base64
 import hashlib
 import html
 import json
@@ -447,7 +446,7 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
     paired_layout = [
         'Paired output+inputs pages show one row (five cards by default); use --columns 6 for six across.',
         'Pass --page-size N explicitly to opt into denser paired pages (up to two rows / 10 cards).',
-        'Open numbered PNG/SVG pages in order; use frame-index.json static_surface.rows for exact row/card ranges.',
+        'Open numbered PNG pages in order; use frame-index.json static_surface.rows for exact row/card ranges.',
     ] if paired else []
     if paired:
         paired_columns = max(1, int(options.get('columns') or 5))
@@ -456,8 +455,8 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
             paired_page_size = min(10, paired_columns * 2, max(1, int(options.get('page_size') or 50)))
             base += ['--page-size', str(paired_page_size)]
     return {
-        'viewer': 'Open the returned PNG/SVG pages for visual inspection; use frame-index.json for exact card and asset lookup.',
-        'keyboard': ['Use numbered PNG/SVG pages for the overview; a multi-page result is intentional for readability.', 'Use frame-index.json to inspect a specific frame, clip, lane, or exact target.', 'Use the copyable focus commands below to regenerate a narrower view.'],
+        'viewer': 'Open the returned PNG pages for visual inspection; use frame-index.json for exact card and asset lookup.',
+        'keyboard': ['Use numbered PNG pages for the overview; a multi-page result is intentional for readability.', 'Use frame-index.json to inspect a specific frame, clip, lane, or exact target.', 'Use the copyable focus commands below to regenerate a narrower view.'],
         'filters': ['Use Shot, Track, From/To, Samples, and Density by rerunning the command with the matching flags.', 'Density only reduces captured frames; rerun the command for finer samples.'],
         'commands': {
             'rerun_base': shlex.join(base),
@@ -1262,42 +1261,6 @@ def _png_card_metrics(draw, card, name_font, timestamp_font, script_font, audio=
     }
 
 
-def _static_svg(cards, out_root, columns, page_size, timeline_name, render_run_id, render_selection, *, show_text=True, show_output=True, detail=False):
-    """Render the pre-refresh SVG contract byte-for-byte."""
-    from PIL import ImageFont
-    font = ImageFont.truetype('DejaVuSans.ttf', 13) if Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf').exists() else ImageFont.load_default(size=13)
-    paths = []
-    for page, offset in enumerate(range(0, len(cards), page_size), 1):
-        group = cards[offset:offset + page_size]
-        wrapped = [_static_lines(c, show_text=show_text) for c in group]
-        image_height = 288 if detail else 216
-        text_area_heights = [max(72, 18 * len(lines) + 16) for lines in wrapped]
-        heights = [max(260 + (image_height - 216) + text_area_heights[i] for i in range(row, min(row + columns, len(group)))) for row in range(0, len(group), columns)]
-        width, height = columns * 344 + 24, sum(heights) + 88
-        if width * height > 64_000_000:
-            raise ValueError('Static page exceeds 64 million pixels; reduce --page-size.')
-        svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="100%" height="100%" fill="#111827"/><text x="16" y="28" fill="white">{html.escape(f"{timeline_name} · page {page} · rendered frames")}</text><text x="16" y="44" fill="#acbbcb" font-family="sans-serif" font-size="13">{html.escape(f"Render {render_run_id} · selection: {render_selection}")}</text><text x="16" y="62" fill="#acbbcb" font-family="sans-serif" font-size="13">{html.escape("Authored script segments, not word-aligned. No script does not imply silence.")}</text>']
-        y = 72
-        for i, card in enumerate(group):
-            x = 16 + (i % columns) * 344
-            if i and i % columns == 0:
-                y += heights[i // columns - 1]
-            if show_output:
-                data = base64.b64encode((out_root / card['image']).read_bytes()).decode()
-                svg.append(f'<image x="{x}" y="{y}" width="328" height="{image_height}" preserveAspectRatio="xMinYMin meet" href="data:image/jpeg;base64,{data}"/>')
-            else:
-                svg.append(f'<rect x="{x}" y="{y}" width="328" height="{image_height}" rx="6" fill="#162630" stroke="#405769"/><text x="{x + 12}" y="{y + image_height / 2}" fill="#9fb0bf" font-family="sans-serif" font-size="14">Output hidden</text>')
-            text_area_top = y + image_height + 8
-            text_area_height = text_area_heights[i]
-            text_block_height = 18 * len(wrapped[i])
-            text_top = text_area_top + max(0, (text_area_height - text_block_height) / 2)
-            for j, line in enumerate(wrapped[i]):
-                ty = text_top + j * 18
-                svg.append(f'<text x="{x + 164}" y="{ty + 13}" text-anchor="middle" fill="#e5e7eb" font-family="sans-serif" font-size="13">{html.escape(line)}</text>')
-        paths.append((page, width, height, ''.join(svg) + '</svg>'))
-    return paths
-
-
 def _static_png(cards, out_root, columns, page_size, timeline_name, render_run_id, render_selection, audio=None, *, show_text=True, show_output=True, detail=False):
     from PIL import Image, ImageDraw
     measure_image = Image.new('RGB', (1, 1))
@@ -1402,14 +1365,8 @@ def _static_png(cards, out_root, columns, page_size, timeline_name, render_run_i
 
 def _static(cards, out_root, columns, page_size, timeline_name, render_run_id, render_selection, audio=None, *, components=None, detail=False):
     components = set(components or ('output', 'text', 'audio'))
-    svg_pages = _static_svg(cards, out_root, columns, page_size, timeline_name, render_run_id, render_selection, show_text='text' in components, show_output='output' in components, detail=detail)
     png_paths = _static_png(cards, out_root, columns, page_size, timeline_name, render_run_id, render_selection, audio if 'audio' in components else None, show_text='text' in components, show_output='output' in components, detail=detail)
-    svg_paths = []
-    for page, _width, _height, content in svg_pages:
-        path = out_root / f'filmstrip-{page:03d}.svg'
-        path.write_text(content, encoding='utf-8')
-        svg_paths.append(str(path))
-    return {'png': png_paths, 'svg': svg_paths}
+    return {'png': png_paths}
 
 
 def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, options: dict) -> dict:
@@ -1454,7 +1411,7 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
                                   'verified': audio.get('render_digest') == snapshot.get('video_digest')}
     # Static pages honor component visibility too.  Keep the full machine
     # index intact for drill-down, but do not print hidden script/audio facts
-    # into a supposedly filtered PNG/SVG page.
+    # into a supposedly filtered PNG page.
     display_cards = deepcopy(cards)
     if 'text' not in (options.get('components') or ('output', 'text', 'audio')):
         for card in display_cards:

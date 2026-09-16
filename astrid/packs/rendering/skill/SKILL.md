@@ -38,7 +38,7 @@ python3 -m astrid timelines diff --project <project> <slug-or-id> --json
 ```
 
 For visual continuity review, use the rendered filmstrip. It samples the exact
-successful render into chronological PNG/SVG contact sheets, with Markdown and
+successful render into chronological PNG contact sheets, with Markdown and
 a machine-readable frame index. Omit `--out`; Astrid
 owns the run and returns local delivery paths for verified copies of the
 published evidence objects. The durable authority is the managed run's
@@ -47,8 +47,8 @@ digest-verified bundle/manifest, not those disposable local paths.
 When `output` and `inputs` are both shown, the primary page uses a paired-row
 layout: five (or the requested `--columns`) output samples per row with the
 input lanes relevant to that row immediately underneath. The row's linear
-half-open time axis is shared by cards, placements, audio rails, and the PNG,
-SVG, and `static_surface.rows` JSON contract.
+half-open time axis is shared by cards, placements, audio rails, and the PNG
+and `static_surface.rows` JSON contract.
 Paired pages show one row by default (five columns unless changed with
 `--columns`; `--columns 6` gives six across), while standalone output/input
 pages keep their normal page sizing. Pass `--page-size N` explicitly to opt
@@ -112,7 +112,7 @@ backing chip for legibility.
 Filmstrips require a successful render with its frozen timeline snapshot and
 managed video. They do not substitute source asset thumbnails. PNG cards show
 spoken text in quotes and a prominent local waveform/cursor when the admitted
-render has audio; SVG remains the geometry-oriented companion. Script captions
+render has audio. Script captions
 remain authored segment text, not word-aligned transcription. Missing or
 uncertain speech timing is reported as unavailable/partial, while waveform
 inspection remains usable; opening the inspector never starts a provider call.

@@ -5,7 +5,7 @@
   "kind": "built_in",
   "version": "1.0",
   "short_description": "Build a deterministic, agent-navigable filmstrip from a managed timeline render.",
-  "description": "Read one runtime-owned timeline and its successful managed render, then emit deterministic paired filmstrip JSON, Markdown, PNG, and SVG evidence under the owning run.",
+  "description": "Read one runtime-owned timeline and its successful managed render, then emit deterministic paired filmstrip JSON, Markdown, and PNG evidence under the owning run.",
   "keywords": [
     "timeline",
     "visualize",
@@ -133,7 +133,7 @@
       "name": "view",
       "type": "string",
       "required": false,
-      "description": "Presentation: the paired rendered filmstrip as static PNG/SVG/Markdown/JSON evidence (the only supported view).",
+      "description": "Presentation: the paired rendered filmstrip as static PNG/Markdown/JSON evidence (the only supported view).",
       "default": "filmstrip"
     },
     {

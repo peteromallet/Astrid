@@ -1330,27 +1330,6 @@ def _render_paired_rows(
     return output_paths, rows_meta, standalone_paths
 
 
-def _paired_svg_pages(png_paths: list[str], pack_root: Path) -> list[str]:
-    """Expose the exact paired PNG surface through the static SVG entrypoint."""
-    import base64
-    result = []
-    for png_value in png_paths:
-        png = Path(png_value)
-        if not png.is_file():
-            continue
-        from PIL import Image
-        with Image.open(png) as image:
-            width, height = image.size
-        data = base64.b64encode(png.read_bytes()).decode("ascii")
-        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-               f'viewBox="0 0 {width} {height}"><image width="{width}" height="{height}" '
-               f'href="data:image/png;base64,{data}"/></svg>')
-        path = pack_root / png.name.replace(".png", ".svg")
-        path.write_text(svg, encoding="utf-8")
-        result.append(str(path))
-    return result
-
-
 def _compose_synchronized_surface(
     output_pages: list[str], input_pages: list[Path], *, pack_root: Path,
     frame_index: Mapping[str, object] | None = None,
@@ -1421,7 +1400,6 @@ def _compose_synchronized_surface(
                 coverage["static_page_count"] = len(paired)
                 coverage["static_layout"] = "paired_rows"
             frame_index["static_surface"]["pages"] = [Path(path).name for path in paired]
-            frame_index["static_surface"]["svg_pages"] = [Path(path).name for path in _paired_svg_pages(paired, pack_root)]
         return paired or output_pages
     from PIL import Image, ImageDraw
 
@@ -1616,9 +1594,6 @@ def execute_filmstrip(args, *, authority=None):
                 surface.setdefault('mode', 'paired_rows')
                 surface.setdefault('components', ['output', 'inputs'])
                 surface['standalone_input_pages'] = [path.name for path in input_pages]
-                paired_svg = [pack_root / name for name in surface.get('svg_pages', [])]
-                if paired_svg:
-                    result['paths']['svg'] = [str(path) for path in paired_svg]
                 try:
                     persisted_index = compact_render_receipt(frame_index, snapshot, pack_root)
                 except (KeyError, TypeError, ValueError):
@@ -1647,9 +1622,6 @@ def execute_filmstrip(args, *, authority=None):
     entrypoints = {'frames': 'frame-index.json', 'markdown': 'filmstrip.md'}
     if png_paths:
         entrypoints['png'] = primary_png
-    svg_paths = [Path(path) for path in result['paths'].get('svg') or []]
-    if svg_paths:
-        entrypoints['svg'] = svg_paths[0].relative_to(pack_root).as_posix()
     manifest = build_manifest(
         kind='timeline_filmstrip', created='1970-01-01T00:00:00Z',
         inputs={'render_run_id': snapshot['render_run_id'], 'video_digest': digest,
@@ -1704,7 +1676,7 @@ def execute_filmstrip(args, *, authority=None):
 
     # Keep the host receipt small and self-contained.  The bundle is the
     # canonical delivery artifact; it contains the nested manifest, static
-    # PNG/SVG/Markdown pages, and (when requested) the verified video.
+    # PNG/Markdown pages, and (when requested) the verified video.
     # Publishing the same large members individually would expand the inline
     # settlement beyond the runtime request limit and duplicate the bundle.
     write_manifest(
@@ -1762,8 +1734,6 @@ def execute_filmstrip(args, *, authority=None):
     }
     if primary_png:
         entrypoints["png"] = f"filmstrip-view/{primary_png}"
-    if svg_paths:
-        entrypoints["svg"] = f"filmstrip-view/{svg_paths[0].relative_to(pack_root).as_posix()}"
     entrypoints["markdown"] = "filmstrip-view/filmstrip.md"
     return {'returncode': 0, 'run_root': str(out_root),
             'manifest_path': str(manifest_path), 'timeline_ids': [snapshot['timeline_id']],

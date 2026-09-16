@@ -40,8 +40,7 @@ them. Each row has one linear, half-open time window; card positions, input
 placements, audio rails, and the row ruler all use that same window. The raw
 rendered page and input-band pages remain in the bundle as auxiliary evidence.
 The JSON `static_surface.rows` metadata lists each row's card ids, exact time
-range, and active input tracks; SVG mirrors the same composed surface as the
-PNG. This is the default combined layout, while output-only and input-only
+range, and active input tracks. This is the default combined layout, while output-only and input-only
 views retain their existing layouts.
 
 Combined results may produce several numbered pages intentionally; by default
@@ -98,7 +97,7 @@ status when neither timed speech nor an applicable shot script exists.
 Sampling is bounded at 2,000 cards and fails with guidance to narrow the
 range or increase the interval.
 
-Outputs include chronological paginated PNG and SVG contact sheets, Markdown,
+Outputs include chronological paginated PNG contact sheets, Markdown,
 and JSON frame cards. Cards show time,
 frame, human shot name, and wrapped spoken text; PNG cards also include a
 prominent card-local waveform and frame-time cursor whenever the admitted render
@@ -180,7 +179,7 @@ and its result manifest as managed objects. The SDK verifies and extracts the
 bundle into the deterministic, project-namespaced
 cache at `~/Library/Caches/Astrid/timeline-visualize/<project>/<bundle-digest>/`
 on macOS (or `$XDG_CACHE_HOME/astrid/timeline-visualize/...` elsewhere),
-returning `pages`, `svg_pages`, `markdown`, `frame_index`, and `manifest_path`, plus verified
+returning `pages`, `markdown`, `frame_index`, and `manifest_path`, plus verified
 `audio_analysis` and `media` paths when those members are present. Extraction
 uses a hidden sibling staging directory and publishes only after all members
 pass integrity checks. The runtime objects remain the durable authority and
@@ -196,7 +195,7 @@ render. `identity.manifest.content_hash` and
 rendered-video, nested-manifest, and bundle digest locators that the host can
 publish as CAS objects. They are not inferred from a local filename. The
 relative entrypoints are `filmstrip-view/manifest.json`,
-`filmstrip-view/frame-index.json`, the first static PNG/SVG/Markdown page,
+`filmstrip-view/frame-index.json`, the first static PNG/Markdown page,
 and `filmstrip-bundle.zip`. The nested manifest remains the filmstrip domain
 manifest; the output-root `manifest.json` is the generic
 `timeline_filmstrip_result` host receipt with the bundle as its primary result.
@@ -242,8 +241,8 @@ python3 -m astrid.packs.rendering.executors.timeline_visualize.run \
   --out /tmp/agent-view \
   --project-slug desert-plant-growth \
   --timeline-slug storyboard \
-  --format png --format svg
-# Equivalent: --format png,svg
+  --format png --format md
+# Equivalent: --format png,md
 ```
 
 For the normal project-scoped maker path, omit `out` and let Astrid manage the
@@ -258,7 +257,7 @@ result = sdk.invoke(
     project="desert-plant-growth",
     inputs={
         "timeline_slug": "storyboard",  # UUID, ULID, or slug; omit for default
-        "formats": ["png", "svg"],
+        "formats": ["png", "md"],
     },
 )
 assert result.ok
@@ -272,12 +271,11 @@ project may be omitted when a project has been selected:
 
 ```bash
 python3 -m astrid timelines visualize --project desert-plant-growth \
-  --timeline-slug storyboard --format png,svg --format md --json
+  --timeline-slug storyboard --format png,md --json
 # Omit --timeline-slug for the project default; use --range/--shot to focus.
 ```
 
-`--format` is repeatable and comma-separated (`png`, `svg`, `md`, or `all`),
-with `all` exclusive of other formats. Invalid ownership, selectors, and
+`--format` is repeatable and comma-separated (`png` or `md`). Invalid ownership, selectors, and
 combinations are returned as typed validation errors before a run/task is
 admitted.
 

@@ -359,7 +359,6 @@ def test_managed_execution_verifies_video_before_extracting(tmp_path, monkeypatc
         'manifest': 'filmstrip-view/manifest.json',
         'frame_index': 'filmstrip-view/frame-index.json',
         'png': 'filmstrip-view/filmstrip-001.png',
-        'svg': 'filmstrip-view/filmstrip-001.svg',
         'markdown': 'filmstrip-view/filmstrip.md',
         'bundle': 'filmstrip-bundle.zip',
     }
@@ -475,7 +474,7 @@ def test_paired_surface_groups_five_samples_and_clips_input_rows(tmp_path):
     assert [row['output_card_count'] for row in surface['rows']] == [5, 5, 5, 5, 4]
     assert surface['rows'][0]['time_range'] == [0.0, 25.0]
     assert surface['rows'][-1]['time_range'] == [100.0, 117.06666666666666]
-    assert all((tmp_path / f'filmstrip-{page:03d}.svg').is_file() for page in range(1, 4))
+    assert not list(tmp_path.glob('filmstrip-*.svg'))
 
 
 def test_paired_surface_page_size_respects_smaller_request_and_sparse_card_fills_row(tmp_path):
@@ -596,7 +595,7 @@ def test_paired_navigation_describes_pages_and_drill_down():
         {'components': ['output', 'text', 'audio', 'inputs'], 'columns': 5, 'page_size': 50, 'page_size_explicit': False},
     )
     assert any('one row' in note for note in navigation['notes'])
-    assert any('numbered PNG/SVG pages' in note for note in navigation['keyboard'])
+    assert any('numbered PNG pages' in note for note in navigation['keyboard'])
     assert '--page-size' not in navigation['commands']['rerun_base']
 
 

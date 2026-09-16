@@ -190,7 +190,7 @@ def test_pack_uses_rendered_frames_without_html_artifact(tmp_path):
     subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=24:duration=4', '-c:v', 'libx264', '-y', str(video)], check=True)
     snap = snapshot(scripts=[dict(start=0, end=4, text='</script><script>alert("x")</script>')], metadata={'selection': 'explicit_render'})
     result = build_filmstrip_pack(out_root=tmp_path / 'pack', video_path=video, snapshot=snap, options={'every': 2})
-    assert set(result['paths']) == {'png', 'svg', 'json', 'markdown'}
+    assert set(result['paths']) == {'png', 'json', 'markdown'}
     assert not (tmp_path / 'pack' / 'filmstrip.html').exists()
     index = json.loads(Path(result['paths']['json']).read_text())
     assert index['provenance']['render_run_id'] == 'run-exact'
@@ -200,12 +200,9 @@ def test_pack_uses_rendered_frames_without_html_artifact(tmp_path):
         r, g, b = image.getpixel((20, 20))
         assert r > 200 and g < 30 and b < 30
     assert Path(result['paths']['png'][0]).exists()
-    svg = Path(result['paths']['svg'][0]).read_text()
     markdown = Path(result['paths']['markdown']).read_text()
-    assert '</script><script>alert' not in svg
     assert '</script><script>alert' not in markdown
-    assert '&lt;/script&gt;' in svg
-    assert 'Render run-exact · selection: explicit_render' in svg
+    assert not list((tmp_path / 'pack').glob('*.svg'))
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg required')
@@ -382,15 +379,6 @@ def _static_fixture(root, *, size=(64, 36), color=(32, 64, 96)):
     image_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new('RGB', size, color).save(image_path, format='JPEG', quality=90, optimize=False, progressive=False)
     return image_path
-
-
-def test_static_svg_centers_card_text_in_its_body_area(tmp_path):
-    _static_fixture(tmp_path)
-    card = _static_card(name='Baseline shot', script='Baseline authored script')
-    pages = filmstrip_cards._static_svg([card], tmp_path, 1, 50, 'Baseline timeline', 'run-baseline', 'selection')
-    svg = pages[0][3]
-    assert 'text-anchor="middle"' in svg
-    assert 'x="180"' in svg
 
 
 def test_png_text_is_measured_bounded_and_unicode_safe():

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import multiprocessing
 import subprocess
+import threading
+import time
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +29,12 @@ def _launcher_result(status: str, *, ok: bool = True) -> str:
     )
 
 
+def _hold_acquisition_lock(data_root: str, entered, release) -> None:
+    with autobootstrap._acquisition_file_lock(Path(data_root), timeout=2.0):
+        entered.set()
+        release.wait(5.0)
+
+
 def test_thin_launcher_accepts_restarted_owner_and_preserves_normal_command(monkeypatch, launcher_data_root):
     seen: list[list[str]] = []
     monkeypatch.setattr(
@@ -41,6 +51,39 @@ def test_thin_launcher_accepts_restarted_owner_and_preserves_normal_command(monk
         "/usr/bin/banodoco-local", "up", "--profile", "astrid",
         "--data-root", str(launcher_data_root), "--json"
     ]]
+
+
+def test_acquisition_lock_is_canonical_and_cross_process_serialized(launcher_data_root):
+    assert autobootstrap._acquisition_lock_path(launcher_data_root) == (
+        launcher_data_root / "runtime" / "acquisition.lock"
+    )
+
+    context = multiprocessing.get_context("spawn")
+    entered = context.Event()
+    release = context.Event()
+    holder = context.Process(
+        target=_hold_acquisition_lock,
+        args=(str(launcher_data_root), entered, release),
+    )
+    holder.start()
+    releaser = None
+    try:
+        assert entered.wait(5.0)
+        releaser = threading.Timer(0.15, release.set)
+        releaser.start()
+        started = time.monotonic()
+        with autobootstrap._acquisition_file_lock(launcher_data_root, timeout=2.0):
+            elapsed = time.monotonic() - started
+        assert elapsed >= 0.10
+    finally:
+        if releaser is not None:
+            releaser.join(5.0)
+        release.set()
+        holder.join(5.0)
+        if holder.is_alive():
+            holder.terminate()
+            holder.join(5.0)
+    assert holder.exitcode == 0
 
 
 @pytest.mark.parametrize(

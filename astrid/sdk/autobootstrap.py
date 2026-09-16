@@ -10,9 +10,10 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 PROFILE = "astrid"
 RECONFIGURE_ACTION = "run `banodoco-local up --profile astrid`"
@@ -130,6 +131,81 @@ def _discovery_present(data_root: Path) -> bool:
     except Exception:
         return False
     return path.is_file() and not path.is_symlink()
+
+
+def _acquisition_lock_path(data_root: Path) -> Path:
+    """Return the stable cross-process lock path for one canonical root."""
+    return data_root.expanduser().resolve(strict=False) / "runtime" / "acquisition.lock"
+
+
+@contextmanager
+def _acquisition_file_lock(
+    data_root: Path, *, timeout: float | None = None
+) -> Iterator[None]:
+    """Serialize launcher acquisition across independent Astrid processes.
+
+    The in-process lock above only protects threads sharing one interpreter.
+    A stable flock sibling is needed because LC-06 launches separate CLI
+    processes concurrently.  The lock is advisory, auto-released on process
+    death, and scoped to the canonical support root.  Waiting is bounded by
+    the same admission budget as the launcher so a stuck peer cannot leave a
+    caller hanging forever.
+    """
+    try:
+        import fcntl
+    except ImportError as exc:  # pragma: no cover - Astrid runs on POSIX
+        raise AutoBootstrapError(
+            f"neutral runtime acquisition lock is unavailable; {RECONFIGURE_ACTION}",
+            code="runtime_acquisition_lock_unavailable",
+        ) from exc
+
+    lock_path = _acquisition_lock_path(data_root)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+")
+        os.fchmod(handle.fileno(), 0o600)
+    except OSError as exc:
+        raise AutoBootstrapError(
+            f"neutral runtime acquisition lock is unavailable; {RECONFIGURE_ACTION}",
+            code="runtime_acquisition_lock_unavailable",
+        ) from exc
+
+    wait_timeout = _launcher_timeout() if timeout is None else float(timeout)
+    if wait_timeout <= 0 or not math.isfinite(wait_timeout):
+        handle.close()
+        raise AutoBootstrapError(
+            "runtime acquisition lock timeout must be finite and positive",
+            code="runtime_acquisition_lock_unavailable",
+        )
+    deadline = time.monotonic() + wait_timeout
+    acquired = False
+    try:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AutoBootstrapError(
+                        f"neutral runtime acquisition lock timed out; {RECONFIGURE_ACTION}",
+                        code="runtime_acquisition_lock_timeout",
+                    )
+                time.sleep(min(0.05, remaining))
+            except OSError as exc:
+                raise AutoBootstrapError(
+                    f"neutral runtime acquisition lock is unavailable; {RECONFIGURE_ACTION}",
+                    code="runtime_acquisition_lock_unavailable",
+                ) from exc
+        yield
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
 
 
 def _lifecycle_result(
@@ -334,7 +410,7 @@ def ensure_runtime(*, start_pack_host: bool = True, data_root: str | Path | None
         base.extend(("--source-manifest", str(manifest)))
     if data_root is not None:
         base.extend(("--data-root", str(data_root)))
-    with _ACQUISITION_LOCK:
+    with _ACQUISITION_LOCK, _acquisition_file_lock(Path(data_root)):
         value: Mapping[str, Any] | None = None
         if data_root is not None and _discovery_present(Path(data_root)):
             connect_command = [*launcher, "connect", "--profile", PROFILE]

@@ -1,5 +1,7 @@
 # Getting Started with Astrid
 
+New installation? Start with [Set up Astrid](setup/README.md), or give your agent the [setup checklist](setup/SKILL.md). The reference below covers additional SDK and rendering details.
+
 Astrid is a Python SDK and harness toolkit for building and running
 agentic UXes — pipelines where agents and humans collaborate to make art.
 

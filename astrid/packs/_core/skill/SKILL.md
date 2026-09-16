@@ -25,6 +25,8 @@ Choose the route by the requested result. Read only that route's guidance:
 Using an existing workflow and building a reusable extension are different
 requests: pack builder handles the latter, including deciding what to reuse.
 
+On a new machine, complete the [setup checklist](../../../../docs/setup/SKILL.md) before beginning project work.
+
 ## Start here
 
 **Establish the current project when opening or switching project work.**

@@ -2280,7 +2280,7 @@ def invoke(
             str(mpath) if mpath else _discover_invocation_manifest_path(raw_result, out=out)
         )
         if (wait and ok and capability.id == "rendering.timeline_visualize"
-                and (invocation_authority_context or {}).get("mode") == "filmstrip"):
+                and (invocation_authority_context or {}).get("mode") in {"filmstrip", "input_only"}):
             manifest_path = _materialize_filmstrip_outputs(
                 raw_result,
                 _client,

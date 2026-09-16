@@ -471,6 +471,8 @@ def _visualization_navigation_help(
     zoom_detail = [] if inputs.get("detail") else ["--detail"]
     pages = outputs.get("pages")
     primary_page = pages[0] if isinstance(pages, list) and pages else outputs.get("png")
+    manifest_ref = outputs.get("manifest_path") or "MANIFEST"
+    inspect_base = ["python3", "-m", "astrid", "timelines", "inspect", "--manifest", str(manifest_ref)]
     paired = "output" in tokens(inputs.get("show")) and "inputs" in tokens(inputs.get("show"))
     page_status = None
     if paired and isinstance(pages, list) and len(pages) > 1:
@@ -479,10 +481,10 @@ def _visualization_navigation_help(
         "primary_page": primary_page,
         "pages": pages,
         "markdown": outputs.get("markdown"),
-        "frame_index": outputs.get("frame_index"),
+        "inspection": shlex.join(inspect_base + ["--section", "summary"]),
         "status": page_status,
         "keyboard": [
-            "Open the primary PNG page for visual inspection; use frame-index.json for exact card and asset lookup.",
+            "Open the primary PNG page for visual inspection; use the bounded inspect command for exact card, placement, lane, or timing lookup.",
             "Use the rerun commands below to zoom, change sampling intervals, or narrow to input lanes.",
         ],
         "filters": [
@@ -497,6 +499,11 @@ def _visualization_navigation_help(
             "resolution": shlex.join(base(resolution=False) + ["--resolution", "960x540"]),
             "inputs_only": shlex.join(input_only),
             "pages": shlex.join(clean + ["--columns", "5", "--page-size", "10"]),
+            "inspect_summary": shlex.join(inspect_base + ["--section", "summary"]),
+            "inspect_cards": shlex.join(inspect_base + ["--section", "cards"]),
+            "inspect_placements": shlex.join(inspect_base + ["--section", "placements"]),
+            "inspect_audio": shlex.join(inspect_base + ["--section", "audio"]),
+            "inspect_boundaries": shlex.join(inspect_base + ["--section", "boundaries"]),
         },
         "notes": [
             "--range uses a half-open START..END seconds window.",
@@ -521,9 +528,9 @@ def _print_visualization_navigation(outputs: Mapping[str, Any]) -> None:
     primary_page = navigation.get("primary_page")
     if primary_page:
         print(f"  open PNG: {primary_page}")
-    frame_index = navigation.get("frame_index")
-    if frame_index:
-        print(f"  inspect JSON: {frame_index}")
+    inspection = navigation.get("inspection")
+    if inspection:
+        print(f"  inspect (bounded): {inspection}")
     status = navigation.get("status")
     if status:
         print(f"  status: {status}")

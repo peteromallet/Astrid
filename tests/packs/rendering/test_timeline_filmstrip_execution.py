@@ -6,6 +6,7 @@ import subprocess
 import wave
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,52 @@ from astrid.packs.rendering.executors.timeline_visualize import filmstrip_execut
 from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip
 from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
 from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import project_input_window
+
+
+def test_input_only_is_a_materializable_compact_filmstrip_bundle(tmp_path):
+    """Input-only uses the same manifest/receipt contract as the paired view."""
+    snapshot = {
+        'project_slug': 'demo', 'timeline_id': 'main', 'timeline_name': 'Main',
+        'render_run_id': 'run-input', 'fps_rational': [30, 1],
+        'duration_frames': 120, 'clips': [
+            {'id': 'picture-1', 'track': 'picture', 'asset': 'still-a', 'at': 0, 'hold': 2},
+            {'id': 'vo-1', 'track': 'vo', 'asset': 'voice-a', 'at': 1, 'hold': 2},
+        ], 'tracks': [{'id': 'picture', 'kind': 'visual'}, {'id': 'vo', 'kind': 'audio'}],
+        'scripts': [], 'metadata': {},
+    }
+    args = Namespace(range_value=None, out=tmp_path / 'output', project_slug='demo')
+    result = execution.execute_input_only(
+        args, {'input_snapshot': snapshot, 'mode': 'input_only'},
+    )
+
+    manifest_path = Path(result['manifest_path'])
+    manifest = json.loads(manifest_path.read_text())
+    index = json.loads((manifest_path.parent / 'frame-index.json').read_text())
+    assert manifest['kind'] == 'timeline_filmstrip'
+    assert index['schema'] == 'astrid.filmstrip.v2'
+    assert 'navigation' not in index
+    assert (manifest_path.parent / 'render-snapshot.json').is_file()
+    assert len(json.dumps(index, separators=(',', ':')).encode()) < 8192
+
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import inspect_filmstrip
+
+    assert inspect_filmstrip(manifest_path, section='summary')['ok']
+    placements = inspect_filmstrip(manifest_path, section='placements')
+    assert placements['ok']
+    assert {row['id'] for row in placements['data']['records']} == {'picture-1', 'vo-1'}
+
+    bundle_bytes = Path(result['outputs']['filmstrip_bundle']).read_bytes()
+    raw = {'outputs': {'artifacts': [{
+        'name': 'filmstrip_bundle',
+        'digest': 'sha256:' + hashlib.sha256(bundle_bytes).hexdigest(),
+        'size': len(bundle_bytes),
+    }]}}
+    client = SimpleNamespace(media=SimpleNamespace(read_bytes=lambda _: bundle_bytes))
+    from astrid.sdk.invocation import _materialize_filmstrip_outputs
+
+    hydrated = _materialize_filmstrip_outputs(raw, client, project='demo', cache_root=tmp_path / 'cache')
+    assert Path(hydrated).is_file()
+    assert json.loads(Path(hydrated).read_text())['kind'] == 'timeline_filmstrip'
 
 
 def test_managed_coverage_projects_actual_overview_source_pack():

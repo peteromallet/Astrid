@@ -165,8 +165,16 @@ def execute_input_only(args, authority):
     _materialize_input_previews(projection, pack_root)
     _attach_input_navigation(index, projection, track_meta=snapshot.get("tracks"))
     png_pages = _render_input_projection_png(projection, snapshot, pack_root)
-    (pack_root / "frame-index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
     (pack_root / "render-snapshot.json").write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Input-only deliveries use the same compact v2 receipt as output and
+    # paired deliveries. The rich projection remains available in memory for
+    # rendering, while the persisted entrypoint stays bounded and points back
+    # to the verified snapshot for placement drill-down.
+    persisted_index = compact_render_receipt(index, snapshot, pack_root)
+    (pack_root / "frame-index.json").write_text(
+        json.dumps(persisted_index, ensure_ascii=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
     files = sorted(path for path in pack_root.rglob("*") if path.is_file())
     primary_png = Path(png_pages[0]).relative_to(pack_root).as_posix() if png_pages else None
     # Every concrete file in a universal result manifest needs a stable
@@ -186,7 +194,7 @@ def execute_input_only(args, authority):
     entrypoints = {"frames": "frame-index.json"}
     if primary_png:
         entrypoints["png"] = primary_png
-    manifest = build_manifest(kind="timeline_input_inspection", created="1970-01-01T00:00:00Z", inputs={"timeline_id": snapshot.get("timeline_id"), "components": options.get("components"), "window": projection["window"], "render_requested": False}, outputs=outputs, entrypoints=entrypoints, timeline_ids=[snapshot.get("timeline_id")], request=options.get("request"))
+    manifest = build_manifest(kind="timeline_filmstrip", created="1970-01-01T00:00:00Z", inputs={"timeline_id": snapshot.get("timeline_id"), "components": options.get("components"), "window": projection["window"], "render_requested": False}, outputs=outputs, entrypoints=entrypoints, timeline_ids=[snapshot.get("timeline_id")], request=options.get("request"))
     write_manifest(pack_root / "manifest.json", manifest)
     # Input-only runs are still first-class filmstrip deliveries.  Package
     # the preview stills, audio rails, frame index, and nested manifest so the
@@ -203,7 +211,7 @@ def execute_input_only(args, authority):
     write_manifest(
         out_root / "manifest.json",
         build_manifest(
-            kind="timeline_input_inspection_result",
+            kind="timeline_filmstrip_result",
             created="1970-01-01T00:00:00Z",
             inputs={"timeline_id": snapshot.get("timeline_id"), "render_requested": False},
             outputs=[

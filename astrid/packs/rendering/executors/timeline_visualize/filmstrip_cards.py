@@ -446,7 +446,7 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
     paired_layout = [
         'Paired output+inputs pages show one row (five cards by default); use --columns 6 for six across.',
         'Pass --page-size N explicitly to opt into denser paired pages (up to two rows / 10 cards).',
-        'Open numbered PNG pages in order; use frame-index.json static_surface.rows for exact row/card ranges.',
+        'Open numbered PNG pages in order; use the bounded inspect command for exact row/card ranges.',
     ] if paired else []
     if paired:
         paired_columns = max(1, int(options.get('columns') or 5))
@@ -455,8 +455,8 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
             paired_page_size = min(10, paired_columns * 2, max(1, int(options.get('page_size') or 50)))
             base += ['--page-size', str(paired_page_size)]
     return {
-        'viewer': 'Open the returned PNG pages for visual inspection; use frame-index.json for exact card and asset lookup.',
-        'keyboard': ['Use numbered PNG pages for the overview; a multi-page result is intentional for readability.', 'Use frame-index.json to inspect a specific frame, clip, lane, or exact target.', 'Use the copyable focus commands below to regenerate a narrower view.'],
+        'viewer': 'Open the returned PNG pages for visual inspection; use the bounded inspect command for exact card, placement, lane, or timing lookup.',
+        'keyboard': ['Use numbered PNG pages for the overview; a multi-page result is intentional for readability.', 'Use the bounded inspect commands below for exact cards, placements, audio, or boundaries; do not ingest the raw receipt.', 'Use the copyable focus commands below to regenerate a narrower view.'],
         'filters': ['Use Shot, Track, From/To, Samples, and Density by rerunning the command with the matching flags.', 'Density only reduces captured frames; rerun the command for finer samples.'],
         'commands': {
             'rerun_base': shlex.join(base),
@@ -465,6 +465,11 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
             'change_interval_frames': shlex.join(base + ['--every-frames', '12']),
             'change_resolution': shlex.join(base + ['--resolution', '960x540']),
             'input_lanes_only': shlex.join(input_only),
+            'inspect_summary': 'python3 -m astrid timelines inspect --manifest MANIFEST --section summary',
+            'inspect_cards': 'python3 -m astrid timelines inspect --manifest MANIFEST --section cards',
+            'inspect_placements': 'python3 -m astrid timelines inspect --manifest MANIFEST --section placements',
+            'inspect_audio': 'python3 -m astrid timelines inspect --manifest MANIFEST --section audio',
+            'inspect_boundaries': 'python3 -m astrid timelines inspect --manifest MANIFEST --section boundaries',
         },
         'notes': ['--every and --every-frames are mutually exclusive.', '--range is half-open START..END seconds.', '--columns and --page-size change static layout; --track narrows input lanes.', *paired_layout],
         'request': dict(options.get('request') or {}),

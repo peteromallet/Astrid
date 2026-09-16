@@ -59,8 +59,8 @@ The frame index records the effective page size, page count, row ranges, and
 copyable navigation guidance.
 
 For a complete review pass, use `--show output,inputs,text,audio --every 5`.
-The command reports the primary PNG, all numbered pages, and the frame-index
-path. Open the pages in order; then use `--range 0..25 --every 0.25 --detail`
+The command reports the primary PNG, all numbered pages, and a bounded inspect
+command. Open the pages in order; then use `--range 0..25 --every 0.25 --detail`
 to zoom into one window, `--shot first` (or `--shot N`) to focus an authored
 shot, and `--track vo` to isolate the voice lane. Use `--every` for seconds,
 `--every-frames` for exact frame steps, `--columns`/`--page-size` for layout,

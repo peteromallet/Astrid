@@ -49,7 +49,7 @@ pass `--page-size N` explicitly when a denser two-row page is useful. Open
 `filmstrip-001.png`, `filmstrip-002.png`, and so on in order. Use
 `--page-size N` for a smaller/focused page, `--columns N` to change row width,
 and rerun with `--range START..END --every 0.25` or `--shot first`/`--shot N`
-to drill into a page or authored shot. The returned frame-index navigation
+to drill into a page or authored shot. The returned bounded-inspect navigation
 metadata repeats these commands and the effective page count.
 
 An explicit `--every` or `--every-frames` request is a strict periodic grid.
@@ -195,8 +195,7 @@ render. `identity.manifest.content_hash` and
 rendered-video, nested-manifest, and bundle digest locators that the host can
 publish as CAS objects. They are not inferred from a local filename. The
 relative entrypoints are `filmstrip-view/manifest.json`,
-`filmstrip-view/frame-index.json`, the first static PNG/Markdown page,
-and `filmstrip-bundle.zip`. The nested manifest remains the filmstrip domain
+the first static PNG/Markdown page, and `filmstrip-bundle.zip`. The nested manifest remains the filmstrip domain
 manifest; the output-root `manifest.json` is the generic
 `timeline_filmstrip_result` host receipt with the bundle as its primary result.
 This read-only path emits no mutation receipt and no review-specific events.

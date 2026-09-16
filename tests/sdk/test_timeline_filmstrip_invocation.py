@@ -113,7 +113,7 @@ def test_bundle_rehydration_preserves_static_pages_without_html(tmp_path):
     try:
         result = invocation._invocation_outputs(raw, manifest_path=manifest, capability_id='rendering.timeline_visualize')
         assert len(result['pages']) == 1
-        assert len(result['svg_pages']) == 1
+        assert 'svg_pages' not in result
         assert result['markdown'].endswith('filmstrip.md')
         assert 'html' not in result
         assert Path(manifest).parent == tmp_path / "demo" / hashlib.sha256(data).hexdigest()

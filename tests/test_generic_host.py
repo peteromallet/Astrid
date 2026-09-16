@@ -30,17 +30,6 @@ from astrid.core.execution.generic_host import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _small_fixture_scratch_floor(monkeypatch):
-    # These CPU fixtures write tiny files. Keep them independent of the
-    # workstation's free space; test_execution_guards covers the production
-    # floor and low-space rejection explicitly.
-    monkeypatch.setattr(
-        "astrid.core.execution.generic_host.ExecutionGuardPolicy",
-        lambda: ExecutionGuardPolicy(scratch_floor_bytes=1),
-    )
-
-
 class FakeRuntime:
     schema_digest = "sha256:" + "1" * 64
 
@@ -1711,6 +1700,37 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert not list(tmp_path.glob("astrid-attempt-*"))
 
 
+def test_run_does_not_require_a_filesystem_free_space_floor(tmp_path, monkeypatch):
+    _write_manifest(tmp_path / "echo")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    host.register()
+    task = {
+        "task": {
+            "id": "task-low-space",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-low-space",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-low-space"] = task
+
+    monkeypatch.setattr(
+        "astrid.core.execution.generic_host.shutil.disk_usage",
+        lambda _path: pytest.fail("the removed scratch-floor guard was invoked"),
+    )
+    settled = host.run_task(task, lease_token="lease-low-space")
+
+    assert settled["task"]["status"] == "completed"
+    guard_receipt = runtime.settlements[0][2]["result"]["execution_guards"]
+    assert "scratch" not in guard_receipt
+    assert guard_receipt["evidence"] is not None
+    assert guard_receipt["deadline_seconds"] == 3600.0
+
+
 def test_structure_pack_members_survive_harvest_cleanup_and_reopen(tmp_path):
     root = tmp_path / "timeline"
     root.mkdir()
@@ -1830,7 +1850,6 @@ def test_mid_render_evidence_abort_keeps_measurement_on_runtime_failure(tmp_path
         pack_roots=[tmp_path],
         client=runtime,
         execution_policy=ExecutionGuardPolicy(
-            scratch_floor_bytes=1,
             evidence_cap_bytes=1,
             deadline_seconds=5,
         ),

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -20,10 +19,6 @@ from typing import Any, Mapping
 
 class ExecutionGuardError(RuntimeError):
     """Base error raised when an execution allowance cannot be established."""
-
-
-class ScratchFloorError(ExecutionGuardError):
-    """The filesystem does not have the required free-space floor."""
 
 
 class EvidenceCapError(ExecutionGuardError):
@@ -44,7 +39,6 @@ class WarmReuseExpectationError(ExecutionGuardError):
     """The warm-reuse policy is malformed."""
 
 
-SCRATCH_FLOOR_BYTES = 4 * 1024**3
 GENERATED_EVIDENCE_CAP_BYTES = 2 * 1024**3
 DEFAULT_DEADLINE_SECONDS = 3600.0
 
@@ -119,9 +113,8 @@ class EvidenceBudget:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionGuardPolicy:
-    """Bound one attempt with explicit disk, evidence, and deadline limits."""
+    """Bound one attempt with explicit evidence and deadline limits."""
 
-    scratch_floor_bytes: int = SCRATCH_FLOOR_BYTES
     evidence_cap_bytes: int = GENERATED_EVIDENCE_CAP_BYTES
     deadline_seconds: float = DEFAULT_DEADLINE_SECONDS
     warm_reuse_expected: bool = False
@@ -132,32 +125,12 @@ class ExecutionGuardPolicy:
     )
 
     def __post_init__(self) -> None:
-        if self.scratch_floor_bytes <= 0:
-            raise ValueError("scratch_floor_bytes must be positive")
         if self.evidence_cap_bytes <= 0:
             raise ValueError("evidence_cap_bytes must be positive")
         if self.deadline_seconds <= 0:
             raise ValueError("deadline_seconds must be positive")
         if type(self.warm_reuse_expected) is not bool:
             raise WarmReuseExpectationError("warm_reuse_expected must be a boolean")
-
-    def assert_scratch_floor(self, path: str | Path) -> dict[str, Any]:
-        """Require the filesystem backing ``path`` to retain the free-space floor."""
-        root = Path(path)
-        try:
-            free_bytes = int(shutil.disk_usage(root).free)
-        except OSError as exc:
-            raise ScratchFloorError(f"cannot measure scratch filesystem: {root}") from exc
-        if free_bytes < self.scratch_floor_bytes:
-            raise ScratchFloorError(
-                f"scratch free space {free_bytes} is below required floor "
-                f"{self.scratch_floor_bytes} at {root}"
-            )
-        return {
-            "path": str(root),
-            "free_bytes": free_bytes,
-            "required_bytes": self.scratch_floor_bytes,
-        }
 
     def immutable_input_baseline(self, root: str | Path) -> dict[str, tuple[int, str]]:
         """Capture materialized input bytes before the child is launched."""

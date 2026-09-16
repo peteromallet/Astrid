@@ -136,7 +136,6 @@ def test_publication_contract_producer_upload_fenced_settlement_roundtrip(tmp_pa
             client=worker,
             attempt_root=tmp_path / "attempts",
             execution_policy=ExecutionGuardPolicy(
-                scratch_floor_bytes=1,
                 evidence_cap_bytes=1024 * 1024,
                 deadline_seconds=30.0,
             ),

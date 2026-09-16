@@ -77,7 +77,6 @@ from astrid.core.execution.guards import (
     EvidenceCapError,
     ExecutionGuardError,
     ExecutionGuardPolicy,
-    ScratchFloorError,
 )
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
@@ -4087,27 +4086,6 @@ class GenericPackHost:
         ephemeral_attempt_root = self.attempt_root is None
         root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
         root.mkdir(parents=True, exist_ok=True)
-        try:
-            scratch_receipt = self.execution_policy.assert_scratch_floor(root)
-        except ExecutionGuardError as exc:
-            fail_error: Exception | None = None
-            try:
-                self.client.fail(
-                    task_id,
-                    lease_token,
-                    str(exc),
-                    retryable=False,
-                    attempt_id=attempt_id,
-                    fence=fence,
-                )
-            except Exception as runtime_exc:
-                fail_error = runtime_exc
-            finally:
-                if ephemeral_attempt_root:
-                    self._cleanup_ephemeral_attempt_or_latch(root)
-            if fail_error is not None:
-                raise HostError("scratch-floor failure was not recorded by Runtime") from fail_error
-            raise HostError(str(exc)) from exc
         execution_deadline = self.execution_policy.deadline_from_now()
         warm_receipt = self.execution_policy.warm_expectation()
         evidence_receipt: dict[str, Any] | None = None
@@ -4122,7 +4100,6 @@ class GenericPackHost:
         evidence_cap_exceeded = False
         evidence_failure_receipt: dict[str, Any] | None = None
         storage_failure_receipt: dict[str, Any] | None = None
-        scratch_floor_breached = False
         deadline_failed = False
         storage_receipt: dict[str, int] | None = None
         # Every network attempt gets a fresh host-issued nonce.  It is part of
@@ -4199,18 +4176,12 @@ class GenericPackHost:
 
         def cancelled():
             nonlocal deadline_exceeded, evidence_cap_exceeded
-            nonlocal evidence_failure_receipt, scratch_floor_breached
+            nonlocal evidence_failure_receipt
             if self.execution_policy.deadline_expired(execution_deadline):
                 deadline_exceeded = True
                 cancel_signal.set()
                 return True
             if self._shutdown.is_set() or cancel_signal.is_set():
-                return True
-            try:
-                self.execution_policy.assert_scratch_floor(root)
-            except ScratchFloorError:
-                scratch_floor_breached = True
-                cancel_signal.set()
                 return True
             if evidence_root is not None:
                 try:
@@ -4258,16 +4229,6 @@ class GenericPackHost:
                 deadline_failed = state == "failed"
 
         def handle_guard_abort() -> None:
-            if scratch_floor_breached:
-                self.client.fail(
-                    task_id,
-                    lease_token,
-                    "scratch free-space floor breached",
-                    retryable=False,
-                    attempt_id=attempt_id,
-                    fence=fence,
-                )
-                raise HostError("scratch free-space floor breached")
             if evidence_cap_exceeded:
                 self.client.fail(
                     task_id,
@@ -4700,7 +4661,6 @@ class GenericPackHost:
                 scratch_disposition = "cleanup_pending"
                 retained_owner = "generic-pack-host"
             payload["execution_guards"] = {
-                "scratch": scratch_receipt,
                 "evidence": evidence_receipt,
                 "deadline_seconds": self.execution_policy.deadline_seconds,
                 "warm_expectation": warm_receipt,

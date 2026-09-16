@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 import time
@@ -12,38 +11,15 @@ from astrid.core.execution.guards import (
     ExecutionDeadlineError,
     ExecutionGuardPolicy,
     EvidenceCapError,
-    ScratchFloorError,
     WarmReuseExpectationError,
 )
 import astrid.core.execution.generic_host as generic_host
 from astrid.core.execution.generic_host import GenericPackHost
 
 
-def test_scratch_floor_fails_closed_and_accepts_measured_space(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=4, evidence_cap_bytes=16)
-    usage = shutil.disk_usage(tmp_path)
-    monkeypatch.setattr(
-        shutil,
-        "disk_usage",
-        lambda _path: type(usage)(usage.total, usage.used, 3),
-    )
-    with pytest.raises(ScratchFloorError, match="below required floor"):
-        policy.assert_scratch_floor(tmp_path)
-
-    monkeypatch.setattr(
-        shutil,
-        "disk_usage",
-        lambda _path: type(usage)(usage.total, usage.used, 8),
-    )
-    receipt = policy.assert_scratch_floor(tmp_path)
-    assert receipt["free_bytes"] == 8
-
-
 def test_generated_evidence_cap_is_enforced(tmp_path) -> None:
     (tmp_path / "evidence.bin").write_bytes(b"12345")
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=4)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=4)
     with pytest.raises(EvidenceCapError, match="exceeds cap") as failure:
         policy.assert_evidence_cap(tmp_path)
     assert failure.value.diagnostic == {
@@ -68,7 +44,7 @@ def test_generated_evidence_cap_is_enforced(tmp_path) -> None:
         "largest_paths_truncated": False,
     }
 
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=5)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=5)
     assert policy.assert_evidence_cap(tmp_path)["observed_bytes"] == 5
 
 
@@ -89,7 +65,7 @@ def test_generated_evidence_scan_tolerates_a_file_vanishing_during_render(
         return original_stat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", stat_without_vanished)
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=64)
     assert policy.evidence_bytes(tmp_path) == len(b"kept")
 
 
@@ -104,7 +80,7 @@ def test_generated_evidence_scan_tolerates_outer_walk_directory_vanishing(
         return original_rglob(path, pattern)
 
     monkeypatch.setattr(Path, "rglob", rglob_with_vanished_directory)
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=64)
     measurement = policy.evidence_measurement(tmp_path)
     assert measurement["observed_bytes"] == 0
     assert measurement["vanished_file_count"] == 1
@@ -115,7 +91,7 @@ def test_generated_evidence_scan_tolerates_a_file_vanishing_during_input_hash(
 ) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"input")
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=64)
     baseline = policy.immutable_input_baseline(tmp_path)
 
     original_read_bytes = Path.read_bytes
@@ -143,7 +119,7 @@ def test_generated_evidence_scan_still_fails_closed_on_other_os_errors(
         return original_stat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", stat_with_permission_error)
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=64)
     with pytest.raises(EvidenceCapError, match="cannot measure generated evidence"):
         policy.evidence_bytes(tmp_path)
 
@@ -161,7 +137,7 @@ def test_generated_evidence_scan_error_has_distinct_diagnostic(
         return original_stat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", stat_with_permission_error)
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=64)
     with pytest.raises(EvidenceCapError) as failure:
         policy.evidence_measurement(tmp_path)
     assert failure.value.diagnostic == {
@@ -176,7 +152,7 @@ def test_generated_budget_accumulates_and_excludes_immutable_inputs(tmp_path) ->
     (inputs / "source.bin").write_bytes(b"input-bytes")
     output = tmp_path / "generated.log"
     output.write_bytes(b"123")
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=5)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=5)
     baseline = policy.immutable_input_baseline(inputs)
     first = policy.assert_evidence_cap(tmp_path, immutable_inputs=baseline)
     assert first["observed_bytes"] == 3
@@ -190,7 +166,7 @@ def test_generated_budget_accumulates_and_excludes_immutable_inputs(tmp_path) ->
 
 
 def test_budget_latches_after_cross_attempt_breach(tmp_path) -> None:
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=5)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=5)
     first = tmp_path / "first"
     second = tmp_path / "second"
     third = tmp_path / "third"
@@ -223,7 +199,7 @@ def test_modified_or_managed_input_is_not_exempt(tmp_path) -> None:
     managed_file = managed / "asset.bin"
     input_file.write_bytes(b"input-data")
     managed_file.write_bytes(b"managed-data")
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=64)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=64)
     baseline = policy.immutable_input_baseline(inputs)
     baseline.update(policy.immutable_input_baseline(managed))
     assert policy.assert_evidence_cap(tmp_path, immutable_inputs=baseline)["observed_bytes"] == 0
@@ -241,7 +217,7 @@ def test_running_writer_is_detected_while_still_alive(tmp_path) -> None:
             str(output),
         ]
     )
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=1024)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=1024)
     try:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -259,20 +235,19 @@ def test_running_writer_is_detected_while_still_alive(tmp_path) -> None:
 
 
 def test_deadline_gate_rejects_expired_attempt() -> None:
-    policy = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=1, deadline_seconds=1)
+    policy = ExecutionGuardPolicy(evidence_cap_bytes=1, deadline_seconds=1)
     with pytest.raises(ExecutionDeadlineError, match="deadline"):
         policy.assert_deadline(time.monotonic() - 0.001)
 
 
 def test_warm_expectation_is_not_derived_from_a_listener_port() -> None:
-    cold = ExecutionGuardPolicy(scratch_floor_bytes=1, evidence_cap_bytes=1)
+    cold = ExecutionGuardPolicy(evidence_cap_bytes=1)
     assert cold.warm_expectation() == {
         "warm_reuse_expected": False,
         "listener_port": None,
         "port_independent": True,
     }
     warm = ExecutionGuardPolicy(
-        scratch_floor_bytes=1,
         evidence_cap_bytes=1,
         warm_reuse_expected=True,
     )
@@ -284,7 +259,6 @@ def test_warm_expectation_is_not_derived_from_a_listener_port() -> None:
 def test_warm_expectation_requires_a_boolean() -> None:
     with pytest.raises(WarmReuseExpectationError):
         ExecutionGuardPolicy(
-            scratch_floor_bytes=1,
             evidence_cap_bytes=1,
             warm_reuse_expected=1,
         )
@@ -292,7 +266,6 @@ def test_warm_expectation_requires_a_boolean() -> None:
 
 def test_generic_host_carries_the_guard_policy_without_a_listener_port(tmp_path) -> None:
     policy = ExecutionGuardPolicy(
-        scratch_floor_bytes=1,
         evidence_cap_bytes=1,
         warm_reuse_expected=False,
     )

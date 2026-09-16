@@ -289,7 +289,6 @@ def test_c12_deadline_contains_child_and_terminalizes_runtime(tmp_path: Path) ->
             pack_roots=[FIXTURE_PACK],
             client=worker_client,
             execution_policy=ExecutionGuardPolicy(
-                scratch_floor_bytes=1,
                 evidence_cap_bytes=1024,
                 deadline_seconds=1.0,
             ),
@@ -423,7 +422,7 @@ def test_c12_cpu_runtime_worker_host_harness(tmp_path: Path) -> None:
         completed = _wait_state(owner, success_id, {"succeeded"})
         result = _value(completed, "result", {})
         guard_receipt = _value(result, "execution_guards", {})
-        assert guard_receipt["scratch"]["required_bytes"] == 4 * 1024**3
+        assert "scratch" not in guard_receipt
         assert guard_receipt["evidence"]["cap_bytes"] == 2 * 1024**3
         assert guard_receipt["deadline_seconds"] == 3600.0
         assert guard_receipt["warm_expectation"] == {

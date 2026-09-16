@@ -50,6 +50,9 @@ def _dispatch_projects(args: list[str]) -> int:
 
 
 def _dispatch_timelines(args: list[str]) -> int:
+    if args and args[0] == "inspect":
+        from astrid.packs.timeline.cli import offline_inspect_main
+        return offline_inspect_main(args[1:])
     return _dispatch_product(["timelines", *args])
 
 

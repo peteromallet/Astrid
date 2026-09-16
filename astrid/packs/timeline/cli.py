@@ -252,6 +252,19 @@ def _cmd_diff(parsed: argparse.Namespace) -> int:
     return print_result(result, as_json=parsed.json)
 
 
+def _visualize_format_argument(value: str) -> str:
+    """Validate one bounded visualization format argument."""
+    values = [part.strip().lower() for part in value.split(",") if part.strip()]
+    if not values:
+        raise argparse.ArgumentTypeError("format must name png or md")
+    invalid = sorted(set(values) - {"png", "md"})
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            f"invalid visualization format(s): {', '.join(invalid)}; choose png or md"
+        )
+    return ",".join(values)
+
+
 def _visualization_artifact_summary(outputs: Mapping[str, Any]) -> dict[str, Any] | None:
     """Summarize repeated visualization artifacts without dropping evidence."""
     raw_artifacts = outputs.get("artifacts")
@@ -304,12 +317,12 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     from astrid.sdk.contracts import DomainResult, ErrorObject
     human_outputs: Mapping[str, Any] | None = None
 
-    # The public CLI intentionally accepts both ``--format png --format svg``
-    # and ``--format png,svg``.  Normalize both spellings before the one
-    # canonical SDK call so the pre-admission grammar sees one shape.
+    # Normalize repeatable and comma-separated spellings before the one
+    # canonical SDK call.  The filmstrip is the only public visualization
+    # path, and its presentation formats are deliberately bounded to PNG/MD.
     formats = [
         item.strip().lower()
-        for value in (parsed.formats or ["all"])
+        for value in (parsed.formats or ["png", "md"])
         for item in str(value).split(",")
         if item.strip()
     ]
@@ -332,9 +345,8 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
         project=parsed.project,
         inputs=inputs,
         out=parsed.out,
-        # Both visualizer views return browsable evidence. Wait for the
-        # admitted task so the CLI cannot report a successful run before the
-        # PNG/manifest artifacts (or a terminal failure) exist.
+        # Wait for the admitted task so the CLI cannot report a successful run
+        # before the PNG/manifest artifacts (or a terminal failure) exist.
         wait=True,
     )
     if result.ok:
@@ -529,6 +541,49 @@ def _print_visualization_navigation(outputs: Mapping[str, Any]) -> None:
         command = commands.get(key)
         if command:
             print(f"  {label}: {command}")
+
+
+def _cmd_inspect(parsed: argparse.Namespace) -> int:
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import inspect_filmstrip
+
+    result = inspect_filmstrip(parsed.manifest, section=parsed.section, limit=parsed.limit, cursor=parsed.cursor,
+                              frame=parsed.frame, card=parsed.card, shot=parsed.shot, occurrence=parsed.occurrence,
+                              clip=parsed.clip, track=parsed.track, asset=parsed.asset, range_value=parsed.range_value)
+    # This exact compact serialization is included in the inspector's byte cap.
+    print(json.dumps(result, ensure_ascii=True, separators=(",", ":")))
+    return 0 if result["ok"] else 1
+
+
+def _configure_inspect(subparser: argparse.ArgumentParser) -> None:
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import INSPECTION_SECTIONS
+
+    subparser.description = "Inspect a verified materialized filmstrip offline; no runtime or render admission. Responses are capped at 8 KiB."
+    subparser.add_argument("--manifest", required=True, help="Materialized filmstrip manifest.json; bundle members are verified before reading.")
+    subparser.add_argument("--section", default="summary", help="Named section: " + ", ".join(INSPECTION_SECTIONS))
+    subparser.add_argument("--limit", type=int, default=10, help="Records per response: 1–50, default 10; byte cap may reduce the page.")
+    subparser.add_argument("--cursor", default=None, help="Opaque cursor from this bundle and identical query.")
+    subparser.add_argument("--frame", type=int, default=None, help="Exact decoded frame number.")
+    for selector in ("card", "shot", "occurrence", "clip", "track", "asset"):
+        subparser.add_argument("--" + selector, default=None, help="Exact " + selector + " identity (shot also accepts an exact name).")
+    subparser.add_argument("--range", dest="range_value", default=None, help="Half-open START..END seconds window.")
+    subparser.add_argument("--json", action="store_true", help="Compact JSON envelope is always used.")
+    subparser.set_defaults(handler=_cmd_inspect)
+
+
+def offline_inspect_main(args: list[str]) -> int:
+    """Separate parser keeps argument errors bounded and skips runtime startup."""
+    class OfflineParser(argparse.ArgumentParser):
+        def error(self, message):
+            raise ValueError("invalid_arguments")
+
+    parser = OfflineParser(prog="astrid timelines inspect")
+    _configure_inspect(parser)
+    try:
+        return _cmd_inspect(parser.parse_args(args))
+    except ValueError:
+        from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import _inspection_error
+        print(json.dumps(_inspection_error("invalid_arguments"), separators=(",", ":")))
+        return 2
 
 
 def _resolve_timeline_ref(client: Any, project: str, ref: str | None) -> str | None:
@@ -847,7 +902,8 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--format", dest="formats", action="append", default=None,
         metavar="FORMAT[,FORMAT...]",
-        help="Repeatable/comma-separated png, svg, md, or all (default: all).",
+        type=_visualize_format_argument,
+        help="Repeatable/comma-separated png or md (default: png,md).",
     )
     subparser.add_argument(
         "--view",
@@ -1016,6 +1072,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "visualize",
         help="Build a timeline evidence pack synchronously through the public SDK.",
         configure=_configure_visualize,
+    ),
+    CommandSpec(
+        "inspect",
+        help="Read bounded named sections of a verified filmstrip bundle offline.",
+        configure=_configure_inspect,
     ),
     CommandSpec(
         "render",

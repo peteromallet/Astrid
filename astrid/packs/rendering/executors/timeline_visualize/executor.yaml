@@ -11,8 +11,7 @@
     "visualize",
     "evidence",
     "agent",
-    "png",
-    "svg"
+    "png"
   ],
   "inputs": [
     {
@@ -100,7 +99,7 @@
       "name": "formats",
       "type": "string",
       "required": false,
-      "description": "Repeatable presentation format list. Pass [\"png\", \"svg\"] or a comma-separated CLI value; choices are png, svg, md, or all (default all). Core machine artifacts are always written."
+      "description": "Optional presentation format list. Choices are png or md (default png,md); SVG/all were removed. Core machine artifacts are always written."
     },
     {
       "name": "rendered_video",

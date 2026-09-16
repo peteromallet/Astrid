@@ -469,7 +469,7 @@ def _validate_timeline_visualize_inputs(
             raw_formats = [raw_formats]
         if not isinstance(raw_formats, (list, tuple, set)):
             raise CapabilityValidationError(
-                "rendering.timeline_visualize formats must be a list of png, svg, md, or all"
+                "rendering.timeline_visualize formats must be a list of png or md"
             )
         formats = {
             part.strip().lower()
@@ -479,18 +479,14 @@ def _validate_timeline_visualize_inputs(
         }
         if not formats:
             raise CapabilityValidationError(
-                "rendering.timeline_visualize formats must contain png, svg, md, or all"
+                "rendering.timeline_visualize formats must contain png or md"
             )
-        allowed = {"png", "svg", "md", "all"}
+        allowed = {"png", "md"}
         invalid = sorted(formats - allowed)
         if invalid:
             raise CapabilityValidationError(
                 f"invalid visualization format(s): {', '.join(invalid)}; "
-                "choose png, svg, md, or all"
-            )
-        if "all" in formats and len(formats) > 1:
-            raise CapabilityValidationError(
-                "visualization format 'all' cannot be combined with another format"
+                "choose png or md; the legacy SVG/all formats were removed"
             )
     if out not in (None, ""):
         raise CapabilityValidationError(
@@ -1257,6 +1253,11 @@ def _invocation_outputs(
             # project-namespaced Astrid cache.
             outputs["pack_root"] = str(pack_root)
             outputs["manifest_path"] = str(manifest)
+            if isinstance(document, dict) and document.get("kind") == "timeline_filmstrip":
+                from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import action_argv
+                outputs["inspection"] = action_argv(
+                    "python3", "-m", "astrid", "timelines", "inspect", "--manifest", str(manifest), "--section", "summary"
+                )
             page_pattern = "filmstrip-*.png" if isinstance(document, dict) and document.get("kind") == "timeline_filmstrip" else "PG*.png"
             outputs["pages"] = [
                 str(path)

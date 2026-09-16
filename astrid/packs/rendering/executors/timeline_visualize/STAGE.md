@@ -143,6 +143,22 @@ approximated, and `--include-media`
 adds only a relative digest-verified video; the rendered mix is never presented
 as an isolated stem.
 
+## Offline inspection
+
+The materialized `manifest.json` is the authority for a bounded, runtime-free
+inspection route:
+
+```bash
+python3 -m astrid timelines inspect --manifest <manifest_path> --section summary
+python3 -m astrid timelines inspect --manifest <manifest_path> --section cards --limit 5
+```
+
+Sections are `summary`, `pages`, `cards`, `placements`, `audio`, and
+`boundaries`. Selectors and half-open ranges are explicit, responses are capped
+at 8 KiB, and `next_cursor` continues a query without loading the full JSON.
+The receipt contains only projections and hashed sidecar references; the full
+frozen snapshot remains a verified provenance sidecar.
+
 ## Read-only contract
 
 The executor reads timeline rows/config/history from the workspace runtime and

@@ -283,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=_format_argument,
         metavar="FORMAT[,FORMAT...]",
-        help="Repeatable presentation format(s): png, svg, md, or all (default all).",
+        help="Repeatable presentation format(s): png or md (default png,md). SVG/all are removed.",
     )
     # The admitted rendered video is host-injected; callers select it with
     # --render-run rather than supplying a filesystem path.
@@ -342,15 +342,11 @@ def _format_argument(value: str) -> str:
 
     values = [part.strip().lower() for part in value.split(",") if part.strip()]
     if not values:
-        raise argparse.ArgumentTypeError("format must name one or more of png, svg, md, or all")
-    invalid = sorted(set(values) - (_FORMATS | {"all"}))
+        raise argparse.ArgumentTypeError("format must name one or more of png or md")
+    invalid = sorted(set(values) - _FORMATS)
     if invalid:
         raise argparse.ArgumentTypeError(
-            f"invalid format(s): {', '.join(invalid)}; choose png, svg, md, or all"
-        )
-    if "all" in values and len(values) > 1:
-        raise argparse.ArgumentTypeError(
-            "format 'all' cannot be combined with another format; omit the others"
+            f"invalid format(s): {', '.join(invalid)}; SVG/all output was removed; choose png or md"
         )
     return ",".join(values)
 

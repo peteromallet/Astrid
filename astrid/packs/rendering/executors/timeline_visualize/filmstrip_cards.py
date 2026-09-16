@@ -1423,6 +1423,10 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
     if not 1 <= columns <= 12 or not 1 <= page_size <= 200:
         raise ValueError('columns must be 1–12 and page_size 1–200.')
     out_root.mkdir(parents=True, exist_ok=True)
+    # Keep the complete frozen snapshot as a sidecar for provenance, while
+    # the compact frame index below is the bounded agent-facing receipt.
+    (out_root / 'render-snapshot.json').write_text(
+        json.dumps(snapshot, indent=2, ensure_ascii=False), encoding='utf-8')
     cards = index['cards']
     _extract(video_path, cards, out_root, options.get('resolution'))
     media_record = None

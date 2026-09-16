@@ -233,17 +233,12 @@ def test_pack_keeps_raw_audio_separate_from_navigation_links(tmp_path):
     index = json.loads(Path(result['paths']['json']).read_text())
     sidecar = json.loads((tmp_path / 'pack' / 'audio-analysis.json').read_text())
     assert len(index['cards']) == 4
-    assert index['audio'] == raw_audio
     assert sidecar == raw_audio
-    assert 'waveform_targets' not in index['audio']
-
-    navigation = index['navigation']
-    assert navigation['audio']['waveform_targets']
-    target = navigation['waveforms'][0]
-    assert navigation['targets'][target['target']] == target
-    assert target['actions']['focus_command']
-    assert target['actions']['seek'] == {'start': [0, 1], 'end': [1, 2]}
-    assert target['target'] in navigation['frames'][0]['active_audio_targets']
+    assert 'audio' not in index
+    assert 'navigation' not in index
+    assert index['schema'] == 'astrid.filmstrip.v2'
+    assert index['audio_sidecar']['path'] == 'audio-analysis.json'
+    assert index['audio_sidecar']['digest'] == 'sha256:' + hashlib.sha256((tmp_path / 'pack' / 'audio-analysis.json').read_bytes()).hexdigest()
 
 
 def test_float_arithmetic_noise_does_not_move_cut_boundary():

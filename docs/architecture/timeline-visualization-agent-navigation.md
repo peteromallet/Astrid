@@ -38,20 +38,13 @@ unified inspector and requires a successful managed render.
   the SDK verifies and copies the logical pack to the derived project cache at
   `.astrid/views/timeline_visualize/<manifest-digest>/`; that directory is
   returned as `outputs.pack_root`, never shares inodes with CAS, and may be
-  safely regenerated. It contains nine mandatory core
-  artifacts: `manifest.json`, `ground-truth.json`, `view-map.json`,
-  `action-index.json`, `asset-index.json`, `transcript-index.json`,
-  `diagnostics.json`, `metric-definitions.json`, `reading-guide.md`, plus
-  optional `structure.md`, `PG*.png`, `PG*.svg`, and `filmstrip/*.png`
-  (ledger: `pack-hashes.json`).
-- **The structural drill-down operation** is `astrid timelines visualize --project
-  <slug> --view structure --from-view <manifest_path> --focus <ref>`: it rehydrates and re-validates the prior pack (containment,
-  full hash ledger, schemas, run ownership — `frozen.load_frozen_view`),
-  rebuilds the model *exclusively from hashed frozen facts*, and emits a new
-  child pack. Children copy the root-lineage substrate byte-for-byte
-  (`frozen_objects`, `frozen_timeline`, `frozen_shots`, `frozen_ranges`) and
-  the parent's `asset-index.json`/`transcript-index.json` verbatim, and add
-  one `parent_view` action on `TL01`.
+  safely regenerated. It contains `manifest.json`, `frame-index.json`,
+  `render-snapshot.json`, PNG pages, Markdown, and optional verified
+  audio/media sidecars.
+- **The offline inspection operation** is `astrid timelines inspect --manifest
+  <manifest_path> --section <name>`. It verifies manifest-declared hashes,
+  returns only named bounded projections, and supports opaque cursor
+  pagination; it never starts the runtime or regenerates media.
 
 Fresh-agent journey (proven by `tests/packs/rendering/
 test_timeline_visualize_journey.py`, every step using a verbatim action argv):
@@ -147,38 +140,29 @@ emitted project indexes retain exact hash-bound navigation.
 - `timestamps.frozen_at` is a fixed sentinel `2026-08-11T00:00:00Z` — never
   the wall clock, never in any preimage.
 
-## 5. Action relations
+## 5. Offline inspection contract
 
-Each `action-index.json` entry: `canonical_ref`, `relations`, `actions`.
+The machine-facing path is a single bounded command over the materialized
+filmstrip manifest:
 
-- Relations (v1): `parent` (null at TL01), `previous`, `next` (same-track
-  clip ordering), `children`. `parent`/`children` and `previous`/`next` are
-  reciprocal; targets outside a scoped emission are reported `null` (never
-  dangling). The plan's `timeline_media`/`mapped_speech` relation names are
-  not part of v1; TS/SP navigation uses the shipped action graph in §10.
-- Action kinds: `visualize` (`--view structure --from-view --focus` drill-downs) and
-  `inspect_media` (`inspect_original`). Every `visualize` action with a
-  non-null `focus` carries exactly one `--from-view` and one `--focus`
-  (schema-enforced); action `argv` is prefixed `python3 -m astrid` and
-  carries the owning `--project` explicitly. The
-  `--from-view` is **pack-relative** (`manifest.json`) so packs relocate.
-- Per-entry actions: `TL01` → `focus_timestamp` (whole-timeline midpoint,
-  `--context 3`), `refresh_root`; `CL/SH/RG/AS` → `focus_context`
-  (`--context 2`); `AS` → `inspect_original` (available only for
-  `verified_original`; deterministic `unavailable_reason` otherwise).
-- Frozen children add `TL01.parent_view` → `--from-view <parent-manifest>
-  --focus <parent scope ref>` — the one follow-up operation returning to the
-  exact parent scope identity (kind + ref; context reverts to the 3s
-  default).
-- `refresh_root` (`reads: "current"`, focus must be `TL01`) is the **sole
-  current-state transition**; every other action reads the frozen snapshot.
+```sh
+astrid timelines inspect --manifest <manifest_path> --section cards --limit 5
+```
+
+Named sections are `summary`, `pages`, `cards`, `placements`, `audio`, and
+`boundaries`. Exact selectors (`--frame`, `--card`, `--shot`, `--occurrence`,
+`--clip`, `--track`, `--asset`) and half-open `--range START..END` compose with
+the section; `--cursor` continues the same query. Responses are capped at 8
+KiB and include typed errors rather than raw JSON dumps. The command verifies
+declared member hashes before projecting records, never starts the runtime,
+and never regenerates media.
 
 ## 6. CLI examples (real invocations)
 
 ```sh
 # cold roots — project default timeline; mutually exclusive selectors
 astrid timelines visualize --project desert                  # rendered filmstrip by default
-astrid timelines visualize --project desert --view structure --all  # every non-tombstoned timeline
+astrid timelines visualize --project desert --render-run latest --every 5
 astrid timelines visualize --project desert desert-slug      # by timeline slug
 astrid timelines visualize --project desert --shot SH01
 astrid timelines visualize --project desert --range 0..13.9  # closed-open window (frame-quantized)
@@ -188,20 +172,13 @@ astrid timelines visualize --project desert --asset plant-frame-3
 
 # presentation
 --layout time-scaled|linear|both            # default both
---format png --format svg --format md       # repeatable; default all
---view filmstrip --render-run latest       # explicit form of the default; pin with an exact run id
---view structure                            # diagnostic structural evidence view
+--format png --format md                   # repeatable; default png,md
+--view filmstrip --render-run latest       # the only visualization path
 
-# drill-down (the only navigation form)
-astrid timelines visualize --project desert --view structure --from-view <root>/agent-view/manifest.json --focus TL01.CL03 --context 2
-
-# frozen-lineage transition
-astrid timelines visualize --project desert --view structure --from-view <root>/agent-view/manifest.json --focus TL01 --refresh-root
+# bounded machine navigation
+astrid timelines inspect --manifest <manifest_path> --section cards --shot SH01 --limit 5
+astrid timelines inspect --manifest <manifest_path> --section audio --range 10..20
 ```
-
-Rules: `--from-view` and `--focus` must be supplied together; neither can be
-combined with cold selectors; `--refresh-root` requires `--from-view
---focus TL01`.
 
 ## 7. Source-integrity states (exact rules, `resolution.classify_asset` +
 `assets.verify_now`)

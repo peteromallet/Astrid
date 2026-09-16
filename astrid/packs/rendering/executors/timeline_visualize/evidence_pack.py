@@ -279,13 +279,10 @@ def _build_manifest(
     )
 
     primary_png = f"{png_page_ids[0]}.png" if png_page_ids else None
-    primary_svg = f"{svg_page_ids[0]}.svg" if svg_page_ids else None
     structure_path = STRUCTURE_NAME if structure_present else None
     input_formats: list[str] = []
     if png_page_ids:
         input_formats.append("png")
-    if svg_page_ids:
-        input_formats.append("svg")
     if structure_present:
         input_formats.append("md")
 
@@ -344,10 +341,6 @@ def _build_manifest(
             "png": {
                 "path": primary_png,
                 "reason": None if primary_png else "no pages were laid out for this scope",
-            },
-            "svg": {
-                "path": primary_svg,
-                "reason": None if primary_svg else "svg rendering was not produced for any page",
             },
             "structure": {
                 "path": structure_path,
@@ -509,9 +502,12 @@ def write_evidence_pack(
     unknown_png_ids = sorted(set(png_bytes) - set(page_ids))
     if unknown_png_ids:
         raise ValueError(f"png_bytes contains unknown page ids: {unknown_png_ids!r}")
-    unknown_svg_ids = sorted(set(svg_bytes) - set(page_ids))
-    if unknown_svg_ids:
-        raise ValueError(f"svg_bytes contains unknown page ids: {unknown_svg_ids!r}")
+    if svg_bytes:
+        raise ValueError("SVG output was removed; request PNG or Markdown instead")
+    # Keep the internal argument for historical callers while ensuring no new
+    # pack can publish or hash an SVG page.
+    svg_bytes = {}
+    unknown_svg_ids: list[str] = []
     png_page_ids = tuple(page_id for page_id in page_ids if page_id in png_bytes)
     svg_page_ids = tuple(page_id for page_id in page_ids if page_id in svg_bytes)
 

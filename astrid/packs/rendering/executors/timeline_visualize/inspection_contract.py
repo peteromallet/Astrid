@@ -1,16 +1,19 @@
 """Shared timeline inspection grammar, status projection, and input geometry.
 
-This module is deliberately pure.  It is used by the product CLI, SDK
+The option and geometry helpers are deliberately pure. They are used by the product CLI, SDK
 admission, and the executor so the three entry points cannot disagree about
 component names or half-open time semantics.  It does not render, retry, or
-read media bytes.
+read media bytes. The offline inspector below reads only verified bundle members.
 """
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 import shlex
 from collections import defaultdict
 from fractions import Fraction
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 from astrid.core.timeline.duration import clip_end_frame, clip_start_frame
@@ -409,3 +412,328 @@ def project_input_window(
 
 
 __all__ = ["COMPONENTS", "DEFAULT_COMPONENTS", "normalize_components", "normalize_input_window", "inspection_options", "action_argv", "render_status", "project_input_window"]
+
+
+INSPECTION_SECTIONS = ("summary", "pages", "cards", "placements", "audio", "boundaries")
+INSPECTION_MAX_BYTES = 8192
+_IDENTITY_KEYS = ("project_slug", "timeline_id", "timeline_name", "render_run_id", "video_digest", "fps_rational", "duration_frames")
+
+
+def _small_scalar(value: Any, limit: int = 256) -> Any:
+    if isinstance(value, str):
+        if "data:" in value.lower() or len(value) > limit:
+            return "[omitted: oversized or inline data]"
+        return value
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return None
+
+
+def _projection(record: Mapping, keys: Iterable[str]) -> dict:
+    return {key: _small_scalar(record[key]) for key in keys if key in record}
+
+
+def _relative_path(value: Any) -> str:
+    if not isinstance(value, str) or not value or len(value) > 512 or any(ord(c) < 32 for c in value):
+        raise ValueError("unsafe_member")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or "\\" in value or ":" in value:
+        raise ValueError("unsafe_member")
+    return path.as_posix()
+
+
+def compact_render_receipt(index: Mapping, snapshot: Mapping, root: Path) -> dict:
+    """Persist sample evidence, never a duplicate timeline/navigation graph."""
+    provenance = _projection(snapshot, _IDENTITY_KEYS)
+    provenance["fps_rational"] = list(snapshot["fps_rational"])
+    canonical = (snapshot.get("metadata") or {}).get("canonical_timeline") or {}
+    timeline = _projection(canonical, ("config_version", "config_hash", "authority"))
+    timeline["timeline_ref"] = provenance.get("timeline_id")
+    cards = []
+    if len(index.get("cards", [])) > 2000:
+        raise ValueError("compact receipt exceeds 2000 samples")
+    for raw in index.get("cards", []):
+        card = _projection(raw, ("id", "frame", "time_seconds", "time_label"))
+        card["image"] = _relative_path(raw["image"])
+        card["time_rational"] = list(raw["time_rational"])
+        reasons = raw.get("sample_reasons", [])
+        if len(reasons) > 16:
+            raise ValueError("compact receipt exceeds sample reason limit")
+        card["sample_reasons"] = [_small_scalar(reason, 64) for reason in reasons]
+        for target, key in (("clip_ids", "id"), ("shot_ids", "shot_id"), ("occurrence_ids", "occurrence_id")):
+            values = sorted({str(item[key]) for item in raw.get("clips", []) if item.get(key) is not None})
+            if len(values) > 64 or any(len(value) > 256 or "data:" in value.lower() for value in values):
+                raise ValueError("compact receipt identity limit exceeded")
+            card[target] = values
+        cards.append(card)
+    receipt = {"schema": "astrid.filmstrip.v2", "provenance": provenance,
+               "canonical_timeline": timeline, "cards": cards,
+               "sampling": _projection(index.get("sampling", {}), ("mode", "overview", "explicit_interval", "include_cuts")),
+               "coverage": _projection(index.get("coverage", {}), ("full_duration", "selected_frame_count", "page_count", "page_size", "all_boundaries_sampled")),
+               "inspection": {"command": "python3 -m astrid timelines inspect --manifest MANIFEST --section summary",
+                              "sections": list(INSPECTION_SECTIONS)}}
+    for field, filename in (("snapshot_sidecar", "render-snapshot.json"), ("audio_sidecar", "audio-analysis.json")):
+        path = root / filename
+        if path.is_file():
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            receipt[field] = {"path": filename, "digest": "sha256:" + digest, "bytes": path.stat().st_size,
+                              "render_digest": provenance.get("video_digest"), "verified": True}
+    if isinstance(index.get("media"), Mapping):
+        receipt["media"] = _projection(index["media"], ("path", "digest", "bytes", "verified", "kind", "source_digest"))
+    if len(json.dumps(receipt, ensure_ascii=True).encode()) > 2 * 1024 * 1024:
+        raise ValueError("compact receipt exceeds 2 MiB")
+    return receipt
+
+
+def _inspection_error(code: str) -> dict:
+    return {"ok": False, "data": None, "error": {"code": code, "message": "Offline inspection could not satisfy this bounded request."},
+            "receipt": None, "idempotency_key": ""}
+
+
+def inspect_filmstrip(manifest: str | Path, *, section: str = "summary", limit: int = 10,
+                      cursor: str | None = None, frame: int | None = None, card: str | None = None,
+                      shot: str | None = None, occurrence: str | None = None, clip: str | None = None,
+                      track: str | None = None, asset: str | None = None, range_value: str | None = None) -> dict:
+    """Read named scalar projections offline; never return arbitrary JSON objects.
+
+    Legacy v1 indexes are read without rewriting them. Cursors bind to the exact
+    manifest bytes and query. Every referenced member is confined and verified.
+    The entire compact JSON envelope (including errors) is at most 8 KiB.
+    """
+    try:
+        if section not in INSPECTION_SECTIONS or type(limit) is not int or not 1 <= limit <= 50:
+            return _inspection_error("invalid_query")
+        selectors = {"frame": frame, "card": card, "shot": shot, "occurrence": occurrence,
+                     "clip": clip, "track": track, "asset": asset, "range": range_value}
+        if frame is not None and (type(frame) is not int or frame < 0):
+            return _inspection_error("invalid_selector")
+        for key, value in selectors.items():
+            if key != "frame" and value is not None and (not isinstance(value, str) or not value or len(value) > 256 or "data:" in value.lower()):
+                return _inspection_error("invalid_selector")
+        if section in ("summary", "pages") and any(value is not None for value in selectors.values()):
+            return _inspection_error("unsupported_selector")
+        if section == "audio" and any(value is not None for key, value in selectors.items() if key != "range"):
+            return _inspection_error("unsupported_selector")
+        window = normalize_input_window(range_value=range_value) if range_value is not None else None
+        manifest_path = Path(manifest)
+        if manifest_path.name != "manifest.json" or manifest_path.is_symlink() or manifest_path.stat().st_size > 2 * 1024 * 1024:
+            return _inspection_error("invalid_manifest")
+        root = manifest_path.resolve().parent
+        manifest_bytes = manifest_path.read_bytes()
+        document = json.loads(manifest_bytes)
+        if not isinstance(document, dict) or document.get("kind") != "timeline_filmstrip":
+            return _inspection_error("invalid_manifest")
+        members = {}
+        declared = document.get("outputs")
+        if not isinstance(declared, list) or len(declared) > 10000:
+            return _inspection_error("invalid_manifest")
+        for member in declared:
+            if not isinstance(member, dict):
+                return _inspection_error("invalid_manifest")
+            name = _relative_path(member.get("path"))
+            if name in members:
+                return _inspection_error("invalid_manifest")
+            members[name] = member
+
+        def verified(name: str) -> Path:
+            name = _relative_path(name)
+            path = root / name
+            entry = members.get(name)
+            if not entry or path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root):
+                raise ValueError("unsafe_member")
+            if path.stat().st_size != entry.get("bytes"):
+                raise ValueError("integrity_mismatch")
+            with path.open("rb") as stream:
+                digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+            if digest != entry.get("content_hash"):
+                raise ValueError("integrity_mismatch")
+            return path
+
+        def read_json(name: str) -> dict:
+            path = verified(name)
+            if path.stat().st_size > 64 * 1024 * 1024:
+                raise ValueError("member_too_large")
+            value = json.loads(path.read_bytes())
+            if not isinstance(value, dict):
+                raise ValueError("invalid_member")
+            return value
+
+        index = read_json("frame-index.json")
+        if index.get("schema") not in ("astrid.filmstrip.v1", "astrid.filmstrip.v2"):
+            return _inspection_error("unsupported_schema")
+        for field, filename in (("snapshot_sidecar", "render-snapshot.json"), ("audio_sidecar", "audio-analysis.json")):
+            reference = index.get(field)
+            if reference is not None:
+                entry = members.get(filename, {})
+                if (not isinstance(reference, dict) or reference.get("path") != filename
+                        or reference.get("digest") != entry.get("content_hash") or reference.get("bytes") != entry.get("bytes")):
+                    return _inspection_error("integrity_mismatch")
+        identity = _projection(index.get("provenance", {}), _IDENTITY_KEYS)
+        fps = Fraction(*(index.get("provenance", {}).get("fps_rational") or [1, 1]))
+        identity["fps_rational"] = [fps.numerator, fps.denominator]
+        if fps <= 0:
+            return _inspection_error("invalid_member")
+        query = {"section": section, "limit": limit, **selectors}
+        binding = hashlib.sha256(manifest_bytes + json.dumps(query, sort_keys=True).encode()).hexdigest()
+        offset = 0
+        if cursor is not None:
+            if not isinstance(cursor, str) or len(cursor) > 100:
+                return _inspection_error("invalid_cursor")
+            parts = cursor.split(":")
+            if len(parts) != 2 or parts[0] != binding or not parts[1].isascii() or not parts[1].isdigit():
+                return _inspection_error("invalid_cursor")
+            offset = int(parts[1])
+        cards = index.get("cards", [])
+        if not isinstance(cards, list):
+            return _inspection_error("invalid_member")
+        snapshot = None
+
+        def frozen():
+            nonlocal snapshot
+            if snapshot is None:
+                if "render-snapshot.json" not in members:
+                    raise ValueError("evidence_unavailable")
+                snapshot = read_json("render-snapshot.json")
+                for key in ("render_run_id", "video_digest", "timeline_id"):
+                    if snapshot.get(key) != identity.get(key):
+                        raise ValueError("integrity_mismatch")
+            return snapshot
+
+        def selected(item, *, is_card=False):
+            if not isinstance(item, dict):
+                raise ValueError("invalid_member")
+            if is_card:
+                if frame is not None and item.get("frame") != frame:
+                    return False
+                if card is not None and item.get("id") != card:
+                    return False
+                at = Fraction(item["frame"], 1) / fps
+                if window and not Fraction(*window["start"]) <= at < Fraction(*window["end"]):
+                    return False
+                if any(value is not None for value in (shot, occurrence, clip, track, asset)):
+                    return any(selected(row) and _frame_span_for_inspection(row, fps)[0] <= item["frame"] < _frame_span_for_inspection(row, fps)[1]
+                               for row in frozen().get("clips", []))
+                return True
+            for wanted, fields in ((shot, ("shot_id", "shot_name")), (occurrence, ("occurrence_id", "shot_occurrence_id")),
+                                   (clip, ("id",)), (track, ("track",)), (asset, ("asset",))):
+                if wanted is not None and not any(item.get(key) == wanted for key in fields):
+                    return False
+            start, end = _frame_span_for_inspection(item, fps)
+            if frame is not None and not start <= frame < end:
+                return False
+            if card is not None:
+                matching = [row for row in cards if row.get("id") == card]
+                if not matching or not start <= matching[0]["frame"] < end:
+                    return False
+            return not window or (Fraction(start, 1) / fps < Fraction(*window["end"]) and Fraction(end, 1) / fps > Fraction(*window["start"]))
+
+        records = []
+        if section == "summary":
+            records = [{**identity, "sample_count": len(cards), "sections": list(INSPECTION_SECTIONS),
+                        "canonical_timeline": _projection(index.get("canonical_timeline", {}), ("timeline_ref", "config_version", "config_hash")),
+                        "note": "Samples are rendered evidence; placements and shot scripts are declarations, not proof of pixels, speech timing or silence."}]
+        elif section == "pages":
+            for name in sorted(members):
+                if PurePosixPath(name).name.startswith("filmstrip-") and name.endswith(".png"):
+                    verified(name)
+                    records.append({"path": name})
+        elif section == "cards":
+            for item in cards:
+                if selected(item, is_card=True):
+                    verified(item["image"])
+                    row = _projection(item, ("id", "frame", "time_seconds", "image"))
+                    row["sample_reasons"] = [_small_scalar(reason, 64) for reason in item.get("sample_reasons", [])[:16]]
+                    records.append(row)
+        elif section in ("placements", "boundaries"):
+            for item in frozen().get("clips", []):
+                if not selected(item):
+                    continue
+                start, end = _frame_span_for_inspection(item, fps)
+                row = _projection(item, ("id", "shot_id", "shot_name", "occurrence_id", "shot_occurrence_id", "track", "asset", "kind", "from", "to", "speed"))
+                row.update(start_frame=start, end_frame=end, evidence="declared_placement")
+                if section == "placements":
+                    records.append(row)
+                else:
+                    captured = {item["frame"] for item in cards}
+                    for boundary in (start, end):
+                        records.append({"clip_id": row.get("id"), "boundary_frame": boundary,
+                                        "before_captured": boundary - 1 in captured, "after_captured": boundary in captured,
+                                        "note": "Uncaptured adjacent frames require a pinned visualize --range refinement."})
+        else:
+            audio = read_json("audio-analysis.json")
+            if audio.get("render_digest") != identity.get("video_digest"):
+                return _inspection_error("integrity_mismatch")
+            records = [_projection(audio, ("status", "analysis_identity", "render_digest"))]
+            records[0]["evidence"] = "composite_audio_analysis; low energy does not establish perceptual silence"
+
+            def audio_interval(start, end):
+                start, end = _rational(start), _rational(end)
+                if end <= start:
+                    return None
+                if window and not (start < Fraction(*window["end"]) and end > Fraction(*window["start"])):
+                    return None
+                return {"start_seconds": float(start), "end_seconds": float(end)}
+
+            for gap in audio.get("quiet_gaps", []):
+                interval = audio_interval(gap.get("start"), gap.get("end"))
+                if interval:
+                    records.append({"kind": "low_energy", **interval, **_projection(gap, ("threshold", "measurement"))})
+            speech = audio.get("speech") or {}
+            for phrase in speech.get("phrases", []):
+                timing = phrase.get("render_interval") or phrase
+                interval = audio_interval(timing.get("start"), timing.get("end"))
+                if interval:
+                    text = phrase.get("canonical_text") or phrase.get("text") or ""
+                    safe_text = "[inline data omitted]" if not isinstance(text, str) or "data:" in text.lower() else text[:256]
+                    records.append({"kind": "speech_annotation", **interval, "text_excerpt": safe_text,
+                                    "truncated": isinstance(text, str) and len(text) > 256,
+                                    **_projection(phrase, ("timing_basis", "timing_method", "status", "word_aligned"))})
+            stream = audio.get("stream") or {}
+            sample_rate = stream.get("sample_rate")
+            levels = (audio.get("waveform") or {}).get("levels") or []
+            if type(sample_rate) is int and sample_rate > 0 and levels:
+                # One existing resolution only. Never expand every level into
+                # target graphs or imply that a bounded excerpt is complete.
+                level = min(levels, key=lambda item: len(item.get("bins") or []))
+                origin = _rational((audio.get("presentation_origin") or {}).get("seconds", [0, 1]))
+                bins = []
+                for item in level.get("bins", []):
+                    interval = audio_interval(origin + Fraction(item["start_sample"], sample_rate),
+                                              origin + Fraction(item["end_sample"], sample_rate))
+                    if interval:
+                        bins.append({"kind": "waveform_bin", **interval,
+                                     **_projection(item, ("index", "min", "max", "peak", "rms"))})
+                records[0]["waveform_bins_available"] = len(bins)
+                records[0]["waveform_bins_returned"] = min(128, len(bins))
+                records[0]["waveform_excerpt"] = len(bins) > 128
+                records.extend(bins[:128])
+        if offset > len(records):
+            return _inspection_error("invalid_cursor")
+        batch = records[offset:offset + limit]
+        while True:
+            next_offset = offset + len(batch)
+            data = {"section": section, "render_run_id": identity.get("render_run_id"), "records": batch,
+                    "next_cursor": f"{binding}:{next_offset}" if next_offset < len(records) else None}
+            result = {"ok": True, "data": data, "error": None, "receipt": None, "idempotency_key": ""}
+            if len((json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n").encode()) <= INSPECTION_MAX_BYTES:
+                return result
+            if len(batch) <= 1:
+                return _inspection_error("record_too_large")
+            batch.pop()
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, ZeroDivisionError):
+        return _inspection_error("invalid_bundle")
+    except ValueError as exc:
+        code = str(exc)
+        return _inspection_error(code if code in {"unsafe_member", "integrity_mismatch", "member_too_large", "invalid_member", "evidence_unavailable"} else "invalid_query")
+
+
+def _frame_span_for_inspection(item: Mapping, fps: Fraction) -> tuple[int, int]:
+    if isinstance(item.get("start_frame"), int) and isinstance(item.get("end_frame"), int):
+        return item["start_frame"], item["end_frame"]
+    timing = dict(item)
+    if item.get("duration") is not None:
+        timing.update(hold=float(item["duration"]), speed=1)
+    return clip_start_frame(timing, float(fps)), clip_end_frame(timing, float(fps))

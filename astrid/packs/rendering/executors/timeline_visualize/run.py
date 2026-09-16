@@ -377,6 +377,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample", choices=("interval", "clips", "shots", "cuts"))
     parser.add_argument("--every", type=float)
     parser.add_argument("--every-frames", type=int)
+    parser.add_argument(
+        "--include-cuts", action="store_true",
+        help="with interval sampling, also capture explicit visual cut-neighbor frames",
+    )
     parser.add_argument("--render-run")
     parser.add_argument("--columns", type=int)
     parser.add_argument("--page-size", type=int)
@@ -398,6 +402,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asset")
     parser.add_argument("--context", type=float, default=3.0)
     parser.add_argument("--neighbors", type=int, default=0)
+    parser.add_argument("--show", action="append", default=None)
+    parser.add_argument("--hide", action="append", default=None)
+    parser.add_argument("--track", action="append", default=None)
+    parser.add_argument("--detail", action="store_true", default=False)
     parser.add_argument("--from-view", type=Path)
     parser.add_argument("--focus")
     parser.add_argument("--refresh-root", action="store_true")

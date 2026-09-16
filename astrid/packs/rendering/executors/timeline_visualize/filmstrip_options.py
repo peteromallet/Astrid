@@ -5,6 +5,8 @@ import math
 import re
 from typing import Any, Mapping
 
+from .inspection_contract import inspection_options
+
 
 def seconds(value: Any) -> float:
     if isinstance(value, bool):
@@ -50,6 +52,10 @@ def resolution(value: Any) -> list[int] | None:
 
 def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize only public controls; never accept an unbounded sampling job."""
+    # Component/target grammar is shared with the structural executor and SDK
+    # admission. Keep the legacy filmstrip fields below intact for envelope
+    # compatibility, but carry the resolved contract alongside them.
+    shared = inspection_options(values)
     sample = values.get('sample') or 'interval'
     if sample not in {'interval', 'clips', 'shots', 'cuts'}:
         raise ValueError('sample must be interval, clips, shots, or cuts')
@@ -63,12 +69,34 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError('every must be a finite positive number of seconds')
     if sample != 'interval' and (every is not None or frames is not None):
         raise ValueError('every/every_frames apply only to sample=interval')
+    # Keep the distinction between an omitted density (which requests the
+    # bounded adaptive overview) and an explicit interval request.  Applying
+    # the 0.5s default before planning used to make ``--every 0.5`` look like
+    # the overview and then injected unrelated boundary/beat frames.
+    explicit_interval = every is not None or frames is not None
+    include_cuts = values.get('include_cuts', False)
+    if include_cuts is None:
+        include_cuts = False
+    if not isinstance(include_cuts, bool):
+        raise ValueError('include_cuts must be a boolean')
+    if include_cuts and sample != 'interval':
+        raise ValueError('include_cuts applies only to sample=interval')
     normalized_every = every if every is not None else (None if frames else 0.5)
     density = ({'mode': 'every_frames', 'value': frames}
                if frames is not None else {'mode': 'every_seconds', 'value': normalized_every})
     result: dict[str, Any] = {'sample': sample, 'every': normalized_every,
-                              'every_frames': frames, 'density': density, 'max_frames': 2000,
+                              'every_frames': frames, 'density': density,
+                              'explicit_interval': explicit_interval,
+                              'include_cuts': include_cuts,
+                              'max_frames': 2000,
                               'include_media': bool(values.get('include_media', False))}
+    result.update({
+        'components': shared['components']['resolved'],
+        'component_request': shared['components'],
+        'track_ids': shared['tracks'],
+        'detail': shared['detail'],
+        'input_window': shared['window'],
+    })
     for name, default, maximum in [('columns', 5, 8), ('page_size', 50, 100)]:
         n = values.get(name, default)
         if n is None:

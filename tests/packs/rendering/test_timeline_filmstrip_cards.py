@@ -1,4 +1,6 @@
 from fractions import Fraction
+import copy
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -24,13 +26,28 @@ def test_integer_fractional_fps_and_half_open_window():
         assert Fraction(*c['time_rational']) == Fraction(c['frame'] * 1001, 30000)
 
 
-def test_cut_neighbors_are_preserved_between_sparse_intervals():
-    cards = plan_filmstrip(snapshot(), {'every': 3})['cards']
+def test_cut_neighbors_are_opt_in_between_sparse_intervals():
+    strict = plan_filmstrip(snapshot(), {'every': 3})['cards']
+    assert [card['frame'] for card in strict] == [0, 72]
+    cards = plan_filmstrip(snapshot(), {'every': 3, 'include_cuts': True})['cards']
     frames = {c['frame']: c for c in cards}
     assert {47, 48, 95}.issubset(frames)
     assert frames[47]['clips'][0]['id'] == 'a'
     assert frames[48]['clips'][0]['id'] == 'b'
     assert 'before_cut' in frames[47]['sample_reasons']
+
+
+def test_explicit_interval_does_not_inject_clip_first_or_shot_midpoint():
+    cards = plan_filmstrip(snapshot(duration_frames=240), {'every': 3})['cards']
+    assert all(card['sample_reasons'] == ['interval'] for card in cards)
+
+
+def test_explicit_half_second_is_not_adaptive_overview():
+    options = filmstrip_options({'every': 0.5})
+    index = plan_filmstrip(snapshot(duration_frames=240), options)
+    assert index['sampling']['overview'] is False
+    assert index['sampling']['explicit_interval'] is True
+    assert [card['frame'] for card in index['cards']] == [0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228]
 
 
 def test_scripts_are_overlapping_segments_and_gaps_explicit():
@@ -39,6 +56,34 @@ def test_scripts_are_overlapping_segments_and_gaps_explicit():
     assert cards[24]['scripts'][0]['text'] == 'Overlap'
     assert cards[48]['scripts'] == []
     assert cards[48]['script_status'] == 'no script'
+
+
+def test_frame_captions_use_only_explicit_timed_speech():
+    audio = {'speech': {'phrases': [
+        {'id': 'phrase-1', 'status': 'projected', 'canonical_text': 'Timed line',
+         'render_interval': {'start': [0, 1], 'end': [1, 1]}},
+    ]}}
+    cards = {c['frame']: c for c in plan_filmstrip(
+        snapshot(duration_frames=72, audio=audio), {'every_frames': 12}
+    )['cards']}
+    assert [caption['canonical_text'] for caption in cards[0]['captions']] == ['Timed line']
+    assert [caption['canonical_text'] for caption in cards[12]['captions']] == ['Timed line']
+    assert cards[24]['captions'] == []  # exact half-open end boundary
+    assert cards[0]['scripts']  # shot-script context is retained separately
+    assert cards[0]['caption_status'] == 'timed caption'
+    assert cards[24]['caption_status'] == 'same shot; no new timed text'
+
+
+def test_shot_script_display_is_once_per_occurrence_without_fake_timing():
+    cards = plan_filmstrip(
+        snapshot(duration_frames=96, scripts=[dict(start=0, end=4, text='Shot context')]),
+        {'every_frames': 24},
+    )['cards']
+    assert [card['time_seconds'] for card in cards] == [0.0, 1.0, 2.0, 3.0]
+    assert [script['text'] for script in cards[0]['display_scripts']] == ['Shot context']
+    assert cards[1]['display_scripts'] == []
+    assert cards[1]['caption_status'] == 'same shot; no new timed text'
+    assert cards[0]['scripts'][0]['text'] == cards[1]['scripts'][0]['text'] == 'Shot context'
 
 
 def test_filters_and_bounds_are_enforced():
@@ -267,3 +312,200 @@ def test_extract_uses_ffmpeg9_supported_filter_and_frame_mode(tmp_path, monkeypa
     assert argv[argv.index('-fps_mode:v') + 1] == 'passthrough'
     assert '-filter_script:v' not in argv
     assert '-vsync' not in argv
+
+
+def _static_card(image_name='frames/frame.jpg', *, name='Shot one', timestamp='0.000s · frame 0', script='An authored line.'):
+    return {
+        'id': 'frame-000000000',
+        'frame': 0,
+        'time_label': timestamp,
+        'image': image_name,
+        'clips': [{'id': 'clip-1', 'shot_name': name}],
+        'scripts': [{'text': script}] if script is not None else [],
+        'script_status': 'scripted' if script is not None else 'no script',
+    }
+
+
+def _static_fixture(root, *, size=(64, 36), color=(32, 64, 96)):
+    from PIL import Image
+    image_path = root / 'frames' / 'frame.jpg'
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new('RGB', size, color).save(image_path, format='JPEG', quality=90, optimize=False, progressive=False)
+    return image_path
+
+
+def test_static_svg_remains_byte_stable_against_captured_legacy_fixture(tmp_path):
+    _static_fixture(tmp_path)
+    card = _static_card(name='Baseline shot', script='Baseline authored script')
+    pages = filmstrip_cards._static_svg([card], tmp_path, 1, 50, 'Baseline timeline', 'run-baseline', 'selection')
+    svg = pages[0][3]
+    assert hashlib.sha256(svg.encode('utf-8')).hexdigest() == '0928d6845ed18d93b89e1a3f9316a35652839b62ac55420ee4b81caa38cc40c9'
+
+
+def test_png_text_is_measured_bounded_and_unicode_safe():
+    from PIL import Image, ImageDraw
+    measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    name_font, timestamp_font, script_font = filmstrip_cards._png_font(18), filmstrip_cards._png_font(14), filmstrip_cards._png_font(16)
+    card = _static_card(
+        name='東京 café — ' + ('unbroken-name-' * 80),
+        timestamp='1234567890123456789012345678901234567890',
+        script='Δé🙂 ' + ('unbroken-script-token-' * 100),
+    )
+    metrics = filmstrip_cards._png_card_metrics(measure, card, name_font, timestamp_font, script_font)
+    assert metrics['name_lines'][-1].endswith('…')
+    assert len(metrics['name_lines']) <= 2
+    assert all(filmstrip_cards._png_text_width(measure, line, name_font) <= metrics['name_width'] + 0.01 for line in metrics['name_lines'])
+    assert all(filmstrip_cards._png_text_width(measure, line, timestamp_font) <= 150.01 for line in metrics['timestamp_lines'])
+    assert len(metrics['script_lines']) <= 6
+    assert len(metrics['script_lines']) >= 2
+    assert all(filmstrip_cards._png_text_width(measure, line, script_font) <= 308.01 for line in metrics['script_lines'])
+
+
+def test_png_font_chain_uses_bundled_fallbacks_for_missing_glyphs():
+    from PIL import Image, ImageDraw
+    measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    font = filmstrip_cards._png_font(18)
+    assert font.for_character('A') is font.primary
+    assert font.for_character('東') is font.fallback
+    assert font.for_character('🙂') is font.emoji
+    assert filmstrip_cards._png_text_width(measure, '東🙂', font) > 0
+
+
+def test_png_extreme_timestamp_gets_its_own_header_line(tmp_path):
+    from PIL import Image
+    _static_fixture(tmp_path)
+    card = _static_card(timestamp='timestamp ' * 80, name='A long shot label')
+    result = filmstrip_cards._static_png([card], tmp_path, 1, 50, 'A story', 'run', 'selection')
+    with Image.open(result[0]) as page:
+        assert page.height >= 314 + 22 * 2 + 22
+
+
+def test_png_missing_script_is_explicit_and_bounded():
+    from PIL import Image, ImageDraw
+    measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    fonts = [filmstrip_cards._png_font(size) for size in (18, 14, 16)]
+    metrics = filmstrip_cards._png_card_metrics(measure, _static_card(script=None), *fonts)
+    assert metrics['script_lines'] == ['No spoken text', '']
+    assert metrics['excerpt'] is False
+
+
+def test_png_page_chrome_is_measured_for_narrow_pages():
+    from PIL import Image, ImageDraw
+    measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    title_font, chrome_font = filmstrip_cards._png_font(20), filmstrip_cards._png_font(12)
+    width = 1 * filmstrip_cards._PNG_PAGE_WIDTH_STRIDE + 24
+    chrome_width = width - 32
+    title = filmstrip_cards._png_chrome_lines(measure, 'Timeline ' + ('very-long-name-' * 100), title_font, chrome_width, 2)
+    provenance = filmstrip_cards._png_chrome_lines(measure, 'Render ' + ('r' * 400), chrome_font, chrome_width, 2)
+    disclaimer = filmstrip_cards._png_chrome_lines(measure, 'Authored script segments, not word-aligned. No script does not imply silence.', chrome_font, chrome_width, 2)
+    assert title[-1].endswith('…')
+    assert all(filmstrip_cards._png_text_width(measure, line, title_font) <= chrome_width + 0.01 for line in title)
+    assert all(filmstrip_cards._png_text_width(measure, line, chrome_font) <= chrome_width + 0.01 for line in provenance + disclaimer)
+
+
+def test_static_png_geometry_paginates_and_does_not_mutate_cards(tmp_path):
+    _static_fixture(tmp_path, size=(80, 40))
+    cards = [_static_card(timestamp=f'{i}.000s · frame {i}', name=f'Shot {i}', script=f'Line {i}') for i in range(9)]
+    before = copy.deepcopy(cards)
+    result = filmstrip_cards._static(cards, tmp_path, 5, 4, 'A story', 'run-exact', 'selection')
+    assert len(result['png']) == 3
+    assert cards == before
+    from PIL import Image
+    with Image.open(result['png'][0]) as page:
+        assert page.size == (5 * filmstrip_cards._PNG_PAGE_WIDTH_STRIDE + 24, page.size[1])
+    one_column = tmp_path / 'one-column'
+    one_column.mkdir()
+    _static_fixture(one_column, size=(40, 80))
+    one = filmstrip_cards._static([_static_card(image_name='frames/frame.jpg')], one_column, 1, 50, 'A story', 'run-exact', 'selection')
+    with Image.open(one['png'][0]) as page:
+        assert page.size[0] == filmstrip_cards._PNG_PAGE_WIDTH_STRIDE + 24
+
+
+def test_static_png_draw_geometry_contains_images_and_varies_row_height(tmp_path, monkeypatch):
+    from PIL import Image, ImageDraw
+    _static_fixture(tmp_path, size=(160, 90))
+    cards = []
+    for i in range(9):
+        image_name = f'frames/frame-{i:03d}.jpg'
+        image = tmp_path / image_name
+        image.parent.mkdir(parents=True, exist_ok=True)
+        size = (90, 160) if i % 2 else ((160, 90) if i < 8 else (24, 24))
+        Image.new('RGB', size, (50 + i * 15, 70 + i * 8, 110 + i * 6)).save(image, format='JPEG', quality=90, optimize=False, progressive=False)
+        cards.append(_static_card(image_name=image_name, name=f'Geometry {i}', timestamp=f'{i}.000s', script=('Long row script. ' * 100 if i == 0 else 'Short row script.')))
+
+    text_calls, paste_calls = [], []
+    original_text = ImageDraw.ImageDraw.text
+    original_paste = Image.Image.paste
+
+    def spy_text(draw, xy, text, *args, **kwargs):
+        text_calls.append((xy, str(text)))
+        return original_text(draw, xy, text, *args, **kwargs)
+
+    def spy_paste(image, source, box=None, *args, **kwargs):
+        paste_calls.append((box, source.size))
+        return original_paste(image, source, box, *args, **kwargs)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, 'text', spy_text)
+    monkeypatch.setattr(Image.Image, 'paste', spy_paste)
+    result = filmstrip_cards._static_png(cards, tmp_path, 8, 50, 'Geometry', 'run', 'selection')
+    assert len(paste_calls) == 9
+    assert all(size[0] <= 328 and size[1] <= 216 for _box, size in paste_calls)
+    image_box_tops = [box[1] - (216 - size[1]) // 2 for box, size in paste_calls]
+    assert image_box_tops[0] == image_box_tops[1] == image_box_tops[7]
+    assert image_box_tops[8] - image_box_tops[0] > 16 + 22 * 2
+    assert Path(result[0]).exists()
+
+    name_call = next((xy for xy, text in text_calls if text == 'Geometry 0'), None)
+    timestamp_call = next((xy for xy, text in text_calls if text == '0.000s'), None)
+    spoken_call = next((xy for xy, text in text_calls if text.startswith('“')), None)
+    assert name_call and timestamp_call and spoken_call
+    image_x, image_y = paste_calls[0][0]
+    assert name_call[1] < image_y
+    assert spoken_call[1] > image_box_tops[0] + 216
+    layout = filmstrip_cards._png_card_metrics(ImageDraw.Draw(Image.new('RGB', (1, 1))), cards[0], filmstrip_cards._png_font(18), filmstrip_cards._png_font(14), filmstrip_cards._png_font(16))
+    assert not layout['separate_timestamp']
+    assert name_call[0] + filmstrip_cards._png_text_width(ImageDraw.Draw(Image.new('RGB', (1, 1))), 'Geometry 0', filmstrip_cards._png_font(18)) <= timestamp_call[0] - 12
+    assert image_x - (328 - paste_calls[0][1][0]) // 2 == 16
+
+
+def test_png_waveform_projects_frozen_audio_bins_into_card_strip(tmp_path):
+    from PIL import Image, ImageDraw
+    _static_fixture(tmp_path)
+    audio = {
+        'status': 'ok',
+        'stream': {'sample_rate': 10, 'channels': 1},
+        'presentation_origin': {'seconds': [0, 1]},
+        'waveform': {
+            'duration_seconds': 4,
+            'levels': [{
+                'id': 'level-8', 'target_bins': 8,
+                'bins': [
+                    {'index': 0, 'start_sample': 0, 'end_sample': 5, 'peak': [0.8]},
+                    {'index': 1, 'start_sample': 5, 'end_sample': 10, 'peak': [0.0]},
+                    {'index': 2, 'start_sample': 10, 'end_sample': 15, 'peak': [0.4]},
+                ],
+            }],
+        },
+    }
+    card = _static_card(timestamp='1.000s', script='Spoken line')
+    measure = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    fonts = [filmstrip_cards._png_font(size) for size in (18, 14, 16)]
+    metrics = filmstrip_cards._png_card_metrics(measure, card, *fonts, audio)
+    assert metrics['waveform'] is not None
+    assert max(metrics['waveform']['amplitudes']) == pytest.approx(0.8)
+    assert metrics['audio_extra'] == filmstrip_cards._PNG_AUDIO_HEIGHT + 8
+    result = filmstrip_cards._static_png([card], tmp_path, 1, 50, 'A story', 'run', 'selection', audio)
+    assert Path(result[0]).exists()
+
+
+def test_static_png_rejects_oversized_page_before_allocating(tmp_path):
+    _static_fixture(tmp_path)
+    huge_timestamp = 'timestamp\n' * 30000
+    with pytest.raises(ValueError, match='64 million pixels'):
+        filmstrip_cards._static([_static_card(timestamp=huge_timestamp)], tmp_path, 1, 50, 'A story', 'run-exact', 'selection')
+
+
+def test_png_font_loading_fails_closed_when_bundled_font_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(filmstrip_cards, '_PNG_FONT_PATH', tmp_path / 'missing.ttf')
+    with pytest.raises(RuntimeError, match='Bundled PNG font is unavailable'):
+        filmstrip_cards._png_font(12)

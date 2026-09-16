@@ -909,7 +909,7 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
         "--view",
         choices=("filmstrip",),
         default="filmstrip",
-        help="Rendered paired filmstrip as static PNG/SVG/Markdown/JSON evidence (default and only view).",
+        help="Rendered paired filmstrip as static PNG/Markdown/JSON evidence (default and only view).",
     )
     subparser.add_argument("--sample", choices=("interval", "clips", "cuts", "shots"), default=None,
                            help="Filmstrip sampling: interval (default), picture clips, cut boundaries, or authored story beats.")

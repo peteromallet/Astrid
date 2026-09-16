@@ -99,7 +99,7 @@
       "name": "formats",
       "type": "string",
       "required": false,
-      "description": "Optional presentation format list. Choices are png or md (default png,md); SVG/all were removed. Core machine artifacts are always written."
+      "description": "Optional presentation format list. Choices are png or md (default png,md). Core machine artifacts are always written."
     },
     {
       "name": "rendered_video",

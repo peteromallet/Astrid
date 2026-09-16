@@ -69,6 +69,27 @@ def test_input_only_is_a_materializable_compact_filmstrip_bundle(tmp_path):
     assert json.loads(Path(hydrated).read_text())['kind'] == 'timeline_filmstrip'
 
 
+def test_bundle_publication_keeps_previous_complete_bundle_on_archive_failure(
+    tmp_path, monkeypatch
+):
+    """A failed archive build cannot advertise a partial replacement."""
+    source_root = tmp_path / 'filmstrip-view'
+    source_root.mkdir()
+    (source_root / 'manifest.json').write_text('{"complete":true}\n')
+    destination = tmp_path / 'filmstrip-bundle.zip'
+    destination.write_bytes(b'previous-complete-bundle')
+
+    def fail_write(self, filename, arcname=None, compress_type=None):
+        raise OSError('synthetic archive failure')
+
+    monkeypatch.setattr(execution.zipfile.ZipFile, 'write', fail_write)
+    with pytest.raises(OSError, match='synthetic archive failure'):
+        execution._write_zip_atomic(destination, source_root)
+
+    assert destination.read_bytes() == b'previous-complete-bundle'
+    assert not list(tmp_path.glob('.filmstrip-bundle.zip.*.tmp'))
+
+
 def test_managed_coverage_projects_actual_overview_source_pack():
     source = plan_filmstrip(
         {

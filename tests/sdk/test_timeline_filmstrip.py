@@ -263,6 +263,22 @@ def test_default_refuses_stale_timeline_or_script(field):
         prepare_filmstrip({}, project='p', client=client)
 
 
+def test_latest_render_refuses_canonical_head_change_before_projection():
+    """A current-head change cannot be mixed into a selected render view."""
+    client = FakeClient()
+
+    def changed_head(_ref):
+        # The render was admitted at version one. Simulate the canonical
+        # timeline advancing after run selection but before filmstrip
+        # projection; the request must fail closed rather than joining the
+        # old render with a new timeline revision.
+        return {'config_version': 2}
+
+    client.get_timeline = changed_head
+    with pytest.raises(CapabilityValidationError, match='stale'):
+        prepare_filmstrip({}, project='p', client=client)
+
+
 def test_refuses_changed_script_bytes():
     client = FakeClient(); client.raw = b'wrong'
     with pytest.raises(CapabilityValidationError, match='bytes'):

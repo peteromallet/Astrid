@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import subprocess
+import tempfile
 import zipfile
 from collections.abc import Mapping
 from copy import deepcopy
@@ -29,6 +31,45 @@ _FILMSTRIP_CAPABILITY_ID = "rendering.timeline_visualize"
 _MANAGED_COVERAGE_REASONS = frozenset(
     {"interval", "before_cut", "after_cut", "clip_first", "shot_midpoint"}
 )
+
+
+def _write_zip_atomic(destination: Path, source_root: Path) -> None:
+    """Publish a complete bundle in one rename.
+
+    The outer result manifest is the runtime publication marker, but callers
+    can still inspect an attempt directory while a worker is running.  Build
+    the zip beside its destination and replace it only after the archive has
+    been closed and fsync'd, so an interrupted bundle can never look like a
+    complete delivery (or be harvested with a truncated central directory).
+    """
+
+    destination = Path(destination)
+    source_root = Path(source_root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(source_root.rglob("*")):
+                if path.is_file():
+                    archive.write(path, path.relative_to(source_root).as_posix())
+        with temporary.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+        try:
+            directory_fd = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _asset_integrity_from_registry(
@@ -205,10 +246,7 @@ def execute_input_only(args, authority):
     # generic host can publish one durable artifact instead of returning a
     # manifest whose attempt-local PNGs disappear during cleanup.
     bundle = out_root / "filmstrip-bundle.zip"
-    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(pack_root.rglob("*")):
-            if path.is_file():
-                archive.write(path, path.relative_to(pack_root).as_posix())
+    _write_zip_atomic(bundle, pack_root)
     outer_entrypoints = {"manifest": "filmstrip-view/manifest.json", "frame_index": "filmstrip-view/frame-index.json"}
     if primary_png:
         outer_entrypoints["png"] = f"filmstrip-view/{primary_png}"
@@ -1652,10 +1690,7 @@ def execute_filmstrip(args, *, authority=None):
     manifest_path = pack_root / 'manifest.json'
     write_manifest(manifest_path, manifest)
     bundle = out_root / 'filmstrip-bundle.zip'
-    with zipfile.ZipFile(bundle, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(pack_root.rglob('*')):
-            if path.is_file():
-                archive.write(path, path.relative_to(pack_root).as_posix())
+    _write_zip_atomic(bundle, pack_root)
     # The generic pack host treats ``{out}/manifest.json`` as the universal
     # result receipt.  The filmstrip's own manifest intentionally lives inside
     # ``filmstrip-view/`` because it is part of the self-contained bundle, so

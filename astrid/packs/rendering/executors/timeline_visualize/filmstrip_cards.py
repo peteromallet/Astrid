@@ -24,7 +24,7 @@ from .audio_analysis import (
     audio_analysis_identity,
     project_waveform,
 )
-from .inspection_contract import project_input_window
+from .inspection_contract import compact_render_receipt, project_input_window
 from .inspector_navigation import build_inspector_navigation
 
 
@@ -1495,7 +1495,12 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
         ]
         _materialize_input_previews(index['input_projection'], out_root)
         _attach_input_navigation(index, index['input_projection'], track_meta=snapshot.get('tracks'))
-    Path(paths['json']).write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding='utf-8')
+    # Keep rich navigation in memory for the paired compositor, but persist a
+    # bounded receipt so agents never need to ingest the full timeline graph.
+    Path(paths['json']).write_text(
+        json.dumps(compact_render_receipt(index, snapshot, out_root),
+                   ensure_ascii=True, separators=(',', ':')),
+        encoding='utf-8')
     md = ['# Rendered filmstrip', '', f"Render: `{snapshot['render_run_id']}`", '', 'Scripts are segment-level, not word-aligned. “No script” does not assert acoustic silence.', '']
     for card in cards:
         md += [f"## {card['id']}", '', f"![{card['time_label']}]({card['image']})", ''] + [html.escape(line) + '  ' for line in _lines(card)] + ['', '```sh', card['actions']['focus_command'], '```', '']

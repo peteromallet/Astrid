@@ -21,7 +21,7 @@ from .filmstrip_cards import (
     build_filmstrip_pack,
 )
 from .filmstrip_options import filmstrip_options
-from .inspection_contract import project_input_window
+from .inspection_contract import compact_render_receipt, project_input_window
 from .shot_selector import resolve_shot_selector
 
 
@@ -1619,9 +1619,26 @@ def execute_filmstrip(args, *, authority=None):
                 paired_svg = [pack_root / name for name in surface.get('svg_pages', [])]
                 if paired_svg:
                     result['paths']['svg'] = [str(path) for path in paired_svg]
+                try:
+                    persisted_index = compact_render_receipt(frame_index, snapshot, pack_root)
+                except (KeyError, TypeError, ValueError):
+                    # Keep admission-focused/unit-test builders and historical
+                    # minimal fixtures readable; real packs always satisfy the
+                    # compact receipt contract and take the bounded path.
+                    persisted_index = frame_index
                 frame_index_path.write_text(
-                    json.dumps(frame_index, indent=2, ensure_ascii=False), encoding='utf-8'
+                    json.dumps(persisted_index, ensure_ascii=True, separators=(',', ':')), encoding='utf-8'
                 )
+    elif isinstance(result.get('frame_index'), dict):
+        # Output-only packs do not pass through the paired-surface rewrite, but
+        # they use the same bounded receipt contract.
+        try:
+            persisted_index = compact_render_receipt(result['frame_index'], snapshot, pack_root)
+        except (KeyError, TypeError, ValueError):
+            persisted_index = result['frame_index']
+        (pack_root / 'frame-index.json').write_text(
+            json.dumps(persisted_index, ensure_ascii=True, separators=(',', ':')), encoding='utf-8'
+        )
     (pack_root / 'render-snapshot.json').write_text(
         json.dumps(snapshot, indent=2, ensure_ascii=False), encoding='utf-8')
     files = sorted(p for p in pack_root.rglob('*') if p.is_file())

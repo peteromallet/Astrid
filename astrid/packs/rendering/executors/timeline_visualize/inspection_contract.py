@@ -467,6 +467,14 @@ def compact_render_receipt(index: Mapping, snapshot: Mapping, root: Path) -> dic
             if len(values) > 64 or any(len(value) > 256 or "data:" in value.lower() for value in values):
                 raise ValueError("compact receipt identity limit exceeded")
             card[target] = values
+        # Keep the one useful navigation affordance without copying the full
+        # action graph or arbitrary command payload into the receipt.
+        actions = raw.get("actions")
+        if isinstance(actions, Mapping) and isinstance(actions.get("focus_command"), str):
+            command = actions["focus_command"]
+            if len(command) > 1024 or any(ord(char) < 32 for char in command):
+                raise ValueError("compact receipt action limit exceeded")
+            card["actions"] = {"focus_command": command}
         cards.append(card)
     receipt = {"schema": "astrid.filmstrip.v2", "provenance": provenance,
                "canonical_timeline": timeline, "cards": cards,
@@ -648,7 +656,12 @@ def inspect_filmstrip(manifest: str | Path, *, section: str = "summary", limit: 
                     row["sample_reasons"] = [_small_scalar(reason, 64) for reason in item.get("sample_reasons", [])[:16]]
                     records.append(row)
         elif section in ("placements", "boundaries"):
-            for item in frozen().get("clips", []):
+            # Input-only projections may keep source placements in
+            # ``input_clips`` while rendered cards use the composited ``clips``
+            # list. Prefer the explicit source list when present, without
+            # copying it into the compact receipt.
+            placement_clips = frozen().get("input_clips") or frozen().get("clips", [])
+            for item in placement_clips:
                 if not selected(item):
                     continue
                 start, end = _frame_span_for_inspection(item, fps)

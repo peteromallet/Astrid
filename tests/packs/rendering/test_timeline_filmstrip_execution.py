@@ -628,7 +628,8 @@ def test_execution_delivers_audio_sidecar_optional_media_and_reuses_cache(tmp_pa
     assert len(calls) == 1
     for result in (first, second):
         index = json.loads((Path(result['outputs']['pack_root']) / 'frame-index.json').read_text())
-        assert index['audio']['status'] == 'ok'
+        assert index['schema'] == 'astrid.filmstrip.v2'
+        assert 'audio' not in index
         assert index['audio_sidecar']['verified'] is True
         assert index['audio_sidecar']['digest'].startswith('sha256:')
         assert index['media']['source_digest'] == digest

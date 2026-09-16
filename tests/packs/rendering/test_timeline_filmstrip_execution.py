@@ -47,6 +47,9 @@ def test_input_only_is_a_materializable_compact_filmstrip_bundle(tmp_path):
     placements = inspect_filmstrip(manifest_path, section='placements')
     assert placements['ok']
     assert {row['id'] for row in placements['data']['records']} == {'picture-1', 'vo-1'}
+    audio = inspect_filmstrip(manifest_path, section='audio')
+    assert audio['ok']
+    assert audio['data']['records'][0]['status'] == 'not_available'
 
     bundle_bytes = Path(result['outputs']['filmstrip_bundle']).read_bytes()
     raw = {'outputs': {'artifacts': [{

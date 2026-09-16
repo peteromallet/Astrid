@@ -676,11 +676,27 @@ def inspect_filmstrip(manifest: str | Path, *, section: str = "summary", limit: 
                                         "before_captured": boundary - 1 in captured, "after_captured": boundary in captured,
                                         "note": "Uncaptured adjacent frames require a pinned visualize --range refinement."})
         else:
-            audio = read_json("audio-analysis.json")
-            if audio.get("render_digest") != identity.get("video_digest"):
-                return _inspection_error("integrity_mismatch")
-            records = [_projection(audio, ("status", "analysis_identity", "render_digest"))]
-            records[0]["evidence"] = "composite_audio_analysis; low energy does not establish perceptual silence"
+            # Input-only filmstrips have placement-level audio signifiers but
+            # no rendered composite to analyse. Return a truthful bounded
+            # status instead of treating the absent sidecar as a malformed
+            # bundle; rendered/paired packs still require the verified audio
+            # analysis sidecar and digest match below.
+            if "audio-analysis.json" not in members and identity.get("video_digest") is None:
+                records = [{
+                    "status": "not_available",
+                    "analysis_identity": None,
+                    "render_digest": None,
+                    "evidence": "input-only placement audio signifiers; no composite audio analysis was requested",
+                }]
+                # Keep the shared bounded projection loop below inert for this
+                # status-only response while avoiding a fabricated waveform.
+                audio = {}
+            else:
+                audio = read_json("audio-analysis.json")
+                if audio.get("render_digest") != identity.get("video_digest"):
+                    return _inspection_error("integrity_mismatch")
+                records = [_projection(audio, ("status", "analysis_identity", "render_digest"))]
+                records[0]["evidence"] = "composite_audio_analysis; low energy does not establish perceptual silence"
 
             def audio_interval(start, end):
                 start, end = _rational(start), _rational(end)

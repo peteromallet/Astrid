@@ -800,6 +800,310 @@ def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
     snapshot["metadata"]["rendered_tail"] = tail
 
 
+_FILMSTRIP_CAPABILITY_ID = "rendering.timeline_visualize"
+_MANAGED_COVERAGE_REASONS = frozenset(
+    {"interval", "before_cut", "after_cut", "clip_first", "shot_midpoint"}
+)
+
+
+def _filmstrip_managed_coverage(frame_index: Mapping[str, object]) -> dict[str, object]:
+    """Project the verified frame index into the managed-output V1 shape.
+
+    The frame index intentionally contains richer viewer-only coverage fields
+    (boundary counts, page layout, and overview reason labels). Runtime
+    managed outputs accept the stable sampling subset; retain exact frame
+    bounds, density, step, and cards whenever their reason vocabulary is
+    already part of that contract.
+    """
+    sampling = frame_index.get("sampling")
+    coverage = frame_index.get("coverage")
+    provenance = frame_index.get("provenance")
+    if not isinstance(sampling, Mapping) or not isinstance(coverage, Mapping):
+        raise ValueError("filmstrip frame index is missing canonical coverage")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("filmstrip frame index is missing timing provenance")
+    raw_fps = provenance.get("fps_rational")
+    if (
+        not isinstance(raw_fps, (list, tuple))
+        or len(raw_fps) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in raw_fps)
+    ):
+        raise ValueError("filmstrip frame index has invalid fps provenance")
+    fps = Fraction(raw_fps[0], raw_fps[1])
+    raw_window = coverage.get("window_seconds")
+    if (
+        not isinstance(raw_window, (list, tuple))
+        or len(raw_window) != 2
+        or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in raw_window)
+        or any(not math.isfinite(float(value)) for value in raw_window)
+    ):
+        raise ValueError("filmstrip coverage has an invalid rendered window")
+
+    def frame_boundary(seconds: int | float) -> int:
+        value = Fraction(str(seconds)) * fps
+        return (value.numerator + value.denominator - 1) // value.denominator
+
+    start, end = (frame_boundary(value) for value in raw_window)
+    if start < 0 or end <= start:
+        raise ValueError("filmstrip coverage has an empty rendered window")
+    mode = sampling.get("mode")
+    if mode == "overview":
+        mode = "interval"
+    if mode not in {"interval", "clips", "cuts", "shots"}:
+        raise ValueError("filmstrip sampling mode is not managed-output compatible")
+    managed_sampling: dict[str, object] = {
+        "mode": mode,
+        "range": {"start": start, "end": end},
+    }
+    raw_step = sampling.get("step_frames_rational")
+    if (
+        isinstance(raw_step, (list, tuple))
+        and len(raw_step) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) for value in raw_step)
+        and raw_step[0] >= 0
+        and raw_step[1] > 0
+    ):
+        managed_sampling["step_frames_rational"] = {
+            "numerator": raw_step[0], "denominator": raw_step[1]
+        }
+    density = sampling.get("density")
+    if isinstance(density, Mapping):
+        density_mode, density_value = density.get("mode"), density.get("value")
+        if (
+            mode == "interval"
+            and density_mode == "every_seconds"
+            and isinstance(density_value, (int, float))
+            and not isinstance(density_value, bool)
+            and math.isfinite(float(density_value))
+            and density_value > 0
+        ):
+            managed_sampling["every"] = density_value
+        elif (
+            mode == "interval"
+            and density_mode == "every_frames"
+            and isinstance(density_value, int)
+            and not isinstance(density_value, bool)
+            and density_value > 0
+        ):
+            managed_sampling["every_frames"] = density_value
+
+    cards = frame_index.get("cards")
+    if isinstance(cards, list):
+        normalized_cards = []
+        for card in cards:
+            if not isinstance(card, Mapping):
+                normalized_cards = []
+                break
+            reasons = card.get("sample_reasons")
+            if (
+                not isinstance(reasons, list)
+                or not reasons
+                or not all(isinstance(reason, str) for reason in reasons)
+                or not set(reasons).issubset(_MANAGED_COVERAGE_REASONS)
+            ):
+                normalized_cards = []
+                break
+            frame = card.get("frame")
+            time_seconds = card.get("time_seconds")
+            if (
+                isinstance(frame, bool)
+                or not isinstance(frame, int)
+                or frame < 0
+                or isinstance(time_seconds, bool)
+                or not isinstance(time_seconds, (int, float))
+                or not math.isfinite(float(time_seconds))
+                or time_seconds < 0
+            ):
+                normalized_cards = []
+                break
+            time_rational = card.get("time_rational")
+            if (
+                not isinstance(time_rational, (list, tuple))
+                or len(time_rational) != 2
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in time_rational)
+                or time_rational[0] < 0
+                or time_rational[1] <= 0
+            ):
+                normalized_cards = []
+                break
+            normalized_cards.append(
+                {
+                    "frame": frame,
+                    "time_seconds": time_seconds,
+                    "time_rational": {
+                        "numerator": time_rational[0],
+                        "denominator": time_rational[1],
+                    },
+                    "sample_reasons": list(reasons),
+                }
+            )
+        if normalized_cards:
+            managed_sampling["cards"] = normalized_cards
+    return {"sampling": managed_sampling}
+
+
+def _filmstrip_output_contract(
+    snapshot: Mapping[str, object],
+    options: Mapping[str, object],
+    video_digest: str,
+    coverage: Mapping[str, object],
+) -> dict[str, object]:
+    """Return explicit lifecycle metadata for one derived filmstrip result."""
+
+    exact_inputs = {
+        "render_run_id": snapshot["render_run_id"],
+        "timeline_id": snapshot["timeline_id"],
+        "video_digest": video_digest,
+        "options": dict(options),
+    }
+    recipe = {
+        "capability_id": _FILMSTRIP_CAPABILITY_ID,
+        "view": "filmstrip",
+        "exact_inputs": exact_inputs,
+    }
+    recipe_digest = "sha256:" + hashlib.sha256(
+        json.dumps(recipe, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return {
+        "producer": {"capability_id": _FILMSTRIP_CAPABILITY_ID, "view": "filmstrip"},
+        "provenance": {
+            "render_run_id": snapshot["render_run_id"],
+            "timeline_id": snapshot["timeline_id"],
+            "video_digest": video_digest,
+        },
+        "regeneration": {
+            "available": True,
+            "capability_id": _FILMSTRIP_CAPABILITY_ID,
+            "source_refs": [video_digest],
+            "recipe_digest": recipe_digest,
+            "exact_inputs": exact_inputs,
+        },
+        "coverage": _filmstrip_managed_coverage(coverage),
+    }
+
+
+def _rendered_timing(video: Path, fps) -> tuple[int, float]:
+    """Return decoded frame extent and duration, not authored timeline length.
+
+    A managed render can contain an explicit tail that is absent from the
+    authored picture timeline. Filmstrip sampling must follow the bytes being
+    reviewed.
+    """
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames,nb_frames,duration,r_frame_rate",
+         "-of", "json", str(video)],
+        capture_output=True, text=True, check=False,
+    )
+    if probe.returncode:
+        raise ValueError("Unable to probe rendered video duration: " + probe.stderr[-1000:])
+    try:
+        payload = json.loads(probe.stdout)
+        stream = payload["streams"][0]
+        try:
+            frames = int(stream.get("nb_read_frames") or stream.get("nb_frames") or 0)
+        except (TypeError, ValueError):
+            frames = 0
+        format_info = payload.get("format") or {}
+        duration_value = stream.get("duration") or format_info.get("duration") or 0
+        try:
+            duration = float(duration_value)
+        except (TypeError, ValueError):
+            duration = 0.0
+    except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
+        raise ValueError("Rendered video duration probe was invalid.") from exc
+    if frames <= 0 and duration <= 0:
+        raise ValueError("Rendered video has no usable duration.")
+    if frames <= 0:
+        frames = max(1, math.ceil(duration * float(fps)))
+    if duration <= 0:
+        duration = frames / float(fps)
+    return frames, duration
+
+
+def _rendered_frame_count(video: Path, fps) -> int:
+    """Return the decoded video-frame count for compatibility with callers."""
+    return _rendered_timing(video, fps)[0]
+
+
+def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
+    """Make the review snapshot describe the actual rendered composition.
+
+    The authored timeline remains authoritative for shot/script identity.  If
+    the render is longer, represent its unowned tail explicitly as a black
+    render tail rather than pretending it belongs to the last shot.
+    """
+    from fractions import Fraction
+
+    fps = Fraction(*snapshot["fps_rational"])
+    rendered_frames, decoded_duration = _rendered_timing(video, fps)
+    metadata = snapshot.get("metadata")
+    authored_frames = int(
+        metadata.get("authored_duration_frames")
+        if isinstance(metadata, Mapping) and metadata.get("authored_duration_frames") is not None
+        else snapshot.get("duration_frames") or 0
+    )
+    snapshot["duration_frames"] = rendered_frames
+    snapshot.setdefault("metadata", {})["rendered_duration_frames"] = rendered_frames
+    snapshot["metadata"]["rendered_duration_seconds"] = decoded_duration
+    snapshot["metadata"]["authored_duration_frames"] = authored_frames
+    snapshot["metadata"]["authored_duration_seconds"] = authored_frames / float(fps)
+    snapshot["metadata"]["duration_basis"] = "rendered_video"
+    # Authored clips and proven shot occurrences cannot own frames beyond the
+    # authored clock. Clamp both clocks to the decoded render EOF so no label
+    # leaks into the excess region or points past a shorter materialization.
+    for clip in snapshot.get("clips", []):
+        start = min(max(int(clip.get("start_frame", 0)), 0), authored_frames, rendered_frames)
+        end = min(max(int(clip.get("end_frame", rendered_frames)), 0), authored_frames, rendered_frames)
+        clip["start_frame"], clip["end_frame"] = start, max(start, end)
+        if clip.get("duration") is not None:
+            clip["duration"] = max(0.0, (clip["end_frame"] - start) / float(fps))
+    clamped_occurrences = []
+    for occurrence in snapshot.get("occurrences", []):
+        start = min(max(int(occurrence.get("start_frame", 0)), 0), authored_frames, rendered_frames)
+        end = min(max(int(occurrence.get("end_frame", 0)), 0), authored_frames, rendered_frames)
+        if end <= start:
+            continue
+        item = dict(occurrence, start_frame=start, end_frame=end,
+                    start=start / float(fps), end=end / float(fps))
+        clamped_occurrences.append(item)
+    snapshot["occurrences"] = clamped_occurrences
+    clamped_scripts = []
+    for script in snapshot.get("scripts", []):
+        start = min(max(float(script.get("start", 0)), 0.0), rendered_frames / float(fps))
+        end = min(max(float(script.get("end", 0)), 0.0), rendered_frames / float(fps))
+        if end > start:
+            clamped_scripts.append(dict(script, start=start, end=end))
+    snapshot["scripts"] = clamped_scripts
+    tail_start = min(max(authored_frames, 0), rendered_frames)
+    tail = None
+    if tail_start < rendered_frames:
+        tail = {
+            "id": "__rendered_tail__",
+            "label": "Unmapped rendered tail",
+            "status": "unmapped",
+            "mapping_status": "unmapped",
+            "start_frame": tail_start,
+            "end_frame": rendered_frames,
+            "start_seconds": tail_start / float(fps),
+            "end_seconds": rendered_frames / float(fps),
+        }
+        snapshot["unmapped_regions"] = [tail]
+        snapshot.setdefault("clips", []).append({
+            "id": tail["id"], "label": tail["label"], "status": tail["status"],
+            "mapping_status": tail["mapping_status"], "at": tail["start_seconds"],
+            "duration": tail["end_seconds"] - tail["start_seconds"],
+            "start_frame": tail_start, "end_frame": rendered_frames,
+            "track": "picture", "kind": "render_tail", "clipType": "render_tail",
+            "render_tail": True,
+        })
+    else:
+        snapshot["unmapped_regions"] = []
+    snapshot["metadata"]["rendered_tail"] = tail
+
+
 def _audio_cache_path(parent: Path, render_digest: str, settings: object) -> Path:
     key = hashlib.sha256(json.dumps(
         {"render_digest": render_digest, "settings": settings},

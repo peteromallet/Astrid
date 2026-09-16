@@ -66,6 +66,10 @@ admission occurrence order. An out-of-range ordinal fails with the available
 shot count rather than producing an empty view. The same selector is applied
 to rendered, input-only, and synchronized filmstrip surfaces.
 
+An explicit `--every` or `--every-frames` request is a strict periodic grid.
+Use `--include-cuts` with interval sampling when cut-neighbor evidence is also
+wanted; those extra frames are never inserted implicitly.
+
 ```bash
 python3 -m astrid timelines visualize main --project demo \
   --view filmstrip --render-run latest --every 0.5 --include-media

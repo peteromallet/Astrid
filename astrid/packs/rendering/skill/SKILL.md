@@ -54,7 +54,14 @@ python3 -m astrid timelines visualize <slug-or-id> --project <project> \
 Use `--sample interval` (default) for regular time samples, `--sample clips`
 for picture clips, `--sample cuts` for cut boundaries, and `--sample shots`
 for authored story beat midpoints. Shots require authored shot metadata.
-Interval samples retain adjacent visual cut frames even between sample ticks.
+An explicit `--every` or `--every-frames` interval is a strict periodic grid;
+pass `--include-cuts` when cut-neighbor frames should be added explicitly.
+Shot-script context is retained in JSON/details and is shown once per shot
+occurrence on review cards when no word/phrase timing exists; later samples
+stay visually quiet while their machine-readable status is “same shot; no new
+timed text.” Frozen timed speech captions
+still take precedence, and “No timed text available” is used only when there
+is no applicable timed phrase or shot script.
 Use `--range 10..20`, `--shot`, `--clip`, or `--asset` to restrict the view.
 The unified inspector can search dialogue, filter shots and time ranges, reduce
 density, expand declared visual/audio tracks on one shared absolute-time ruler,
@@ -72,7 +79,9 @@ interval for additional detail. Extraction is bounded at 2,000 frames, so use
 a coarser interval or a narrower range for long renders.
 
 Filmstrips require a successful render with its frozen timeline snapshot and
-managed video. They do not substitute source asset thumbnails. Script captions
+managed video. They do not substitute source asset thumbnails. PNG cards show
+spoken text in quotes and a compact local waveform/cursor when the admitted
+render has audio; SVG remains the geometry-oriented companion. Script captions
 remain authored segment text, not word-aligned transcription. Missing or
 uncertain speech timing is reported as unavailable/partial, while waveform
 inspection remains usable; opening the inspector never starts a provider call.

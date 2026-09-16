@@ -315,8 +315,9 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     timeline_slug = parsed.timeline_slug or parsed.timeline_ref
     for name in (
         "layout", "filmstrip", "rendered_video", "shot",
-        "view", "sample", "every", "every_frames", "render_run", "columns", "page_size", "resolution",
+        "view", "sample", "every", "every_frames", "include_cuts", "render_run", "columns", "page_size", "resolution",
         "include_media", "range", "at", "clip", "asset", "context", "neighbors", "from_view",
+        "show", "hide", "track", "detail",
         "focus",
     ):
         value = getattr(parsed, name, None)
@@ -662,6 +663,22 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--at", default=None, help="Focus a timestamp.")
     subparser.add_argument("--clip", default=None, help="Focus an authored clip id.")
     subparser.add_argument("--asset", default=None, help="Focus a canonical asset key.")
+    subparser.add_argument(
+        "--show", action="append", default=None, metavar="COMPONENT[,COMPONENT...]",
+        help="Add synchronized components: inputs, output, text, or audio.",
+    )
+    subparser.add_argument(
+        "--hide", action="append", default=None, metavar="COMPONENT[,COMPONENT...]",
+        help="Hide components from the resolved surface.",
+    )
+    subparser.add_argument(
+        "--track", action="append", default=None, metavar="TRACK_ID",
+        help="Restrict input lanes; repeat for multiple tracks.",
+    )
+    subparser.add_argument(
+        "--detail", action="store_true", default=None,
+        help="Open the current time/target in the shared detail selection.",
+    )
     subparser.add_argument("--context", type=float, default=None, help="Context seconds around a focus.")
     subparser.add_argument("--neighbors", type=int, default=None, help="Neighbor clips retained around a focus.")
     subparser.add_argument(
@@ -685,6 +702,10 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
                           help="Filmstrip interval in seconds (default: 0.5).")
     sampling.add_argument("--every-frames", type=int, default=None,
                           help="Filmstrip interval in integer rendered frames; replaces --every.")
+    subparser.add_argument(
+        "--include-cuts", action="store_true", default=None,
+        help="With interval sampling, also capture visual cut-neighbor frames.",
+    )
     subparser.add_argument("--render-run", default=None,
                            help="Exact successful render run, or latest (filmstrip default).")
     subparser.add_argument("--columns", type=int, default=None,

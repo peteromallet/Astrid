@@ -510,6 +510,13 @@ def _validate_timeline_visualize_inputs(
         raise CapabilityValidationError(
             "transcript input is host-owned; config.app.transcript supplies the CAS object"
         )
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import (
+        inspection_options,
+    )
+    try:
+        inspection_options(values)
+    except ValueError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
     # The rendered filmstrip/storyboard is the primary visualization surface.
     # Keep the structural diagram available as an explicit opt-in via
     # ``view=structure``.
@@ -534,7 +541,7 @@ def _validate_timeline_visualize_inputs(
             raise CapabilityValidationError(str(exc)) from exc
         return prepare_filmstrip(values, project=project, client=_client)
     if any(values.get(key) is not None for key in (
-        "render_run", "sample", "every", "every_frames", "columns", "page_size", "include_media", "resolution"
+        "render_run", "sample", "every", "every_frames", "include_cuts", "columns", "page_size", "include_media", "resolution"
     )):
         raise CapabilityValidationError("filmstrip controls require view=filmstrip")
 

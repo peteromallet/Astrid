@@ -72,6 +72,31 @@
       "description": "Canonical asset key to inspect with every timeline use."
     },
     {
+      "name": "show",
+      "type": "string",
+      "required": false,
+      "description": "Add synchronized components (repeatable/comma-separated): output, text, audio, or inputs."
+    },
+    {
+      "name": "hide",
+      "type": "string",
+      "required": false,
+      "description": "Hide synchronized components (repeatable/comma-separated)."
+    },
+    {
+      "name": "track",
+      "type": "string",
+      "required": false,
+      "description": "Restrict input lanes to one or more track ids."
+    },
+    {
+      "name": "detail",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Request detail treatment for the shared current selection."
+    },
+    {
       "name": "context",
       "type": "number",
       "required": false,
@@ -177,6 +202,13 @@
       "type": "integer",
       "required": false,
       "description": "Positive integer rendered frame interval, mutually exclusive with every."
+    },
+    {
+      "name": "include_cuts",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "For interval sampling, explicitly include visual cut-neighbor frames."
     },
     {
       "name": "render_run",
@@ -334,6 +366,29 @@
         "optional": true
       },
       {
+        "input": "show",
+        "flag": "--show",
+        "repeatable": true,
+        "optional": true
+      },
+      {
+        "input": "hide",
+        "flag": "--hide",
+        "repeatable": true,
+        "optional": true
+      },
+      {
+        "input": "track",
+        "flag": "--track",
+        "repeatable": true,
+        "optional": true
+      },
+      {
+        "input": "detail",
+        "flag": "--detail",
+        "optional": true
+      },
+      {
         "input": "context",
         "flag": "--context",
         "optional": true
@@ -386,6 +441,11 @@
       {
         "input": "every_frames",
         "flag": "--every-frames",
+        "optional": true
+      },
+      {
+        "input": "include_cuts",
+        "flag": "--include-cuts",
         "optional": true
       },
       {

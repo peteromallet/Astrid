@@ -41,6 +41,10 @@ or `every_frames` (positive integer, mutually exclusive with `every`),
 and resolution are recorded as separate request values. Existing range,
 timestamp/context, clip, asset, and shot selectors restrict frame selection.
 
+An explicit `--every` or `--every-frames` request is a strict periodic grid.
+Use `--include-cuts` with interval sampling when cut-neighbor evidence is also
+wanted; those extra frames are never inserted implicitly.
+
 ```bash
 python3 -m astrid timelines visualize main --project demo \
   --view filmstrip --render-run latest --every 0.5 --include-media
@@ -55,20 +59,28 @@ not silently annotate an older render. Missing render provenance fails with
 an actionable error. SDK-injected `filmstrip_authority` is internal handoff
 data, never a public caller override.
 
-The frame index records integer frames, rational times, active clips, authored
-script segments, sample reasons, render provenance, and commands pinned to
-the exact render run. When audio is present it also records a digest-scoped
+The frame index records integer frames, rational times, active clips, complete
+shot-script context, timed caption projections, sample reasons, render
+provenance, and commands pinned to the exact render run. When audio is present it also records a digest-scoped
 analysis identity, bounded channel-preserving waveform levels, measured
 low-amplitude quiet gaps, and (when explicitly admitted in the frozen input)
-projected speech phrases. Intervals retain neighboring visual cut frames;
-`clips` means picture clips, `cuts` means cut boundaries, and `shots` means
-authored story beat midpoints. There is no inferred scene detection.
+projected speech phrases. `clips` means picture-clip first frames, `cuts` means
+cut boundaries, and `shots` means authored story beat midpoints. There is no
+inferred scene detection. Shot-script context is never presented as a precise
+frame caption: when no timed phrase covers a sample, cards show each
+applicable shot script once per occurrence (marked “Shot script
+(not word-aligned)”). Later samples in that same coarse shot are intentionally
+quiet in the visual strip; their machine-readable status remains
+“same shot; no new timed text.” “No timed text available” remains the honest
+status when neither timed speech nor an applicable shot script exists.
 Sampling is bounded at 2,000 cards and fails with guidance to narrow the
 range or increase the interval.
 
 Outputs include a self-contained offline HTML viewer, chronological paginated
 PNG and SVG contact sheets, Markdown, and JSON frame cards. Cards show time,
-frame, human shot name, and wrapped script text. The filmstrip view is the
+frame, human shot name, and wrapped spoken text; PNG cards also include a
+compact card-local waveform and frame-time cursor whenever the admitted render
+has audio. The filmstrip view is the
 unified inspector: it adds expandable declared visual/audio track lanes on the
 same time ruler and uses the frozen snapshot's integer clip intervals. Empty
 tracks remain visible; declared audio lanes are placement intervals, while

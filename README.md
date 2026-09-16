@@ -37,4 +37,6 @@ Tools and knowledge for agents and humans to make art with open models.
 - [Contributing knowledge](docs/guides/contributing-knowledge.md)
 - [Get help](docs/setup/troubleshooting.md)
 
-[Full documentation](docs/README.md) · [License](LICENSE)
+---
+
+_[License](LICENSE)_

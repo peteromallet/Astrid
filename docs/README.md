@@ -7,6 +7,15 @@ pipelines where agents and humans collaborate to make art.
 [`astrid/packs/_core/skill/SKILL.md`](../astrid/packs/_core/skill/SKILL.md);
 humans begin at [Getting Started](getting-started.md).
 
+## Essentials
+
+- [Set up Astrid](setup/README.md)
+- [Agent setup checklist](setup/SKILL.md)
+- [How Astrid works](guides/how-it-works.md)
+- [When and how to create a pack](guides/create-a-pack.md)
+- [Contributing knowledge](guides/contributing-knowledge.md)
+- [Get help](setup/troubleshooting.md)
+
 ## Which journey matches you?
 
 ### I'm new here

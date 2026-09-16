@@ -4,8 +4,8 @@
   "name": "Timeline Visualize",
   "kind": "built_in",
   "version": "1.0",
-  "short_description": "Build a deterministic, agent-navigable evidence pack from managed timeline event logs.",
-  "description": "Read runtime-owned timeline documents, freeze source-normalized snapshots, and emit deterministic JSON, Markdown, PNG, and SVG evidence under the owning run.",
+  "short_description": "Build a deterministic, agent-navigable filmstrip from a managed timeline render.",
+  "description": "Read one runtime-owned timeline and its successful managed render, then emit deterministic paired filmstrip JSON, Markdown, PNG, and SVG evidence under the owning run.",
   "keywords": [
     "timeline",
     "visualize",
@@ -26,20 +26,6 @@
       "type": "string",
       "required": false,
       "description": "Managed timeline reference by slug, UUID, or ULID; omission selects the project default."
-    },
-    {
-      "name": "all",
-      "type": "boolean",
-      "required": false,
-      "default": false,
-      "description": "Select every non-tombstoned managed timeline in canonical ULID order."
-    },
-    {
-      "name": "scope",
-      "type": "string",
-      "required": false,
-      "default": "timeline",
-      "description": "Explicit cold scope: project, timeline, shot, range, clip, asset, or timestamp."
     },
     {
       "name": "shot",
@@ -111,51 +97,17 @@
       "description": "Previous and next clips retained on a focused clip's track."
     },
     {
-      "name": "from_view",
-      "type": "file",
-      "required": false,
-      "artifact_type": null,
-      "description": "Prior visualization manifest used by snapshot-safe navigation. Pass the durable manifest_path returned by the SDK, not the browse-only manifest copy under pack_root."
-    },
-    {
-      "name": "focus",
-      "type": "string",
-      "required": false,
-      "description": "Qualified object or timestamp reference resolved through from_view."
-    },
-    {
-      "name": "refresh_root",
-      "type": "boolean",
-      "required": false,
-      "default": false,
-      "description": "Explicitly cross from a verified frozen view to a fresh current-state root."
-    },
-    {
-      "name": "layout",
-      "type": "string",
-      "required": false,
-      "default": "both",
-      "description": "Page geometry: time-scaled, linear, or both."
-    },
-    {
       "name": "formats",
       "type": "string",
       "required": false,
       "description": "Repeatable presentation format list. Pass [\"png\", \"svg\"] or a comma-separated CLI value; choices are png, svg, md, or all (default all). Core machine artifacts are always written."
     },
     {
-      "name": "filmstrip",
-      "type": "string",
-      "required": false,
-      "default": "auto",
-      "description": "Boundary sampling policy: auto, off, assets, or rendered."
-    },
-    {
       "name": "rendered_video",
       "type": "file",
       "required": false,
       "artifact_type": null,
-      "description": "Contained rendered-video source used only with rendered filmstrip mode."
+      "description": "Host-injected attempt-local rendered video; callers select it with render_run."
     },
     {
       "name": "materialized_root",
@@ -182,7 +134,7 @@
       "name": "view",
       "type": "string",
       "required": false,
-      "description": "Presentation: rendered filmstrip/storyboard with an offline HTML viewer (default), or the structural timeline diagram.",
+      "description": "Presentation: the paired rendered filmstrip as static PNG/SVG/Markdown/JSON evidence (the only supported view).",
       "default": "filmstrip"
     },
     {
@@ -253,7 +205,7 @@
       "name": "pack_root",
       "type": "directory",
       "mode": "create_or_replace",
-      "path_template": "{out}/agent-view",
+      "path_template": "{out}/filmstrip-view",
       "artifact_type": "evidence/timeline-visualization",
       "description": "Browsable deterministic evidence-pack directory. Kernel SDK invocations materialize this as a durable, non-authoritative project cache; use manifest_path for navigation authority."
     },
@@ -261,7 +213,7 @@
       "name": "manifest_path",
       "type": "file",
       "mode": "create_or_replace",
-      "path_template": "{out}/agent-view/manifest.json",
+      "path_template": "{out}/filmstrip-view/manifest.json",
       "artifact_type": "metadata/result-manifest",
       "description": "Durable managed result manifest and authoritative agent navigation handle."
     },
@@ -271,14 +223,6 @@
       "mode": "create_or_replace",
       "path_template": "{out}/filmstrip-bundle.zip",
       "artifact_type": "archive/filmstrip",
-      "description": "Rendered filmstrip delivery artifact; produced for view=filmstrip."
-    },
-    {
-      "name": "filmstrip_html",
-      "type": "file",
-      "mode": "create_or_replace",
-      "path_template": "{out}/filmstrip-view/filmstrip.html",
-      "artifact_type": "document/html",
       "description": "Rendered filmstrip delivery artifact; produced for view=filmstrip."
     },
     {
@@ -333,11 +277,6 @@
       {
         "input": "timeline_slug",
         "flag": "--timeline-slug",
-        "optional": true
-      },
-      {
-        "input": "scope",
-        "flag": "--scope",
         "optional": true
       },
       {
@@ -396,26 +335,6 @@
       {
         "input": "neighbors",
         "flag": "--neighbors",
-        "optional": true
-      },
-      {
-        "input": "from_view",
-        "flag": "--from-view",
-        "optional": true
-      },
-      {
-        "input": "focus",
-        "flag": "--focus",
-        "optional": true
-      },
-      {
-        "input": "layout",
-        "flag": "--layout",
-        "optional": true
-      },
-      {
-        "input": "filmstrip",
-        "flag": "--filmstrip",
         "optional": true
       },
       {

@@ -517,277 +517,36 @@ def _validate_timeline_visualize_inputs(
         inspection_options(values)
     except ValueError as exc:
         raise CapabilityValidationError(str(exc)) from exc
-    # The rendered filmstrip/storyboard is the primary visualization surface.
-    # Keep the structural diagram available as an explicit opt-in via
-    # ``view=structure``.
+    # The paired rendered filmstrip is the only public timeline visualization
+    # surface.  The former structural diagram and frozen-object navigation
+    # route were removed; all review navigation is render-scoped (range,
+    # timestamp, shot, clip, asset, track, and density).
     view = values.get("view", "filmstrip")
-    if view not in {"structure", "filmstrip"}:
-        raise CapabilityValidationError("view must be structure or filmstrip")
-    if view == "filmstrip":
-        if not isinstance(project, str) or not project.strip():
-            raise CapabilityValidationError("filmstrip review requires project=<slug>")
-        if values.get("project_slug") not in (None, "", project):
-            raise CapabilityValidationError("project_slug does not match project")
-        if any(values.get(key) for key in ("all", "from_view", "focus", "refresh_root")):
-            raise CapabilityValidationError(
-                "filmstrip review selects one managed render; all/from_view navigation "
-                "belongs to the timeline view"
-            )
-        from .timeline_filmstrip import prepare_filmstrip
-        from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
-        try:
-            filmstrip_options(values)
-        except ValueError as exc:
-            raise CapabilityValidationError(str(exc)) from exc
-        return prepare_filmstrip(values, project=project, client=_client)
-    if any(values.get(key) is not None for key in (
-        "render_run", "sample", "every", "every_frames", "include_cuts", "columns", "page_size", "include_media", "resolution"
-    )):
-        raise CapabilityValidationError("filmstrip controls require view=filmstrip")
-
-    has_ref = values.get("timeline_slug") not in (None, "")
-    select_all = bool(values.get("all", False))
-    if has_ref and select_all:
+    if view != "filmstrip":
         raise CapabilityValidationError(
-            "timeline_slug and all are mutually exclusive; choose one timeline ref or all"
+            "only view=filmstrip is supported; the structural timeline view was removed"
         )
-    from_view = values.get("from_view") not in (None, "")
-    focus = values.get("focus") not in (None, "")
-    if from_view != focus:
-        raise CapabilityValidationError(
-            "from_view and focus must be supplied together for visualization navigation"
-        )
-    cold_selectors = [
-        name
-        for name in ("shot", "range", "at", "clip", "asset")
-        if values.get(name) not in (None, "")
+    removed = [
+        name for name in ("all", "from_view", "focus", "refresh_root", "layout", "filmstrip", "scope")
+        if values.get(name) not in (None, "", False, [])
     ]
-    if len(cold_selectors) > 1:
+    if removed:
+        flags = ", ".join(f"{name.replace('_', '-')}" for name in removed)
         raise CapabilityValidationError(
-            "cold selectors are mutually exclusive: "
-            + ", ".join(f"--{name}" for name in cold_selectors)
+            f"legacy structural visualization options were removed ({flags}); "
+            "use the filmstrip's --range/--at/--shot/--clip/--asset controls"
         )
-    refresh_root = bool(values.get("refresh_root", False))
-    if refresh_root and not from_view:
-        raise CapabilityValidationError("refresh_root requires from_view and focus")
-    if from_view:
-        conflicts = [
-            name
-            for name, present in (
-                ("timeline_slug", has_ref),
-                ("all", select_all),
-                *((name, name in cold_selectors) for name in cold_selectors),
-            )
-            if present
-        ]
-        if conflicts:
-            raise CapabilityValidationError(
-                "from_view/focus cannot be combined with "
-                + ", ".join(f"--{name.replace('_', '-')}" for name in conflicts)
-            )
-    filmstrip = values.get("filmstrip")
-    rendered_video = values.get("rendered_video")
-    layout = values.get("layout")
-    if layout is not None and (
-        not isinstance(layout, str) or layout not in {"time-scaled", "linear", "both"}
-    ):
-        raise CapabilityValidationError(
-            "layout must be time-scaled, linear, or both"
-        )
-    if filmstrip is not None and (
-        not isinstance(filmstrip, str)
-        or filmstrip not in {"auto", "off", "assets", "rendered"}
-    ):
-        raise CapabilityValidationError(
-            "filmstrip must be auto, off, assets, or rendered"
-        )
-    scope = values.get("scope")
-    if scope is not None and (
-        not isinstance(scope, str)
-        or scope not in {
-            "project",
-            "timeline",
-            "shot",
-            "range",
-            "clip",
-            "asset",
-            "timestamp",
-        }
-    ):
-        raise CapabilityValidationError(
-            "scope must be project, timeline, shot, range, clip, asset, or timestamp"
-        )
-    raw_context = values.get("context", 3.0)
-    if (
-        isinstance(raw_context, bool)
-        or not isinstance(raw_context, (int, float))
-        or not math.isfinite(float(raw_context))
-        or float(raw_context) < 0
-    ):
-        raise CapabilityValidationError("context must be a finite non-negative number")
-    raw_neighbors = values.get("neighbors", 0)
-    if (
-        isinstance(raw_neighbors, bool)
-        or not isinstance(raw_neighbors, int)
-        or raw_neighbors < 0
-    ):
-        raise CapabilityValidationError("neighbors must be a non-negative integer")
-    if rendered_video not in (None, "") and filmstrip not in (None, "auto", "rendered"):
-        raise CapabilityValidationError(
-            "rendered_video requires filmstrip auto or rendered"
-        )
-    if filmstrip == "rendered" and rendered_video in (None, ""):
-        raise CapabilityValidationError("filmstrip rendered requires rendered_video")
-    requested_project = values.get("project_slug")
-    if (
-        requested_project not in (None, "")
-        and project not in (None, "")
-        and requested_project != project
-    ):
-        raise CapabilityValidationError(
-            f"project_slug {requested_project!r} does not match project {project!r}"
-        )
-
-    if project is None or not str(project).strip():
-        raise CapabilityValidationError(
-            "rendering.timeline_visualize requires project=<slug> to resolve a managed timeline"
-        )
-
-    # Timeline identity and content come from the neutral runtime.  The
-    # executor's local root is only a disposable materialization base for
-    # frozen result rehydration; it is never scanned for a project or timeline.
-    from astrid.packs.rendering.executors.timeline_visualize.select import (
-        select_kernel_timelines,
-    )
-
-    managed_project = (
-        Path(project_root).expanduser().resolve() if project_root is not None else None
-    )
-
-    if from_view:
-        if managed_project is None:
-            raise CapabilityValidationError(
-                "from_view requires an explicit attempt-local project_root"
-            )
-        raw_view = Path(str(values["from_view"])).expanduser()
-        if not raw_view.is_absolute():
-            raise CapabilityValidationError(
-                "from_view must be an absolute path; cwd-relative visualization paths "
-                "are not accepted"
-            )
-        view_path = raw_view
-        if not view_path.is_file():
-            raise CapabilityValidationError(
-                f"from_view must name an existing visualization manifest: {view_path}"
-            )
-        from astrid.packs.rendering.executors.timeline_visualize.frozen import (
-            FrozenViewError,
-            discard_rehydrated_pack,
-            load_frozen_view,
-            resolve_focus,
-        )
-        from astrid.packs.rendering.executors.timeline_visualize.ids import (
-            parse_qualified_ref,
-        )
-
-        try:
-            frozen = load_frozen_view(view_path, project_root=managed_project)
-        except FrozenViewError as exc:
-            raise CapabilityValidationError(f"from_view rejected: {exc}") from exc
-        try:
-            try:
-                resolved_focus = resolve_focus(
-                    frozen,
-                    str(values["focus"]),
-                    context_seconds=float(raw_context),
-                    neighbors=raw_neighbors,
-                )
-                parsed_focus = parse_qualified_ref(str(values["focus"]))
-            except (KeyError, TypeError, ValueError) as exc:
-                raise CapabilityValidationError(f"focus rejected: {exc}") from exc
-            if refresh_root and (
-                parsed_focus.kind != "TL" or resolved_focus.kind != "timeline"
-            ):
-                raise CapabilityValidationError(
-                    "refresh_root focus must be the frozen timeline reference"
-                )
-            return {
-                "mode": "frozen_view",
-                "manifest_sha256": hashlib.sha256(view_path.read_bytes()).hexdigest(),
-                "focus": str(values["focus"]),
-                "snapshot_sns": frozen.snapshot_sns,
-            }
-        finally:
-            discard_rehydrated_pack(frozen.pack_root)
-
-    selected: list[Any] = []
-    diagnostics: list[str] = []
-    selected, diagnostics = select_kernel_timelines(
-        managed_project,
-        project_slug=str(project),
-        slug=str(values["timeline_slug"]) if has_ref else None,
-        all=select_all,
-        default=not has_ref and not select_all,
-        runtime_client=_client,
-    )
-    if not selected:
-        detail = "; ".join(diagnostics) or "no eligible managed timeline was selected"
-        raise CapabilityValidationError(f"timeline selection failed: {detail}")
-
-    transcript_input: dict[str, str] | None = None
-    if len(selected) == 1:
-        from .managed_transcript import transcript_input_from_snapshot
-
-        try:
-            transcript_input = transcript_input_from_snapshot(
-                selected[0].config,
-                selected[0].registry,
-            )
-        except ValueError as exc:
-            raise CapabilityValidationError(str(exc)) from exc
-    elif any(
-        isinstance(getattr(row, "config", None), Mapping)
-        and isinstance(row.config.get("app"), Mapping)
-        and "transcript" in row.config["app"]
-        for row in selected
-    ):
-        raise CapabilityValidationError(
-            "a multi-timeline visualization cannot stage multiple config.app.transcript files"
-        )
-
-    return {
-        "mode": "kernel",
-        "timelines": [
-            {
-                "timeline_id": row.timeline_id,
-                "head_version": row.config_version,
-                "head_event_id": row.head_event_id,
-                "head_hash": row.head_hash,
-            }
-            for row in selected
-        ],
-        "transcript_input": transcript_input,
-        # The worker token used by the generic host is intentionally not
-        # granted projects:read. Carry the already-authenticated admission
-        # snapshot into the child so execution verifies the same rows without
-        # attempting a second project discovery under worker credentials.
-        "timeline_snapshots": [
-            {
-                "timeline_id": row.timeline_id,
-                "timeline_ulid": row.timeline_ulid,
-                "slug": row.slug,
-                "name": row.name,
-                "is_default": row.is_default,
-                "config": row.config,
-                "registry": row.registry,
-                "config_version": row.config_version,
-                "head_event_id": row.head_event_id,
-                "head_hash": row.head_hash,
-                "head_created_at": row.head_created_at,
-            }
-            for row in selected
-        ],
-    }
+    if not isinstance(project, str) or not project.strip():
+        raise CapabilityValidationError("filmstrip review requires project=<slug>")
+    if values.get("project_slug") not in (None, "", project):
+        raise CapabilityValidationError("project_slug does not match project")
+    from .timeline_filmstrip import prepare_filmstrip
+    from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
+    try:
+        filmstrip_options(values)
+    except ValueError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
+    return prepare_filmstrip(values, project=project, client=_client)
 
 
 def _payload_manifest_path(raw_result: Mapping[str, Any]) -> str | None:
@@ -1380,8 +1139,8 @@ def _materialize_filmstrip_outputs(
                     destination.write_bytes(archive.read(member))
         manifest = staging / "manifest.json"
         document = json.loads(manifest.read_text(encoding="utf-8"))
-        if document.get("kind") != "timeline_filmstrip" or not (staging / "filmstrip.html").is_file():
-            raise CapabilityInvocationError("filmstrip bundle is missing its manifest or HTML entrypoint")
+        if document.get("kind") != "timeline_filmstrip" or not (staging / "frame-index.json").is_file():
+            raise CapabilityInvocationError("filmstrip bundle is missing its manifest or frame-index entrypoint")
         declared = document.get("outputs")
         if not isinstance(declared, list):
             raise CapabilityInvocationError("filmstrip manifest lacks member integrity records")
@@ -1440,12 +1199,17 @@ def _materialize_filmstrip_outputs(
         os.replace(staging, root)
         staging = root
         manifest = root / "manifest.json"
-        raw_result["outputs"].update({
-            "pack_root": str(root), "manifest_path": str(manifest),
-            "html": str(root / "filmstrip.html"),
+        static_outputs = {
+            "pack_root": str(root),
+            "manifest_path": str(manifest),
             "pages": [str(p) for p in sorted(root.glob("filmstrip-*.png"))],
+            "svg_pages": [str(p) for p in sorted(root.glob("filmstrip-*.svg"))],
             "frame_index": str(root / "frame-index.json"),
-        })
+        }
+        markdown = root / "filmstrip.md"
+        if markdown.is_file():
+            static_outputs["markdown"] = str(markdown)
+        raw_result["outputs"].update(static_outputs)
         if media_relative is not None:
             raw_result["outputs"]["media"] = str(root / media_relative)
         if audio_relative is not None:
@@ -1494,13 +1258,20 @@ def _invocation_outputs(
             outputs["pack_root"] = str(pack_root)
             outputs["manifest_path"] = str(manifest)
             page_pattern = "filmstrip-*.png" if isinstance(document, dict) and document.get("kind") == "timeline_filmstrip" else "PG*.png"
-            if page_pattern == "filmstrip-*.png":
-                outputs["html"] = str(pack_root / "filmstrip.html")
             outputs["pages"] = [
                 str(path)
                 for path in sorted(pack_root.rglob(page_pattern))
                 if "filmstrip" not in path.relative_to(pack_root).parts
             ]
+            if page_pattern == "filmstrip-*.png":
+                outputs["svg_pages"] = [
+                    str(path)
+                    for path in sorted(pack_root.rglob("filmstrip-*.svg"))
+                    if "filmstrip" not in path.relative_to(pack_root).parts
+                ]
+                markdown = pack_root / "filmstrip.md"
+                if markdown.is_file():
+                    outputs["markdown"] = str(markdown)
             outputs["file_hashes"] = {
                 path.relative_to(pack_root).as_posix(): hashlib.sha256(
                     path.read_bytes()
@@ -1814,6 +1585,61 @@ def _kernel_invoke(
         if isinstance(raw_assets, Mapping):
             seen: set[str] = set()
             for entry in raw_assets.values():
+                if not isinstance(entry, Mapping):
+                    continue
+                candidate = next(
+                    (
+                        value
+                        for value in (
+                            entry.get("object_id"),
+                            entry.get("media_id"),
+                            entry.get("content_sha256"),
+                            entry.get("digest"),
+                            entry.get("sha256"),
+                            entry.get("hash"),
+                        )
+                        if isinstance(value, str)
+                        and len(value.removeprefix("sha256:")) == 64
+                        and all(
+                            ch in "0123456789abcdef"
+                            for ch in value.removeprefix("sha256:")
+                        )
+                    ),
+                    None,
+                )
+                if candidate is None:
+                    continue
+                normalized = candidate.removeprefix("sha256:")
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                input_manifest.append(candidate)
+
+    # Timeline visualization carries its immutable snapshot in the
+    # host-owned authority context rather than in public ``inputs``.  The
+    # registry media still needs to be part of the admission manifest so the
+    # generic host can fetch and hash-check those objects before the child
+    # renders source previews.
+    if (str(capability.id) == "rendering.timeline_visualize"
+            and isinstance(idempotency_context, Mapping)
+            and idempotency_context.get("mode") in {"filmstrip", "input_only"}):
+        authority_snapshot = (
+            idempotency_context.get("filmstrip_snapshot")
+            or idempotency_context.get("input_snapshot")
+        )
+        authority_registry = (
+            authority_snapshot.get("registry")
+            if isinstance(authority_snapshot, Mapping)
+            else None
+        )
+        authority_assets = (
+            authority_registry.get("assets")
+            if isinstance(authority_registry, Mapping)
+            else None
+        )
+        if isinstance(authority_assets, Mapping):
+            seen = {str(value).removeprefix("sha256:") for value in input_manifest}
+            for entry in authority_assets.values():
                 if not isinstance(entry, Mapping):
                     continue
                 candidate = next(
@@ -2225,15 +2051,21 @@ def invoke(
                         "transcript input is host-owned; config.app.transcript supplies the CAS object"
                     )
                 inputs["transcript.json"] = transcript_input
-            if invocation_authority_context.get("mode") == "filmstrip":
+            if invocation_authority_context.get("mode") in {"filmstrip", "input_only"}:
                 # Only preflight may turn a successful project-owned render
                 # into a file input. Public paths were rejected above.
                 inputs = dict(inputs or {})
-                inputs["project_slug"] = invocation_authority_context["filmstrip_snapshot"]["project_slug"]
-                inputs["rendered_video"] = {
-                    "digest": invocation_authority_context["video_digest"],
-                    "object_id": invocation_authority_context["video_object_id"],
-                }
+                authority_snapshot = (
+                    invocation_authority_context.get("filmstrip_snapshot")
+                    or invocation_authority_context.get("input_snapshot")
+                    or {}
+                )
+                inputs["project_slug"] = authority_snapshot["project_slug"]
+                if invocation_authority_context.get("mode") == "filmstrip":
+                    inputs["rendered_video"] = {
+                        "digest": invocation_authority_context["video_digest"],
+                        "object_id": invocation_authority_context["video_object_id"],
+                    }
                 inputs["filmstrip_authority"] = json.dumps(
                     invocation_authority_context, sort_keys=True, separators=(",", ":"),
                     ensure_ascii=False,

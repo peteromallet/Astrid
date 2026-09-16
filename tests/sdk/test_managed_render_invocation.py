@@ -61,6 +61,33 @@ def test_filmstrip_preflight_enrichment_reaches_kernel(monkeypatch):
     assert captured["idempotency_context"]["video_object_id"] == VIDEO_DIGEST
 
 
+def test_input_only_preflight_forwards_input_snapshot_without_video(monkeypatch):
+    authority = {
+        "mode": "input_only",
+        "input_snapshot": {"project_slug": "project-1"},
+    }
+    _filmstrip_invoke_fixtures(monkeypatch, authority)
+    captured = {}
+
+    def fake_kernel(capability, **kwargs):
+        captured.update(kwargs)
+        return "run-1", "task-1", "attempt-1", None, {"ok": True}, True, None
+
+    monkeypatch.setattr(invocation, "_kernel_invoke", fake_kernel)
+    result = invocation.invoke(
+        "rendering.timeline_visualize",
+        kind="executor",
+        project="project-1",
+        inputs={"view": "filmstrip", "hide": ["output"]},
+        client=SimpleNamespace(),
+    )
+
+    assert result.ok
+    assert captured["inputs"]["project_slug"] == "project-1"
+    assert "rendered_video" not in captured["inputs"]
+    assert "filmstrip_authority" in captured["inputs"]
+
+
 def test_public_filmstrip_invoke_keeps_strict_video_identity_rejection(monkeypatch):
     authority = {
         "mode": "filmstrip",

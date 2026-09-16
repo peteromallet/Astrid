@@ -38,11 +38,35 @@ python3 -m astrid timelines diff --project <project> <slug-or-id> --json
 ```
 
 For visual continuity review, use the rendered filmstrip. It samples the exact
-successful render into an offline HTML viewer and chronological PNG/SVG contact
-sheets, with Markdown and a machine-readable frame index. Omit `--out`; Astrid
+successful render into chronological PNG/SVG contact sheets, with Markdown and
+a machine-readable frame index. Omit `--out`; Astrid
 owns the run and returns local delivery paths for verified copies of the
 published evidence objects. The durable authority is the managed run's
 digest-verified bundle/manifest, not those disposable local paths.
+
+When `output` and `inputs` are both shown, the primary page uses a paired-row
+layout: five (or the requested `--columns`) output samples per row with the
+input lanes relevant to that row immediately underneath. The row's linear
+half-open time axis is shared by cards, placements, audio rails, and the PNG,
+SVG, and `static_surface.rows` JSON contract.
+Paired pages show one row by default (five columns unless changed with
+`--columns`; `--columns 6` gives six across), while standalone output/input
+pages keep their normal page sizing. Pass `--page-size N` explicitly to opt
+into a denser paired page, capped at two rows / 10 cards. Multi-page paired
+results are intentional: open the numbered pages in order, then rerun with
+`--range START..END --every 0.25` or `--shot first` / `--shot N` to drill down.
+The frame index records the effective page size, page count, row ranges, and
+copyable navigation guidance.
+
+For a complete review pass, use `--show output,inputs,text,audio --every 5`.
+The command reports the primary PNG, all numbered pages, and the frame-index
+path. Open the pages in order; then use `--range 0..25 --every 0.25 --detail`
+to zoom into one window, `--shot first` (or `--shot N`) to focus an authored
+shot, and `--track vo` to isolate the voice lane. Use `--every` for seconds,
+`--every-frames` for exact frame steps, `--columns`/`--page-size` for layout,
+and `--resolution` for thumbnail size. The generated navigation metadata
+contains copyable versions of these commands, so the full-timeline result is
+the starting point rather than a dead-end overview.
 
 ```bash
 python3 -m astrid timelines visualize <slug-or-id> --project <project> \
@@ -78,9 +102,16 @@ Density controls only select already captured frames; rerun with a finer
 interval for additional detail. Extraction is bounded at 2,000 frames, so use
 a coarser interval or a narrower range for long renders.
 
+The PNG waveform uses a bounded display-only gain/contrast curve so quiet voice
+remains visible; the JSON retains the measured amplitudes. Source audio-track
+rails are timing signifiers (not per-source loudness measurements), and use the
+same absolute time axis as the cards and input placements. In input lanes, each
+rail is centered vertically inside its source clip and its label gets a dark
+backing chip for legibility.
+
 Filmstrips require a successful render with its frozen timeline snapshot and
 managed video. They do not substitute source asset thumbnails. PNG cards show
-spoken text in quotes and a compact local waveform/cursor when the admitted
+spoken text in quotes and a prominent local waveform/cursor when the admitted
 render has audio; SVG remains the geometry-oriented companion. Script captions
 remain authored segment text, not word-aligned transcription. Missing or
 uncertain speech timing is reported as unavailable/partial, while waveform
@@ -91,23 +122,18 @@ settings identity, and verified in the bundle manifest. A pinned render keeps
 old visual evidence associated with its own timeline state even after later
 edits.
 
-The rendered filmstrip/storyboard is the default and primary continuity-review
-visualization. For the structural timeline diagram and frozen object
-navigation, explicitly use `--view structure`:
+The rendered paired filmstrip/storyboard is the only timeline visualization.
+There is no separate structural diagram or frozen-object navigation route.
+Use the managed filmstrip commands above with `--render-run`; do not supply a
+caller-owned `--rendered-video` path. The frame index's render-scoped
+range/shot/clip/track targets are the canonical navigation surface.
 
-```bash
-python3 -m astrid timelines visualize <slug-or-id> --project <project> \
-  --view structure --format md,png,svg --layout both --filmstrip off --json
-```
-
-Structural views support `--all` and a prior manifest with
-`--from-view`/`--focus`. For rendered continuity, use the managed filmstrip
-commands above with `--render-run`; do not supply a caller-owned
-`--rendered-video` path to that public route. The structural
-`--from-view`/`--focus` grammar addresses frozen object manifests;
-the filmstrip inspector's render-scoped frame/clip/track targets are separate
-until an explicit adapter exists. Use the frame index's pinned focus command to
-navigate a rendered inspector.
+Use a coarse `--every 5` pass to locate a transition, then rerun the exact
+time window with a finer `--every 0.25` (or `--every-frames 1` for frame-level
+inspection) and add `--detail`. `--range START..END` is half-open, so the end
+sample is excluded. `--shot first` and numeric `--shot N` use authored shot
+order; use the exact shot name or a time range when chronological order is
+what matters.
 
 ## Create and edit
 

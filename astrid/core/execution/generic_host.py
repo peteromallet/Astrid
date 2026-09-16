@@ -2677,6 +2677,30 @@ class GenericPackHost:
             # snapshot.
             candidate = values.get("timeline_snapshot")
             snapshot = candidate if isinstance(candidate, Mapping) else None
+        if not isinstance(snapshot, Mapping):
+            # Timeline visualization keeps its frozen snapshot in the
+            # host-owned authority context (filmstrip/input-only) rather than
+            # exposing it as a public command input.  It still has to pass
+            # through the exact same CAS materialization path, otherwise every
+            # source is truthfully rendered as an unavailable placeholder even
+            # when its admitted object exists in the runtime CAS.
+            # ``authority_context`` lives on the outer task spec in the
+            # runtime envelope (the immutable capability spec is nested
+            # under ``spec``).  Older direct callers may still place it on
+            # the nested input spec, so accept both locations.  Without the
+            # outer lookup timeline visualizations lose their frozen registry
+            # before materialization and every source preview degrades to a
+            # placeholder even when its CAS object was admitted.
+            authority_context = input_spec.get("authority_context")
+            if not isinstance(authority_context, Mapping):
+                candidate = spec.get("authority_context")
+                authority_context = candidate if isinstance(candidate, Mapping) else None
+            if isinstance(authority_context, Mapping):
+                for key in ("filmstrip_snapshot", "input_snapshot"):
+                    candidate = authority_context.get(key)
+                    if isinstance(candidate, Mapping):
+                        snapshot = candidate
+                        break
         # The snapshot is an admission envelope, not a renderer input port.
         # Once its derived files are created, do not forward the authoring
         # document as an undeclared child argument.

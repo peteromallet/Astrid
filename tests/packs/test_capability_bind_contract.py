@@ -65,6 +65,22 @@ def test_wan_generation_controls_are_transported_by_shared_expander() -> None:
     _assert_flag_value(result.argv, "--out", "/tmp/out")
 
 
+def test_json_input_args_are_encoded_as_json() -> None:
+    """Host-owned JSON handoffs must survive the subprocess boundary."""
+    command = CommandSpec(
+        argv=("python", "-c", "pass"),
+        input_args=({"input": "materialized_objects", "flag": "--objects", "optional": True},),
+    )
+    ports = (Port("materialized_objects", type="json", required=False),)
+    result = expand_command(
+        command,
+        ports,
+        {"materialized_objects": {"sha256:abc": "/tmp/managed-object"}},
+        {},
+    )
+    _assert_flag_value(result.argv, "--objects", '{"sha256:abc":"/tmp/managed-object"}')
+
+
 def test_wan_compiler_preserves_generation_controls() -> None:
     settings = compile_from_inputs(
         {

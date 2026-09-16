@@ -296,4 +296,4 @@ def build_inspector_navigation(snapshot: Mapping, cards: Sequence[Mapping]) -> d
         'tracks': tracks, 'clips': clips, 'shots': shots, 'frames': frame_records,
         'audio': audio,
         'waveforms': audio_targets['waveform'], 'gaps': audio_targets['gaps'], 'phrases': audio_targets['phrases'],
-        'ranges': [full_range], 'legacy_from_view_compatible': False}
+        'ranges': [full_range]}

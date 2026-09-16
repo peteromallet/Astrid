@@ -433,6 +433,131 @@ def analyze_audio(
     return base
 
 
+def _interval_value(value: object, *, label: str) -> Fraction:
+    """Parse a JSON-friendly rational time value without float drift."""
+    try:
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return Fraction(int(value[0]), int(value[1]))
+        return Fraction(str(value))
+    except (TypeError, ValueError, ZeroDivisionError) as exc:
+        raise AudioAnalysisError(f"{label} must be rational") from exc
+
+
+def project_waveform(
+    analysis: Mapping[str, Any],
+    start_seconds: object,
+    end_seconds: object,
+    *,
+    count: int = 64,
+) -> dict[str, Any] | None:
+    """Project measured bins into a bounded interval for a timeline placement.
+
+    ``analyze_audio`` stores a compact multiresolution waveform.  This helper
+    selects its finest available level and reduces only the requested source
+    interval into a small set of peak-amplitude bars.  It is intentionally
+    independent of rendering: the same source analysis can be used by the
+    static PNG lane, an interactive viewer, or another inspection surface.
+    ``None`` means the analysis has no usable audio waveform; a real silent
+    interval returns zero-valued bars rather than being treated as missing.
+    """
+    if not isinstance(analysis, Mapping):
+        return None
+    if str(analysis.get("status", "")).lower() not in {
+        "ok", "available", "complete", "analysis_complete", "analyzed",
+    }:
+        return None
+    stream = analysis.get("stream")
+    waveform = analysis.get("waveform")
+    if not isinstance(stream, Mapping) or not isinstance(waveform, Mapping):
+        return None
+    try:
+        sample_rate = int(stream.get("sample_rate"))
+        requested_count = int(count)
+    except (TypeError, ValueError):
+        return None
+    if sample_rate <= 0 or requested_count <= 0 or requested_count > 4096:
+        return None
+    levels = waveform.get("levels")
+    if not isinstance(levels, list):
+        return None
+    usable = [
+        level for level in levels
+        if isinstance(level, Mapping) and isinstance(level.get("bins"), list)
+    ]
+    if not usable:
+        return None
+    level = max(
+        usable,
+        key=lambda item: int(item.get("target_bins") or len(item.get("bins") or [])),
+    )
+    bins = level.get("bins") or []
+    origin_value = (analysis.get("presentation_origin") or {}).get("seconds", [0, 1])
+    try:
+        origin = _interval_value(origin_value, label="audio presentation origin")
+        start = _interval_value(start_seconds, label="waveform start")
+        end = _interval_value(end_seconds, label="waveform end")
+    except AudioAnalysisError:
+        return None
+    if end <= start:
+        return None
+    duration_value = waveform.get("duration_seconds")
+    try:
+        duration = (
+            _interval_value(duration_value, label="waveform duration")
+            if duration_value is not None else None
+        )
+    except AudioAnalysisError:
+        duration = None
+    if duration is None:
+        ends = []
+        for item in bins:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                ends.append(int(item.get("end_sample", 0)))
+            except (TypeError, ValueError):
+                continue
+        duration = Fraction(max(ends), sample_rate) if ends else None
+    if duration is not None and duration > 0:
+        start = max(origin, start)
+        end = min(origin + duration, end)
+    if end <= start:
+        return None
+
+    amplitudes = [0.0] * requested_count
+    for index in range(requested_count):
+        bucket_start = start + (end - start) * index / requested_count
+        bucket_end = start + (end - start) * (index + 1) / requested_count
+        peak = 0.0
+        for item in bins:
+            if not isinstance(item, Mapping):
+                continue
+            try:
+                item_start = origin + Fraction(int(item.get("start_sample", 0)), sample_rate)
+                item_end = origin + Fraction(int(item.get("end_sample", 0)), sample_rate)
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            if item_end <= bucket_start or item_start >= bucket_end:
+                continue
+            values = item.get("peak") or item.get("max") or []
+            if not isinstance(values, (list, tuple)):
+                values = [values]
+            for value in values:
+                try:
+                    numeric = abs(float(value))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(numeric):
+                    peak = max(peak, numeric)
+        amplitudes[index] = min(1.0, peak)
+    return {
+        "amplitudes": amplitudes,
+        "start": _ratio(start),
+        "end": _ratio(end),
+        "source_sample_rate": sample_rate,
+    }
+
+
 # Descriptive aliases make the helper easy to discover without adding another
 # owner or capability surface.
 analyze_render_audio = analyze_audio
@@ -440,5 +565,5 @@ build_audio_analysis = analyze_audio
 
 __all__ = [
     "ANALYSIS_VERSION", "AudioAnalysisError", "audio_analysis_identity",
-    "analyze_audio", "analyze_render_audio", "build_audio_analysis",
+    "analyze_audio", "analyze_render_audio", "build_audio_analysis", "project_waveform",
 ]

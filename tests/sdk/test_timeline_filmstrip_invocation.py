@@ -88,7 +88,7 @@ def test_mismatched_video_identity_rejected_before_admission():
             idempotency_context={'mode': 'filmstrip', 'video_object_id': DIGEST})
 
 
-def test_bundle_rehydration_preserves_html_and_pages(tmp_path):
+def test_bundle_rehydration_preserves_static_pages_without_html(tmp_path):
     import hashlib
     import io
     import json
@@ -98,10 +98,11 @@ def test_bundle_rehydration_preserves_html_and_pages(tmp_path):
     with zipfile.ZipFile(archive, 'w') as bundle:
         bundle.writestr('manifest.json', json.dumps({'kind': 'timeline_filmstrip', 'outputs': [
             {'path': name, 'content_hash': 'sha256:' + hashlib.sha256(content).hexdigest(), 'bytes': len(content)}
-            for name, content in [('filmstrip.html', b'<html>review</html>'), ('filmstrip-001.png', b'png'), ('frame-index.json', b'{}')]
+            for name, content in [('filmstrip-001.png', b'png'), ('filmstrip-001.svg', b'<svg/>'), ('filmstrip.md', b'# Filmstrip'), ('frame-index.json', b'{}')]
         ]}))
-        bundle.writestr('filmstrip.html', '<html>review</html>')
         bundle.writestr('filmstrip-001.png', b'png')
+        bundle.writestr('filmstrip-001.svg', b'<svg/>')
+        bundle.writestr('filmstrip.md', b'# Filmstrip')
         bundle.writestr('frame-index.json', '{}')
     data = archive.getvalue()
     raw = {'outputs': {'artifacts': [{'name': 'filmstrip_bundle', 'digest': 'sha256:' + hashlib.sha256(data).hexdigest(), 'size': len(data)}]}}
@@ -111,8 +112,10 @@ def test_bundle_rehydration_preserves_html_and_pages(tmp_path):
     )
     try:
         result = invocation._invocation_outputs(raw, manifest_path=manifest, capability_id='rendering.timeline_visualize')
-        assert result['html'].endswith('filmstrip.html')
         assert len(result['pages']) == 1
+        assert len(result['svg_pages']) == 1
+        assert result['markdown'].endswith('filmstrip.md')
+        assert 'html' not in result
         assert Path(manifest).parent == tmp_path / "demo" / hashlib.sha256(data).hexdigest()
         assert "/private/tmp/astrid-filmstrip-" not in manifest
     finally:
@@ -141,8 +144,9 @@ def test_bundle_rehydration_exposes_verified_audio_and_media(tmp_path):
     import zipfile
 
     members = {
-        'filmstrip.html': b'<html>review</html>',
         'filmstrip-001.png': b'png',
+        'filmstrip-001.svg': b'<svg/>',
+        'filmstrip.md': b'# Filmstrip',
         'audio-analysis.json': b'{"status":"ok"}\n',
         'media/rendered-video.mp4': b'video',
     }
@@ -171,9 +175,14 @@ def test_bundle_rehydration_exposes_verified_audio_and_media(tmp_path):
         shutil.rmtree(Path(manifest).parent)
 
 
-def test_structure_rejects_filmstrip_controls():
-    with pytest.raises(CapabilityValidationError, match='controls require'):
-        invocation._validate_timeline_visualize_inputs({'view': 'structure', 'every': 0.5}, project='p')
+def test_structural_view_is_removed():
+    with pytest.raises(CapabilityValidationError, match='structural timeline view was removed'):
+        invocation._validate_timeline_visualize_inputs({'view': 'structure'}, project='p')
+
+
+def test_structural_navigation_options_are_removed():
+    with pytest.raises(CapabilityValidationError, match='legacy structural visualization options'):
+        invocation._validate_timeline_visualize_inputs({'from_view': '/tmp/manifest.json'}, project='p')
 
 
 def test_invalid_sampling_rejected_before_runtime():

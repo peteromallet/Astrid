@@ -141,6 +141,7 @@ def _expand_one_input_arg(
     flag = _field(mapping, "flag")
     is_boolean = _port_type(port_by_name.get(name)) in {"boolean", "bool"}
     expanded: list[str] = []
+    port_type = _port_type(port_by_name.get(name))
     for item in items:
         if not _has_value(item):
             continue
@@ -150,7 +151,18 @@ def _expand_one_input_arg(
             continue
         if flag:
             expanded.append(str(flag))
-        expanded.append(_stringify_declared_input(name, item))
+        # JSON ports cross the command boundary as JSON, not Python's repr.
+        # This matters for host-owned handoffs such as
+        # ``materialized_objects``: repr(dict) uses single quotes and cannot
+        # be parsed by the child executor, silently dropping verified source
+        # previews.  Keep the normal string behavior for every other port.
+        if port_type == "json":
+            try:
+                expanded.append(json.dumps(item, sort_keys=True, separators=(",", ":")))
+            except (TypeError, ValueError) as exc:
+                raise BindingError(f"input {name!r} must be JSON-serializable") from exc
+        else:
+            expanded.append(_stringify_declared_input(name, item))
     return expanded
 
 

@@ -14,14 +14,467 @@ from pathlib import Path
 from astrid.core._shared.result_manifest import build_manifest, write_manifest
 
 from .audio_analysis import AudioAnalysisError, analyze_audio, audio_analysis_identity
-from .filmstrip_cards import build_filmstrip_pack
+from .filmstrip_cards import (
+    _attach_input_navigation,
+    _navigation_usage,
+    attach_input_audio_waveforms,
+    build_filmstrip_pack,
+)
 from .filmstrip_options import filmstrip_options
+from .inspection_contract import project_input_window
+from .shot_selector import resolve_shot_selector
 
 
 _FILMSTRIP_CAPABILITY_ID = "rendering.timeline_visualize"
 _MANAGED_COVERAGE_REASONS = frozenset(
     {"interval", "before_cut", "after_cut", "clip_first", "shot_midpoint"}
 )
+
+
+def _asset_integrity_from_registry(
+    registry,
+    *,
+    materialized_objects: Mapping[str, object] | None = None,
+    materialized_root: Path | None = None,
+) -> dict[str, dict[str, object]]:
+    """Verify registry-local originals when an admitted path is available.
+
+    Input inspection never invents a preview.  A registry entry is promoted to
+    ``verified_original`` only after hashing its declared local file; digest
+    declarations without a materialized file remain explicit unavailable
+    placeholders.
+    """
+    if not isinstance(registry, Mapping):
+        return {}
+    assets = registry.get("assets") if isinstance(registry.get("assets"), Mapping) else registry
+    result: dict[str, dict[str, object]] = {}
+    for asset_id, raw in assets.items():
+        if not isinstance(raw, Mapping):
+            continue
+        expected = raw.get("sha256") or raw.get("digest") or raw.get("content_sha256") or raw.get("content_hash") or raw.get("object_id")
+        if isinstance(expected, str):
+            expected = expected.removeprefix("sha256:")
+        path_value = raw.get("file") or raw.get("path") or raw.get("local_path") or raw.get("source_path")
+        path = Path(path_value).expanduser() if isinstance(path_value, str) and path_value else None
+        # A local path alone is not ownership evidence.  Only a runtime
+        # admitted digest paired with a managed object identity can become a
+        # verified original; otherwise keep a truthful unverified placeholder.
+        managed_id = (raw.get("media_id") or raw.get("object_id") or
+                       raw.get("managed_media_id") or raw.get("runtime_object_id"))
+        admitted = isinstance(expected, str) and bool(managed_id)
+        # Host materialization uses extensionless, attempt-local paths. Resolve
+        # those paths by the admitted object identity/digest rather than by
+        # filename suffix.
+        from_handoff = False
+        if path is None and admitted and isinstance(materialized_objects, Mapping):
+            for candidate in (str(managed_id), str(expected), f"sha256:{expected}"):
+                value = materialized_objects.get(candidate)
+                if isinstance(value, (str, Path)) and value:
+                    path = Path(str(value)).expanduser()
+                    from_handoff = True
+                    break
+        if from_handoff and materialized_root is not None:
+            try:
+                root = Path(materialized_root).expanduser().resolve(strict=True)
+                if not path.resolve(strict=True).is_relative_to(root):
+                    path = None
+            except (OSError, ValueError):
+                path = None
+        if path is not None and path.is_file() and admitted:
+            try:
+                with path.open("rb") as stream:
+                    observed = hashlib.file_digest(stream, "sha256").hexdigest()
+            except OSError:
+                observed = None
+            if observed and observed == expected:
+                result[str(asset_id)] = {"state": "verified_original", "observed_sha256": observed, "managed_id": str(managed_id), "path": str(path), "media_type": raw.get("type")}
+            elif observed:
+                result[str(asset_id)] = {"state": "tampered", "observed_sha256": observed, "expected_sha256": expected, "managed_id": str(managed_id), "path": str(path), "media_type": raw.get("type"), "reason": "registry digest mismatch"}
+            else:
+                result[str(asset_id)] = {"state": "unavailable", "expected_sha256": expected, "path": str(path), "media_type": raw.get("type"), "reason": "registry source could not be read"}
+        else:
+            reason = "managed source is not materialized in this attempt"
+            if not admitted:
+                reason = "registry lacks admitted digest and managed ownership identity"
+            elif path is not None and not path.is_file():
+                reason = "managed source is not materialized in this attempt"
+            result[str(asset_id)] = {"state": "unavailable", "expected_sha256": expected, "media_type": raw.get("type"), "reason": reason}
+    return result
+
+
+def execute_input_only(args, authority):
+    """Emit a render-free input inspection pack from an admitted snapshot."""
+    snapshot = authority.get("input_snapshot")
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("Input-only inspection requires an immutable timeline snapshot.")
+    values = vars(args).copy()
+    values["range"] = args.range_value
+    # The input-only authority is already the explicit no-render projection;
+    # make its component metadata truthful even for an older caller that did
+    # not repeat ``--show inputs --hide output`` on the executor handoff.
+    if not values.get("show"):
+        values["show"] = ["inputs"]
+    if not values.get("hide"):
+        values["hide"] = ["output"]
+    options = filmstrip_options(values)
+    options["shot"] = resolve_shot_selector(options.get("shot"), snapshot)
+    from fractions import Fraction
+    fps = Fraction(*(snapshot.get("fps_rational") or [30, 1]))
+    total = int(snapshot.get("duration_frames") or 0)
+    if total <= 0:
+        raise ValueError("Input-only inspection requires a positive timeline extent.")
+    window = options.get("input_window")
+    if isinstance(window, Mapping):
+        start = Fraction(*window["start"])
+        end = Fraction(*window["end"])
+    else:
+        start, end = Fraction(0), Fraction(total, 1) / fps
+    ceil_frame = lambda value: (value.numerator + value.denominator - 1) // value.denominator
+    start_frame = max(0, ceil_frame(start * fps))
+    end_frame = min(total, ceil_frame(end * fps))
+    if end_frame <= start_frame:
+        raise ValueError("Requested input window contains no timeline frames.")
+    integrity = _asset_integrity_from_registry(
+        snapshot.get("registry"),
+        materialized_objects=getattr(args, "materialized_objects", None),
+        materialized_root=getattr(args, "materialized_root", None),
+    )
+    projection = project_input_window(
+        snapshot.get("clips") or [], start_frame=start_frame, end_frame=end_frame,
+        fps=fps, track_ids=options.get("track_ids") or (), clip_id=options.get("clip"),
+        shot_id=options.get("shot"), asset_id=options.get("asset"), integrity=integrity,
+        shot_groups=snapshot.get("pinned_shots") or snapshot.get("pinnedShotGroups") or (),
+    )
+    index = {
+        "schema": "astrid.timeline-input-inspection.v1",
+        "provenance": {key: snapshot.get(key) for key in ("project_slug", "timeline_id", "timeline_name", "render_run_id", "fps_rational", "duration_frames", "metadata")},
+        "sampling": {"mode": "input_only", "window": projection["window"], "shared_window": [float(Fraction(start_frame, 1) / fps), float(Fraction(end_frame, 1) / fps)], "range": [float(Fraction(start_frame, 1) / fps), float(Fraction(end_frame, 1) / fps)], "step_frames_rational": [1, 1], "include_cuts": False, "explicit_interval": False, "options": options},
+        "input_projection": projection, "cards": [], "navigation": {"frames": [], "tracks": [], "clips": [], "shots": [], "phrases": [], "gaps": [], "waveforms": [], "targets": {}},
+        "components": options.get("components"), "render": {"status": "not_requested", "auto_render": False},
+    }
+    index["navigation"]["usage"] = _navigation_usage(snapshot, options)
+    out_root = args.out.expanduser().resolve()
+    # Keep input-only packs under the same runtime-approved namespace as the
+    # paired/output views.  The host deliberately accepts ``filmstrip-view``
+    # as a managed-output namespace (and strips it to a direct leaf filename);
+    # a bespoke ``input-view`` namespace would fail output custody before the
+    # thumbnails could be consumed.
+    pack_root = out_root / "filmstrip-view"
+    pack_root.mkdir(parents=True, exist_ok=True)
+    attach_input_audio_waveforms(projection, integrity=integrity, out_root=pack_root)
+    _materialize_input_previews(projection, pack_root)
+    _attach_input_navigation(index, projection, track_meta=snapshot.get("tracks"))
+    png_pages = _render_input_projection_png(projection, snapshot, pack_root)
+    (pack_root / "frame-index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
+    (pack_root / "render-snapshot.json").write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
+    files = sorted(path for path in pack_root.rglob("*") if path.is_file())
+    primary_png = Path(png_pages[0]).relative_to(pack_root).as_posix() if png_pages else None
+    # Every concrete file in a universal result manifest needs a stable
+    # identity.  The generic host uses this field when it harvests a receipt;
+    # omitting it makes input-only visualization fail before the pack can be
+    # consumed ("output ... must declare name or port").
+    outputs = [
+        {
+            "name": path.relative_to(pack_root).as_posix(),
+            "path": path.relative_to(pack_root).as_posix(),
+            "type": "file",
+            "role": "result",
+            "is_primary": path.relative_to(pack_root).as_posix() == primary_png,
+        }
+        for path in files
+    ]
+    entrypoints = {"frames": "frame-index.json"}
+    if primary_png:
+        entrypoints["png"] = primary_png
+    manifest = build_manifest(kind="timeline_input_inspection", created="1970-01-01T00:00:00Z", inputs={"timeline_id": snapshot.get("timeline_id"), "components": options.get("components"), "window": projection["window"], "render_requested": False}, outputs=outputs, entrypoints=entrypoints, timeline_ids=[snapshot.get("timeline_id")], request=options.get("request"))
+    write_manifest(pack_root / "manifest.json", manifest)
+    # Input-only runs are still first-class filmstrip deliveries.  Package
+    # the preview stills, audio rails, frame index, and nested manifest so the
+    # generic host can publish one durable artifact instead of returning a
+    # manifest whose attempt-local PNGs disappear during cleanup.
+    bundle = out_root / "filmstrip-bundle.zip"
+    with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(pack_root.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(pack_root).as_posix())
+    outer_entrypoints = {"manifest": "filmstrip-view/manifest.json", "frame_index": "filmstrip-view/frame-index.json"}
+    if primary_png:
+        outer_entrypoints["png"] = f"filmstrip-view/{primary_png}"
+    write_manifest(
+        out_root / "manifest.json",
+        build_manifest(
+            kind="timeline_input_inspection_result",
+            created="1970-01-01T00:00:00Z",
+            inputs={"timeline_id": snapshot.get("timeline_id"), "render_requested": False},
+            outputs=[
+                {
+                    "name": "filmstrip_manifest",
+                    "path": "filmstrip-view/manifest.json",
+                    "type": "file",
+                    "role": "auxiliary",
+                    "is_primary": False,
+                },
+                {
+                    "name": "filmstrip_bundle",
+                    "path": "filmstrip-bundle.zip",
+                    "type": "file",
+                    "role": "result",
+                    "is_primary": True,
+                },
+            ],
+            entrypoints=outer_entrypoints,
+        ),
+    )
+    return {"returncode": 0, "run_root": str(out_root), "manifest_path": str(pack_root / "manifest.json"), "timeline_ids": [snapshot.get("timeline_id")], "outputs": {"pack_root": str(pack_root), "manifest_path": str(pack_root / "manifest.json"), "frame_index": str(pack_root / "frame-index.json"), "pages": [str(path) for path in png_pages], "filmstrip_bundle": str(bundle), "render_requested": False}}
+
+
+def _materialize_input_previews(projection: Mapping, pack_root: Path) -> None:
+    """Materialize digest-verified visual stills/posters into the result pack."""
+    from PIL import Image
+
+    preview_root = pack_root / "source-previews"
+    seen: set[str] = set()
+    for track in projection.get("tracks") or []:
+        for clip in track.get("clips") or []:
+            preview = clip.get("source_preview") if isinstance(clip, Mapping) else None
+            if not isinstance(preview, Mapping) or preview.get("status") != "verified":
+                continue
+            source = preview.get("path")
+            if not isinstance(source, str) or not source:
+                continue
+            source_path = Path(source).expanduser()
+            if not source_path.is_file():
+                continue
+            media_type = str(preview.get("media_type") or "").lower()
+            media_kind = media_type.split("/", 1)[0]
+            if media_kind == "audio":
+                continue
+            digest = str(preview.get("digest") or hashlib.sha256(source_path.as_posix().encode()).hexdigest())
+            name = hashlib.sha256(digest.encode()).hexdigest()[:24] + ".png"
+            destination = preview_root / name
+            if name not in seen:
+                preview_root.mkdir(parents=True, exist_ok=True)
+                try:
+                    if media_kind == "video":
+                        subprocess.run(
+                            [
+                                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                                "-i", str(source_path), "-frames:v", "1",
+                                "-vf", "scale=320:180:force_original_aspect_ratio=decrease",
+                                "-y", str(destination),
+                            ], check=True, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    else:
+                        with Image.open(source_path) as source_image:
+                            source_image.convert("RGBA").save(destination, format="PNG")
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    continue
+                seen.add(name)
+            materialized = dict(preview)
+            materialized.pop("path", None)
+            materialized["preview"] = f"source-previews/{name}"
+            materialized["preview_kind"] = "poster" if media_kind == "video" else "still"
+            clip["source_preview"] = materialized
+
+
+def _render_input_projection_png(
+    projection, snapshot, pack_root: Path, *, width: int = 1500,
+    filename_prefix: str = "input-band",
+) -> list[Path]:
+    """Render readable, paginated input lanes without creating media frames."""
+    from PIL import Image, ImageDraw
+    from .filmstrip_cards import _png_draw_text, _png_ellipsis, _png_font, _png_text_width
+    tracks = projection.get("tracks") or []
+    bands = projection.get("track_bands") or [{"track_ids": [t.get("track_id") for t in tracks], "label": "tracks"}]
+    by_id = {str(t.get("track_id")): t for t in tracks}
+    fps = Fraction(*(projection["window"].get("fps") or [30, 1]))
+    start, end = projection["window"]["start_frame"], projection["window"]["end_frame"]
+    span = max(1, end - start)
+    # Reuse the same bundled font chain as the rendered contact sheets.  The
+    # old default bitmap font made the lane labels both tiny and impossible to
+    # clip to short placements, which caused adjacent labels to run together.
+    font = _png_font(16)
+    small_font = _png_font(13)
+    paths: list[Path] = []
+    for page, band in enumerate(bands, 1):
+        ids = [str(item) for item in band.get("track_ids") or []]
+        row_height, header = 96, 144
+        row_heights = []
+        for track_id in ids:
+            track = by_id.get(track_id, {})
+            clips = track.get("clips") or []
+            track_name = str(track_id).lower()
+            audio_track = (
+                track_name in {"audio", "vo", "voiceover", "music", "sound", "sfx"}
+                or any(
+                    isinstance(clip, Mapping)
+                    and (
+                        isinstance(clip.get("audio_signifier"), Mapping)
+                        or str((clip.get("source_preview") or {}).get("media_type") or "").lower().split("/", 1)[0] == "audio"
+                    )
+                    for clip in clips
+                )
+            )
+            max_subrow = max((int(clip.get("subrow", 0)) for clip in clips), default=0)
+            row_heights.append(max(112 if audio_track else row_height, 64 + (58 if audio_track else 48) * max_subrow))
+        image = Image.new("RGB", (width, header + sum(row_heights or [row_height]) + 28), "#10161d")
+        draw = ImageDraw.Draw(image)
+        _png_draw_text(draw, (24, 16), f"{snapshot.get('timeline_name') or snapshot.get('timeline_id')} · input lanes", font, fill="#ebf2f5")
+        _png_draw_text(draw, (24, 42), f"{band.get('label', f'tracks {page}')} · [{start / float(fps):.3f}s, {end / float(fps):.3f}s) · frozen source placements", small_font, fill="#9fb0bf")
+        _png_draw_text(draw, (24, 66), "Source previews are shown only when digest-verified; placeholders never substitute rendered output.", small_font, fill="#9fb0bf")
+        _png_draw_text(draw, (24, 90), "Teal = verified source / measured waveform · amber = timing fallback or unavailable · vertical guides = shared time samples.", small_font, fill="#9fb0bf")
+        lane_left, lane_right = 24, width - 24
+        ruler_y = 128
+        draw.line((lane_left, ruler_y, lane_right, ruler_y), fill="#6edac7", width=1)
+        # A visible ruler makes the input geometry use the same zero and end
+        # points as the rendered surface; the old 210px label gutter made a
+        # clip at t=0 look like it started late.
+        tick_count = 4
+        for tick in range(tick_count + 1):
+            fraction = tick / tick_count
+            x = lane_left + fraction * (lane_right - lane_left)
+            draw.line((x, ruler_y - 6, x, ruler_y + 6), fill="#6edac7", width=1)
+            seconds = start / float(fps) + fraction * (end - start) / float(fps)
+            label = f"{seconds:.1f}s"
+            _png_draw_text(draw, (x - _png_text_width(draw, label, small_font) / 2, 108), label, small_font, fill="#8ce0d0")
+            draw.line((x, ruler_y + 7, x, image.height - 16), fill="#23343f", width=1)
+        y = header
+        for track_index, track_id in enumerate(ids):
+            track = by_id.get(track_id, {})
+            clips = track.get("clips") or []
+            current_row_height = row_heights[track_index]
+            draw.line((18, y, width - 18, y), fill="#304151", width=1)
+            role = {"frame": "composited frame / overlay", "picture": "picture / shots", "vo": "voiceover", "audio": "audio"}.get(str(track_id), "source track")
+            _png_draw_text(draw, (24, y + 12), f"{track_id} · {role}", font, fill="#ebf2f5")
+            draw.line((lane_left, y + 28, lane_right, y + 28), fill="#304151", width=1)
+            for clip in clips:
+                clip_start, clip_end = clip["window"]
+                x0 = lane_left + (clip_start - start) / span * (lane_right - lane_left)
+                x1 = lane_left + (clip_end - start) / span * (lane_right - lane_left)
+                track_name = str(track_id).lower()
+                preview_meta = clip.get("source_preview") if isinstance(clip, Mapping) else None
+                preview_type = str(preview_meta.get("media_type") or "").lower() if isinstance(preview_meta, Mapping) else ""
+                is_audio_track = (
+                    track_name in {"audio", "vo", "voiceover", "music", "sound", "sfx"}
+                    or preview_type.split("/", 1)[0] == "audio"
+                )
+                verified = clip.get("source_preview", {}).get("status") == "verified"
+                track_color = {"frame": "#55406b", "picture": "#305265", "vo": "#4f526f", "audio": "#355e58"}.get(str(track_id), "#405769")
+                color = track_color if verified else "#594735"
+                box_right = max(x0 + 4, x1)
+                clip_width = max(0.0, box_right - x0)
+                clip_y = y + 42 + 48 * int(clip.get("subrow", 0))
+                # Give audio placements a little more vertical presence: the
+                # rail is an intentional visual cue, not a measured waveform,
+                # but it should still read in a dense full-timeline sheet.
+                clip_height = 56 if is_audio_track else 34
+                draw.rounded_rectangle((x0, clip_y, box_right, clip_y + clip_height), radius=5, fill=color, outline="#8ce0d0")
+                preview = preview_meta
+                preview_rel = preview.get("preview") if isinstance(preview, Mapping) else None
+                # Visual placements reserve a compact preview slot on the
+                # left. Audio placements are waveform/label-only and never
+                # receive a crossed thumbnail placeholder.
+                preview_slot = min(68.0, max(0.0, clip_width - 8.0)) if not is_audio_track else 0.0
+                if preview_rel and preview.get("status") == "verified" and preview_slot >= 8:
+                    try:
+                        with Image.open(pack_root / str(preview_rel)) as source:
+                            thumb = source.convert("RGB")
+                            thumb.thumbnail((max(1, int(preview_slot - 4)), clip_height - 4))
+                            image.paste(thumb, (int(x0 + 2 + max(0, (preview_slot - 4 - thumb.width) / 2)), int(clip_y + 2 + max(0, (clip_height - 4 - thumb.height) / 2))))
+                    except (OSError, ValueError):
+                        pass
+                elif not is_audio_track and clip_width >= 22:
+                    # A muted, crossed tile is an honest visual indicator that
+                    # the source preview is unavailable; it never reuses the
+                    # rendered output as a misleading stand-in.
+                    icon_right = min(box_right - 2, x0 + 28)
+                    draw.rectangle((x0 + 2, clip_y + 2, icon_right, clip_y + clip_height - 2), outline="#9f7b58", width=1)
+                    draw.line((x0 + 4, clip_y + 5, icon_right - 2, clip_y + clip_height - 5), fill="#9f7b58", width=1)
+                    draw.line((x0 + 4, clip_y + clip_height - 5, icon_right - 2, clip_y + 5), fill="#9f7b58", width=1)
+                audio = clip.get("audio_signifier") if isinstance(clip, Mapping) else None
+                if isinstance(audio, Mapping):
+                    audio_present = audio.get("present") is True
+                    if clip_width >= 34:
+                        if audio_present:
+                            audio_left = x0 + (preview_slot + 5 if preview_slot else 6)
+                            audio_right = box_right - 6
+                            if audio_right > audio_left:
+                                rail_y = clip_y + clip_height / 2
+                                waveform = audio.get("waveform")
+                                display_values = waveform.get("display_amplitudes") if isinstance(waveform, Mapping) else None
+                                measured_values = waveform.get("amplitudes") if isinstance(waveform, Mapping) else None
+                                values = display_values if isinstance(display_values, list) else measured_values
+                                if isinstance(values, list) and values:
+                                    # Source waveforms use the same exact clip
+                                    # span as the timing fallback, but their bar
+                                    # heights come from this asset's measured
+                                    # PCM peaks rather than a generic marker.
+                                    draw.line((audio_left, rail_y, audio_right, rail_y), fill="#476b76", width=2)
+                                    inner_width = max(1.0, audio_right - audio_left)
+                                    for bar_index, value in enumerate(values):
+                                        try:
+                                            amplitude = max(0.0, min(1.0, float(value)))
+                                        except (TypeError, ValueError):
+                                            amplitude = 0.0
+                                        if not math.isfinite(amplitude) or amplitude <= 0:
+                                            continue
+                                        bar_x = audio_left + inner_width * (bar_index + 0.5) / len(values)
+                                        bar_height = max(2, int(round(amplitude * (clip_height - 10) / 2)))
+                                        draw.line(
+                                            (bar_x, rail_y - bar_height, bar_x, rail_y + bar_height),
+                                            fill="#8ff6dd", width=3,
+                                        )
+                                else:
+                                    # Unavailable/unanalysed sources retain a
+                                    # truthful placement rail, never fabricated
+                                    # amplitude bars.
+                                    draw.line((audio_left, rail_y, audio_right, rail_y), fill="#ffc078", width=5)
+                                    markers = max(3, min(32, int((audio_right - audio_left) // 12)))
+                                    for marker_index in range(markers):
+                                        marker_x = audio_left + (audio_right - audio_left) * marker_index / max(1, markers - 1)
+                                        draw.line((marker_x, rail_y - 10, marker_x, rail_y + 10), fill="#ffe0a8", width=3)
+                        elif str(audio.get("reason")) == "muted":
+                            _png_draw_text(draw, (box_right - 16, clip_y + 9), "×", small_font, fill="#9fb0bf")
+                # A lane image is a geometry overview, not the authoritative
+                # identity surface.  Never paint text outside its clip box:
+                # wide clips get the id/status, medium clips get a clipped id,
+                # and tiny clips remain intentionally unlabeled blocks.
+                box_width = max(0.0, clip_width - (preview_slot + 6 if preview_slot else 10))
+                clip_id = str(clip.get("clip_id") or "clip")
+                status = str(clip.get("source_preview", {}).get("status", "placeholder"))
+                if box_width >= 86:
+                    label = f"{clip_id} · {status}"
+                elif box_width >= 28:
+                    label = clip_id
+                else:
+                    label = ""
+                if label:
+                    if _png_text_width(draw, label, small_font) > box_width:
+                        label = _png_ellipsis(draw, label, small_font, box_width)
+                    label_x = x0 + preview_slot + 5 if preview_slot else x0 + 6
+                    label_y = clip_y + 9
+                    label_width = _png_text_width(draw, label, small_font)
+                    # The rail runs behind the clip identity. Keep the chip
+                    # inside the placement so narrow clips cannot bleed into
+                    # neighboring timing regions.
+                    draw.rounded_rectangle(
+                        (
+                            max(x0 + 2, label_x - 4),
+                            max(clip_y + 2, label_y - 3),
+                            min(box_right - 2, label_x + label_width + 4),
+                            min(clip_y + clip_height - 2, label_y + 19),
+                        ),
+                        radius=4,
+                        fill="#10161d",
+                        outline="#304151",
+                    )
+                    _png_draw_text(draw, (label_x, label_y), label, small_font, fill="#ebf2f5")
+            y += current_row_height
+        path = pack_root / f"{filename_prefix}-{page:03d}.png"
+        image.save(path)
+        paths.append(path)
+    return paths
 
 
 def _filmstrip_managed_coverage(frame_index: Mapping[str, object]) -> dict[str, object]:
@@ -263,6 +716,19 @@ def _align_snapshot_to_render(snapshot: dict, video: Path) -> None:
         if isinstance(metadata, Mapping) and metadata.get("authored_duration_frames") is not None
         else snapshot.get("duration_frames") or 0
     )
+    # Keep the complete admitted input clock before adapting presentation
+    # metadata to decoded output. The legacy ``clips`` list remains clamped so
+    # rendered cards cannot point past EOF; input lanes consume this frozen
+    # copy and therefore retain authored clips after a short render.
+    input_clips = deepcopy(snapshot.get("clips") or [])
+    input_extent_frames = max([
+        authored_frames,
+        *(int(item.get("end_frame", 0)) for item in input_clips if isinstance(item, Mapping)),
+    ])
+    snapshot.setdefault("metadata", {})["input_extent_frames"] = input_extent_frames
+    snapshot["metadata"]["input_extent_seconds"] = input_extent_frames / float(fps)
+    snapshot["input_clips"] = input_clips
+    snapshot["metadata"]["asset_integrity"] = _asset_integrity_from_registry(snapshot.get("registry"))
     snapshot["duration_frames"] = rendered_frames
     snapshot.setdefault("metadata", {})["rendered_duration_frames"] = rendered_frames
     snapshot["metadata"]["rendered_duration_seconds"] = decoded_duration
@@ -350,11 +816,712 @@ def _store_audio_cache(parent: Path, render_digest: str, settings: object, value
         stale.unlink(missing_ok=True)
 
 
+def _render_time_anchored_output(
+    frame_index: Mapping[str, object], pack_root: Path, *, options: Mapping[str, object],
+) -> list[Path]:
+    """Render sampled output cards whose left edges are exact timeline times."""
+    from PIL import Image, ImageDraw
+    from .filmstrip_cards import (
+        _png_bounded_lines, _png_draw_text, _png_ellipsis, _png_font,
+        _png_shot_label, _png_text_width, _png_waveform_for_card,
+        _PNG_AUDIO_HEIGHT,
+    )
+
+    raw_cards = frame_index.get("cards")
+    if not isinstance(raw_cards, list) or not raw_cards:
+        return []
+    cards = [card for card in raw_cards if isinstance(card, Mapping)]
+    if not cards:
+        return []
+    provenance = frame_index.get("provenance") if isinstance(frame_index.get("provenance"), Mapping) else {}
+    raw_fps = provenance.get("fps_rational") or [30, 1]
+    try:
+        fps = Fraction(int(raw_fps[0]), int(raw_fps[1]))
+    except (TypeError, ValueError, ZeroDivisionError, IndexError):
+        fps = Fraction(30, 1)
+    input_window = frame_index.get("input_projection", {}).get("window") if isinstance(frame_index.get("input_projection"), Mapping) else None
+    if isinstance(input_window, Mapping):
+        try:
+            start_frame, end_frame = int(input_window["start_frame"]), int(input_window["end_frame"])
+            start_seconds, end_seconds = start_frame / float(fps), end_frame / float(fps)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            start_seconds, end_seconds = 0.0, float(provenance.get("duration_frames") or 0) / float(fps)
+    else:
+        sampling = frame_index.get("sampling") if isinstance(frame_index.get("sampling"), Mapping) else {}
+        bounds = sampling.get("range") if isinstance(sampling.get("range"), (list, tuple)) else None
+        start_seconds = float(bounds[0]) if bounds and len(bounds) == 2 else 0.0
+        end_seconds = float(bounds[1]) if bounds and len(bounds) == 2 else float(provenance.get("duration_frames") or 0) / float(fps)
+    if end_seconds <= start_seconds:
+        end_seconds = start_seconds + 1.0
+
+    cards = sorted(cards, key=lambda card: (float(card.get("time_seconds") or 0.0), str(card.get("id") or "")))
+    page_size = max(1, int(options.get("page_size") or 50))
+    width, lane_left, lane_right = 1500, 24, 1476
+    header, ruler_y = 144, 128
+    title_font, font, small_font = _png_font(20), _png_font(16), _png_font(13)
+    caption_font = _png_font(14)
+    image_height = 202
+    paths: list[Path] = []
+    for page, offset in enumerate(range(0, len(cards), page_size), 1):
+        group = cards[offset:offset + page_size]
+        image = Image.new("RGB", (width, header + image_height + _PNG_AUDIO_HEIGHT + 96), "#111827")
+        draw = ImageDraw.Draw(image)
+        timeline_name = str(provenance.get("timeline_name") or provenance.get("timeline_id") or "timeline")
+        render_id = str(provenance.get("render_run_id") or "managed render")
+        _png_draw_text(draw, (16, 10), f"{timeline_name} · page {page} · time-anchored rendered samples", title_font, fill="white")
+        _png_draw_text(draw, (16, 36), f"Render {render_id} · each card begins at its exact sample time", small_font, fill="#acbbcb")
+        _png_draw_text(draw, (16, 58), "Shared ruler: sampled output above; continuous canonical input lanes below. Cards are point samples, not clip durations.", small_font, fill="#acbbcb")
+        _png_draw_text(draw, (16, 82), "Teal = exact sample guide · card boundaries line up with the same time coordinates as the input lanes.", small_font, fill="#8ce0d0")
+        draw.line((lane_left, ruler_y, lane_right, ruler_y), fill="#6edac7", width=1)
+        tick_count = 4
+        for tick in range(tick_count + 1):
+            fraction = tick / tick_count
+            x = lane_left + fraction * (lane_right - lane_left)
+            draw.line((x, ruler_y - 6, x, ruler_y + 6), fill="#6edac7", width=1)
+            seconds = start_seconds + fraction * (end_seconds - start_seconds)
+            label = f"{seconds:.1f}s"
+            _png_draw_text(draw, (x - _png_text_width(draw, label, small_font) / 2, 106), label, small_font, fill="#8ce0d0")
+            draw.line((x, ruler_y + 7, x, image.height - 12), fill="#23343f", width=1)
+
+        audio = frame_index.get("audio") if isinstance(frame_index.get("audio"), Mapping) else None
+        for index, card in enumerate(group):
+            global_index = offset + index
+            try:
+                time_seconds = float(card.get("time_seconds") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            x0 = lane_left + max(0.0, min(1.0, (time_seconds - start_seconds) / (end_seconds - start_seconds))) * (lane_right - lane_left)
+            next_time = end_seconds
+            if global_index + 1 < len(cards):
+                try:
+                    next_time = float(cards[global_index + 1].get("time_seconds") or end_seconds)
+                except (TypeError, ValueError):
+                    pass
+            x1 = lane_left + max(0.0, min(1.0, (next_time - start_seconds) / (end_seconds - start_seconds))) * (lane_right - lane_left)
+            box_left = int(round(x0))
+            box_right = int(round(max(x0 + 4, x1 - 6)))
+            box_width = max(4, box_right - box_left)
+            box_y = header
+            draw.rounded_rectangle((box_left, box_y, box_right, image.height - 10), radius=6, fill="#162630", outline="#405769", width=1)
+            time_label = str(card.get("time_label") or f"{time_seconds:.3f}s")
+            _png_draw_text(draw, (box_left + 8, box_y + 8), time_label, font, fill="#8ce0d0")
+            shot_label = _png_shot_label(card)
+            shot_lines, shot_excerpt = _png_bounded_lines(draw, shot_label, small_font, max(20, box_width - 100), 1)
+            if shot_excerpt:
+                shot_lines[-1] = _png_ellipsis(draw, shot_lines[-1], small_font, max(20, box_width - 100))
+            if shot_lines:
+                _png_draw_text(draw, (box_left + 84, box_y + 10), shot_lines[0], small_font, fill="#ebf2f5")
+            frame_path = pack_root / str(card.get("image") or "")
+            image_top = box_y + 30
+            if frame_path.is_file() and box_width > 30:
+                try:
+                    with Image.open(frame_path) as source:
+                        frame = source.convert("RGB")
+                        frame.thumbnail((max(1, box_width - 10), image_height))
+                        image.paste(frame, (box_left + max(5, (box_width - frame.width) // 2), image_top))
+                except (OSError, ValueError):
+                    pass
+            waveform = _png_waveform_for_card(audio, card) if audio is not None else None
+            if waveform is not None and box_width > 80:
+                wave_y = box_y + image_height + 32
+                wave_left, wave_right = box_left + 8, box_right - 8
+                draw.rounded_rectangle((wave_left, wave_y, wave_right, wave_y + _PNG_AUDIO_HEIGHT), radius=4, fill="#101c24", outline="#2e4a58", width=1)
+                center = wave_y + _PNG_AUDIO_HEIGHT // 2
+                draw.line((wave_left + 4, center, wave_right - 4, center), fill="#31505e", width=1)
+                amplitudes = waveform.get("display_amplitudes") or waveform.get("amplitudes") or []
+                inner = max(1, wave_right - wave_left - 10)
+                for bar_index, amplitude in enumerate(amplitudes):
+                    bar_x = wave_left + 5 + inner * (bar_index + 0.5) / len(amplitudes)
+                    bar_height = max(2, int(round(float(amplitude) * (_PNG_AUDIO_HEIGHT - 8) / 2))) if amplitude else 0
+                    if bar_height:
+                        draw.line((bar_x, center - bar_height, bar_x, center + bar_height), fill="#8ff6dd", width=4)
+                cursor_x = wave_left + 5 + inner * float(waveform.get("cursor") or 0.0)
+                draw.line((cursor_x, wave_y + 3, cursor_x, wave_y + _PNG_AUDIO_HEIGHT - 3), fill="#ffc276", width=2)
+            # Planner output deliberately keeps ``scripts`` as complete shot
+            # context, but populates ``display_scripts`` with each untimed
+            # occurrence only on its first captured card.  Do not fall back
+            # to the full context when that field is present and empty, or a
+            # coarse five-card sample will print the same script five times.
+            if card.get("captions"):
+                text_items = card.get("captions") or []
+            elif "display_scripts" in card:
+                text_items = card.get("display_scripts") or []
+            else:
+                text_items = card.get("scripts") or []
+            text = " ".join(str(item.get("canonical_text") or item.get("text") or "") for item in text_items if isinstance(item, Mapping)).strip()
+            if text and box_width > 100:
+                lines, _ = _png_bounded_lines(draw, f"“{text[:240]}”", caption_font, max(20, box_width - 16), 2)
+                for line_index, line in enumerate(lines):
+                    _png_draw_text(draw, (box_left + 8, box_y + image_height + _PNG_AUDIO_HEIGHT + 50 + line_index * 17), line, caption_font, fill="#e5e7eb")
+        path = pack_root / f"time-anchored-{page:03d}.png"
+        image.save(path)
+        paths.append(path)
+    return paths
+
+
+def _compose_unified_panels(
+    output_path: Path, input_paths: list[Path], *, pack_root: Path,
+    time_bounds: tuple[float, float] = (0.0, 20.0),
+) -> Path:
+    """Compose compact output/input bodies under one shared timeline ruler."""
+    from PIL import Image, ImageDraw
+    from .filmstrip_cards import _png_draw_text, _png_font, _png_text_width
+
+    with Image.open(output_path) as source:
+        output = source.convert("RGB")
+    input_images: list[Image.Image] = []
+    try:
+        for path in input_paths:
+            with Image.open(path) as source:
+                input_images.append(source.convert("RGB"))
+        if not input_images:
+            return output_path
+        width = max(output.width, *(image.width for image in input_images))
+        # Both renderers use a 144px chrome/ruler prefix. Cropping it here
+        # leaves the content bodies on one coordinate system while the
+        # unified surface supplies the only title, legend, and ruler.
+        output_body = output.crop((0, min(144, output.height), output.width, output.height))
+        input_bodies = [image.crop((0, min(144, image.height), image.width, image.height)) for image in input_images]
+        panels = [output_body, *input_bodies]
+        scaled: list[Image.Image] = []
+        for panel in panels:
+            if panel.width == width:
+                scaled.append(panel)
+            else:
+                height = max(1, round(panel.height * width / panel.width))
+                scaled.append(panel.resize((width, height), Image.Resampling.LANCZOS))
+        header, ruler_y, section_gap = 120, 92, 28
+        section_label_height = 28
+        body_height = sum(panel.height for panel in scaled) + section_label_height * len(scaled) + section_gap * (len(scaled) - 1)
+        sheet = Image.new("RGB", (width, header + body_height), "#111827")
+        draw = ImageDraw.Draw(sheet)
+        font, small = _png_font(20), _png_font(13)
+        _png_draw_text(draw, (16, 10), "Synchronized timeline", font, fill="white")
+        _png_draw_text(draw, (16, 38), "Rendered samples and canonical input layers share one time axis.", small, fill="#acbbcb")
+        _png_draw_text(draw, (16, 62), "Cards are exact point samples; input blocks show duration. Muted/crossed tiles mean source preview unavailable.", small, fill="#acbbcb")
+        draw.line((24, ruler_y, width - 24, ruler_y), fill="#6edac7", width=1)
+        # The child panels already carry the same vertical guide coordinates;
+        # repeat only the shared ruler ticks here, never a second ruler.
+        start_seconds, end_seconds = time_bounds
+        if end_seconds <= start_seconds:
+            end_seconds = start_seconds + 1.0
+        for tick in range(5):
+            fraction = tick / 4
+            x = 24 + fraction * (width - 48)
+            draw.line((x, ruler_y - 6, x, ruler_y + 6), fill="#6edac7", width=1)
+            label = f"{start_seconds + fraction * (end_seconds - start_seconds):.1f}s"
+            _png_draw_text(draw, (x - _png_text_width(draw, label, small) / 2, 100), label, small, fill="#8ce0d0")
+        y = header
+        labels = ["OUTPUT · rendered samples", "INPUTS · canonical timeline layers"]
+        for index, panel in enumerate(scaled):
+            _png_draw_text(draw, (24, y + 4), labels[0] if index == 0 else labels[1], small, fill="#ebf2f5")
+            y += section_label_height
+            sheet.paste(panel, (0, y))
+            y += panel.height
+            if index < len(scaled) - 1:
+                draw.rectangle((16, y, width - 16, y + section_gap), fill="#0b1118")
+                draw.line((24, y + section_gap // 2, width - 24, y + section_gap // 2), fill="#6edac7", width=2)
+                y += section_gap
+        target = pack_root / output_path.name.replace("time-anchored-", "filmstrip-", 1)
+        sheet.save(target)
+        return target
+    finally:
+        output.close()
+        for image in input_images:
+            image.close()
+
+
+def _paired_projection(projection: Mapping[str, object], start_frame: int, end_frame: int) -> dict:
+    """Return one row's clipped input lanes without changing the frozen index."""
+    value = deepcopy(projection)
+    window = dict(value.get("window") or {})
+    window["start_frame"], window["end_frame"] = start_frame, end_frame
+    value["window"] = window
+    for track in value.get("tracks") or []:
+        clips = []
+        for clip in track.get("clips") or []:
+            raw_start, raw_end = clip.get("window", [0, 0])
+            clipped_start, clipped_end = max(start_frame, int(raw_start)), min(end_frame, int(raw_end))
+            if clipped_end <= clipped_start:
+                continue
+            clip["window"] = [clipped_start, clipped_end]
+            clips.append(clip)
+        track["clips"] = clips
+    return value
+
+
+def _active_paired_projection(projection: Mapping[str, object]) -> dict:
+    """Keep only lanes with a placement in this paired-row window.
+
+    The frozen ``input_projection`` remains untouched in ``frame-index.json``;
+    this presentation copy prevents a canonical-but-empty track from creating
+    a large blank band under an otherwise useful output row.
+    """
+    value = deepcopy(projection)
+    tracks = [track for track in value.get("tracks") or []
+              if isinstance(track, Mapping) and track.get("clips")]
+    active_ids = {str(track.get("track_id")) for track in tracks}
+    value["tracks"] = tracks
+    bands = []
+    for band in value.get("track_bands") or []:
+        ids = [str(item) for item in band.get("track_ids") or [] if str(item) in active_ids]
+        if ids:
+            bands.append(dict(band, track_ids=ids))
+    value["track_bands"] = bands
+    return value
+
+
+def _render_paired_rows(
+    frame_index: Mapping[str, object], pack_root: Path, *, options: Mapping[str, object],
+    snapshot: Mapping[str, object], input_projection: Mapping[str, object],
+) -> tuple[list[str], list[dict], list[str]]:
+    """Render five-card rows with the relevant input lanes directly below.
+
+    Each row owns a half-open time window.  Card x positions and the input
+    placements both use that same window, so irregular samples remain honest
+    instead of being laid out as an unrelated grid.
+    """
+    from PIL import Image, ImageDraw
+    from .filmstrip_cards import (
+        _png_bounded_lines, _png_draw_text, _png_ellipsis, _png_font,
+        _png_shot_label, _png_text_width, _png_waveform_for_card,
+        _png_card_metrics, _PNG_CARD_WIDTH, _PNG_IMAGE_HEIGHT, _PNG_AUDIO_HEIGHT,
+        _PNG_PAGE_WIDTH_STRIDE,
+        _PNG_TEXT_LINE_HEIGHT,
+    )
+
+    cards = [card for card in frame_index.get("cards") or [] if isinstance(card, Mapping)]
+    if not cards:
+        return [], [], []
+    cards = sorted(cards, key=lambda card: (float(card.get("time_seconds") or 0), str(card.get("id") or "")))
+    provenance = frame_index.get("provenance") if isinstance(frame_index.get("provenance"), Mapping) else {}
+    raw_fps = provenance.get("fps_rational") or [30, 1]
+    fps = Fraction(int(raw_fps[0]), int(raw_fps[1]))
+    window = input_projection.get("window") if isinstance(input_projection.get("window"), Mapping) else {}
+    start_frame, end_frame = int(window.get("start_frame", 0)), int(window.get("end_frame", 0))
+    start_seconds, end_seconds = start_frame / float(fps), end_frame / float(fps)
+    columns = max(1, int(options.get("columns") or 5))
+    # Keep the normal paired view to one readable row.  An explicit
+    # ``--page-size`` remains an opt-in for denser pages (up to two rows),
+    # while output-only/input-only views retain their existing pagination.
+    page_size_explicit = bool(options.get("page_size_explicit", True))
+    requested_page_size = max(1, int(options.get("page_size") or 50))
+    page_size = (
+        min(10, max(columns * 2, columns), requested_page_size)
+        if page_size_explicit else columns
+    )
+    width = columns * _PNG_PAGE_WIDTH_STRIDE + 24
+    lane_left, lane_right = 16, width - 16
+    title_font, timestamp_font = _png_font(20), _png_font(14)
+    name_font, script_font = _png_font(18), _png_font(16)
+    small_font = _png_font(12)
+    image_height = 200
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    audio = frame_index.get("audio") if isinstance(frame_index.get("audio"), Mapping) else None
+    show_text = "text" in set(frame_index.get("components") or ("output", "text", "audio"))
+    show_audio = "audio" in set(frame_index.get("components") or ("output", "text", "audio"))
+    rows_meta: list[dict] = []
+    output_paths: list[str] = []
+    standalone_paths: list[str] = []
+    timeline_name = str(provenance.get("timeline_name") or provenance.get("timeline_id") or "timeline")
+    render_id = str(provenance.get("render_run_id") or "managed render")
+
+    def row_bounds(row_cards, global_start_index):
+        first_time = max(start_seconds, float(row_cards[0].get("time_seconds") or start_seconds))
+        next_index = global_start_index + len(row_cards)
+        next_time = end_seconds
+        if next_index < len(cards):
+            next_time = min(end_seconds, float(cards[next_index].get("time_seconds") or end_seconds))
+        if next_time <= first_time:
+            next_time = end_seconds if end_seconds > first_time else first_time + 1 / float(fps)
+        return first_time, next_time
+
+    for page, offset in enumerate(range(0, len(cards), page_size), 1):
+        group = cards[offset:offset + page_size]
+        page_rows = [group[i:i + columns] for i in range(0, len(group), columns)]
+        rendered_rows: list[Image.Image] = []
+        page_row_meta: list[dict] = []
+        for local_row, row_cards in enumerate(page_rows):
+            global_start_index = offset + local_row * columns
+            row_start, row_end = row_bounds(row_cards, global_start_index)
+            row_width = row_end - row_start
+            # Work out the actual card widths before measuring the body.  The
+            # previous fixed 200px preview slot left a visible strip of empty
+            # background under ordinary 16:9 stills (their fitted height is
+            # about 180px at this width), separating the image from its
+            # waveform and caption.  Size the shared row slot to the narrowest
+            # card's real preview instead: sparse/full-width rows stay large,
+            # while dense rows no longer reserve blank vertical space.
+            card_widths: list[int] = []
+            for index, card in enumerate(row_cards):
+                time_value = float(card.get("time_seconds") or 0)
+                card_start = max(row_start, min(row_end, time_value))
+                next_time = row_end
+                if index + 1 < len(row_cards):
+                    try:
+                        candidate = float(row_cards[index + 1].get("time_seconds") or row_end)
+                        if candidate > time_value:
+                            next_time = min(row_end, candidate)
+                    except (TypeError, ValueError):
+                        pass
+                if next_time <= card_start:
+                    next_time = min(row_end, card_start + row_width / max(1, len(row_cards)))
+                left_fraction = max(0.0, min(1.0, (card_start - row_start) / row_width))
+                right_fraction = max(left_fraction, min(1.0, (next_time - row_start) / row_width))
+                box_left = int(round(lane_left + left_fraction * (lane_right - lane_left) + 4))
+                box_right = int(round(lane_left + right_fraction * (lane_right - lane_left) - 4))
+                card_widths.append(max(32, min(width - 8, box_right) - box_left))
+            min_card_width = min(card_widths, default=width - 32)
+            image_height = min(200, max(96, round((min_card_width - 10) * 9 / 16)))
+            layouts = [_png_card_metrics(measure, card, name_font, timestamp_font, script_font, audio if show_audio else None, show_text=show_text, image_height=image_height) for card in row_cards]
+            card_body_height = max((layout["height"] for layout in layouts), default=320)
+            row_projection = _active_paired_projection(
+                _paired_projection(input_projection, round(row_start * float(fps)), round(row_end * float(fps)))
+            )
+            temp_prefix = f".paired-input-{page:03d}-{len(page_row_meta):03d}"
+            input_paths = (_render_input_projection_png(
+                row_projection, snapshot, pack_root, width=width, filename_prefix=temp_prefix
+            ) if row_projection.get("tracks") else [])
+            body_images = []
+            for input_path in input_paths:
+                with Image.open(input_path) as source:
+                    body_images.append(source.convert("RGB").crop((0, 144, source.width, source.height)))
+                input_path.unlink(missing_ok=True)
+            input_height = sum(image.height for image in body_images) + 34 * max(0, len(body_images) - 1)
+            input_label_height = 26 if body_images else 0
+            input_bottom_gap = 20 if body_images else 0
+            row_height = 52 + card_body_height + 18 + input_label_height + input_height + input_bottom_gap
+            row_image = Image.new("RGB", (width, row_height), "#111827")
+            draw = ImageDraw.Draw(row_image)
+            _png_draw_text(draw, (16, 8), f"{row_start:.3f}–{row_end:.3f}s", title_font, fill="white")
+            _png_draw_text(draw, (width - 330, 12), f"{len(row_cards)} samples · row {len(rows_meta) + 1}", small_font, fill="#acbbcb")
+            ruler_y = 43
+            draw.line((lane_left, ruler_y, lane_right, ruler_y), fill="#6edac7", width=1)
+            for tick in range(5):
+                fraction = tick / 4
+                x = lane_left + fraction * (lane_right - lane_left)
+                draw.line((x, ruler_y - 5, x, ruler_y + 5), fill="#6edac7", width=1)
+                label = f"{row_start + fraction * row_width:.1f}s"
+                _png_draw_text(draw, (x - _png_text_width(draw, label, small_font) / 2, 25), label, small_font, fill="#8ce0d0")
+            for index, (card, layout) in enumerate(zip(row_cards, layouts)):
+                time_value = float(card.get("time_seconds") or 0)
+                # A card owns the interval until the next sample (or the row
+                # end). This fills a lone/sparse row while keeping every edge
+                # truthful on the shared time axis.
+                card_start = max(row_start, min(row_end, time_value))
+                next_time = row_end
+                if index + 1 < len(row_cards):
+                    try:
+                        candidate = float(row_cards[index + 1].get("time_seconds") or row_end)
+                        if candidate > time_value:
+                            next_time = min(row_end, candidate)
+                    except (TypeError, ValueError):
+                        pass
+                if next_time <= card_start:
+                    fallback = row_width / max(1, len(row_cards))
+                    next_time = min(row_end, card_start + fallback)
+                left_fraction = max(0.0, min(1.0, (card_start - row_start) / row_width))
+                right_fraction = max(left_fraction, min(1.0, (next_time - row_start) / row_width))
+                box_left = int(round(lane_left + left_fraction * (lane_right - lane_left) + 4))
+                box_right = int(round(lane_left + right_fraction * (lane_right - lane_left) - 4))
+                box_right = min(width - 8, box_right)
+                box_right = max(box_left + 32, box_right)
+                box_y = 52
+                draw.rounded_rectangle((box_left, box_y, box_right, box_y + card_body_height), radius=6, fill="#162630", outline="#405769", width=1)
+                _png_draw_text(draw, (box_left + 8, box_y + 8), str(card.get("time_label") or f"{time_value:.3f}s"), timestamp_font, fill="#8ce0d0")
+                label = _png_shot_label(card)
+                label_lines, _ = _png_bounded_lines(draw, label, name_font, max(20, box_right - box_left - 16), 1)
+                if label_lines:
+                    _png_draw_text(draw, (box_left + 8, box_y + 28), label_lines[0], name_font, fill="white")
+                image_path = pack_root / str(card.get("image") or "")
+                image_top = box_y + 54
+                if image_path.is_file():
+                    try:
+                        with Image.open(image_path) as source:
+                            thumb = source.convert("RGB")
+                            thumb.thumbnail((max(1, box_right - box_left - 10), image_height))
+                            row_image.paste(thumb, (box_left + (box_right - box_left - thumb.width) // 2, image_top))
+                    except (OSError, ValueError):
+                        pass
+                if layout.get("waveform") is not None:
+                    wave_y = image_top + image_height + 5
+                    wave_left, wave_right = box_left + 6, box_right - 6
+                    if wave_right > wave_left + 12:
+                        draw.rounded_rectangle(
+                            (wave_left, wave_y, wave_right, wave_y + _PNG_AUDIO_HEIGHT),
+                            radius=5, fill="#0d1a22", outline="#467486", width=2,
+                        )
+                        center = wave_y + _PNG_AUDIO_HEIGHT // 2
+                        draw.line(
+                            (wave_left + 5, center, wave_right - 5, center),
+                            fill="#476b76", width=2,
+                        )
+                        amplitudes = (
+                            layout["waveform"].get("display_amplitudes")
+                            or layout["waveform"].get("amplitudes") or []
+                        )
+                        inner_width = max(1, wave_right - wave_left - 12)
+                        for bar_index, amplitude in enumerate(amplitudes):
+                            if amplitude:
+                                bx = wave_left + 6 + inner_width * (bar_index + .5) / max(1, len(amplitudes))
+                                bh = max(2, int(float(amplitude) * (_PNG_AUDIO_HEIGHT - 10) / 2))
+                                draw.line((bx, center - bh, bx, center + bh), fill="#8ff6dd", width=4)
+                        cursor = float(layout["waveform"].get("cursor") or 0.0)
+                        cursor_x = wave_left + 6 + inner_width * cursor
+                        draw.line(
+                            (cursor_x, wave_y + 3, cursor_x, wave_y + _PNG_AUDIO_HEIGHT - 3),
+                            fill="#ffc276", width=2,
+                        )
+                text_items = (card.get("captions") or []) if card.get("captions") else (card.get("display_scripts") or [])
+                text = " ".join(str(item.get("canonical_text") or item.get("text") or "") for item in text_items if isinstance(item, Mapping)).strip()
+                if show_text and text:
+                    # Give the caption panel enough lines to carry the actual
+                    # spoken copy.  Two lines made longer shot text look
+                    # missing even though the card had unused vertical room.
+                    max_lines = 4 if box_right - box_left >= 240 else 3
+                    lines, _ = _png_bounded_lines(draw, f'“{text[:240]}”', script_font, max(20, box_right - box_left - 16), max_lines)
+                    # The body reserves a text panel below the preview and
+                    # waveform. Center the caption block in that panel so a
+                    # short transcript is neither bottom- nor left-biased.
+                    audio_extra = layout.get("audio_extra") or 0
+                    text_area_top = box_y + 54 + image_height + audio_extra + 8
+                    text_area_height = max(0, card_body_height - (54 + image_height + audio_extra + 8))
+                    text_block_height = _PNG_TEXT_LINE_HEIGHT * len(lines)
+                    text_top = text_area_top + max(0, (text_area_height - text_block_height) // 2)
+                    for line_index, line in enumerate(lines):
+                        line_width = _png_text_width(draw, line, script_font)
+                        text_x = box_left + 8 + max(0, (box_right - box_left - 16 - line_width) / 2)
+                        _png_draw_text(draw, (text_x, text_top + line_index * _PNG_TEXT_LINE_HEIGHT), line, script_font, fill="#e5e7eb")
+            y = 52 + card_body_height + 18
+            if body_images:
+                _png_draw_text(draw, (16, y), "INPUTS · placements active in this row", small_font, fill="#ebf2f5")
+                y += 26
+                for body_index, body in enumerate(body_images):
+                    row_image.paste(body, (0, y))
+                    y += body.height
+                    if body_index < len(body_images) - 1:
+                        draw.line((16, y + 16, width - 16, y + 16), fill="#6edac7", width=2)
+                        y += 34
+            rendered_rows.append(row_image)
+            page_row_meta.append({
+                "index": len(rows_meta) + 1,
+                "card_ids": [str(card.get("id")) for card in row_cards],
+                "time_range": [row_start, row_end],
+                "start_seconds": row_start, "end_seconds": row_end,
+                "output_card_count": len(row_cards),
+                "input_tracks": [str(track.get("track_id")) for track in row_projection.get("tracks") or [] if track.get("clips")],
+            })
+            rows_meta.append(page_row_meta[-1])
+        page_height = sum(row.height for row in rendered_rows) + 28 * max(0, len(rendered_rows) - 1) + 86
+        sheet = Image.new("RGB", (width, page_height), "#0b1118")
+        draw = ImageDraw.Draw(sheet)
+        _png_draw_text(draw, (16, 12), f"{timeline_name} · page {page} · paired timeline", title_font, fill="white")
+        _png_draw_text(draw, (16, 40), f"Render {render_id} · {columns} columns · output samples with synchronized input lanes", small_font, fill="#acbbcb")
+        y = 78
+        for row_index, row in enumerate(rendered_rows):
+            sheet.paste(row, (0, y))
+            y += row.height
+            if row_index < len(rendered_rows) - 1:
+                draw.line((16, y + 14, width - 16, y + 14), fill="#6edac7", width=2)
+                y += 28
+        path = pack_root / f"filmstrip-{page:03d}.png"
+        sheet.save(path)
+        output_paths.append(str(path))
+    return output_paths, rows_meta, standalone_paths
+
+
+def _paired_svg_pages(png_paths: list[str], pack_root: Path) -> list[str]:
+    """Expose the exact paired PNG surface through the static SVG entrypoint."""
+    import base64
+    result = []
+    for png_value in png_paths:
+        png = Path(png_value)
+        if not png.is_file():
+            continue
+        from PIL import Image
+        with Image.open(png) as image:
+            width, height = image.size
+        data = base64.b64encode(png.read_bytes()).decode("ascii")
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+               f'viewBox="0 0 {width} {height}"><image width="{width}" height="{height}" '
+               f'href="data:image/png;base64,{data}"/></svg>')
+        path = pack_root / png.name.replace(".png", ".svg")
+        path.write_text(svg, encoding="utf-8")
+        result.append(str(path))
+    return result
+
+
+def _compose_synchronized_surface(
+    output_pages: list[str], input_pages: list[Path], *, pack_root: Path,
+    frame_index: Mapping[str, object] | None = None,
+    options: Mapping[str, object] | None = None,
+) -> list[str]:
+    """Put rendered samples and canonical input lanes on one static surface.
+
+    The primary path is a paired-row surface: each row's sampled output cards
+    and clipped input lanes share one linear time window.  A legacy fallback
+    remains for deliberately skeletal/unit-test projections that have no
+    declared tracks.
+    """
+    if not output_pages or not input_pages:
+        return output_pages
+    if (frame_index is not None
+            and isinstance(frame_index.get("input_projection"), Mapping)
+            and (frame_index.get("input_projection") or {}).get("tracks")):
+        paired, rows, _ = _render_paired_rows(
+            frame_index, pack_root, options=options or {},
+            snapshot=frame_index.get("provenance") or {},
+            input_projection=frame_index["input_projection"],
+        )
+        if isinstance(frame_index, dict):
+            visible_components = ["output"]
+            for component in ("text", "audio"):
+                if component in set(frame_index.get("components") or ()):
+                    visible_components.append(component)
+            visible_components.append("inputs")
+            effective_columns = max(1, int((options or {}).get("columns") or 5))
+            effective_page_size_explicit = bool((options or {}).get("page_size_explicit", True))
+            effective_requested_page_size = max(1, int((options or {}).get("page_size") or 50))
+            effective_page_size = (
+                min(10, effective_columns * 2, effective_requested_page_size)
+                if effective_page_size_explicit else effective_columns
+            )
+            frame_index["static_surface"] = {
+                "schema": "astrid.timeline-static-surface.v2",
+                "mode": "paired_rows",
+                "components": visible_components,
+                "columns": effective_columns,
+                "page_size": effective_page_size,
+                "page_count": len(paired),
+                "page_size_policy": (
+                    "one row of paired cards by default; explicit page_size may opt into "
+                    "up to two rows (max 10 cards)"
+                ),
+                "canonical_input_tracks": [
+                    str(track.get("track_id"))
+                    for track in ((frame_index.get("input_projection") or {}).get("tracks") or [])
+                    if isinstance(track, Mapping)
+                ],
+                "rows": rows,
+                "row_count": len(rows),
+                "axis": "linear_half_open_seconds",
+                "navigation": {
+                    "pages": "Open filmstrip-001.png, filmstrip-002.png, ... in order.",
+                    "drill_down": "Rerun with --range START..END --every 0.25 for a readable close-up.",
+                    "selectors": "Use --shot first or --shot N, plus --track TRACK, to focus a review.",
+                },
+                "standalone_input_pages": [Path(path).name for path in input_pages],
+            }
+            # Keep the sampling coverage contract intact, but expose the
+            # effective static pagination beside it so consumers do not infer
+            # paired page count from the standalone contact-sheet defaults.
+            coverage = frame_index.setdefault("coverage", {})
+            if isinstance(coverage, dict):
+                coverage["static_page_size"] = effective_page_size
+                coverage["static_page_count"] = len(paired)
+                coverage["static_layout"] = "paired_rows"
+            frame_index["static_surface"]["pages"] = [Path(path).name for path in paired]
+            frame_index["static_surface"]["svg_pages"] = [Path(path).name for path in _paired_svg_pages(paired, pack_root)]
+        return paired or output_pages
+    from PIL import Image, ImageDraw
+
+    input_images: list[Image.Image] = []
+    try:
+        for path in input_pages:
+            with Image.open(path) as source:
+                input_images.append(source.convert("RGB"))
+        if not input_images:
+            return output_pages
+
+        raw_output_paths: list[Path] = []
+        for output_path_value in output_pages:
+            output_path = Path(output_path_value)
+            if not output_path.is_file():
+                continue
+            raw_path = output_path.with_name(f"rendered-{output_path.name}")
+            output_path.replace(raw_path)
+            raw_output_paths.append(raw_path)
+
+        anchored = _render_time_anchored_output(
+            frame_index, pack_root, options=options or {},
+        ) if frame_index is not None else []
+        surface_paths = anchored or raw_output_paths
+        composed_paths: list[str] = []
+        time_bounds = (0.0, 20.0)
+        if frame_index is not None:
+            projection = frame_index.get("input_projection") if isinstance(frame_index.get("input_projection"), Mapping) else None
+            window = projection.get("window") if isinstance(projection, Mapping) else None
+            provenance = frame_index.get("provenance") if isinstance(frame_index.get("provenance"), Mapping) else None
+            raw_fps = provenance.get("fps_rational") if isinstance(provenance, Mapping) else None
+            try:
+                fps = Fraction(int(raw_fps[0]), int(raw_fps[1])) if raw_fps else Fraction(30, 1)
+                time_bounds = (int(window["start_frame"]) / float(fps), int(window["end_frame"]) / float(fps)) if isinstance(window, Mapping) else time_bounds
+            except (KeyError, TypeError, ValueError, ZeroDivisionError, IndexError):
+                pass
+        for output_path in surface_paths:
+            if not output_path.is_file():
+                continue
+            if anchored:
+                target = _compose_unified_panels(
+                    output_path, input_pages, pack_root=pack_root,
+                    time_bounds=time_bounds,
+                )
+                output_path.unlink(missing_ok=True)
+                composed_paths.append(str(target))
+                continue
+            rendered = None
+            target_path = output_path
+            try:
+                with Image.open(output_path) as source:
+                    rendered = source.convert("RGB")
+                width = max(rendered.width, *(image.width for image in input_images))
+                panels: list[Image.Image] = [rendered]
+                panels.extend(input_images)
+                # Scale the time-based input lanes to the rendered page width
+                # so the shared window occupies the same horizontal surface.
+                scaled: list[Image.Image] = []
+                for panel in panels:
+                    if panel.width == width:
+                        scaled.append(panel)
+                    else:
+                        height = max(1, round(panel.height * width / panel.width))
+                        scaled.append(panel.resize((width, height), Image.Resampling.LANCZOS))
+                separator = 20
+                total_height = sum(panel.height for panel in scaled) + separator * (len(scaled) - 1)
+                sheet = Image.new("RGB", (width, total_height), "#0b1118")
+                draw = ImageDraw.Draw(sheet)
+                y = 0
+                for index, panel in enumerate(scaled):
+                    sheet.paste(panel, (0, y))
+                    y += panel.height
+                    if index < len(scaled) - 1:
+                        draw.rectangle((0, y, width, y + separator), fill="#0b1118")
+                        draw.line((16, y + separator // 2, width - 16, y + separator // 2), fill="#6edac7", width=2)
+                        y += separator
+                if output_path.name.startswith("time-anchored-"):
+                    target_path = pack_root / output_path.name.replace("time-anchored-", "filmstrip-", 1)
+                elif output_path.name.startswith("rendered-"):
+                    target_path = pack_root / output_path.name.replace("rendered-", "", 1)
+                sheet.save(target_path)
+                if output_path.name.startswith("time-anchored-"):
+                    output_path.unlink(missing_ok=True)
+            finally:
+                if rendered is not None:
+                    rendered.close()
+            composed_paths.append(str(target_path))
+        return composed_paths or output_pages
+    finally:
+        for image in input_images:
+            image.close()
+
+
 def execute_filmstrip(args, *, authority=None):
     if args.filmstrip_authority:
         authority = json.loads(args.filmstrip_authority)
-    if not isinstance(authority, dict) or authority.get('mode') != 'filmstrip':
+    if not isinstance(authority, dict) or authority.get('mode') not in {'filmstrip', 'input_only'}:
         raise ValueError('Rendered filmstrips require managed SDK admission.')
+    if authority.get('mode') == 'input_only':
+        return execute_input_only(args, authority)
     snapshot = authority.get('filmstrip_snapshot')
     if not isinstance(snapshot, dict) or snapshot.get('project_slug') != args.project_slug:
         raise ValueError('Filmstrip authority does not match the project.')
@@ -364,16 +1531,38 @@ def execute_filmstrip(args, *, authority=None):
     with video.open('rb') as stream:
         digest = 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
     if digest != authority.get('video_digest') or digest != snapshot.get('video_digest'):
-        raise ValueError('Materialized rendered video does not match admitted digest.')
+        from .inspection_contract import render_status
+        status = render_status(
+            lifecycle='succeeded',
+            output={'available': True, 'digest': digest, 'run_id': snapshot.get('render_run_id')},
+            expected_digest=str(authority.get('video_digest') or snapshot.get('video_digest') or ''),
+            project=args.project_slug,
+        )
+        error = ValueError('Materialized rendered video does not match admitted digest.')
+        # Preserve a typed status payload for the generic host while retaining
+        # ValueError compatibility for standalone executor callers.
+        error.details = {'inspection_status': status, 'next_actions': status.get('next_actions', [])}
+        raise error
     values = vars(args).copy()
     values['range'] = args.range_value
     options = filmstrip_options(values)
     snapshot = deepcopy(snapshot)
+    options["shot"] = resolve_shot_selector(options.get("shot"), snapshot)
     # Older/unit-test authorities may omit the timing envelope.  Real managed
     # renders always carry it; leave incomplete test authorities untouched so
     # their admission checks remain focused on digest verification.
     if snapshot.get("fps_rational") and snapshot.get("duration_frames"):
         _align_snapshot_to_render(snapshot, video)
+    # The frozen authority intentionally omits filesystem locators. The host
+    # hands this subprocess the verified, attempt-local object map separately;
+    # project it into inspection metadata without changing canonical registry
+    # identity or publishing those locators as durable state.
+    if isinstance(snapshot.get("registry"), Mapping):
+        snapshot.setdefault("metadata", {})["asset_integrity"] = _asset_integrity_from_registry(
+            snapshot.get("registry"),
+            materialized_objects=getattr(args, "materialized_objects", None),
+            materialized_root=getattr(args, "materialized_root", None),
+        )
     analysis_settings = authority.get('audio_analysis_settings')
     out_root = args.out.expanduser().resolve()
     analysis = _cached_audio(out_root.parent, digest, analysis_settings)
@@ -405,9 +1594,45 @@ def execute_filmstrip(args, *, authority=None):
         raise ValueError(f'evidence pack output is not empty: {pack_root}')
     result = build_filmstrip_pack(out_root=pack_root, video_path=video,
                                   snapshot=snapshot, options=options)
+    # Keep optional input evidence as synchronized, full-width timeline panels
+    # in the static delivery too.  When output and inputs are both selected,
+    # compose those panels onto the same public PNG surface while retaining
+    # the standalone input bands as auxiliary evidence.
+    if 'inputs' in (options.get('components') or ()) and result.get('frame_index', {}).get('input_projection'):
+        output_pages = list(result['paths'].get('png') or [])
+        input_pages = _render_input_projection_png(
+            result['frame_index']['input_projection'], snapshot, pack_root)
+        if 'output' in (options.get('components') or ()):
+            output_pages = _compose_synchronized_surface(
+                output_pages, input_pages, pack_root=pack_root,
+                frame_index=result.get('frame_index'), options=options,
+            )
+        result['paths']['png'] = output_pages + [str(path) for path in input_pages]
+        if 'output' in (options.get('components') or ()):
+            frame_index_path = pack_root / 'frame-index.json'
+            frame_index = result.get('frame_index')
+            if isinstance(frame_index, dict):
+                surface = frame_index.setdefault('static_surface', {})
+                surface.setdefault('mode', 'paired_rows')
+                surface.setdefault('components', ['output', 'inputs'])
+                surface['standalone_input_pages'] = [path.name for path in input_pages]
+                paired_svg = [pack_root / name for name in surface.get('svg_pages', [])]
+                if paired_svg:
+                    result['paths']['svg'] = [str(path) for path in paired_svg]
+                frame_index_path.write_text(
+                    json.dumps(frame_index, indent=2, ensure_ascii=False), encoding='utf-8'
+                )
     (pack_root / 'render-snapshot.json').write_text(
         json.dumps(snapshot, indent=2, ensure_ascii=False), encoding='utf-8')
     files = sorted(p for p in pack_root.rglob('*') if p.is_file())
+    png_paths = [Path(path) for path in result['paths'].get('png') or []]
+    primary_png = png_paths[0].relative_to(pack_root).as_posix() if png_paths else None
+    entrypoints = {'frames': 'frame-index.json', 'markdown': 'filmstrip.md'}
+    if png_paths:
+        entrypoints['png'] = primary_png
+    svg_paths = [Path(path) for path in result['paths'].get('svg') or []]
+    if svg_paths:
+        entrypoints['svg'] = svg_paths[0].relative_to(pack_root).as_posix()
     manifest = build_manifest(
         kind='timeline_filmstrip', created='1970-01-01T00:00:00Z',
         inputs={'render_run_id': snapshot['render_run_id'], 'video_digest': digest,
@@ -417,9 +1642,9 @@ def execute_filmstrip(args, *, authority=None):
                 'media': result.get('frame_index', {}).get('media'),
                 'audio_sidecar': result.get('frame_index', {}).get('audio_sidecar')},
         outputs=[{'path': p.relative_to(pack_root).as_posix(), 'type': 'file',
-                  'role': 'result', 'is_primary': p.name == 'filmstrip.html',
+                  'role': 'result', 'is_primary': p.relative_to(pack_root).as_posix() == primary_png,
                   'label': p.relative_to(pack_root).as_posix()} for p in files],
-        entrypoints={'html': 'filmstrip.html', 'frames': 'frame-index.json'},
+        entrypoints=entrypoints,
         timeline_ids=[snapshot['timeline_id']],
         request=options.get('request'),
     )
@@ -461,8 +1686,8 @@ def execute_filmstrip(args, *, authority=None):
         }
 
     # Keep the host receipt small and self-contained.  The bundle is the
-    # canonical delivery artifact; it contains the complete HTML viewer,
-    # nested manifest, PNG pages, and (when requested) the verified video.
+    # canonical delivery artifact; it contains the nested manifest, static
+    # PNG/SVG/Markdown pages, and (when requested) the verified video.
     # Publishing the same large members individually would expand the inline
     # settlement beyond the runtime request limit and duplicate the bundle.
     write_manifest(
@@ -515,10 +1740,14 @@ def execute_filmstrip(args, *, authority=None):
     }
     entrypoints = {
         "manifest": "filmstrip-view/manifest.json",
-        "html": "filmstrip-view/filmstrip.html",
         "frame_index": "filmstrip-view/frame-index.json",
         "bundle": "filmstrip-bundle.zip",
     }
+    if primary_png:
+        entrypoints["png"] = f"filmstrip-view/{primary_png}"
+    if svg_paths:
+        entrypoints["svg"] = f"filmstrip-view/{svg_paths[0].relative_to(pack_root).as_posix()}"
+    entrypoints["markdown"] = "filmstrip-view/filmstrip.md"
     return {'returncode': 0, 'run_root': str(out_root),
             'manifest_path': str(manifest_path), 'timeline_ids': [snapshot['timeline_id']],
             'identity': identity, 'cas': cas, 'entrypoints': entrypoints,

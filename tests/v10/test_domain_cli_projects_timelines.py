@@ -773,7 +773,7 @@ def test_timelines_render_without_ref_and_without_default_fails_cleanly(capsys) 
     assert "default timeline" in json.dumps(payload)
 
 
-def test_timelines_visualize_help_separates_legacy_input_from_manifest_compatibility(
+def test_timelines_visualize_help_describes_filmstrip_navigation(
     capsys,
 ) -> None:
     from astrid.packs.timeline.cli import build_parser
@@ -784,7 +784,8 @@ def test_timelines_visualize_help_separates_legacy_input_from_manifest_compatibi
     assert exc_info.value.code == 0
     normalized = " ".join(capsys.readouterr().out.split())
     assert "Timeline slug, UUID, or ULID" in normalized
-    assert "Prior visualization manifest for frozen navigation" in normalized
+    assert "Rendered paired filmstrip" in normalized
+    assert "structure" not in normalized
     assert "returned durable manifest_path" in normalized
     assert "--include-media" in normalized
 
@@ -1093,7 +1094,6 @@ def test_timelines_visualize_routes_public_sdk_and_normalizes_formats(capsys) ->
             "--timeline-slug", "01TIMELINE",
             "--format", "png,svg",
             "--format", "md",
-            "--all",
             "--json",
         ],
         client=client,
@@ -1109,7 +1109,6 @@ def test_timelines_visualize_routes_public_sdk_and_normalizes_formats(capsys) ->
     assert kwargs["inputs"] == {
         "formats": ["png", "svg", "md"],
         "timeline_slug": "01TIMELINE",
-        "all": True,
         "view": "filmstrip",
     }
     envelope = json.loads(capsys.readouterr().out)

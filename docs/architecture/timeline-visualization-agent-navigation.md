@@ -1,4 +1,9 @@
-# Timeline Visualization — Agent Navigation Contract
+# Timeline Visualization — Agent Navigation Contract (retired structural view)
+
+> Retired: this document describes the former structural evidence route. It is
+> preserved as historical release evidence only and is not an executable
+> navigation guide. The current and only public surface is the paired rendered
+> filmstrip; use `astrid/packs/rendering/skill/SKILL.md` for its commands.
 
 *Status: M1 and M2 complete. Schema versions cited from
 `astrid/packs/rendering/executors/timeline_visualize/schemas/` — every claim
@@ -18,10 +23,9 @@ snapshot:
 astrid timelines visualize --project <slug>
 ```
 
-The default presentation is the rendered filmstrip/storyboard unified
-inspector (and therefore requires a successful managed render). It is the
-primary continuity-review surface; use `--view structure` when the question is
-specifically about the diagnostic track/clip diagram or no render exists yet.
+The former default presentation is retained below for historical release
+evidence. The public command now exposes only the rendered filmstrip/storyboard
+unified inspector and requires a successful managed render.
 
 - **stdout** is exactly one compact JSON object (`sort_keys`, no newline).
   Kernel-managed invocation returns a stable `run_id`, a durable

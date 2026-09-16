@@ -95,11 +95,10 @@ different extension or codec from a backend alias.
 
 ## Visual evidence
 
-`timelines visualize` accepts `png`, `svg`, `md`, or `all` formats and
-`time-scaled`, `linear`, or `both` layouts. Start with `--filmstrip off` when
-there is no verified rendered-video source. The returned manifest and pack root
-are navigation artifacts for the selected frozen runtime state, not editable
-timeline input.
+`timelines visualize` accepts `png`, `svg`, `md`, or `all` formats and always
+produces the paired rendered filmstrip. A successful managed render is required;
+the returned manifest and pack root are navigation artifacts for that render,
+not editable timeline input.
 
 For a successful managed render, `timelines visualize` defaults to
 `--view filmstrip`, which opens the primary unified
@@ -111,5 +110,5 @@ wording, provenance, uncertainty, and coverage. `--include-media` explicitly
 bundles a relative hash-verified video for offline seek/audition. No provider is
 called when the inspector opens, and missing audio, stems, or transcript spans
 are explicit states. Frame, clip, phrase, and gap selections share render-scoped
-targets; `--view structure` remains the structural evidence view and its legacy
-`--from-view`/`--focus` object references remain distinct from filmstrip targets.
+targets; the paired filmstrip is the sole timeline visualization surface and
+its range/shot/clip/track targets are the canonical navigation controls.

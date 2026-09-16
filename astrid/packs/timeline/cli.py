@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 from collections.abc import Mapping
 from typing import Any
 
@@ -301,6 +302,7 @@ def _visualization_artifact_summary(outputs: Mapping[str, Any]) -> dict[str, Any
 def _cmd_visualize(parsed: argparse.Namespace) -> int:
     """Run visualization through the public SDK and product output layer."""
     from astrid.sdk.contracts import DomainResult, ErrorObject
+    human_outputs: Mapping[str, Any] | None = None
 
     # The public CLI intentionally accepts both ``--format png --format svg``
     # and ``--format png,svg``.  Normalize both spellings before the one
@@ -314,21 +316,16 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     inputs: dict[str, Any] = {"formats": formats}
     timeline_slug = parsed.timeline_slug or parsed.timeline_ref
     for name in (
-        "layout", "filmstrip", "rendered_video", "shot",
-        "view", "sample", "every", "every_frames", "include_cuts", "render_run", "columns", "page_size", "resolution",
-        "include_media", "range", "at", "clip", "asset", "context", "neighbors", "from_view",
-        "show", "hide", "track", "detail",
-        "focus",
+        "shot", "view", "sample", "every", "every_frames", "include_cuts",
+        "render_run", "columns", "page_size", "resolution", "include_media",
+        "range", "at", "clip", "asset", "context", "neighbors", "show", "hide",
+        "track", "detail",
     ):
         value = getattr(parsed, name, None)
         if value not in (None, "", []):
             inputs[name] = value
     if timeline_slug not in (None, ""):
         inputs["timeline_slug"] = timeline_slug
-    if parsed.select_all:
-        inputs["all"] = True
-    if parsed.refresh_root:
-        inputs["refresh_root"] = True
     result = parsed.client.invoke_result(
         "rendering.timeline_visualize",
         kind="executor",
@@ -347,6 +344,12 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
             summary = _visualization_artifact_summary(outputs)
             if summary is not None:
                 outputs["artifact_summary"] = summary
+            outputs["navigation"] = _visualization_navigation_help(
+                project=parsed.project,
+                inputs=inputs,
+                outputs=outputs,
+            )
+            human_outputs = outputs
         envelope = DomainResult.success(
             {
                 "capability_id": result.capability_id,
@@ -368,6 +371,7 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
                 details={
                     "sdk_error": detail.get("sdk_error"),
                     "sdk_category": category,
+                    "validation": detail.get("validation"),
                     "run_id": result.run_id,
                     "kernel_run_id": result.kernel_run_id,
                     "kernel_task_id": result.kernel_task_id,
@@ -375,7 +379,156 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
                 },
             )
         )
-    return print_result(envelope, as_json=parsed.json)
+    exit_status = print_result(envelope, as_json=parsed.json)
+    if result.ok and not parsed.json:
+        if human_outputs is not None:
+            _print_visualization_navigation(human_outputs)
+    return exit_status
+
+
+def _visualization_navigation_help(
+    *, project: str | None, inputs: Mapping[str, Any], outputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Expose copyable zoom/sampling/navigation guidance in CLI results."""
+    identity = [
+        "python3", "-m", "astrid", "timelines", "visualize",
+        "--project", str(project or "<project>"),
+    ]
+    timeline = inputs.get("timeline_slug")
+    if timeline not in (None, ""):
+        identity += ["--timeline-slug", str(timeline)]
+    render_run = inputs.get("render_run")
+    if render_run not in (None, ""):
+        identity += ["--render-run", str(render_run)]
+
+    def tokens(value: Any) -> list[str]:
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value if str(item)]
+        return [str(value)] if value not in (None, "") else []
+
+    def base(*, components: bool = True, sampling: bool = True, resolution: bool = True) -> list[str]:
+        argv = identity + ["--view", str(inputs.get("view") or "filmstrip")]
+        if components:
+            shown = tokens(inputs.get("show"))
+            hidden = tokens(inputs.get("hide"))
+            if shown:
+                argv += ["--show", ",".join(shown)]
+            if hidden:
+                argv += ["--hide", ",".join(hidden)]
+            for track in tokens(inputs.get("track")):
+                argv += ["--track", track]
+            for key, flag in (("shot", "--shot"), ("clip", "--clip"), ("asset", "--asset")):
+                value = inputs.get(key)
+                if value not in (None, ""):
+                    argv += [flag, str(value)]
+        if inputs.get("detail"):
+            argv += ["--detail"]
+        if inputs.get("sample") not in (None, "", "interval"):
+            argv += ["--sample", str(inputs["sample"])]
+        if inputs.get("include_cuts"):
+            argv += ["--include-cuts"]
+        if inputs.get("columns") not in (None, ""):
+            argv += ["--columns", str(inputs["columns"])]
+        if inputs.get("page_size") not in (None, ""):
+            argv += ["--page-size", str(inputs["page_size"])]
+        if sampling:
+            range_value = inputs.get("range")
+            if isinstance(range_value, (list, tuple)) and len(range_value) == 2:
+                range_value = f"{range_value[0]}..{range_value[1]}"
+            if range_value not in (None, ""):
+                argv += ["--range", str(range_value)]
+            if inputs.get("at") not in (None, ""):
+                argv += ["--at", str(inputs["at"])]
+            if inputs.get("every") not in (None, ""):
+                argv += ["--every", str(inputs["every"])]
+            if inputs.get("every_frames") not in (None, ""):
+                argv += ["--every-frames", str(inputs["every_frames"])]
+        if resolution and inputs.get("resolution") not in (None, ""):
+            value = inputs["resolution"]
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                value = f"{value[0]}x{value[1]}"
+            argv += ["--resolution", str(value)]
+        return argv
+
+    # Build replacement commands from a clean base so mutually-exclusive
+    # selectors (show/hide, every/every-frames, range/at) never duplicate.
+    input_only = base(components=False, sampling=True, resolution=False) + [
+        "--show", "inputs", "--hide", "output"
+    ]
+    clean = base(sampling=False, resolution=False)
+    zoom_detail = [] if inputs.get("detail") else ["--detail"]
+    pages = outputs.get("pages")
+    primary_page = pages[0] if isinstance(pages, list) and pages else outputs.get("png")
+    paired = "output" in tokens(inputs.get("show")) and "inputs" in tokens(inputs.get("show"))
+    page_status = None
+    if paired and isinstance(pages, list) and len(pages) > 1:
+        page_status = f"Paired view generated {len(pages)} bite-sized pages; open them in numbered order."
+    return {
+        "primary_page": primary_page,
+        "pages": pages,
+        "markdown": outputs.get("markdown"),
+        "frame_index": outputs.get("frame_index"),
+        "status": page_status,
+        "keyboard": [
+            "Open the primary PNG page for visual inspection; use frame-index.json for exact card and asset lookup.",
+            "Use the rerun commands below to zoom, change sampling intervals, or narrow to input lanes.",
+        ],
+        "filters": [
+            "Use Shot, Track, From/To, Samples, and Density by rerunning with the matching flags.",
+            "Density only reduces captured frames; rerun for finer samples.",
+        ],
+        "commands": {
+            "rerun": shlex.join(base()),
+            "zoom": shlex.join(clean + ["--range", "START..END", "--every", "0.25", *zoom_detail]),
+            "interval_seconds": shlex.join(clean + ["--every", "1"]),
+            "interval_frames": shlex.join(clean + ["--every-frames", "12"]),
+            "resolution": shlex.join(base(resolution=False) + ["--resolution", "960x540"]),
+            "inputs_only": shlex.join(input_only),
+            "pages": shlex.join(clean + ["--columns", "5", "--page-size", "10"]),
+        },
+        "notes": [
+            "--range uses a half-open START..END seconds window.",
+            "--every and --every-frames are mutually exclusive.",
+            "--columns/--page-size change static layout; --track narrows input lanes.",
+            "paired output+inputs pages show one row by default (five cards across); use --columns 6 for six across, or pass --page-size N explicitly for a denser two-row page.",
+        ],
+    }
+
+
+def _print_visualization_navigation(outputs: Mapping[str, Any]) -> None:
+    """Print short, copyable navigation hints in human CLI mode.
+
+    ``--json`` already carries the structured ``outputs.navigation`` object;
+    human mode should still be actionable without requiring the operator to
+    rerun the command with another flag.
+    """
+    navigation = outputs.get("navigation")
+    if not isinstance(navigation, Mapping):
+        return
+    print("navigation:")
+    primary_page = navigation.get("primary_page")
+    if primary_page:
+        print(f"  open PNG: {primary_page}")
+    frame_index = navigation.get("frame_index")
+    if frame_index:
+        print(f"  inspect JSON: {frame_index}")
+    status = navigation.get("status")
+    if status:
+        print(f"  status: {status}")
+    commands = navigation.get("commands")
+    if not isinstance(commands, Mapping):
+        return
+    for label, key in (
+        ("zoom", "zoom"),
+        ("interval (seconds)", "interval_seconds"),
+        ("interval (frames)", "interval_frames"),
+        ("resolution", "resolution"),
+        ("inputs only", "inputs_only"),
+        ("pages", "pages"),
+    ):
+        command = commands.get(key)
+        if command:
+            print(f"  {label}: {command}")
 
 
 def _resolve_timeline_ref(client: Any, project: str, ref: str | None) -> str | None:
@@ -450,7 +603,7 @@ def _cmd_render(parsed: argparse.Namespace) -> int:
                 "kernel_run_id": result.kernel_run_id,
                 "kernel_task_id": result.kernel_task_id,
                 "kernel_attempt_id": result.kernel_attempt_id,
-                "state": "completed" if parsed.wait else "admitted",
+                "state": str((result.raw_result or {}).get("state") or ("completed" if parsed.wait else "admitted")),
                 "handoff": handoff,
                 "outputs": result.outputs,
             }
@@ -458,6 +611,9 @@ def _cmd_render(parsed: argparse.Namespace) -> int:
     else:
         detail = dict(result.error or {})
         category = str(detail.get("sdk_category") or "invocation")
+        task_id = result.kernel_task_id
+        run_id = result.kernel_run_id or result.run_id
+        handoff = task_handoff(project=parsed.project, task_id=task_id, run_id=run_id) if task_id else {}
         envelope = DomainResult.failure(
             ErrorObject(
                 code="validation_error" if category == "validation" else "invocation_error",
@@ -470,6 +626,8 @@ def _cmd_render(parsed: argparse.Namespace) -> int:
                     "kernel_run_id": result.kernel_run_id,
                     "kernel_task_id": result.kernel_task_id,
                     "kernel_attempt_id": result.kernel_attempt_id,
+                    "state": (result.raw_result or {}).get("state"),
+                    "handoff": handoff,
                 },
             )
         )
@@ -655,17 +813,22 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
         help="Timeline slug, UUID, or ULID; omit to use the project default.",
     )
     subparser.add_argument(
-        "--all", dest="select_all", action="store_true",
-        help="Visualize every active timeline in the project.",
+        "--shot", default=None,
+        help=(
+            "Focus an authored shot id or exact name; use 'first' or a positive "
+            "one-based authored-order ordinal (for example 1) for friendly shot selection."
+        ),
     )
-    subparser.add_argument("--shot", default=None, help="Focus an authored shot id.")
-    subparser.add_argument("--range", dest="range", default=None, help="Focus a closed-open START..END window.")
+    subparser.add_argument("--range", dest="range", default=None, help="Zoom to a closed-open START..END seconds window.")
     subparser.add_argument("--at", default=None, help="Focus a timestamp.")
     subparser.add_argument("--clip", default=None, help="Focus an authored clip id.")
     subparser.add_argument("--asset", default=None, help="Focus a canonical asset key.")
     subparser.add_argument(
         "--show", action="append", default=None, metavar="COMPONENT[,COMPONENT...]",
-        help="Add synchronized components: inputs, output, text, or audio.",
+        help=(
+            "Add synchronized components: inputs, output, text, or audio "
+            "(default: output,text,audio; add inputs for the paired view)."
+        ),
     )
     subparser.add_argument(
         "--hide", action="append", default=None, metavar="COMPONENT[,COMPONENT...]",
@@ -677,7 +840,7 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
     )
     subparser.add_argument(
         "--detail", action="store_true", default=None,
-        help="Open the current time/target in the shared detail selection.",
+        help="Use enlarged frame, waveform, and text panels; combine with --range/--shot for a focused inspection.",
     )
     subparser.add_argument("--context", type=float, default=None, help="Context seconds around a focus.")
     subparser.add_argument("--neighbors", type=int, default=None, help="Neighbor clips retained around a focus.")
@@ -688,20 +851,17 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
     )
     subparser.add_argument(
         "--view",
-        choices=("structure", "filmstrip"),
+        choices=("filmstrip",),
         default="filmstrip",
-        help=(
-            "Rendered storyboard/filmstrip with an offline HTML viewer (default); "
-            "use structure for the diagnostic timeline diagram."
-        ),
+        help="Rendered paired filmstrip as static PNG/SVG/Markdown/JSON evidence (default and only view).",
     )
     subparser.add_argument("--sample", choices=("interval", "clips", "cuts", "shots"), default=None,
                            help="Filmstrip sampling: interval (default), picture clips, cut boundaries, or authored story beats.")
     sampling = subparser.add_mutually_exclusive_group()
     sampling.add_argument("--every", type=float, default=None,
-                          help="Filmstrip interval in seconds (default: 0.5).")
+                          help="Filmstrip interval in seconds (default: 0.5); rerun with --range START..END to zoom.")
     sampling.add_argument("--every-frames", type=int, default=None,
-                          help="Filmstrip interval in integer rendered frames; replaces --every.")
+                          help="Filmstrip interval in exact rendered frames; replaces --every (rerun for finer samples).")
     subparser.add_argument(
         "--include-cuts", action="store_true", default=None,
         help="With interval sampling, also capture visual cut-neighbor frames.",
@@ -709,33 +869,14 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--render-run", default=None,
                            help="Exact successful render run, or latest (filmstrip default).")
     subparser.add_argument("--columns", type=int, default=None,
-                           help="Filmstrip contact sheet columns (default: 5).")
+                           help="Filmstrip contact sheet columns (default: 5; paired pages use one row by default).")
     subparser.add_argument("--page-size", type=int, default=None,
-                           help="Filmstrip cards per static page (default: 50).")
+                           help="Filmstrip cards per static page (default: 50 standalone; paired pages use one row, or explicitly opt into up to two rows / 10 cards).")
     subparser.add_argument("--resolution", default=None, metavar="WIDTHxHEIGHT",
-                           help="Filmstrip frame resolution, recorded and applied exactly by the executor.")
+                           help="Filmstrip frame resolution, e.g. 960x540; recorded and applied exactly by the executor.")
     subparser.add_argument(
         "--include-media", action="store_true", default=None,
         help="Include a relative, digest-verified rendered video for offline filmstrip playback.",
-    )
-    subparser.add_argument("--layout", choices=("time-scaled", "linear", "both"), default=None)
-    subparser.add_argument(
-        "--filmstrip", choices=("auto", "off", "assets", "rendered"), default=None,
-        help="Filmstrip policy for visual evidence.",
-    )
-    subparser.add_argument(
-        "--rendered-video",
-        default=None,
-        help=(
-            "Legacy structural thumbnail source; not valid with --view filmstrip. "
-            "Use the project-owned managed render selected by --render-run instead."
-        ),
-    )
-    subparser.add_argument("--from-view", default=None, help="Prior visualization manifest for frozen navigation.")
-    subparser.add_argument("--focus", default=None, help="Qualified object/timestamp focus within --from-view.")
-    subparser.add_argument(
-        "--refresh-root", action="store_true",
-        help="Refresh current state from a frozen root (requires --from-view/--focus TL01).",
     )
     subparser.add_argument(
         "--out", default=None,

@@ -52,9 +52,9 @@ def resolution(value: Any) -> list[int] | None:
 
 def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize only public controls; never accept an unbounded sampling job."""
-    # Component/target grammar is shared with the structural executor and SDK
-    # admission. Keep the legacy filmstrip fields below intact for envelope
-    # compatibility, but carry the resolved contract alongside them.
+    # Component/target grammar is shared with SDK admission. Keep the
+    # normalized fields alongside the resolved contract so the executor and
+    # the public CLI describe the same filmstrip request.
     shared = inspection_options(values)
     sample = values.get('sample') or 'interval'
     if sample not in {'interval', 'clips', 'shots', 'cuts'}:
@@ -97,6 +97,10 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
         'detail': shared['detail'],
         'input_window': shared['window'],
     })
+    # Keep omission distinguishable from an explicit page-size override. The
+    # paired renderer uses that distinction to make the normal input+output
+    # view one row wide while still allowing a caller to request denser pages.
+    result['page_size_explicit'] = values.get('page_size') is not None
     for name, default, maximum in [('columns', 5, 8), ('page_size', 50, 100)]:
         n = values.get(name, default)
         if n is None:

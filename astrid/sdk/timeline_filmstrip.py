@@ -18,8 +18,17 @@ _AUTHORITY_IDENTITY_FIELDS = (
 )
 
 
-def _fail(message: str) -> None:
-    raise CapabilityValidationError(message)
+def _fail(message: str, *, details: Mapping[str, Any] | None = None) -> None:
+    """Raise a typed preflight error without collapsing recovery metadata."""
+    raise CapabilityValidationError(message, details=details)
+
+
+def _status_failure(status: Mapping[str, Any]) -> None:
+    """Expose the shared lifecycle classification in SDK validation details."""
+    _fail(str(status.get("label") or "timeline render is not available"), details={
+        "inspection_status": dict(status),
+        "next_actions": list(status.get("next_actions") or status.get("actions") or []),
+    })
 
 
 def _envelope(task: Mapping) -> Mapping:
@@ -67,6 +76,54 @@ def _timeline_snapshot(envelope: Mapping) -> Mapping:
         _fail('Render frozen timeline snapshots disagree; rerender the selected timeline.')
     snapshot = nested if nested_present else sibling if sibling_present else {}
     return snapshot
+
+
+def _expand_input_snapshot(client: Any, config: Mapping[str, Any], registry: Mapping[str, Any], authority: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Flatten admitted child timelines for input inspection.
+
+    Render admission normally stores this already-expanded config in its
+    immutable envelope.  The current-timeline, render-free lane may still
+    contain authored ``clipType=shot`` placements, so expand those children
+    through the SDK read surface while enforcing any immutable child pins
+    supplied by a render authority.  A changed pinned child fails closed.
+    """
+    raw_clips = config.get('clips') if isinstance(config, Mapping) else None
+    if not isinstance(raw_clips, list) or not any(isinstance(c, Mapping) and c.get('clipType') == 'shot' for c in raw_clips):
+        return deepcopy(dict(config)), deepcopy(dict(registry))
+    from astrid.core.timeline.expand_shots import expand_shot_clips
+    child_pins = {}
+    if isinstance(authority, Mapping):
+        expansion = authority.get('expansion')
+        if isinstance(expansion, Mapping):
+            for child in expansion.get('children') or []:
+                if isinstance(child, Mapping) and child.get('timeline_id'):
+                    child_pins[str(child['timeline_id'])] = child
+                    if child.get('slug'):
+                        child_pins[str(child['slug'])] = child
+
+    def as_mapping(value):
+        if isinstance(value, Mapping):
+            return value
+        data = getattr(value, 'data', None)
+        return data if isinstance(data, Mapping) else None
+
+    def load_child(ref):
+        child = as_mapping(client.get_timeline(str(ref)))
+        if not child:
+            raise ValueError(f'child timeline {ref!r} was not found')
+        pin = child_pins.get(str(ref))
+        if pin is not None and pin.get('config_version') is not None and int(child.get('config_version', -1)) != int(pin['config_version']):
+            raise ValueError(f'child timeline {ref!r} is no longer at pinned config_version {pin["config_version"]}')
+        child_config, child_registry = child.get('config'), child.get('registry')
+        if not isinstance(child_config, Mapping) or not isinstance(child_registry, Mapping):
+            raise ValueError(f'child timeline {ref!r} has an invalid immutable snapshot')
+        return child_config, child_registry
+
+    try:
+        expanded, merged = expand_shot_clips(config, registry, load_timeline=load_child)
+    except Exception as exc:
+        _fail(f'Input inspection cannot expand child timeline placements: {exc}')
+    return deepcopy(dict(expanded)), deepcopy(dict(merged))
 
 
 def _digest(value: Any) -> str:
@@ -267,6 +324,7 @@ def build_filmstrip_snapshot(envelope: Mapping, *, client: Any, project: str, ru
         'duration_frames': rendered_duration_frames,
         'clips': clips, 'scripts': scripts, 'occurrences': shot_occurrences,
         'tracks': deepcopy(config.get('tracks', [])),
+        'registry': deepcopy(timeline.get('registry') or inputs.get('registry') or {}),
         'metadata': {'canonical_timeline': deepcopy(authority),
             'authored_duration_frames': authored_duration_frames,
             'rendered_duration_frames': rendered_duration_frames,
@@ -285,6 +343,7 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
         with AstridClient.open_from_launcher() as connected:
             return prepare_filmstrip(inputs, project=project, client=connected)
     client = getattr(getattr(client, '_remote', None), '_transport', client)
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import render_status
     if inputs.get('rendered_video'):
         _fail('Filmstrip review accepts a managed --render-run, not --rendered-video.')
     project_row = client.get_project(project)
@@ -294,6 +353,8 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
     if exact == 'latest':
         exact = None
     canonical_project = str(project_row.get('slug') or project)
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import normalize_components
+    components = normalize_components(inputs.get('show'), inputs.get('hide'))
     timeline_row = None
     if selector or not exact:
         selector = selector or project_row.get('metadata', {}).get('default_timeline_id')
@@ -301,50 +362,203 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
         timeline_row = next((r for r in rows if selector in {r.get('timeline_id'), r.get('id'), r.get('slug')}), None)
         if timeline_row is None:
             _fail('Select a canonical timeline before filmstrip review.')
+    # Input-only inspection is a read-only timeline projection. It intentionally
+    # does not list runs, inspect tasks, or request a render. The executor gets
+    # this immutable row through the same authority envelope as rendered
+    # review, so input/output admission remains one coherent path.
+    # An exact render-run selector must take the immutable snapshot pinned by
+    # that run, even when a timeline slug is also supplied.  Only the ordinary
+    # input-only path may read the current canonical timeline row.
+    if 'output' not in components['resolved'] and timeline_row is not None and not exact:
+        config = timeline_row.get('config') or timeline_row.get('configuration') or {}
+        registry = timeline_row.get('registry') or timeline_row.get('assets_registry') or {'assets': {}}
+        if not isinstance(config, Mapping) or not isinstance(registry, Mapping):
+            _fail('Timeline has no immutable canonical input snapshot.')
+        config, registry = _expand_input_snapshot(client, config, registry)
+        from astrid.core.timeline.duration import timeline_duration_frames
+        from fractions import Fraction
+        canvas = config.get('theme_overrides', {}).get('visual', {}).get('canvas', {})
+        fps = canvas.get('fps', 30) if isinstance(canvas, Mapping) else 30
+        try:
+            fps_fraction = Fraction(str(fps))
+            duration_frames = timeline_duration_frames(config, float(fps_fraction))
+        except (TypeError, ValueError):
+            fps_fraction = Fraction(30, 1)
+            duration_frames = 0
+        return {
+            'mode': 'input_only', 'project_id': project_id,
+            'timeline_id': _identifier(timeline_row, 'timeline_id', 'id'),
+            'timeline_slug': _identifier(timeline_row, 'slug', 'timeline_id', 'id'),
+            'component_request': components,
+            'input_snapshot': {
+                'project_slug': canonical_project,
+                'timeline_id': _identifier(timeline_row, 'timeline_id', 'id'),
+                'timeline_name': _identifier(timeline_row, 'slug', 'timeline_id', 'id'),
+                'fps_rational': [fps_fraction.numerator, fps_fraction.denominator], 'duration_frames': int(duration_frames),
+                'clips': deepcopy(config.get('clips') or []),
+                # Preserve authored shot order/membership for render-free
+                # filmstrip selectors (the flattened clip list alone does not
+                # carry pinnedShotGroups).
+                'pinned_shots': deepcopy(config.get('pinnedShotGroups') or []),
+                'tracks': deepcopy(config.get('tracks') or []),
+                'registry': deepcopy(dict(registry)),
+                'metadata': {
+                    'selection': 'input_only', 'authority': 'canonical_timeline_snapshot',
+                    'input_expansion': {'children': [], 'flattened': any(isinstance(c, Mapping) and c.get('shot_occurrence_id') for c in config.get('clips', []))},
+                    'timeline_identity': {
+                        key: timeline_row.get(key)
+                        for key in ('timeline_id', 'slug', 'config_version', 'head_event_id', 'head_hash', 'registry_hash')
+                        if timeline_row.get(key) is not None
+                    },
+                },
+            },
+        }
     if exact:
         candidates = [client.get_run(exact)]
     else:
         candidates = paged_rows(client.list_project_runs, project_id, limit=50) or []
         candidates = sorted(candidates, key=lambda r: (str(r.get('created_at', '')), _identifier(r, 'id', 'run_id')), reverse=True)
     selected = None
+    observed: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
     for candidate in candidates:
         run = client.get_run(_identifier(candidate, 'id', 'run_id'))
-        if _identifier(run, 'project_id', 'project') != project_id or _render_capability(run) != 'rendering.render' or _state(run) not in _SUCCESS_STATES:
+        if _identifier(run, 'project_id', 'project') != project_id:
+            if exact:
+                _status_failure(render_status(
+                    lifecycle=_state(run), output={"run_id": _identifier(run, "id", "run_id"), "timeline": selector},
+                    owner_ok=False, project=project,
+                ))
+            observed.append((run, {}))
             continue
+        if _render_capability(run) != 'rendering.render':
+            continue
+        lifecycle = _state(run)
         tasks = [client.get_task(t) for t in run.get('task_ids', [])]
-        tasks = [t for t in tasks if _render_capability(t) == 'rendering.render' and _state(t) in _SUCCESS_STATES]
+        render_tasks = [t for t in tasks if _render_capability(t) == 'rendering.render']
+        task_state = _state(render_tasks[0]) if len(render_tasks) == 1 else lifecycle
+        observed.append((run, render_tasks[0] if len(render_tasks) == 1 else {}))
+        # Scope a latest-run status to the selected canonical timeline before
+        # classifying lifecycle.  A pending render for another timeline in the
+        # same project must not mask this timeline's successful render.
+        candidate_authority = None
+        candidate_envelope = None
+        if len(render_tasks) == 1:
+            try:
+                candidate_envelope = _envelope(render_tasks[0])
+                candidate_authority = _authority(candidate_envelope)
+            except CapabilityValidationError:
+                candidate_envelope = None
+        if timeline_row and candidate_authority is not None and candidate_authority.get('timeline_id') != _identifier(timeline_row, 'timeline_id', 'id'):
+            continue
+        if lifecycle not in _SUCCESS_STATES or task_state not in _SUCCESS_STATES:
+            # ``--render-run`` pins the input authority even when production
+            # failed. This is the render-free recovery lane; it must not be
+            # mistaken for an implicit retry or a successful output.
+            if exact and 'output' not in components['resolved'] and len(render_tasks) == 1:
+                try:
+                    envelope = candidate_envelope or _envelope(render_tasks[0])
+                    authority = candidate_authority or _authority(envelope)
+                    if timeline_row is None or authority.get('timeline_id') == _identifier(timeline_row, 'timeline_id', 'id'):
+                        selected = (run, render_tasks[0], envelope, authority)
+                        break
+                except CapabilityValidationError:
+                    pass
+            # An exact run is a direct status query; latest ignores unrelated
+            # non-terminal candidates but still reports a useful state when no
+            # successful candidate exists.
+            if exact or (timeline_row is not None and lifecycle in {'pending', 'queued', 'running', 'admitted', 'starting', 'in_progress', 'failed', 'error', 'cancelled', 'canceled'}):
+                record = {'run_id': _identifier(run, 'id', 'run_id'), 'task_id': _identifier(render_tasks[0], 'id', 'task_id') if render_tasks else None, 'timeline': selector}
+                _status_failure(render_status(lifecycle=task_state, output=record, project=project))
+            continue
+        tasks = [t for t in render_tasks if _state(t) in _SUCCESS_STATES]
         if len(tasks) != 1:
             continue
-        task = tasks[0]; envelope = _envelope(task)
-        authority = _authority(envelope)
+        task = tasks[0]; envelope = candidate_envelope or _envelope(task)
+        authority = candidate_authority or _authority(envelope)
         if timeline_row and authority.get('timeline_id') != _identifier(timeline_row, 'timeline_id', 'id'):
             continue
         selected = (run, task, envelope, authority)
         break
     if selected is None:
-        _fail(f'No successful render for this selection. Run: python3 -m astrid timelines render {selector or "<timeline>"} --project {project}')
+        _status_failure(render_status(lifecycle="absent", output={"timeline": selector}, project=project))
     run, task, envelope, authority = selected
+    if 'output' not in components['resolved']:
+        timeline_snapshot = _timeline_snapshot(envelope)
+        config = timeline_snapshot.get('config', {})
+        registry = timeline_snapshot.get('registry', {})
+        if not isinstance(config, Mapping) or not isinstance(registry, Mapping):
+            _fail('Render has no immutable canonical input snapshot.')
+        config, registry = _expand_input_snapshot(client, config, registry, authority)
+        from astrid.core.timeline.duration import timeline_duration_frames
+        from fractions import Fraction
+        canvas = config.get('theme_overrides', {}).get('visual', {}).get('canvas', {})
+        fps = canvas.get('fps', 30) if isinstance(canvas, Mapping) else 30
+        try:
+            fps_fraction = Fraction(str(fps))
+            duration_frames = timeline_duration_frames(config, float(fps_fraction))
+        except (TypeError, ValueError):
+            fps_fraction = Fraction(30, 1)
+            duration_frames = 0
+        return {
+            'mode': 'input_only', 'project_id': project_id,
+            'timeline_id': authority.get('timeline_id'),
+            'timeline_slug': selector or authority.get('timeline_slug') or authority.get('timeline_id'),
+            'render_run_id': _identifier(run, 'id', 'run_id'),
+            'component_request': components,
+            'input_snapshot': {
+                'project_slug': canonical_project, 'timeline_id': authority.get('timeline_id'),
+                'timeline_name': selector or authority.get('timeline_slug') or authority.get('timeline_id'),
+                'fps_rational': [fps_fraction.numerator, fps_fraction.denominator], 'duration_frames': int(duration_frames),
+                'clips': deepcopy(config.get('clips') or []),
+                'pinned_shots': deepcopy(config.get('pinnedShotGroups') or []),
+                'tracks': deepcopy(config.get('tracks') or []),
+                'registry': deepcopy(dict(registry)),
+                'metadata': {
+                    'selection': 'render_pinned_input_only',
+                    'render_run_id': _identifier(run, 'id', 'run_id'),
+                    'authority': deepcopy(dict(authority)),
+                    'input_expansion': {'children': deepcopy((authority.get('expansion') or {}).get('children') or []), 'flattened': True},
+                    'timeline_identity': {
+                        key: authority.get(key)
+                        for key in ('timeline_id', 'timeline_slug', 'config_version', 'head_event_id', 'head_hash', 'registry_hash')
+                        if authority.get(key) is not None
+                    },
+                },
+            },
+        }
     if not exact:
         pins = [{'timeline_id': authority['timeline_id'], 'config_version': authority.get('config_version')}]
         pins += authority.get('expansion', {}).get('children', [])
         for pin in pins:
             current = client.get_timeline(pin['timeline_id'])
             if current.get('config_version') != pin.get('config_version'):
-                _fail(f'Latest render is stale. Run: python3 -m astrid timelines render {selector} --project {project}; or inspect the old render explicitly with --render-run {_identifier(run, "id", "run_id")}.')
+                _status_failure(render_status(
+                    lifecycle="succeeded",
+                    output={"available": True, "run_id": _identifier(run, "id", "run_id"), "timeline": selector},
+                    fresh=False, project=project,
+                ))
         # Script-only edits do not necessarily advance timeline versions.
         for shot in authority.get('expansion', {}).get('shots', []):
             for binding in shot.get('text_bindings', []):
                 current = client.get_project_shot_text_binding(project_id, binding['binding_id'])
                 if current.get('head') != binding.get('head') or current.get('content_hash') != binding.get('content_hash'):
-                    _fail(f'Latest render has stale script text; rerender {selector} in project {project}, or select its --render-run explicitly.')
+                    _status_failure(render_status(
+                        lifecycle="succeeded",
+                        output={"available": True, "run_id": _identifier(run, "id", "run_id"), "timeline": selector},
+                        fresh=False, project=project,
+                    ))
     outputs = task.get('result', {}).get('outputs', [])
     videos = [o for o in outputs if o.get('name') == 'video']
     if len(videos) != 1:
-        _fail('Render must publish exactly one managed video output.')
+        _status_failure(render_status(
+            lifecycle="succeeded", output={"available": False, "run_id": _identifier(run, "id", "run_id"), "timeline": selector}, project=project,
+        ))
     digest = _digest(videos[0].get('digest') or videos[0].get('object_id'))
     objects = paged_rows(client.list_project_objects, project_id, limit=50) or []
     if not any(digest in {o.get('object_id'), o.get('digest')} for o in objects):
-        _fail('Rendered video is not owned by the selected project.')
+        _status_failure(render_status(
+            lifecycle="succeeded", output={"available": True, "digest": digest, "run_id": _identifier(run, "id", "run_id"), "timeline": selector}, owner_ok=False, project=project,
+        ))
     run_id = _identifier(run, 'id', 'run_id')
     snapshot = build_filmstrip_snapshot(envelope, client=client, project=canonical_project, run_id=run_id, video_digest=digest)
     snapshot['metadata']['selection'] = 'explicit_render' if exact else 'latest_current_render'

@@ -1,6 +1,5 @@
 from fractions import Fraction
 import copy
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -9,7 +8,7 @@ import subprocess
 import pytest
 
 from astrid.packs.rendering.executors.timeline_visualize import filmstrip_cards
-from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip, build_filmstrip_pack
+from astrid.packs.rendering.executors.timeline_visualize.filmstrip_cards import plan_filmstrip, build_filmstrip_pack, _attach_input_navigation
 from astrid.packs.rendering.executors.timeline_visualize.filmstrip_options import filmstrip_options
 
 
@@ -24,6 +23,16 @@ def test_integer_fractional_fps_and_half_open_window():
     assert [c['frame'] for c in index['cards']] == [29, 44, 59]
     for c in index['cards']:
         assert Fraction(*c['time_rational']) == Fraction(c['frame'] * 1001, 30000)
+
+
+def test_five_second_grid_is_strict_and_half_open():
+    focused = plan_filmstrip(snapshot(fps_rational=[30, 1], duration_frames=600),
+                             {'range': [0, 5], 'every': 5})
+    assert [card['time_seconds'] for card in focused['cards']] == [0.0]
+    full = plan_filmstrip(snapshot(fps_rational=[30, 1], duration_frames=3512),
+                          {'every': 5})
+    assert [card['time_seconds'] for card in full['cards'][:4]] == [0.0, 5.0, 10.0, 15.0]
+    assert full['cards'][-1]['time_seconds'] == 115.0
 
 
 def test_cut_neighbors_are_opt_in_between_sparse_intervals():
@@ -84,6 +93,10 @@ def test_shot_script_display_is_once_per_occurrence_without_fake_timing():
     assert cards[1]['display_scripts'] == []
     assert cards[1]['caption_status'] == 'same shot; no new timed text'
     assert cards[0]['scripts'][0]['text'] == cards[1]['scripts'][0]['text'] == 'Shot context'
+    first_lines = filmstrip_cards._static_lines(cards[0])
+    later_lines = filmstrip_cards._static_lines(cards[1])
+    assert any('Shot context' in line for line in first_lines)
+    assert not any('Shot context' in line or 'not word-aligned' in line for line in later_lines)
 
 
 def test_filters_and_bounds_are_enforced():
@@ -97,6 +110,47 @@ def test_filters_and_bounds_are_enforced():
         plan_filmstrip(snapshot(), {'every': 0})
     with pytest.raises(ValueError, match='positive integer'):
         plan_filmstrip(snapshot(), {'every_frames': 1.5})
+
+
+def test_friendly_shot_aliases_resolve_in_authored_order():
+    base = snapshot(
+        duration_frames=144,
+        clips=[
+            dict(id='a', kind='video', asset='one', at=0, duration=2, shot_id='shot-a', shot_name='Opening'),
+            dict(id='b', kind='video', asset='two', at=2, duration=2, shot_id='shot-b', shot_name='Middle'),
+        ],
+        occurrences=[
+            dict(occurrence_id='occ-a', shot_id='shot-a', shot_name='Opening', start=0, end=2, start_frame=0, end_frame=48),
+            dict(occurrence_id='occ-b', shot_id='shot-b', shot_name='Middle', start=2, end=4, start_frame=48, end_frame=96),
+        ],
+    )
+    assert [card['clips'][0]['shot_id'] for card in plan_filmstrip(base, {'shot': 'first'})['cards']] == ['shot-a'] * 4
+    assert [card['clips'][0]['shot_id'] for card in plan_filmstrip(base, {'shot': '2'})['cards']] == ['shot-b'] * 4
+    assert [card['clips'][0]['shot_id'] for card in plan_filmstrip(base, {'shot': 'Opening'})['cards']] == ['shot-a'] * 4
+    # Canonical ids win over ordinal interpretation.
+    exact_numeric = dict(base, clips=[dict(base['clips'][0], shot_id='1')], occurrences=[])
+    assert plan_filmstrip(exact_numeric, {'shot': '1'})['cards'][0]['clips'][0]['shot_id'] == '1'
+    with pytest.raises(ValueError, match='out of range'):
+        plan_filmstrip(base, {'shot': '3'})
+
+
+def test_input_navigation_keeps_track_occurrences_distinct_and_copyable():
+    index = {
+        'provenance': {'project_slug': 'demo', 'timeline_id': 'main', 'render_run_id': 'run'},
+        'navigation': {'tracks': [], 'clips': [], 'targets': {}},
+    }
+    projection = {
+        'window': {'fps': [24, 1]},
+        'tracks': [
+            {'track_id': 'picture', 'clips': [{'clip_id': 'same', 'occurrence_id': 'occ', 'window': [0, 24], 'source_time': [[0, 1], [1, 1]], 'source_preview': {'status': 'placeholder'}, 'subrow': 0}]},
+            {'track_id': 'vo', 'clips': [{'clip_id': 'same', 'occurrence_id': 'occ', 'window': [0, 24], 'source_time': [[0, 1], [1, 1]], 'source_preview': {'status': 'placeholder'}, 'subrow': 0}]},
+        ],
+    }
+    _attach_input_navigation(index, projection, track_meta=[{'id': 'picture', 'kind': 'visual'}, {'id': 'vo', 'kind': 'audio'}])
+    targets = [key for key in index['navigation']['targets'] if key.startswith('input-clip-')]
+    assert len(targets) == 2 and targets[0] != targets[1]
+    assert all('focus_command' in index['navigation']['targets'][key]['actions'] for key in targets)
+    assert all('seek' not in index['navigation']['targets'][key]['actions'] for key in targets)
 
 
 def test_v1_04_records_range_density_and_resolution_separately():
@@ -130,16 +184,13 @@ def test_shots_sample_authored_midpoint():
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg required')
-def test_pack_uses_rendered_frames_and_escapes_html(tmp_path):
+def test_pack_uses_rendered_frames_without_html_artifact(tmp_path):
     video = tmp_path / 'render.mp4'
     subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=24:duration=4', '-c:v', 'libx264', '-y', str(video)], check=True)
     snap = snapshot(scripts=[dict(start=0, end=4, text='</script><script>alert("x")</script>')], metadata={'selection': 'explicit_render'})
     result = build_filmstrip_pack(out_root=tmp_path / 'pack', video_path=video, snapshot=snap, options={'every': 2})
-    page = Path(result['paths']['html']).read_text()
-    assert '</script><script>alert' not in page
-    assert '\\u003c/script\\u003e' in page
-    assert 'data:image/jpeg;base64,' in page
-    assert 'https://' not in page
+    assert set(result['paths']) == {'png', 'svg', 'json', 'markdown'}
+    assert not (tmp_path / 'pack' / 'filmstrip.html').exists()
     index = json.loads(Path(result['paths']['json']).read_text())
     assert index['provenance']['render_run_id'] == 'run-exact'
     assert '--render-run run-exact' in index['cards'][0]['actions']['focus_command']
@@ -149,6 +200,9 @@ def test_pack_uses_rendered_frames_and_escapes_html(tmp_path):
         assert r > 200 and g < 30 and b < 30
     assert Path(result['paths']['png'][0]).exists()
     svg = Path(result['paths']['svg'][0]).read_text()
+    markdown = Path(result['paths']['markdown']).read_text()
+    assert '</script><script>alert' not in svg
+    assert '</script><script>alert' not in markdown
     assert '&lt;/script&gt;' in svg
     assert 'Render run-exact · selection: explicit_render' in svg
 
@@ -229,7 +283,7 @@ def test_static_captions_are_bounded_and_full_script_preserved():
     card = plan_filmstrip(snapshot(scripts=[dict(start=0, end=4, text=text)]), {})['cards'][0]
     lines = _static_lines(card)
     assert len(lines) <= 16
-    assert lines[-1] == '[Excerpt; full text in HTML / JSON]'
+    assert lines[-1] == '[Excerpt; full text in JSON / Markdown]'
     assert card['scripts'][0]['text'] == text
 
 
@@ -334,12 +388,13 @@ def _static_fixture(root, *, size=(64, 36), color=(32, 64, 96)):
     return image_path
 
 
-def test_static_svg_remains_byte_stable_against_captured_legacy_fixture(tmp_path):
+def test_static_svg_centers_card_text_in_its_body_area(tmp_path):
     _static_fixture(tmp_path)
     card = _static_card(name='Baseline shot', script='Baseline authored script')
     pages = filmstrip_cards._static_svg([card], tmp_path, 1, 50, 'Baseline timeline', 'run-baseline', 'selection')
     svg = pages[0][3]
-    assert hashlib.sha256(svg.encode('utf-8')).hexdigest() == '0928d6845ed18d93b89e1a3f9316a35652839b62ac55420ee4b81caa38cc40c9'
+    assert 'text-anchor="middle"' in svg
+    assert 'x="180"' in svg
 
 
 def test_png_text_is_measured_bounded_and_unicode_safe():
@@ -493,6 +548,10 @@ def test_png_waveform_projects_frozen_audio_bins_into_card_strip(tmp_path):
     metrics = filmstrip_cards._png_card_metrics(measure, card, *fonts, audio)
     assert metrics['waveform'] is not None
     assert max(metrics['waveform']['amplitudes']) == pytest.approx(0.8)
+    # The measured values stay intact, while a quiet mix gets a display-only
+    # peak normalization so its voice waveform remains legible in a card.
+    assert max(metrics['waveform']['display_amplitudes']) == pytest.approx(0.96)
+    assert metrics['waveform']['display_amplitudes'][30] == pytest.approx(0.0)
     assert metrics['audio_extra'] == filmstrip_cards._PNG_AUDIO_HEIGHT + 8
     result = filmstrip_cards._static_png([card], tmp_path, 1, 50, 'A story', 'run', 'selection', audio)
     assert Path(result[0]).exists()

@@ -11,6 +11,7 @@ import pytest
 from astrid.packs.rendering.executors.timeline_visualize.audio_analysis import (
     AudioAnalysisError,
     analyze_audio,
+    project_waveform,
 )
 
 
@@ -72,3 +73,25 @@ def test_analysis_bounds_gap_sidecar(tmp_path):
     assert len(result["quiet_gaps"]) == 1
     assert result["coverage"]["quiet_gaps"] == "truncated"
     assert result["coverage"]["state"] == "partial"
+
+
+def test_project_waveform_uses_source_interval_and_preserves_silence():
+    analysis = {
+        "status": "ok",
+        "stream": {"sample_rate": 10, "channels": 1},
+        "presentation_origin": {"seconds": [0, 1]},
+        "waveform": {
+            "duration_seconds": 2,
+            "levels": [{
+                "target_bins": 4,
+                "bins": [
+                    {"start_sample": 0, "end_sample": 10, "peak": [0.8]},
+                    {"start_sample": 10, "end_sample": 20, "peak": [0.0]},
+                ],
+            }],
+        },
+    }
+    projected = project_waveform(analysis, [0, 1], [2, 1], count=4)
+    assert projected is not None
+    assert projected["amplitudes"] == [0.8, 0.8, 0.0, 0.0]
+    assert project_waveform(analysis, [2, 1], [3, 1], count=4) is None

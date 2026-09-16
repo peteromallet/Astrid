@@ -101,6 +101,17 @@ def test_direct_render_uses_frozen_inputs_authority_and_exact_run():
     assert result['timeline_id'] == DIRECT_TIMELINE
 
 
+def test_exact_pinned_input_inspection_does_not_fall_back_to_current_timeline():
+    result = prepare_filmstrip(
+        {'render_run': DIRECT_RENDER_RUN, 'timeline_ref': DIRECT_TIMELINE,
+         'show': ['inputs'], 'hide': ['output']},
+        project='p', client=DirectRenderClient(),
+    )
+    assert result['mode'] == 'input_only'
+    assert result['render_run_id'] == DIRECT_RENDER_RUN
+    assert result['input_snapshot']['metadata']['selection'] == 'render_pinned_input_only'
+
+
 def test_identical_legacy_duplicates_remain_compatible():
     client = DirectRenderClient()
     original = client.get_task

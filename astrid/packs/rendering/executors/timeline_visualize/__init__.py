@@ -1,7 +1,8 @@
-"""Contracts shared by the ``rendering.timeline_visualize`` executor.
+"""Contracts shared by the rendered ``timeline_visualize`` executor.
 
-R9+ consumers can call :func:`validate_structural` before deriving a view to
-collect duplicate-ID, dangling-track, and compositor timing errors.
+Consumers can call :func:`validate_structural` before deriving a filmstrip to
+collect duplicate-ID, dangling-track, and compositor timing errors. The former
+structural diagram is no longer a public visualization route.
 """
 
 from .validate import validate_structural

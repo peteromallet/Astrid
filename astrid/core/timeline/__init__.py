@@ -99,6 +99,17 @@ from .banodoco_schema import (
     validate_timeline,
     validate_timeline_config_for_container,
 )
+from .shot_composition import (
+    SCHEMA_VERSION as SHOT_COMPOSITION_SCHEMA_VERSION,
+    ShotCompositionValidationError,
+    StaleWriteError,
+    assert_expected_head,
+    parse_shot_composition,
+    stable_occurrence_deep_link,
+    stable_output_identity,
+    validate_shot_composition,
+)
+
 from .duration import (
     render_clock,
     timeline_duration_frames,
@@ -166,6 +177,14 @@ __all__ = [
     "TimelineRenderView",
     "TrackBlendMode",
     "TrackDefinition",
+    "SHOT_COMPOSITION_SCHEMA_VERSION",
+    "ShotCompositionValidationError",
+    "StaleWriteError",
+    "assert_expected_head",
+    "parse_shot_composition",
+    "stable_occurrence_deep_link",
+    "stable_output_identity",
+    "validate_shot_composition",
     "TrackFit",
     "TrackKind",
     "_animation_ids",

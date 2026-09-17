@@ -4,7 +4,7 @@
 """Auto-generated ready_template — use python -m vibecomfy.cli copy-to-recipe <id> for hand-editing."""
 from __future__ import annotations
 
-from vibecomfy.templates import InputSpec, OutputSpec, ReadyMetadata, new_workflow, node as raw_call, ref
+from vibecomfy.templates import InputSpec, ModelAsset, OutputSpec, ReadyMetadata, new_workflow, node as raw_call, ref
 from vibecomfy.workflow import VibeWorkflow
 from vibecomfy.nodes.core import BasicGuider, BasicScheduler, CLIPLoader, ComfyMathExpression, KSamplerSelect, LoadAudio, LoadImage, LoraLoaderModelOnly, PreviewAny, RandomNoise, ResolutionSelector, SamplerCustomAdvanced, UNETLoader, VAEDecode, VAEDecodeAudio, VAELoader
 from vibecomfy.nodes.videohelpersuite import VHS_LoadVideoFFmpeg, VHS_VideoCombine
@@ -34,6 +34,34 @@ VIDEO_H264_MP4 = 'video/h264-mp4'
 VIDEO_VAE_NAME = 'minimax_h3_video_vae_int8_convrot.safetensors'
 YUV420P = 'yuv420p'
 
+MODEL_ASSETS = {
+    'audio_vae': ModelAsset(
+        filename=AUDIO_VAE_NAME,
+        url='https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors',
+        subdir='vae',
+    ),
+    'turbo_lora': ModelAsset(
+        filename=LORA_NAME,
+        url='https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors',
+        subdir='loras',
+    ),
+    'ref2va': ModelAsset(
+        filename=UNET_NAME,
+        url='https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors',
+        subdir='diffusion_models',
+    ),
+    'video_vae': ModelAsset(
+        filename=VIDEO_VAE_NAME,
+        url='https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors',
+        subdir='vae',
+    ),
+    'text_encoder': ModelAsset(
+        filename=CLIP_NAME,
+        url='https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors',
+        subdir='text_encoders',
+    ),
+}
+
 
 PUBLIC_INPUT_METADATA = {
     'model': InputSpec(node=ref('unetloader'), field='unet_name', default=None, infer_type=False),
@@ -46,7 +74,8 @@ READY_METADATA = ReadyMetadata.build(
     capability='video',
     template_id='source',
     inputs=PUBLIC_INPUT_METADATA,
-    requirements={'models': ['minimax_h3_audio_vae_fp32.safetensors', 'minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors', 'minimax_h3_ref2va_pruned_int8_convrot.safetensors', 'minimax_h3_video_vae_int8_convrot.safetensors', 'qwen3vl_32b_minimax_h3_int8_convrot.safetensors'], 'missing_nodes': ['MiniMaxH3AVExtensionController', 'MiniMaxH3AVSourceAudioModeParam', 'MiniMaxH3AVStartModeParam', 'MiniMaxH3AudioVAECompatibility', 'MiniMaxH3CropTo32', 'MiniMaxH3CustomKeyframes', 'MiniMaxH3FinalizeVHSOutput', 'MiniMaxH3GeneratedAVMaskedContext', 'MiniMaxH3LastActiveVHSPreviewBarrier', 'MiniMaxH3SourceAudioPolicy', 'MiniMaxH3SourceAudioRegenLength', 'MiniMaxH3SourceAudioRegenMask', 'MiniMaxH3StartCanvasSelector', 'MiniMaxH3StartMaskedContext', 'MiniMaxH3StreamLiveExtensionAVToVHS', 'MiniMaxH3Validate24FPSVideo', 'Note']},
+    models=MODEL_ASSETS,
+    requirements={'missing_nodes': ['MiniMaxH3AVExtensionController', 'MiniMaxH3AVSourceAudioModeParam', 'MiniMaxH3AVStartModeParam', 'MiniMaxH3AudioVAECompatibility', 'MiniMaxH3CropTo32', 'MiniMaxH3CustomKeyframes', 'MiniMaxH3FinalizeVHSOutput', 'MiniMaxH3GeneratedAVMaskedContext', 'MiniMaxH3LastActiveVHSPreviewBarrier', 'MiniMaxH3SourceAudioPolicy', 'MiniMaxH3SourceAudioRegenLength', 'MiniMaxH3SourceAudioRegenMask', 'MiniMaxH3StartCanvasSelector', 'MiniMaxH3StartMaskedContext', 'MiniMaxH3StreamLiveExtensionAVToVHS', 'MiniMaxH3Validate24FPSVideo', 'Note']},
     custom_node_packs={'ComfyUI-H3-Motion-Context-MultiRef': {'commit': '361624fb406b63eb6694442eac6c895fc1533a70', 'url': 'https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef.git', 'classes_used': ['MiniMaxH3AVExtensionController', 'MiniMaxH3AVSourceAudioModeParam', 'MiniMaxH3AVStartModeParam', 'MiniMaxH3AudioVAECompatibility', 'MiniMaxH3CropTo32', 'MiniMaxH3CustomKeyframes', 'MiniMaxH3FinalizeVHSOutput', 'MiniMaxH3GeneratedAVMaskedContext', 'MiniMaxH3LastActiveVHSPreviewBarrier', 'MiniMaxH3ReferenceToVideo', 'MiniMaxH3SigmaShift', 'MiniMaxH3SourceAudioPolicy', 'MiniMaxH3SourceAudioRegenLength', 'MiniMaxH3SourceAudioRegenMask', 'MiniMaxH3StartCanvasSelector', 'MiniMaxH3StartMaskedContext', 'MiniMaxH3StreamLiveExtensionAVToVHS', 'MiniMaxH3Validate24FPSVideo'], 'pip_packages': ['safetensors'], 'status': 'discovered'}, 'ComfyUI-VideoHelperSuite': {'commit': '4ee72c065db22c9d96c2427954dc69e7b908444b', 'url': 'https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git', 'class_schema_sha256': '8391e679554eecd5d324a3e34a713ff240e619e3a07476587845ba18c9fae310', 'classes_used': ['VHS_VideoCombine'], 'pip_packages': [], 'status': 'discovered'}},
     source_ref='source.json',
     source_kind='raw_json',

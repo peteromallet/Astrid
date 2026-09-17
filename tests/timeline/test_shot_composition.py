@@ -28,12 +28,17 @@ def test_contract_preserves_revision_occurrence_and_input_identity() -> None:
     occurrences = contract["occurrences"]
     revisions = {(row["shot_id"], row["revision_id"]) for row in contract["shot_revisions"]}
 
-    assert len(occurrences) == 4
+    assert len(occurrences) == 5
     assert (occurrences[0]["shot_id"], occurrences[0]["revision_id"]) == ("shot-alpha", "rev-a")
     assert (occurrences[1]["shot_id"], occurrences[1]["revision_id"]) == ("shot-alpha", "rev-a")
     assert occurrences[0]["occurrence_id"] != occurrences[1]["occurrence_id"]
     assert ("shot-alpha", "rev-b") in revisions
     assert ("shot-beta", "rev-a") in revisions
+    assert ("shot-alpha-copy", "rev-a") in revisions
+    copy_occurrence = next(row for row in occurrences if row["occurrence_id"] == "occ-5")
+    assert copy_occurrence["shot_id"] == "shot-alpha-copy"
+    assert copy_occurrence["stable_deep_link"] != occurrences[0]["stable_deep_link"]
+    assert copy_occurrence["output_identity"] != occurrences[0]["output_identity"]
     assert occurrences[0]["output_identity"] != occurrences[1]["output_identity"]
     assert occurrences[0]["stable_deep_link"] == stable_occurrence_deep_link(
         "project-001", "document-primary", "shot-alpha", "rev-a", "occ-1"

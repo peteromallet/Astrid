@@ -76,7 +76,8 @@ def stable_occurrence_deep_link(
     occurrence_id: str,
 ) -> str:
     parts = (project_id, parent_document_id, shot_id, revision_id, occurrence_id)
-    encoded = [quote(_string(part, "deep_link"), safe="") for part in parts]
+    # Match JavaScript encodeURIComponent used by Reigh's contract validator.
+    encoded = [quote(_string(part, "deep_link"), safe="-_.!~*'()") for part in parts]
     return (
         f"project/{encoded[0]}/document/{encoded[1]}/shot/{encoded[2]}"
         f"/revision/{encoded[3]}/occurrence/{encoded[4]}"
@@ -85,7 +86,7 @@ def stable_occurrence_deep_link(
 
 def stable_output_identity(project_id: str, parent_document_id: str, occurrence_id: str) -> str:
     parts = (project_id, parent_document_id, occurrence_id)
-    encoded = [quote(_string(part, "output_identity"), safe="") for part in parts]
+    encoded = [quote(_string(part, "output_identity"), safe="-_.!~*'()") for part in parts]
     return f"project/{encoded[0]}/document/{encoded[1]}/occurrence/{encoded[2]}/output/final-video"
 
 

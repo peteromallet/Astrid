@@ -11,7 +11,7 @@ import json
 import re
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from astrid.core.timeline.events.schema import (
     TimelineEvent,
@@ -263,6 +263,27 @@ def _canonical_digest(value: Any) -> str:
         raise SnapshotIntegrityError(f"value is not canonical JSON: {exc}") from exc
 
 
+def _project_canonical_composition(
+    assembly: Mapping[str, Any], registry: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply the editor's prepared graph before any downstream snapshot read."""
+    app = assembly.get("app") if isinstance(assembly, Mapping) else None
+    graph = None
+    if isinstance(app, Mapping):
+        candidate = app.get("shot_composition_graph") or app.get("canonical_shot_composition")
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
+            graph = candidate
+    if graph is None:
+        return deepcopy(dict(assembly)), deepcopy(dict(registry))
+    from .shot_composition_projection import project_shot_composition
+
+    try:
+        projected = project_shot_composition(graph, base_config=assembly, base_registry=registry)
+    except ValueError as exc:
+        raise SnapshotIntegrityError(f"canonical shot-composition projection failed: {exc}") from exc
+    return deepcopy(dict(projected.config)), deepcopy(dict(projected.registry))
+
+
 def _resolve_media_hashes(
     registry: dict[str, Any],
     *,
@@ -326,13 +347,14 @@ def _build_snapshot(
         assembly = project_to_assembly(parsed_events)
     except Exception as exc:
         raise SnapshotIntegrityError(f"event projection failed: {exc}") from exc
+    registry, registry_diagnostics = _registry_from_events(parsed_events)
+    assembly, registry = _project_canonical_composition(assembly, registry)
     structural_errors = validate_structural(assembly)
     if structural_errors:
         raise SnapshotIntegrityError(
             "projected assembly is invalid: " + "; ".join(structural_errors)
         )
 
-    registry, registry_diagnostics = _registry_from_events(parsed_events)
     media_hashes, media_diagnostics = _resolve_media_hashes(
         registry,
         project_ref=project_ref,
@@ -415,6 +437,7 @@ def verify_frozen(
 
     try:
         replayed = project_to_assembly(parsed_events)
+        replayed, _replayed_registry = _project_canonical_composition(replayed, snapshot.registry)
         structural_errors = validate_structural(replayed)
         for error in structural_errors:
             diagnostics.append(f"ASSEMBLY_INVALID: {error}")

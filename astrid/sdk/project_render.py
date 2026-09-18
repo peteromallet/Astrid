@@ -464,6 +464,16 @@ def _publication_metadata(
     ):
         if field in association:
             metadata[field] = association[field]
+    # Canonical shot-composition outputs are qualified by occurrence. Preserve
+    # that immutable identity in the read/export surface when Runtime carries
+    # it either directly or under publication provenance.
+    for field in (
+        "output_identity", "occurrence_id", "shot_id", "revision_id",
+        "internal_timeline_revision_id", "stable_deep_link",
+    ):
+        value = association.get(field, provenance_map.get(field))
+        if value is not None:
+            metadata[field] = value
     if producer_id:
         metadata["producer_id"] = producer_id
     if attempt_id:

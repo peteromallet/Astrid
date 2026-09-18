@@ -150,6 +150,12 @@ from .shot_composition import (
     stable_output_identity,
     validate_shot_composition,
 )
+from .shot_composition_projection import (
+    ShotCompositionProjection,
+    ShotCompositionProjectionError,
+    project_canonical_shot_composition,
+    project_shot_composition,
+)
 
 __all__ = [
     "ARRANGEMENT_VERSION",
@@ -248,6 +254,10 @@ __all__ = [
     "stable_occurrence_deep_link",
     "stable_output_identity",
     "validate_shot_composition",
+    "ShotCompositionProjection",
+    "ShotCompositionProjectionError",
+    "project_canonical_shot_composition",
+    "project_shot_composition",
     "TrackFit",
     "TrackKind",
     "_animation_ids",

@@ -299,6 +299,7 @@ def project_input_window(
     shot_id: str | None = None, asset_id: str | None = None,
     integrity: Mapping[str, Mapping[str, Any]] | None = None,
     shot_groups: Iterable[Mapping[str, Any]] = (),
+    shot_occurrences: Iterable[Mapping[str, Any]] = (),
     max_tracks: int = 10,
 ) -> dict[str, Any]:
     """Project every clip intersecting ``[start_frame,end_frame)``.
@@ -308,6 +309,7 @@ def project_input_window(
     """
     if start_frame < 0 or end_frame <= start_frame:
         raise ValueError("input window must be a non-empty half-open frame interval")
+    clips = list(clips)
     fps_value = _rational(fps)
     wanted = set(str(item) for item in track_ids)
     # Canonical input snapshots retain pinned groups separately from the
@@ -327,6 +329,22 @@ def project_input_window(
         for member in members if isinstance(members, (list, tuple, set)) else ():
             if isinstance(member, str) and member:
                 shot_by_clip.setdefault(member, (group_id, group_name))
+    for occurrence in shot_occurrences or ():
+        if not isinstance(occurrence, Mapping):
+            continue
+        occurrence_id = occurrence.get("occurrence_id")
+        shot_value = occurrence.get("shot_id")
+        if not isinstance(occurrence_id, str) or not occurrence_id:
+            continue
+        if not isinstance(shot_value, str) or not shot_value:
+            continue
+        name = occurrence.get("name") or occurrence.get("shot_name")
+        name = name if isinstance(name, str) and name else None
+        for raw in clips:
+            if isinstance(raw, Mapping) and raw.get("shot_occurrence_id") == occurrence_id:
+                raw_id = raw.get("id")
+                if isinstance(raw_id, str):
+                    shot_by_clip.setdefault(raw_id, (shot_value, name))
     selected = []
     for index, raw in enumerate(clips):
         if not isinstance(raw, Mapping):

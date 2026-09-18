@@ -196,6 +196,7 @@ class KernelTimeline:
     head_event_id: str
     head_hash: str
     head_created_at: str
+    composition_graph: dict[str, Any] | None = None
 
 
 def _runtime_reader(runtime_client: Any, *, family: str, operation: str) -> Any:
@@ -340,6 +341,13 @@ def select_kernel_timelines(
                 head_event_id=str(head_event_id),
                 head_hash=str(head_hash),
                 head_created_at=str(head_created_at),
+                composition_graph=(
+                    dict(row.get("shot_composition"))
+                    if isinstance(row.get("shot_composition"), Mapping)
+                    else dict(row.get("composition_graph"))
+                    if isinstance(row.get("composition_graph"), Mapping)
+                    else None
+                ),
             )
         )
     if slug is not None:

@@ -795,12 +795,6 @@ def _prepare_managed_render_inputs(
             expected_version=expected_version,
             client=_client,
         )
-        from astrid.core.timeline.expand_shots import expand_shot_clips
-
-        # Admission is intentionally split: the authoring parent may contain
-        # composite ``shot`` clips, but every reference must resolve through
-        # the SDK before expansion. The expander never invents or fetches a
-        # missing shot and never talks to storage itself.
         child_records: list[dict[str, Any]] = []
         review_shots: list[dict[str, Any]] = []
         review_phrases: list[dict[str, Any]] = []
@@ -809,6 +803,70 @@ def _prepare_managed_render_inputs(
         review_bindings: dict[str, list[dict[str, Any]]] = {}
         from .render_shot_snapshot import shot_text_snapshot
         raw_clips = snapshot.config.get("clips", [])
+        canonical_expansion = snapshot.expansion if isinstance(snapshot.expansion, Mapping) and snapshot.expansion.get("canonical") is True else None
+        if canonical_expansion is not None:
+            for shot in canonical_expansion.get("shots", []):
+                if not isinstance(shot, Mapping) or not isinstance(shot.get("shot_id"), str):
+                    continue
+                shot_id = str(shot["shot_id"])
+                bindings = [dict(item) for item in shot.get("text_bindings", []) if isinstance(item, Mapping)]
+                shot_records[shot_id] = {
+                    "shot_id": shot_id,
+                    "name": str(shot.get("name") or shot_id),
+                    "version": shot.get("revision_id"),
+                    "text_bindings": [{key: value for key, value in binding.items() if key != "text"} for binding in bindings],
+                }
+                review_bindings[shot_id] = bindings
+            for occurrence in canonical_expansion.get("occurrences", []):
+                if not isinstance(occurrence, Mapping):
+                    continue
+                shot_id = occurrence.get("shot_id")
+                occurrence_id = occurrence.get("occurrence_id")
+                if not isinstance(shot_id, str) or not isinstance(occurrence_id, str):
+                    continue
+                name = str(shot_records.get(shot_id, {}).get("name") or occurrence.get("name") or shot_id)
+                at = float(occurrence.get("at", float(occurrence.get("at_ms", 0)) / 1000.0))
+                hold = float(occurrence.get("hold", float(occurrence.get("duration_ms", 0)) / 1000.0))
+                shot_occurrences.append({
+                    "shot_occurrence_id": occurrence_id,
+                    "shot_id": shot_id,
+                    "name": name,
+                    "at": at,
+                    "hold": hold,
+                    "timeline_document_id": str(occurrence.get("parent_document_id") or snapshot.timeline_id),
+                    "source_index": int(occurrence.get("ordinal", len(shot_occurrences))),
+                    "output_identity": occurrence.get("output_identity"),
+                    "revision_id": occurrence.get("revision_id"),
+                })
+                review_shots.append({"shot_id": shot_id, "name": name, "at": at, "hold": hold})
+                for binding in review_bindings.get(shot_id, []):
+                    text = binding.get("text")
+                    if binding.get("kind") != "voiceover_script" or not isinstance(text, str) or not text.strip():
+                        continue
+                    review_phrases.append({
+                        "id": f"shot-script:{occurrence_id}:{binding.get('binding_id', 'binding')}",
+                        "shot_id": shot_id,
+                        "shot_occurrence_id": occurrence_id,
+                        "text": text.strip(),
+                        "status": "projected",
+                        "render_interval": {"start": at, "end": at + hold},
+                        "timing_basis": "shot_script",
+                        "word_aligned": False,
+                        "binding_id": binding.get("binding_id"),
+                        "head": binding.get("head"),
+                        "media_id": binding.get("media_id"),
+                    })
+
+        # Compatibility expansion is only reachable for an older, explicitly
+        # migrated render snapshot. Canonical graph snapshots arrive already
+        # projected above and never interpret a legacy child shape here.
+        expand_shot_clips = None
+        if canonical_expansion is None:
+            from astrid.core.timeline.expand_shots import expand_shot_clips
+
+        # Admission is intentionally split for the compatibility boundary: a
+        # legacy parent is expanded only after each registered reference is
+        # resolved through the SDK. The canonical path above does not use it.
         for index, clip in enumerate(raw_clips):
             if not isinstance(clip, Mapping) or clip.get("clipType") != "shot":
                 continue
@@ -911,14 +969,17 @@ def _prepare_managed_render_inputs(
             )
             return child_config, child_registry
 
-        try:
-            expanded_config, expanded_registry = expand_shot_clips(
-                snapshot.config,
-                snapshot.registry,
-                load_timeline=load_child,
-            )
-        except ValueError as exc:
-            raise CapabilityValidationError(str(exc)) from exc
+        if expand_shot_clips is not None:
+            try:
+                expanded_config, expanded_registry = expand_shot_clips(
+                    snapshot.config,
+                    snapshot.registry,
+                    load_timeline=load_child,
+                )
+            except ValueError as exc:
+                raise CapabilityValidationError(str(exc)) from exc
+        else:
+            expanded_config, expanded_registry = snapshot.config, snapshot.registry
         # The pure expander can carry the registered id and authored-order
         # occurrence through arbitrary child payloads.  Pin the name here,
         # after reading it from the canonical shot registry; child/caller

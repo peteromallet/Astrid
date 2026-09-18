@@ -7,14 +7,27 @@ from pathlib import Path
 import pytest
 
 from astrid.core.timeline.shot_composition import (
+    AssetRecord,
+    AudioRecord,
+    CompositionOccurrenceRecord,
+    DependencyRecord,
+    GenerationInputRecord,
+    InternalTimelineRevisionRecord,
+    MissingDependencyError,
+    PrimaryTimelineHeadRecord,
+    ProjectRecord,
+    ShotCompositionSource,
     ShotCompositionValidationError,
+    ShotRevisionRecord,
     StaleWriteError,
+    TimingRecord,
     assert_expected_head,
     parse_shot_composition,
+    prepare_shot_composition,
+    publish_shot_composition,
     stable_occurrence_deep_link,
     stable_output_identity,
 )
-
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "timeline" / "shot_composition.json"
 
@@ -75,3 +88,157 @@ def test_contract_rejects_legacy_group_and_shot_clip_shapes() -> None:
     legacy_clip["shot_revisions"][0]["internal_timeline_revision"]["timeline"]["clips"][0]["clipType"] = "shot"
     with pytest.raises(ShotCompositionValidationError, match="migration-only"):
         parse_shot_composition(legacy_clip)
+
+
+def test_prepare_normalizes_typed_source_records_and_stable_identities() -> None:
+    fixture = load_fixture()
+    occurrences = copy.deepcopy(fixture["occurrences"])
+    for occurrence in occurrences:
+        occurrence.pop("stable_deep_link")
+        occurrence.pop("output_identity")
+
+    prepared = prepare_shot_composition(
+        ShotCompositionSource(
+            project=fixture["project"],
+            primary_timeline_head=fixture["primary_timeline"]["head"],
+            shot_revisions=fixture["shot_revisions"],
+            occurrences=occurrences,
+            cases=fixture["cases"],
+        )
+    )
+
+    assert prepared == fixture
+    assert prepared["occurrences"][0]["stable_deep_link"] == fixture["occurrences"][0]["stable_deep_link"]
+    assert prepared["occurrences"][0]["output_identity"] == fixture["occurrences"][0]["output_identity"]
+    assert prepared["occurrences"][0]["shot_id"] == prepared["occurrences"][1]["shot_id"]
+    assert prepared["occurrences"][0]["revision_id"] == prepared["occurrences"][1]["revision_id"]
+    assert prepared["occurrences"][0]["occurrence_id"] != prepared["occurrences"][1]["occurrence_id"]
+    assert prepared["occurrences"][4]["shot_id"] == "shot-alpha-copy"
+    assert prepared["occurrences"][4]["shot_id"] != prepared["occurrences"][0]["shot_id"]
+
+
+def test_prepare_accepts_fully_typed_nested_records() -> None:
+    fixture = load_fixture()
+    typed_revisions = []
+    for revision in fixture["shot_revisions"]:
+        typed_revisions.append(
+            ShotRevisionRecord(
+                shot_id=revision["shot_id"],
+                revision_id=revision["revision_id"],
+                content_digest=revision["content_digest"],
+                internal_timeline_revision=InternalTimelineRevisionRecord(
+                    **revision["internal_timeline_revision"]
+                ),
+                dependencies=[DependencyRecord(**row) for row in revision["dependencies"]],
+                assets=[AssetRecord(**row) for row in revision["assets"]],
+                generation_inputs=[
+                    GenerationInputRecord(**row) for row in revision["generation_inputs"]
+                ],
+                timing=TimingRecord(**revision["timing"]),
+                audio=AudioRecord(**revision["audio"]),
+                provenance=revision["provenance"],
+            )
+        )
+    typed_occurrences = [
+        CompositionOccurrenceRecord(
+            **{
+                key: row[key]
+                for key in (
+                    "occurrence_id",
+                    "parent_document_id",
+                    "shot_id",
+                    "revision_id",
+                    "ordinal",
+                    "at_ms",
+                    "duration_ms",
+                )
+            }
+        )
+        for row in fixture["occurrences"]
+    ]
+
+    prepared = prepare_shot_composition(
+        ShotCompositionSource(
+            project=ProjectRecord(**fixture["project"]),
+            primary_timeline_head=PrimaryTimelineHeadRecord(
+                **fixture["primary_timeline"]["head"]
+            ),
+            shot_revisions=typed_revisions,
+            occurrences=typed_occurrences,
+            cases=fixture["cases"],
+        )
+    )
+
+    assert prepared == fixture
+
+
+def test_prepare_reports_typed_missing_dependency() -> None:
+    invalid = load_fixture()
+    invalid["shot_revisions"][0]["dependencies"] = [
+        {"shot_id": "shot-missing", "revision_id": "rev-missing", "required": True}
+    ]
+
+    with pytest.raises(MissingDependencyError) as error:
+        prepare_shot_composition(invalid)
+
+    assert error.value.code == "missing_dependency"
+    assert error.value.status == 422
+    assert (error.value.shot_id, error.value.revision_id) == ("shot-missing", "rev-missing")
+
+
+class _Writer:
+    def __init__(self, *, stale: bool = False, missing: tuple[str, str] | None = None) -> None:
+        self.stale = stale
+        self.missing = missing
+        self.resolved: list[tuple[str, str, str, str]] = []
+        self.published: dict | None = None
+
+    def resolve_immutable_revision(self, **kwargs):
+        self.resolved.append(
+            (kwargs["project_id"], kwargs["document_id"], kwargs["shot_id"], kwargs["revision_id"])
+        )
+        if (kwargs["shot_id"], kwargs["revision_id"]) == self.missing:
+            return None
+        return {"shot_id": kwargs["shot_id"], "revision_id": kwargs["revision_id"]}
+
+    def publish_primary_timeline_revision(self, **kwargs):
+        if self.stale:
+            raise StaleWriteError("Runtime head changed")
+        self.published = kwargs
+        return {"revision_id": "timeline-rev-3"}
+
+
+def test_publish_resolves_each_immutable_revision_and_writes_complete_graph() -> None:
+    fixture = load_fixture()
+    writer = _Writer()
+
+    result = publish_shot_composition(fixture, writer)
+
+    assert result == {"revision_id": "timeline-rev-3"}
+    assert [(shot_id, revision_id) for _, _, shot_id, revision_id in writer.resolved] == [
+        ("shot-beta", "rev-a"),
+        ("shot-alpha", "rev-a"),
+        ("shot-alpha", "rev-b"),
+        ("shot-alpha-copy", "rev-a"),
+    ]
+    assert writer.published is not None
+    assert writer.published["expected_head_revision_id"] == "timeline-rev-2"
+    assert writer.published["project_id"] == "project-001"
+    assert writer.published["document_id"] == "document-primary"
+    assert writer.published["graph"] == fixture
+
+
+def test_publish_maps_missing_runtime_revision_to_typed_error() -> None:
+    writer = _Writer(missing=("shot-beta", "rev-a"))
+
+    with pytest.raises(MissingDependencyError, match="shot-beta"):
+        publish_shot_composition(load_fixture(), writer)
+
+    assert writer.published is None
+
+
+def test_publish_maps_runtime_stale_cas_to_409_error() -> None:
+    with pytest.raises(StaleWriteError) as error:
+        publish_shot_composition(load_fixture(), _Writer(stale=True))
+
+    assert error.value.status == 409

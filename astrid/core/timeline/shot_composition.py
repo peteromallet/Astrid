@@ -1,8 +1,9 @@
-"""Canonical shot-composition contract shared with Reigh's editor.
+"""Canonical shot-composition contract and Runtime preparation boundary.
 
-This module validates the T1 wire shape only. It deliberately does not read
-legacy ``pinnedShotGroups`` or publish Runtime heads; those require a Runtime
-revision-resolution and CAS primitive that workspace.v1 does not expose yet.
+The adapter accepts explicit immutable source records, produces the canonical
+wire graph shared with Reigh's editor, and delegates persistence to an
+injected Runtime resolution/CAS port. It never translates legacy
+``pinnedShotGroups`` or ``clipType: "shot"`` data.
 """
 
 from __future__ import annotations
@@ -10,7 +11,9 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from typing import Any
+from copy import deepcopy
+from dataclasses import asdict, dataclass, is_dataclass
+from typing import Any, Protocol, Sequence, runtime_checkable
 from urllib.parse import quote
 
 SCHEMA_VERSION = 1
@@ -24,6 +27,148 @@ class StaleWriteError(RuntimeError):
 
 class ShotCompositionValidationError(ValueError):
     pass
+
+
+class MissingDependencyError(ShotCompositionValidationError):
+    """A referenced immutable shot revision was not present in the graph."""
+
+    status = 422
+    code = "missing_dependency"
+
+    def __init__(self, shot_id: str, revision_id: str, *, path: str = "dependencies") -> None:
+        self.shot_id = shot_id
+        self.revision_id = revision_id
+        super().__init__(
+            f"{path}: missing dependency revision {shot_id!r}/{revision_id!r}"
+        )
+
+
+@dataclass(frozen=True)
+class ProjectRecord:
+    """The project/document identity that owns the primary timeline."""
+
+    project_id: str
+    document_id: str
+    role: str = "project"
+
+
+@dataclass(frozen=True)
+class PrimaryTimelineHeadRecord:
+    """The immutable primary-timeline head used for Runtime CAS publication."""
+
+    revision_id: str
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class InternalTimelineRevisionRecord:
+    revision_id: str
+    content_digest: str
+    timeline: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class DependencyRecord:
+    shot_id: str
+    revision_id: str
+    required: bool = True
+
+
+@dataclass(frozen=True)
+class AssetRecord:
+    asset_id: str
+    object_id: str
+    digest: str
+    scope: Mapping[str, Any]
+    role: str
+
+
+@dataclass(frozen=True)
+class GenerationInputRecord:
+    input_id: str
+    object_id: str
+    digest: str
+    ordinal: int
+    role: str
+
+
+@dataclass(frozen=True)
+class AudioRecord:
+    track_id: str
+    object_id: str
+    digest: str
+    scope: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class TimingRecord:
+    duration_ms: int
+
+
+@dataclass(frozen=True)
+class ShotRevisionRecord:
+    """A complete immutable shot revision and its referenced source records."""
+
+    shot_id: str
+    revision_id: str
+    content_digest: str
+    internal_timeline_revision: InternalTimelineRevisionRecord | Mapping[str, Any]
+    audio: AudioRecord | Mapping[str, Any]
+    timing: TimingRecord | Mapping[str, Any]
+    provenance: Mapping[str, Any]
+    document_role: str = "shot_revision"
+    dependencies: Sequence[DependencyRecord | Mapping[str, Any]] = ()
+    assets: Sequence[AssetRecord | Mapping[str, Any]] = ()
+    generation_inputs: Sequence[GenerationInputRecord | Mapping[str, Any]] = ()
+
+
+@dataclass(frozen=True)
+class CompositionOccurrenceRecord:
+    """One placement identity; multiple records may link to one shot revision."""
+
+    occurrence_id: str
+    parent_document_id: str
+    shot_id: str
+    revision_id: str
+    ordinal: int
+    at_ms: int
+    duration_ms: int
+
+
+@dataclass(frozen=True)
+class ShotCompositionSource:
+    """Typed source records accepted by :func:`prepare_shot_composition`."""
+
+    project: ProjectRecord | Mapping[str, Any]
+    primary_timeline_head: PrimaryTimelineHeadRecord | Mapping[str, Any]
+    shot_revisions: Sequence[ShotRevisionRecord | Mapping[str, Any]]
+    occurrences: Sequence[CompositionOccurrenceRecord | Mapping[str, Any]]
+    cases: Mapping[str, Any] | None = None
+
+
+@runtime_checkable
+class RuntimeShotCompositionWriter(Protocol):
+    """Runtime port for immutable revision resolution and primary-timeline CAS."""
+
+    def resolve_immutable_revision(
+        self,
+        *,
+        project_id: str,
+        document_id: str,
+        shot_id: str,
+        revision_id: str,
+    ) -> Any:
+        """Return a present immutable revision handle, or ``None`` if absent."""
+
+    def publish_primary_timeline_revision(
+        self,
+        *,
+        project_id: str,
+        document_id: str,
+        expected_head_revision_id: str,
+        graph: Mapping[str, Any],
+    ) -> Any:
+        """Atomically publish the complete graph with a Runtime CAS precondition."""
 
 
 def _fail(path: str, message: str) -> None:
@@ -53,6 +198,143 @@ def _digest(value: Any, path: str) -> str:
     if not _DIGEST.fullmatch(value):
         _fail(path, "must be a sha256 digest")
     return value
+
+
+def _copy_record(value: Any, path: str) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return deepcopy(dict(value))
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    _fail(path, "must be a canonical record object")
+
+
+def _copy_records(values: Sequence[Any], path: str) -> list[dict[str, Any]]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        _fail(path, "must be a list of canonical records")
+    return [_copy_record(value, f"{path}[{index}]") for index, value in enumerate(values)]
+
+
+def _default_cases(head_revision_id: str) -> dict[str, Any]:
+    # ``cases`` is retained as fixture metadata for Python/TypeScript parity.
+    # It is never used to resolve or publish Runtime state.
+    return {
+        "missing_dependency": {
+            "shot_id": "__missing__",
+            "revision_id": "__missing__",
+            "expected": "missing_dependency",
+        },
+        "stale_write_rejection": {
+            "expected_head_revision_id": head_revision_id,
+            "submitted_head_revision_id": head_revision_id,
+            "expected_status": 409,
+        },
+    }
+
+
+def _source_to_graph(
+    source: ShotCompositionSource | Mapping[str, Any] | None,
+    *,
+    project: ProjectRecord | Mapping[str, Any] | None,
+    primary_timeline_head: PrimaryTimelineHeadRecord | Mapping[str, Any] | None,
+    shot_revisions: Sequence[ShotRevisionRecord | Mapping[str, Any]] | None,
+    occurrences: Sequence[CompositionOccurrenceRecord | Mapping[str, Any]] | None,
+    cases: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    explicit = any(
+        value is not None
+        for value in (project, primary_timeline_head, shot_revisions, occurrences, cases)
+    )
+    if source is not None and explicit:
+        _fail("source", "use either source or explicit source records, not both")
+    if source is None:
+        if project is None or primary_timeline_head is None or shot_revisions is None or occurrences is None:
+            _fail(
+                "source",
+                "project, primary_timeline_head, shot_revisions, and occurrences are required",
+            )
+        project_mapping = _copy_record(project, "project")
+        head_mapping = _copy_record(primary_timeline_head, "primary_timeline_head")
+        graph = {
+            "schema_version": SCHEMA_VERSION,
+            "project": project_mapping,
+            "primary_timeline": {
+                "document_id": project_mapping.get("document_id"),
+                "role": "primary_timeline",
+                "head": head_mapping,
+            },
+            "shot_revisions": _copy_records(shot_revisions, "shot_revisions"),
+            "occurrences": _copy_records(occurrences, "occurrences"),
+        }
+        if cases is not None:
+            graph["cases"] = deepcopy(dict(cases))
+    elif isinstance(source, ShotCompositionSource):
+        graph = {
+            "schema_version": SCHEMA_VERSION,
+            "project": _copy_record(source.project, "project"),
+            "primary_timeline": {
+                "document_id": _copy_record(source.project, "project").get("document_id"),
+                "role": "primary_timeline",
+                "head": _copy_record(source.primary_timeline_head, "primary_timeline_head"),
+            },
+            "shot_revisions": _copy_records(source.shot_revisions, "shot_revisions"),
+            "occurrences": _copy_records(source.occurrences, "occurrences"),
+        }
+        if source.cases is not None:
+            graph["cases"] = deepcopy(dict(source.cases))
+    else:
+        graph = _copy_record(source, "source")
+
+    _walk_for_legacy(graph)
+    if "primary_timeline" not in graph and "primary_timeline_head" in graph:
+        project_mapping = _mapping(graph.get("project"), "project")
+        graph["primary_timeline"] = {
+            "document_id": project_mapping.get("document_id"),
+            "role": "primary_timeline",
+            "head": graph.pop("primary_timeline_head"),
+        }
+    if "cases" not in graph:
+        primary = _mapping(graph.get("primary_timeline"), "primary_timeline")
+        head = _mapping(primary.get("head"), "primary_timeline.head")
+        graph["cases"] = _default_cases(_string(head.get("revision_id"), "primary_timeline.head.revision_id"))
+
+    raw_revisions = graph.get("shot_revisions")
+    if isinstance(raw_revisions, list):
+        normalized_revisions: list[dict[str, Any]] = []
+        for index, raw_revision in enumerate(raw_revisions):
+            revision = dict(_mapping(raw_revision, f"shot_revisions[{index}]"))
+            for field in ("dependencies", "assets", "generation_inputs"):
+                values = revision.get(field)
+                if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+                    revision[field] = [deepcopy(value) for value in values]
+            normalized_revisions.append(revision)
+        graph["shot_revisions"] = normalized_revisions
+
+    project_mapping = _mapping(graph.get("project"), "project")
+    project_id = _string(project_mapping.get("project_id"), "project.project_id")
+    document_id = _string(project_mapping.get("document_id"), "project.document_id")
+    raw_occurrences = graph.get("occurrences")
+    if not isinstance(raw_occurrences, list):
+        _fail("occurrences", "must be a list")
+    normalized_occurrences: list[dict[str, Any]] = []
+    for index, raw_occurrence in enumerate(raw_occurrences):
+        occurrence = _mapping(raw_occurrence, f"occurrences[{index}]")
+        normalized = dict(occurrence)
+        shot_id = _string(occurrence.get("shot_id"), f"occurrences[{index}].shot_id")
+        revision_id = _string(occurrence.get("revision_id"), f"occurrences[{index}].revision_id")
+        occurrence_id = _string(
+            occurrence.get("occurrence_id"), f"occurrences[{index}].occurrence_id"
+        )
+        normalized.setdefault(
+            "stable_deep_link",
+            stable_occurrence_deep_link(project_id, document_id, shot_id, revision_id, occurrence_id),
+        )
+        normalized.setdefault(
+            "output_identity",
+            stable_output_identity(project_id, document_id, occurrence_id),
+        )
+        normalized_occurrences.append(normalized)
+    graph["occurrences"] = normalized_occurrences
+    return graph
 
 
 def _walk_for_legacy(value: Any, path: str = "contract") -> None:
@@ -88,6 +370,119 @@ def stable_output_identity(project_id: str, parent_document_id: str, occurrence_
     parts = (project_id, parent_document_id, occurrence_id)
     encoded = [quote(_string(part, "output_identity"), safe="-_.!~*'()") for part in parts]
     return f"project/{encoded[0]}/document/{encoded[1]}/occurrence/{encoded[2]}/output/final-video"
+
+
+def prepare_shot_composition(
+    source: ShotCompositionSource | Mapping[str, Any] | None = None,
+    *,
+    project: ProjectRecord | Mapping[str, Any] | None = None,
+    primary_timeline_head: PrimaryTimelineHeadRecord | Mapping[str, Any] | None = None,
+    shot_revisions: Sequence[ShotRevisionRecord | Mapping[str, Any]] | None = None,
+    occurrences: Sequence[CompositionOccurrenceRecord | Mapping[str, Any]] | None = None,
+    cases: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Prepare explicit canonical records for Runtime publication.
+
+    The returned value is a detached, JSON-shaped graph.  It is validated at
+    the boundary and contains stable occurrence deep links and occurrence-
+    qualified output identities.  No legacy timeline data is read or
+    translated here; legacy shapes are rejected by the canonical validator.
+    """
+
+    graph = _source_to_graph(
+        source,
+        project=project,
+        primary_timeline_head=primary_timeline_head,
+        shot_revisions=shot_revisions,
+        occurrences=occurrences,
+        cases=cases,
+    )
+    return validate_shot_composition(graph)
+
+
+def _raise_stale_if_needed(error: Exception) -> None:
+    if isinstance(error, StaleWriteError):
+        raise error
+    if getattr(error, "status", None) == 409 or getattr(error, "code", None) == "stale_write":
+        raise StaleWriteError(str(error)) from error
+
+
+def _resolution_is_missing(result: Any) -> bool:
+    if result is None:
+        return True
+    if isinstance(result, Mapping):
+        if result.get("status") == 404 or result.get("code") in {"not_found", "missing_dependency"}:
+            return True
+        error = result.get("error")
+        if result.get("ok") is False and isinstance(error, Mapping):
+            if error.get("code") in {"not_found", "missing_dependency"}:
+                return True
+    return False
+
+
+def publish_shot_composition(
+    source: ShotCompositionSource | Mapping[str, Any],
+    writer: RuntimeShotCompositionWriter,
+    *,
+    expected_head_revision_id: str | None = None,
+) -> Any:
+    """Resolve immutable references, then delegate complete-graph CAS to Runtime.
+
+    The writer is the only persistence boundary.  This function performs no
+    local head mutation and does not call legacy timeline mutation APIs.
+    """
+
+    graph = prepare_shot_composition(source)
+    project = graph["project"]
+    primary = graph["primary_timeline"]
+    head = primary["head"]
+    graph_head_revision_id = head["revision_id"]
+    if expected_head_revision_id is not None:
+        _string(expected_head_revision_id, "expected_head_revision_id")
+        if expected_head_revision_id != graph_head_revision_id:
+            raise ShotCompositionValidationError(
+                "expected_head_revision_id must match primary_timeline.head.revision_id"
+            )
+    expected = expected_head_revision_id or graph_head_revision_id
+
+    resolved: set[tuple[str, str]] = set()
+    for index, revision in enumerate(graph["shot_revisions"]):
+        key = (revision["shot_id"], revision["revision_id"])
+        if key in resolved:
+            continue
+        resolved.add(key)
+        try:
+            result = writer.resolve_immutable_revision(
+                project_id=project["project_id"],
+                document_id=project["document_id"],
+                shot_id=revision["shot_id"],
+                revision_id=revision["revision_id"],
+            )
+        except Exception as error:
+            _raise_stale_if_needed(error)
+            if isinstance(error, (KeyError, LookupError)):
+                raise MissingDependencyError(
+                    revision["shot_id"], revision["revision_id"], path=f"shot_revisions[{index}]"
+                ) from error
+            raise
+        if _resolution_is_missing(result):
+            raise MissingDependencyError(
+                revision["shot_id"], revision["revision_id"], path=f"shot_revisions[{index}]"
+            )
+
+    try:
+        result = writer.publish_primary_timeline_revision(
+            project_id=project["project_id"],
+            document_id=project["document_id"],
+            expected_head_revision_id=expected,
+            graph=deepcopy(graph),
+        )
+    except Exception as error:
+        _raise_stale_if_needed(error)
+        raise
+    if isinstance(result, Mapping) and result.get("status") == 409:
+        raise StaleWriteError("Runtime rejected stale shot-composition head")
+    return result
 
 
 def assert_expected_head(expected_revision_id: str, actual_revision_id: str) -> None:
@@ -181,12 +576,15 @@ def validate_shot_composition(raw: Mapping[str, Any]) -> dict[str, Any]:
             _fail(f"{path}.generation_inputs", "ordinals must be contiguous and ordered")
         if not isinstance(revision.get("provenance"), Mapping):
             _fail(f"{path}.provenance", "must be an object")
-        for dependency_index, raw_dependency in enumerate(revision.get("dependencies", [])):
+        dependencies = revision.get("dependencies")
+        if not isinstance(dependencies, list):
+            _fail(f"{path}.dependencies", "must be a list")
+        for dependency_index, raw_dependency in enumerate(dependencies):
             dependency_path = f"{path}.dependencies[{dependency_index}]"
             dependency = _mapping(raw_dependency, dependency_path)
             dep_key = (_string(dependency.get("shot_id"), f"{dependency_path}.shot_id"), _string(dependency.get("revision_id"), f"{dependency_path}.revision_id"))
             if dep_key not in revisions_by_key:
-                _fail(dependency_path, "dependency revision is missing")
+                raise MissingDependencyError(*dep_key, path=dependency_path)
             if not isinstance(dependency.get("required"), bool):
                 _fail(f"{dependency_path}.required", "must be boolean")
 
@@ -194,6 +592,7 @@ def validate_shot_composition(raw: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(occurrences, list) or not occurrences:
         _fail("occurrences", "must be a non-empty list")
     occurrence_ids: set[str] = set()
+    occurrence_ordinals: list[int] = []
     for index, raw_occurrence in enumerate(occurrences):
         path = f"occurrences[{index}]"
         occurrence = _mapping(raw_occurrence, path)
@@ -207,7 +606,7 @@ def validate_shot_composition(raw: Mapping[str, Any]) -> dict[str, Any]:
         revision_id = _string(occurrence.get("revision_id"), f"{path}.revision_id")
         if (shot_id, revision_id) not in revisions_by_key:
             _fail(path, "occurrence must pin an available shot revision")
-        _int(occurrence.get("ordinal"), f"{path}.ordinal")
+        occurrence_ordinals.append(_int(occurrence.get("ordinal"), f"{path}.ordinal"))
         _int(occurrence.get("at_ms"), f"{path}.at_ms")
         _int(occurrence.get("duration_ms"), f"{path}.duration_ms")
         expected_link = stable_occurrence_deep_link(project_id, document_id, shot_id, revision_id, occurrence_id)
@@ -216,6 +615,8 @@ def validate_shot_composition(raw: Mapping[str, Any]) -> dict[str, Any]:
         expected_output = stable_output_identity(project_id, document_id, occurrence_id)
         if occurrence.get("output_identity") != expected_output:
             _fail(f"{path}.output_identity", "must be occurrence-qualified")
+    if occurrence_ordinals != list(range(len(occurrence_ordinals))):
+        _fail("occurrences", "ordinals must be contiguous and ordered")
 
     cases = _mapping(root.get("cases"), "cases")
     missing = _mapping(cases.get("missing_dependency"), "cases.missing_dependency")
@@ -244,11 +645,26 @@ def parse_shot_composition(raw: Mapping[str, Any] | str | bytes) -> dict[str, An
 
 
 __all__ = [
+    "AssetRecord",
+    "AudioRecord",
+    "CompositionOccurrenceRecord",
+    "DependencyRecord",
+    "GenerationInputRecord",
+    "InternalTimelineRevisionRecord",
+    "MissingDependencyError",
+    "PrimaryTimelineHeadRecord",
+    "ProjectRecord",
+    "RuntimeShotCompositionWriter",
     "SCHEMA_VERSION",
+    "ShotCompositionSource",
     "ShotCompositionValidationError",
+    "ShotRevisionRecord",
     "StaleWriteError",
+    "TimingRecord",
     "assert_expected_head",
     "parse_shot_composition",
+    "prepare_shot_composition",
+    "publish_shot_composition",
     "stable_occurrence_deep_link",
     "stable_output_identity",
     "validate_shot_composition",

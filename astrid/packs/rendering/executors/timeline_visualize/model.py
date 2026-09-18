@@ -387,6 +387,50 @@ def _shot_models(
     clips: tuple[ClipModel, ...],
     fps: int,
 ) -> tuple[ShotModel, ...]:
+    app = assembly.get("app") if isinstance(assembly, Mapping) else None
+    composition = app.get("astrid_shot_composition") if isinstance(app, Mapping) else None
+    canonical_occurrences = composition.get("occurrences") if isinstance(composition, Mapping) else None
+    if isinstance(canonical_occurrences, list):
+        by_occurrence: dict[str, list[ClipModel]] = {}
+        for clip in clips:
+            raw_app = None
+            # ClipModel intentionally retains only normalized fields; the
+            # occurrence id is available from the projected clip id prefix and
+            # from the canonical occurrence table. Match by stable prefix so
+            # repeated linked revisions never collapse into one shot row.
+            if ":" in clip.clip_id:
+                prefix = clip.clip_id.split(":", 1)[0]
+                by_occurrence.setdefault(prefix, []).append(clip)
+        result: list[ShotModel] = []
+        for raw in canonical_occurrences:
+            if not isinstance(raw, Mapping):
+                continue
+            occurrence_id = raw.get("occurrence_id")
+            if not isinstance(occurrence_id, str) or not occurrence_id:
+                continue
+            members = by_occurrence.get(occurrence_id, [])
+            at = raw.get("at")
+            if at is None and isinstance(raw.get("at_ms"), (int, float)):
+                at = float(raw["at_ms"]) / 1000.0
+            duration = raw.get("duration_seconds")
+            if duration is None and isinstance(raw.get("duration_ms"), (int, float)):
+                duration = float(raw["duration_ms"]) / 1000.0
+            if isinstance(at, (int, float)) and isinstance(duration, (int, float)):
+                authored = IntervalSeconds(float(at), float(at) + max(0.0, float(duration)))
+                frames = IntervalFrames(
+                    _seconds_to_frame(authored.start, fps),
+                    _seconds_to_frame(authored.end, fps),
+                    fps,
+                )
+            elif members:
+                authored = IntervalSeconds(min(c.authored.start for c in members), max(c.authored.end for c in members))
+                frames = IntervalFrames(min(c.frames.start_frame for c in members), max(c.frames.end_frame for c in members), fps)
+            else:
+                authored = None
+                frames = None
+            result.append(ShotModel(occurrence_id, tuple(c.clip_id for c in members), authored, frames, ()))
+        return tuple(result)
+
     raw_groups = assembly.get("pinnedShotGroups", ())
     if raw_groups is None:
         return ()

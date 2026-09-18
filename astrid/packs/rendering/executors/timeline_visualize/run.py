@@ -369,6 +369,12 @@ def _materialize_kernel_timeline(
     except ValueError:
         timeline_id = row.timeline_id
     config = dict(row.config)
+    if isinstance(row.composition_graph, Mapping):
+        app = config.setdefault("app", {})
+        if not isinstance(app, dict):
+            app = {}
+            config["app"] = app
+        app["shot_composition_graph"] = json.loads(json.dumps(row.composition_graph))
     if not isinstance(config.get("clips"), list) or not isinstance(config.get("tracks"), list):
         raise ValueError(
             f"kernel timeline {row.slug!r} at version {row.config_version} cannot be "

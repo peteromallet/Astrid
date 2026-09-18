@@ -385,6 +385,7 @@ class ManagedRenderSnapshot:
     registry_hash: str
     materialized_registry_hash: str
     expansion: Mapping[str, Any] | None = None
+    composition_graph: Mapping[str, Any] | None = None
 
     def authority(self) -> dict[str, Any]:
         result = {
@@ -533,6 +534,61 @@ def resolve_managed_render_snapshot(
     stored_registry = timeline_data.get("registry")
     if not isinstance(config, dict) or not isinstance(stored_registry, dict):
         raise ValueError("canonical timeline snapshot is not a JSON object")
+    composition_graph = None
+    for key in ("shot_composition", "composition_graph", "canonical_graph", "prepared_shot_composition"):
+        candidate = timeline_data.get(key)
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
+            composition_graph = candidate
+            break
+    if composition_graph is None:
+        metadata = timeline_data.get("metadata")
+        if isinstance(metadata, Mapping):
+            candidate = metadata.get("shot_composition") or metadata.get("composition_graph")
+            if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
+                composition_graph = candidate
+    expansion = None
+    if composition_graph is not None:
+        from astrid.core.timeline.shot_composition_projection import project_shot_composition
+
+        try:
+            projected = project_shot_composition(
+                composition_graph,
+                base_config=config,
+                base_registry=stored_registry,
+            )
+        except ValueError as exc:
+            raise ValueError(f"canonical shot-composition graph is not renderable: {exc}") from exc
+        config = projected.config
+        stored_registry = projected.registry
+        revisions = {
+            (row["shot_id"], row["revision_id"]): row
+            for row in composition_graph["shot_revisions"]
+            if isinstance(row, Mapping) and row.get("shot_id") and row.get("revision_id")
+        }
+        shots = []
+        for (shot_id, revision_id), revision in sorted(revisions.items()):
+            provenance = revision.get("provenance") if isinstance(revision, Mapping) else None
+            metadata = provenance.get("metadata") if isinstance(provenance, Mapping) else None
+            name = metadata.get("name") if isinstance(metadata, Mapping) else None
+            shots.append({
+                "shot_id": shot_id,
+                "revision_id": revision_id,
+                "name": str(name or shot_id),
+                "text_bindings": list(revision.get("text_bindings") or []) if isinstance(revision.get("text_bindings"), list) else [],
+            })
+        expansion = {
+            "canonical": True,
+            "children": [
+                {"timeline_id": row.get("revision_id"), "config_version": 1,
+                 "config_hash": row.get("content_digest")}
+                for row in composition_graph["shot_revisions"]
+                if isinstance(row, Mapping)
+            ],
+            "shots": shots,
+            "occurrences": [dict(row) for row in projected.occurrences],
+            "outputs": [dict(row) for row in projected.outputs],
+            "graph": composition_graph,
+        }
     # The SDK's read model is the authority. Keep runtime-admitted media
     # identities in the snapshot; the generic host supplies bytes to the child
     # attempt without any local database or filesystem lookup.
@@ -574,6 +630,8 @@ def resolve_managed_render_snapshot(
         config_hash=config_hash,
         registry_hash=registry_hash,
         materialized_registry_hash=_digest(registry),
+        expansion=expansion,
+        composition_graph=composition_graph,
     )
 
 

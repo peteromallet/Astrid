@@ -78,6 +78,13 @@ def _timeline_snapshot(envelope: Mapping) -> Mapping:
     return snapshot
 
 
+def _canonical_shot_occurrences(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    app = config.get("app") if isinstance(config, Mapping) else None
+    composition = app.get("astrid_shot_composition") if isinstance(app, Mapping) else None
+    occurrences = composition.get("occurrences") if isinstance(composition, Mapping) else None
+    return [dict(item) for item in occurrences if isinstance(item, Mapping)] if isinstance(occurrences, list) else []
+
+
 def _expand_input_snapshot(client: Any, config: Mapping[str, Any], registry: Mapping[str, Any], authority: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Flatten admitted child timelines for input inspection.
 
@@ -400,6 +407,7 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
                 # filmstrip selectors (the flattened clip list alone does not
                 # carry pinnedShotGroups).
                 'pinned_shots': deepcopy(config.get('pinnedShotGroups') or []),
+                'shot_occurrences': _canonical_shot_occurrences(config),
                 'tracks': deepcopy(config.get('tracks') or []),
                 'registry': deepcopy(dict(registry)),
                 'metadata': {
@@ -511,6 +519,7 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
                 'fps_rational': [fps_fraction.numerator, fps_fraction.denominator], 'duration_frames': int(duration_frames),
                 'clips': deepcopy(config.get('clips') or []),
                 'pinned_shots': deepcopy(config.get('pinnedShotGroups') or []),
+                'shot_occurrences': _canonical_shot_occurrences(config),
                 'tracks': deepcopy(config.get('tracks') or []),
                 'registry': deepcopy(dict(registry)),
                 'metadata': {

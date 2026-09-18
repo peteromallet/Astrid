@@ -185,6 +185,7 @@ def execute_input_only(args, authority):
         fps=fps, track_ids=options.get("track_ids") or (), clip_id=options.get("clip"),
         shot_id=options.get("shot"), asset_id=options.get("asset"), integrity=integrity,
         shot_groups=snapshot.get("pinned_shots") or snapshot.get("pinnedShotGroups") or (),
+        shot_occurrences=snapshot.get("shot_occurrences") or (),
     )
     index = {
         "schema": "astrid.timeline-input-inspection.v1",

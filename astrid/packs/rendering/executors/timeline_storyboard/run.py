@@ -270,6 +270,26 @@ def build_view_model(
     registry_dir: Path,
     shot_id: str | None = None,
 ) -> dict[str, Any]:
+    # Canonical shot-composition graphs are already prepared by the editor
+    # lane. Project them in memory for the preview; the storyboard must never
+    # reconstruct a shot from legacy pinned membership.
+    app = timeline_config.get("app") if isinstance(timeline_config, Mapping) else None
+    graph = None
+    if isinstance(timeline_config.get("shot_revisions"), list):
+        graph = timeline_config
+    elif isinstance(app, Mapping):
+        candidate = app.get("shot_composition_graph") or app.get("canonical_shot_composition")
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
+            graph = candidate
+    if graph is not None:
+        from astrid.core.timeline.shot_composition_projection import project_shot_composition
+        projected = project_shot_composition(
+            graph,
+            base_config=timeline_config if isinstance(timeline_config.get("clips"), list) else None,
+            base_registry=asset_registry,
+        )
+        timeline_config = projected.config
+        asset_registry = projected.registry
     clips_raw = timeline_config.get("clips")
     clips = clips_raw if isinstance(clips_raw, list) else []
     clips_by_id: dict[str, Mapping[str, Any]] = {
@@ -278,8 +298,35 @@ def build_view_model(
         if isinstance(clip, Mapping)
         and (clip_id := _string(clip.get("id"))) is not None
     }
-    groups_raw = timeline_config.get("pinnedShotGroups")
-    groups = groups_raw if isinstance(groups_raw, list) else []
+    canonical = timeline_config.get("app", {}).get("astrid_shot_composition") if isinstance(timeline_config.get("app"), Mapping) else None
+    canonical_occurrences = canonical.get("occurrences") if isinstance(canonical, Mapping) else None
+    if isinstance(canonical_occurrences, list):
+        groups = []
+        for occurrence in canonical_occurrences:
+            if not isinstance(occurrence, Mapping):
+                continue
+            occurrence_id = occurrence.get("occurrence_id")
+            if not isinstance(occurrence_id, str):
+                continue
+            member_ids = [
+                str(clip.get("id"))
+                for clip in clips
+                if isinstance(clip, Mapping) and clip.get("shot_occurrence_id") == occurrence_id
+            ]
+            start = _number(occurrence.get("at", occurrence.get("at_ms", 0) / 1000 if isinstance(occurrence.get("at_ms"), (int, float)) else 0)) or 0.0
+            duration = _number(occurrence.get("duration_seconds", occurrence.get("duration_ms", 0) / 1000 if isinstance(occurrence.get("duration_ms"), (int, float)) else 0)) or 0.0
+            groups.append({
+                "shotId": occurrence.get("shot_id") or occurrence_id,
+                "name": occurrence.get("name"),
+                "clipIds": member_ids,
+                "start": start,
+                "end": start + duration,
+                "trackId": occurrence.get("track"),
+                "occurrenceId": occurrence_id,
+            })
+    else:
+        groups_raw = timeline_config.get("pinnedShotGroups")
+        groups = groups_raw if isinstance(groups_raw, list) else []
     assets_raw = asset_registry.get("assets")
     assets = assets_raw if isinstance(assets_raw, Mapping) else {}
 

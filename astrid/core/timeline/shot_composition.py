@@ -165,7 +165,7 @@ class RuntimeShotCompositionWriter(Protocol):
         *,
         project_id: str,
         document_id: str,
-        expected_head_revision_id: str,
+        expected_head_revision_id: str | None,
         graph: Mapping[str, Any],
     ) -> Any:
         """Atomically publish the complete graph with a Runtime CAS precondition."""
@@ -420,11 +420,14 @@ def _resolution_is_missing(result: Any) -> bool:
     return False
 
 
+_EXPECTED_HEAD_UNSET = object()
+
+
 def publish_shot_composition(
     source: ShotCompositionSource | Mapping[str, Any],
     writer: RuntimeShotCompositionWriter,
     *,
-    expected_head_revision_id: str | None = None,
+    expected_head_revision_id: str | None | object = _EXPECTED_HEAD_UNSET,
 ) -> Any:
     """Resolve immutable references, then delegate complete-graph CAS to Runtime.
 
@@ -437,13 +440,17 @@ def publish_shot_composition(
     primary = graph["primary_timeline"]
     head = primary["head"]
     graph_head_revision_id = head["revision_id"]
-    if expected_head_revision_id is not None:
+    if expected_head_revision_id is _EXPECTED_HEAD_UNSET:
+        expected = graph_head_revision_id
+    elif expected_head_revision_id is None:
+        expected = None
+    else:
         _string(expected_head_revision_id, "expected_head_revision_id")
         if expected_head_revision_id != graph_head_revision_id:
             raise ShotCompositionValidationError(
                 "expected_head_revision_id must match primary_timeline.head.revision_id"
             )
-    expected = expected_head_revision_id or graph_head_revision_id
+        expected = expected_head_revision_id
 
     resolved: set[tuple[str, str]] = set()
     for index, revision in enumerate(graph["shot_revisions"]):
@@ -485,7 +492,7 @@ def publish_shot_composition(
     return result
 
 
-def assert_expected_head(expected_revision_id: str, actual_revision_id: str) -> None:
+def assert_expected_head(expected_revision_id: str | None, actual_revision_id: str | None) -> None:
     """Apply the local contract guard; this is not Runtime CAS publication."""
     if expected_revision_id != actual_revision_id:
         raise StaleWriteError(

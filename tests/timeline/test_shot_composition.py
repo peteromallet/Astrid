@@ -228,6 +228,15 @@ def test_publish_resolves_each_immutable_revision_and_writes_complete_graph() ->
     assert writer.published["graph"] == fixture
 
 
+def test_publish_explicit_null_expected_head_reaches_initial_cas() -> None:
+    writer = _Writer()
+
+    publish_shot_composition(load_fixture(), writer, expected_head_revision_id=None)
+
+    assert writer.published is not None
+    assert writer.published["expected_head_revision_id"] is None
+
+
 def test_publish_maps_missing_runtime_revision_to_typed_error() -> None:
     writer = _Writer(missing=("shot-beta", "rev-a"))
 

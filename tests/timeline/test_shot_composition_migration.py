@@ -69,6 +69,7 @@ def test_child_migration_preserves_identity_metadata_and_uses_canonical_graph():
     assert shot["payload"]["pools"] == [{"id": "pool-1"}]
     assert shot["payload"]["selected_variants"] == {"pool-1": "alt-1"}
     assert shot["payload"]["provenance"]["lineage"] == "source-cut"
+    assert plan.publication["dependency_manifest"]["shots"][0]["internal_timeline_revision_id"] == shot["internal_timeline_revision_id"]
     assert "pinnedShotGroups" not in plan.publication["parent_composition"]["config"]
     assert all(clip.get("clipType") != "shot" for clip in plan.publication["parent_composition"]["clips"])
 
@@ -123,7 +124,7 @@ def test_activation_receipt_contains_mapping_marker_reload_and_no_media_copy():
     assert receipt["activation_marker"]["migration_id"] == "fixed-migration"
     assert receipt["reload"]["verified"] is True
     assert receipt["managed_media"]["created"] == 0
-    assert writer.calls[0][3] == "astrid-shot-composition-migration:fixed-migration"
+    assert writer.calls[0][3] == "astrid-shot-composition-migration-fixed-migration"
 
 
 def test_interrupted_publication_recovers_by_runtime_idempotency_receipt():

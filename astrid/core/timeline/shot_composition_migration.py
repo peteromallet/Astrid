@@ -933,7 +933,7 @@ def plan_shot_composition_migration(
             "internal_timeline_revisions": sorted(internal_revisions.values(), key=lambda value: (value["timeline_id"], value["revision_id"])),
             "shot_revisions": sorted(revisions.values(), key=lambda value: (value["shot_id"], value["revision_id"])),
             "dependency_manifest": {
-                "shots": [{"shot_id": item["shot_id"], "revision_id": item["revision_id"], "content_digest": item["content_digest"]} for item in sorted(revisions.values(), key=lambda value: (value["shot_id"], value["revision_id"]))],
+                "shots": [{"shot_id": item["shot_id"], "revision_id": item["revision_id"], "internal_timeline_revision_id": item["internal_timeline_revision_id"], "content_digest": item["content_digest"]} for item in sorted(revisions.values(), key=lambda value: (value["shot_id"], value["revision_id"]))],
                 "internal_timelines": [{"timeline_id": item["timeline_id"], "revision_id": item["revision_id"], "content_digest": item["content_digest"]} for item in sorted(internal_revisions.values(), key=lambda value: (value["timeline_id"], value["revision_id"]))],
                 "media": [{"media_id": digest, "content_digest": digest} for digest in media],
             },

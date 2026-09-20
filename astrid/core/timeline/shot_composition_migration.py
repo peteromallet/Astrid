@@ -489,13 +489,12 @@ def _source_assets(registry: Mapping[str, Any], *, project_id: str) -> tuple[lis
             "role": str(entry.get("role", entry.get("type", "asset"))),
             "source": _copy(entry),
         })
-        if digest.startswith("sha256:"):
-            # Runtime media dependencies are exact bytes already managed by
-            # Runtime.  A deterministic fallback digest is retained in the
-            # shot payload but is not claimed as managed media by this list.
-            supplied = entry.get("digest", entry.get("content_digest", entry.get("sha256")))
-            if isinstance(supplied, str) and supplied.startswith("sha256:") and len(supplied) == 71:
-                media.add(digest)
+        # The object/media identity is the dependency; ``digest`` may be a
+        # legacy record digest for the asset descriptor itself and need not be
+        # a Runtime object.  Preserve that field in the payload, but only
+        # claim an actual SHA-256 object as managed media.
+        if object_id.startswith("sha256:") and len(object_id) == 71:
+            media.add(object_id)
     return assets, tuple(sorted(media))
 
 
@@ -646,7 +645,10 @@ def plan_shot_composition_migration(
         document_id = str(timeline.get("document_id", tid))
         fingerprint = _source_fingerprint(row, timeline)
         mid = migration_id or _identity("shot-composition-migration", pid, tid, fingerprint)
-        key = f"astrid-shot-composition-migration:{mid}"
+        # Runtime idempotency keys are HTTP header values.  Keep the
+        # deterministic migration identity, but use only the characters
+        # accepted by Runtime's transport validator.
+        key = f"astrid-shot-composition-migration-{mid}"
         children = _child_timelines(row, timeline)
         shots = _shot_records(row, timeline)
         clips = config.get("clips", [])

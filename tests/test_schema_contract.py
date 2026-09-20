@@ -106,7 +106,14 @@ class SchemaContractTest(unittest.TestCase):
         theme_overrides_keys = set(config.get("theme_overrides") or {})
         asset_entry_keys = {key for entry in registry["assets"].values() for key in entry}
 
-        self.assertEqual(clip_keys, set(timeline._CLIP_ALLOWED) - {"app", "derived_output", "keyframes", "label"})
+        # The full fixture exercises the shared authoring shape. Astrid's
+        # shot-provenance overlay is admitted for render-admission outputs,
+        # but is intentionally not present on every authoring clip.
+        self.assertEqual(
+            clip_keys,
+            set(timeline._CLIP_ALLOWED)
+            - {"app", "derived_output", "elementRef", "keyframes", "label", "shot_id", "shot_occurrence_id", "shot_name"},
+        )
         self.assertEqual(track_keys, set(timeline._TRACK_ALLOWED) - {"app"})
         self.assertEqual(theme_overrides_keys, set(timeline._THEME_OVERRIDES_ALLOWED))
         self.assertEqual(asset_entry_keys, set(timeline._ASSET_ENTRY_ALLOWED))

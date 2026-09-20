@@ -103,7 +103,20 @@ const validSegments = (value: unknown): TimelineSegment[] => {
 
 const renderableFile = (file: string | undefined): string | null => {
   if (!file || !file.trim()) return null;
-  return file.startsWith('http://') || file.startsWith('https://') ? file : staticFile(file);
+  const value = file.trim();
+  // Worker renders provide public-relative paths; browser hosts may provide a
+  // Vite URL, an absolute URL, or a blob/data URL. Preserve already-renderable
+  // values instead of feeding them through Remotion's staticFile resolver.
+  if (
+    value.startsWith('http://')
+    || value.startsWith('https://')
+    || value.startsWith('/')
+    || value.startsWith('blob:')
+    || value.startsWith('data:')
+  ) {
+    return value;
+  }
+  return staticFile(value);
 };
 
 type TimelineStripProps = {
@@ -170,7 +183,7 @@ export default function EndSpanningLayer({clip, params: rawParams, assetEntry, f
   const segments = validSegments(params.timelineSegments);
   const cards = [...CARD_KEYS];
   const staged = params.__astridAssets ?? {};
-  const url = (key: string): string => staged[key] ? staticFile(staged[key]) : staticFile(`astrid-effects/end-spanning-layer/${key}`);
+  const url = (key: string): string => renderableFile(staged[key]) ?? staticFile(`astrid-effects/end-spanning-layer/${key}`);
   const fallbackSelectedIndex = Math.min(segments.length - 1, DEFAULT_SELECTED_SEGMENT_INDEX);
   const requestedIndex = typeof params.selectedSegmentIndex === 'number' && Number.isFinite(params.selectedSegmentIndex) && params.selectedSegmentIndex >= 0
     ? params.selectedSegmentIndex

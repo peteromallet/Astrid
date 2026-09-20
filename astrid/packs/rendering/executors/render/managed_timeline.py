@@ -127,6 +127,101 @@ def _validate_render_element_clip_types(
         )
 
 
+def _normalize_pinned_element_references(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Project editor element refs onto the fields the Remotion backend reads.
+
+    ``elementRef`` is the stable authoring identity. The existing generated
+    Remotion composition still consumes ``clipType`` for effect clips and the
+    canonical ``entrance``/``exit``/``continuous`` phase fields for animation
+    references, so the managed render snapshot carries both representations
+    without asking callers to know backend details.
+    """
+
+    normalized = dict(config)
+    raw_clips = config.get("clips")
+    if not isinstance(raw_clips, list):
+        return normalized
+    clips: list[Any] = []
+    changed = False
+    for raw_clip in raw_clips:
+        if not isinstance(raw_clip, Mapping):
+            clips.append(raw_clip)
+            continue
+        clip = dict(raw_clip)
+        ref = clip.get("elementRef")
+        if isinstance(ref, Mapping):
+            element_id = ref.get("id")
+            element_kind = ref.get("kind")
+            if isinstance(element_id, str) and element_id and element_kind == "effect":
+                if clip.get("clipType") == "effect-layer":
+                    clip["clipType"] = element_id
+                    changed = True
+        clips.append(clip)
+    if changed:
+        normalized["clips"] = clips
+    return normalized
+
+
+def _validate_pinned_element_references(
+    snapshot: "ManagedRenderSnapshot", config: Mapping[str, Any]
+) -> None:
+    """Check revision-pinned editor refs against Astrid's registry."""
+
+    from astrid.core.element import catalog as element_catalog
+
+    descriptors = {
+        (str(descriptor.get("kind")), str(descriptor.get("id"))): descriptor
+        for descriptor in element_catalog.list_element_descriptors()
+    }
+    for index, clip in enumerate(config.get("clips", [])):
+        if not isinstance(clip, Mapping):
+            continue
+        ref = clip.get("elementRef")
+        if not isinstance(ref, Mapping):
+            continue
+        ref_id = ref.get("id")
+        ref_kind = ref.get("kind")
+        ref_revision = ref.get("revision")
+        path = f"$.clips[{index}].elementRef"
+        if not all(isinstance(value, str) and value for value in (ref_id, ref_kind, ref_revision)):
+            raise ManagedRenderValidationError(
+                f"canonical timeline {snapshot.timeline_slug!r} is not renderable at {path}: "
+                "elementRef must contain id, kind, and revision",
+                path=path,
+                reason="malformed pinned element reference",
+                recovery="Re-apply the element from the current Astrid catalog, then retry.",
+                validator="pinned_element_reference",
+            )
+        if ref_revision.startswith("draft-"):
+            raise ManagedRenderValidationError(
+                f"canonical timeline {snapshot.timeline_slug!r} is not renderable at {path}: "
+                f"draft element {ref_id!r} is preview-only",
+                path=path,
+                reason="draft element reference",
+                recovery="Publish the element before exporting the timeline.",
+                validator="pinned_element_reference",
+            )
+        descriptor = descriptors.get((ref_kind, ref_id))
+        if descriptor is None:
+            raise ManagedRenderValidationError(
+                f"canonical timeline {snapshot.timeline_slug!r} is not renderable at {path}: "
+                f"element {ref_kind}/{ref_id!r} is not registered",
+                path=path,
+                reason="unregistered pinned element",
+                recovery="Re-apply the element from the current Astrid catalog, then retry.",
+                validator="pinned_element_reference",
+            )
+        if descriptor.get("revision") != ref_revision:
+            raise ManagedRenderValidationError(
+                f"canonical timeline {snapshot.timeline_slug!r} is not renderable at {path}: "
+                f"element {ref_id!r} is pinned to stale revision {ref_revision!r}",
+                path=path,
+                reason="stale pinned element revision",
+                recovery="Refresh the catalog and re-apply the current element revision, then retry.",
+                validator="pinned_element_reference",
+            )
+
+
 def _timeline_fps(config: Mapping[str, Any]) -> float:
     output = config.get("output")
     if isinstance(output, Mapping) and isinstance(output.get("fps"), (int, float)):
@@ -438,7 +533,7 @@ def validate_managed_render_snapshot(snapshot: ManagedRenderSnapshot) -> None:
     or creating a run.  Backend runtime readiness remains the renderer's job.
     """
 
-    config = dict(snapshot.config)
+    config = _normalize_pinned_element_references(snapshot.config)
     output = config.get("output")
     if isinstance(output, Mapping):
         required_output_fields = ("resolution", "fps", "file")
@@ -454,6 +549,7 @@ def validate_managed_render_snapshot(snapshot: ManagedRenderSnapshot) -> None:
         timeline.validate_timeline(config)
     except Exception as exc:
         raise _schema_validation_error(snapshot, exc) from exc
+    _validate_pinned_element_references(snapshot, config)
     _validate_render_element_clip_types(snapshot, config)
 
     registry = dict(snapshot.registry)
@@ -592,6 +688,7 @@ def resolve_managed_render_snapshot(
     # The SDK's read model is the authority. Keep runtime-admitted media
     # identities in the snapshot; the generic host supplies bytes to the child
     # attempt without any local database or filesystem lookup.
+    config = _normalize_pinned_element_references(config)
     registry = _runtime_snapshot_registry(
         stored_registry,
         project_ref=project_ref,

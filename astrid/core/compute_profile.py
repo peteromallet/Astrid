@@ -42,6 +42,7 @@ PROFILE_FIELDS = frozenset(
         "provider",
         "credentials",
         "gpu_type",
+        "allowed_cuda_versions",
         "storage_name",
         "max_runtime_seconds",
         "name_prefix",
@@ -113,6 +114,16 @@ def validate_profile(document: Mapping[str, Any], *, expected_id: str | None = N
     unknown = sorted(set(data) - PROFILE_FIELDS)
     if unknown:
         raise ValueError(f"unknown compute profile fields: {', '.join(unknown)}")
+
+    if "allowed_cuda_versions" in data:
+        cuda_versions = data["allowed_cuda_versions"]
+        if isinstance(cuda_versions, str):
+            cuda_versions = [part.strip() for part in cuda_versions.split(",") if part.strip()]
+        if not isinstance(cuda_versions, (list, tuple)) or not cuda_versions:
+            raise ValueError("allowed_cuda_versions must contain at least one version")
+        if any(not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+", version.strip()) for version in cuda_versions):
+            raise ValueError("allowed_cuda_versions entries must be non-empty CUDA versions like '12.4'")
+        data["allowed_cuda_versions"] = list(dict.fromkeys(version.strip() for version in cuda_versions))
 
     credentials = data.get("credentials", {})
     if not isinstance(credentials, Mapping):

@@ -7,10 +7,10 @@ import json
 import os
 import shutil
 import subprocess
-import threading
 from pathlib import Path
 from unittest import mock
 
+import threading
 import pytest
 
 from astrid.core.media import ffprobe_metadata_strict

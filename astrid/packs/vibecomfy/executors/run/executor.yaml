@@ -26,7 +26,10 @@
       "{readiness_profile_path}",
       "--readiness-profile-hash",
       "{readiness_profile_hash}"
-    ]
+    ],
+    "env": {
+      "VIBECOMFY_HEADLESS": "1"
+    }
   },
   "description": "Run a VibeComfy workflow through the VibeComfy CLI.",
   "graph": {

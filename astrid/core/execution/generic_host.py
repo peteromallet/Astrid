@@ -66,7 +66,11 @@ from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantError,
 )
 from astrid.core.subprocess_env import build_child_subprocess_env
-from astrid.core.generation.vibecomfy_dependency import dependency_pythonpath
+from astrid.core.generation.vibecomfy_dependency import (
+    VIBECOMFY_ATTESTED_CONTENT_DIGEST_ENV,
+    VIBECOMFY_ATTESTED_REVISION_ENV,
+    dependency_pythonpath,
+)
 from astrid.core.util.secrets import load_local_api_key_with_source
 from astrid.core.execution.managed_tool_session import (
     CapabilityDescriptor,
@@ -110,7 +114,15 @@ _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
 )
 
 _RUNTIME_OUTPUT_NAMESPACES = frozenset(
-    ("images", "videos", "audio", "agent-view", "filmstrip-view")
+    (
+        "images",
+        "videos",
+        "audio",
+        "outputs",
+        "artifacts",
+        "agent-view",
+        "filmstrip-view",
+    )
 )
 
 
@@ -165,19 +177,29 @@ def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> st
     if not isinstance(intent, Mapping):
         return None
     modality = intent.get("modality")
-    expected = {"image": "generated_images", "video": "generated_videos", "audio": "generated_audio"}.get(modality)
-    if expected is None:
+    if modality not in {"image", "video", "audio"}:
         return None
-    matches = [
+    expected = {"image": "generated_images", "video": "generated_videos", "audio": "generated_audio"}[modality]
+    candidates = [
         output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
-        if getattr(output, "name", None) == expected
-        and getattr(output, "type", None) == "file"
+        if getattr(output, "type", None) == "file"
         and not str(getattr(output, "name", "")).endswith("_manifest")
         and getattr(output, "artifact_type", None)
     ]
-    if matches != [expected]:
-        raise HostError(f"generation capability must declare exactly one primary {expected!r} output")
-    return expected
+    if candidates.count(expected) == 1:
+        return expected
+    if len(candidates) == 1:
+        return candidates[0]
+    untyped_candidates = [
+        output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
+        if getattr(output, "type", None) == "file"
+        and not str(getattr(output, "name", "")).endswith("_manifest")
+    ]
+    if len(untyped_candidates) == 1:
+        return untyped_candidates[0]
+    raise HostError(
+        f"generation capability must declare exactly one primary {modality!r} output"
+    )
 
 
 def _generation_selector_declarations(
@@ -197,6 +219,7 @@ def _generation_selector_declarations(
                 "ordinal": selector["ordinal"],
                 "variant_key": selector["variant_key"],
                 "output_port": output_port,
+                **({"required": selector["required"]} if "required" in selector else {}),
             })
     return output_port, tuple(declarations)
 
@@ -567,14 +590,17 @@ def _prepare_vibecomfy_execution_identity(
     inputs: Mapping[str, Any],
     scratch: Path,
     readiness_profile: Mapping[str, Any] | None,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, Mapping[str, Any]]:
     """Select and identify the exact VibeComfy input form before launch."""
     from astrid.packs.vibecomfy.executors._bundle_inputs import staged_workflow_path
     from astrid.packs.vibecomfy.production_engine import (
         load_workflow_path,
         loaded_workflow_execution_identity,
+        loaded_workflow_session_requirements,
     )
 
+    previous_headless = os.environ.get("VIBECOMFY_HEADLESS")
+    os.environ["VIBECOMFY_HEADLESS"] = "1"
     try:
         with staged_workflow_path(
             workflow=inputs.get("workflow"),
@@ -591,9 +617,15 @@ def _prepare_vibecomfy_execution_identity(
                 loaded_workflow_execution_identity(loaded, readiness_profile),
                 loaded.model_id,
                 loaded.template_id,
+                loaded_workflow_session_requirements(loaded),
             )
     except Exception as exc:
         raise HostError(f"vibecomfy.run canonical input preflight failed: {exc}") from exc
+    finally:
+        if previous_headless is None:
+            os.environ.pop("VIBECOMFY_HEADLESS", None)
+        else:
+            os.environ["VIBECOMFY_HEADLESS"] = previous_headless
 
 
 def _dependency_pythonpath() -> tuple[str, ...]:
@@ -1046,16 +1078,22 @@ def _source_digest(root: Path) -> str:
 def _attempt_tree_bytes(root: Path) -> int:
     """Count owned attempt bytes without following symlink escapes."""
     total = 0
-    for path in root.rglob("*"):
-        # Renderers may remove completed frame files while the live guard is
-        # walking the attempt. ``is_file()`` and ``stat()`` are not atomic; a
-        # vanished file is a normal scan race, not a renderer failure.
-        try:
-            if path.is_symlink() or not path.is_file():
+    try:
+        for path in root.rglob("*"):
+            # Renderers may remove completed frame files or workspaces while
+            # the live guard is walking the attempt. ``rglob()``, ``is_file``
+            # and ``stat()`` are not atomic; a vanished path is a normal scan
+            # race, not a renderer failure.
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                total += int(path.stat().st_size)
+            except FileNotFoundError:
                 continue
-            total += int(path.stat().st_size)
-        except FileNotFoundError:
-            continue
+    except FileNotFoundError:
+        # A renderer-owned directory can disappear during rglob iteration.
+        # Return the bounded point-in-time total rather than failing the task.
+        return total
     return total
 
 
@@ -1064,19 +1102,22 @@ def _storage_tree_bytes(root: Path) -> int:
     if not root.is_dir():
         return 0
     total = 0
-    for path in root.rglob("*"):
-        # Atomic writers use sibling ``*.tmp`` files.  Those bytes are
-        # scratch during the write and must not be charged to the final-output
-        # bucket while the child is still running.
-        # The output tree can also contain renderer-owned intermediates for
-        # legacy/direct callers. Treat a file removed between discovery and
-        # stat as absent from this point-in-time accounting sample.
-        try:
-            if path.is_symlink() or not path.is_file() or path.name.endswith(".tmp"):
+    try:
+        for path in root.rglob("*"):
+            # Atomic writers use sibling ``*.tmp`` files.  Those bytes are
+            # scratch during the write and must not be charged to the final-output
+            # bucket while the child is still running.
+            # The output tree can also contain renderer-owned intermediates for
+            # legacy/direct callers. Treat a path removed during traversal as
+            # absent from this point-in-time accounting sample.
+            try:
+                if path.is_symlink() or not path.is_file() or path.name.endswith(".tmp"):
+                    continue
+                total += int(path.stat().st_size)
+            except FileNotFoundError:
                 continue
-            total += int(path.stat().st_size)
-        except FileNotFoundError:
-            continue
+    except FileNotFoundError:
+        return total
     return total
 
 
@@ -1716,7 +1757,7 @@ class RuntimeProtocolClient:
             idempotency_key=f"capability-withdraw-{capability_id}-{digest}",
         )
 
-    def heartbeat(self, task_id: str, lease_token: str, *, attempt_id: str | None = None, fence: int | None = None):
+    def heartbeat(self, task_id: str, lease_token: str, *, attempt_id: str | None = None, fence: int | None = None, progress: Mapping[str, Any] | None = None):
         if not attempt_id or fence is None:
             raise HostError("generated heartbeat requires attempt_id and fence")
         runtime_epoch = self._current_runtime_epoch()
@@ -1727,16 +1768,18 @@ class RuntimeProtocolClient:
         with self._heartbeat_lock:
             self._heartbeat_sequence += 1
             heartbeat_sequence = self._heartbeat_sequence
-        return self.generated.heartbeat_attempt(
-            attempt_id,
-            lease_id=lease_token,
-            fence=int(fence),
-            idempotency_key=(
+        payload = {
+            "lease_id": lease_token,
+            "fence": int(fence),
+            "idempotency_key": (
                 f"heartbeat-{attempt_id}-{fence}-{runtime_epoch}-"
                 f"{self._heartbeat_session}-{heartbeat_sequence}"
             ),
-            runtime_epoch=runtime_epoch,
-        )
+            "runtime_epoch": runtime_epoch,
+        }
+        if progress is not None:
+            payload["progress"] = dict(progress)
+        return self.generated.heartbeat_attempt(attempt_id, **payload)
 
     def claim(self, task_id: str, worker_id: str, lease_token: str):
         raise HostError("per-task claim is not a canonical operation; use claim_task")
@@ -1993,6 +2036,13 @@ class GenericPackHost:
         self._registration_refresh_deadline = float("inf")
         self._cleanup_uncertain = False
         self._last_cleanup_receipt: dict[str, Any] | None = None
+        # A command child is short-lived while the manager-owned VibeComfy
+        # server persists across tasks.  Keep only the last successful,
+        # verified session/model hint in the host; it is revalidated by the
+        # child adapter against the HC-03 registry before reuse.
+        self._vibecomfy_warmth_hint: str | None = None
+        self._vibecomfy_current_warmth_hint: str | None = None
+        self._vibecomfy_requested_warmth_hint: str | None = None
 
     @property
     def last_cleanup_receipt(self) -> dict[str, Any] | None:
@@ -3248,9 +3298,18 @@ class GenericPackHost:
                 ) not in matched_declarations
             ]
             policy = generation_intent.get("partial_success_policy")
-            if policy == "reject" and missing:
-                raise HostError(
+            required_missing = [
+                declaration for declaration in missing
+                if declaration.get("required", policy == "reject")
+            ]
+            if required_missing:
+                message = (
                     "generation.publish_v1 reject policy is missing declared selectors"
+                    if policy == "reject"
+                    else "generation.publish_v1 is missing required declared selectors"
+                )
+                raise HostError(
+                    message
                 )
             if not matched_declarations:
                 raise HostError(
@@ -3289,6 +3348,46 @@ class GenericPackHost:
             )
         }
         explicit = dict(explicit_env or {})
+        # A worker may deliberately execute a qualified, local VibeComfy
+        # snapshot rather than the normal published dependency pin.  The
+        # candidate is selected only by the digest-bound HC-03 profile; never
+        # accept an ambient candidate variable from the pod environment.
+        if record.id == "vibecomfy.run":
+            # Canonical bundle loading imports VibeComfy custom-node modules
+            # before the child reaches the live checkout server. Keep that
+            # host-side preflight headless too; the actual Comfy daemon keeps
+            # its normal route-registration environment in its own process.
+            explicit["VIBECOMFY_HEADLESS"] = "1"
+            profile = _read_readiness_profile_document()
+            session = profile.get("vibecomfy_session") if isinstance(profile, Mapping) else None
+            if isinstance(session, Mapping):
+                explicit["ASTRID_VIBECOMFY_SESSION_OWNERSHIP_ATTESTED"] = "1"
+                revision = session.get("source_revision")
+                content_digest = session.get("source_content_digest")
+                if isinstance(revision, str) and isinstance(content_digest, str):
+                    explicit[VIBECOMFY_ATTESTED_REVISION_ENV] = revision
+                    explicit[VIBECOMFY_ATTESTED_CONTENT_DIGEST_ENV] = content_digest
+            launch = profile.get("launch") if isinstance(profile, Mapping) else None
+            if isinstance(launch, Mapping):
+                model_root = launch.get("model_root")
+                if isinstance(model_root, str) and model_root:
+                    explicit["ASTRID_VIBECOMFY_MODELS_ROOT"] = model_root
+            candidate = profile.get("vibecomfy_candidate") if isinstance(profile, Mapping) else None
+            if isinstance(candidate, Mapping) and candidate.get("kind") == "local_snapshot":
+                revision = candidate.get("revision")
+                content_digest = candidate.get("source_content_digest")
+                if isinstance(revision, str) and isinstance(content_digest, str):
+                    explicit["ASTRID_VIBECOMFY_CANDIDATE_KIND"] = "local_snapshot"
+                    explicit["ASTRID_VIBECOMFY_CANDIDATE_REVISION"] = revision
+                    explicit["ASTRID_VIBECOMFY_CANDIDATE_CONTENT_DIGEST"] = content_digest
+            if self._vibecomfy_requested_warmth_hint:
+                from astrid.core.generation.backends.vibecomfy import (
+                    VIBECOMFY_WARMTH_HINT_ENV,
+                )
+
+                explicit[VIBECOMFY_WARMTH_HINT_ENV] = (
+                    self._vibecomfy_requested_warmth_hint
+                )
         explicit.update({
             name: value
             for name in all_declared
@@ -3583,8 +3682,25 @@ class GenericPackHost:
         command = record.definition.command
         if command is None:
             raise HostError(f"capability {record.id!r} has no dispatchable command")
+        attempt_output_root = (attempt / "outputs").resolve()
         if admission is not None:
             _verify_admitted_source(admission)
+        # Checkout-server VibeComfy is intentionally bound to the manager's
+        # HC-03 output root. Keep the task's generated spool inside that
+        # attested root instead of handing the child an arbitrary attempt
+        # directory, which the adapter must correctly reject.
+        if record.id == "vibecomfy.run":
+            profile = _read_readiness_profile_document()
+            launch = profile.get("launch") if isinstance(profile, Mapping) else None
+            profile_output_root = launch.get("output_root") if isinstance(launch, Mapping) else None
+            if isinstance(profile_output_root, str) and profile_output_root:
+                managed_root = Path(profile_output_root).expanduser().resolve()
+                if managed_root.is_symlink() or not managed_root.is_absolute():
+                    raise HostError("HC-03 VibeComfy output_root must be an absolute non-symlink path")
+                task_label = str(inputs.get("task_identity") or attempt.name)
+                safe_label = "".join(char if char.isalnum() or char in "-_." else "_" for char in task_label)
+                output_root = managed_root / "astrid-tasks" / safe_label / "outputs"
+                output_root.mkdir(parents=True, exist_ok=True)
         values = {**inputs, "out": str(output_root), "run_root": str(attempt), "python_exec": sys.executable}
         for port in record.definition.inputs:
             if port.name not in values and port.default is not None:
@@ -3629,6 +3745,7 @@ class GenericPackHost:
                 "PYTHONPATH": os.pathsep.join((package_parent, *_dependency_pythonpath())),
                 ASTRID_INTERNAL_INVOCATION: "1",
                 **binding.env,
+                "ASTRID_PROGRESS_PATH": str(attempt / ".astrid-progress.json"),
             },
         )
         # Pack runtime modules reserve their direct module entry points for
@@ -3687,6 +3804,22 @@ class GenericPackHost:
                 raise HostError(f"capability {record.id!r} exited {returncode}: {detail}")
             if not isinstance(process_id, int) or process_id <= 0:
                 raise HostError(f"capability {record.id!r} child process_id is missing")
+            # The managed VibeComfy session must write inside its attested
+            # HC-03 release root while running, but Astrid's settlement
+            # contract owns an attempt-local output spool. Copy final regular
+            # files (including the result manifest) back into that spool before
+            # harvesting so typed-output custody remains inside the attempt.
+            if output_root != attempt_output_root:
+                attempt_output_root.mkdir(parents=True, exist_ok=True)
+                for source in output_root.rglob("*"):
+                    if source.is_symlink() or not source.is_file():
+                        continue
+                    relative = source.relative_to(output_root)
+                    destination = attempt_output_root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+                output_root = attempt_output_root
+                values = {**values, "out": str(output_root)}
             try:
                 outputs = harvest_staged_outputs(
                     output_root,
@@ -3699,6 +3832,7 @@ class GenericPackHost:
                 raise HostError(f"capability {record.id!r}: {exc}") from exc
             return SimpleNamespace(
                 outputs=outputs,
+                output_root=output_root,
                 payload={
                     "returncode": returncode,
                     "capability_digest": record.capability_digest,
@@ -4173,6 +4307,8 @@ class GenericPackHost:
         execution_identity = ""
         model_id = "vibecomfy.run"
         template_id = "vibecomfy.run"
+        self._vibecomfy_current_warmth_hint = None
+        self._vibecomfy_requested_warmth_hint = None
 
         def cancelled():
             nonlocal deadline_exceeded, evidence_cap_exceeded
@@ -4242,6 +4378,68 @@ class GenericPackHost:
                 raise HostError("generated evidence cap exceeded")
             if deadline_exceeded:
                 terminalize_deadline()
+
+        # Lease renewal must cover the complete claimed-attempt lifecycle,
+        # including input materialization, canonical identity/attestation,
+        # managed-session setup, output harvesting, upload, and settlement.
+        # Those steps can be expensive on a cold GPU release (for example,
+        # source-integrity attestation may hash thousands of files), and a
+        # pump started only immediately before child launch can let an otherwise
+        # healthy claim expire before the first heartbeat.
+        pump_stop = threading.Event()
+        progress_path = root / ".astrid-progress.json"
+        latest_progress: Mapping[str, Any] | None = None
+
+        def read_progress() -> Mapping[str, Any] | None:
+            nonlocal latest_progress
+            try:
+                payload = json.loads(progress_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return latest_progress
+            if isinstance(payload, Mapping):
+                latest_progress = {
+                    str(key): value
+                    for key, value in payload.items()
+                    if str(key) in {"phase", "percent", "current", "total"}
+                }
+            return latest_progress
+
+        initial_progress = read_progress()
+        heartbeat_kwargs = {
+            "attempt_id": attempt_id,
+            "fence": fence,
+        }
+        if initial_progress is not None:
+            heartbeat_kwargs["progress"] = initial_progress
+        self.client.heartbeat(task_id, lease_token, **heartbeat_kwargs)
+
+        def pump_lease():
+            while not pump_stop.wait(5.0):
+                try:
+                    heartbeat_progress = read_progress()
+                    heartbeat_kwargs = {
+                        "attempt_id": attempt_id,
+                        "fence": fence,
+                    }
+                    if heartbeat_progress is not None:
+                        heartbeat_kwargs["progress"] = heartbeat_progress
+                    self.client.heartbeat(task_id, lease_token, **heartbeat_kwargs)
+                    current = self.client.task(task_id)
+                    current_task = current.get("task", current) if isinstance(current, Mapping) else current
+                    state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
+                    if state == "cancelled":
+                        cancel_signal.set()
+                except Exception:
+                    # The daemon fences settlement if a heartbeat is lost; the
+                    # subprocess is still cleaned up here.
+                    cancel_signal.set()
+
+        pump_thread = threading.Thread(
+            target=pump_lease,
+            name=f"astrid-heartbeat-{task_id}",
+            daemon=True,
+        )
+        pump_thread.start()
         try:
             raw_task_param_ports = record.definition.metadata.get("hc04_param_ports")
             task_param_ports = (
@@ -4347,7 +4545,7 @@ class GenericPackHost:
             evidence_root = root
             self.execution_policy.assert_deadline(execution_deadline)
             if capability_id == "vibecomfy.run":
-                execution_identity, model_id, template_id = (
+                execution_identity, model_id, template_id, workflow_session_requirements = (
                     _prepare_vibecomfy_execution_identity(
                         inputs,
                         root / "workflow-identity",
@@ -4355,10 +4553,119 @@ class GenericPackHost:
                     )
                 )
                 network_admission["execution_identity"] = execution_identity
+                from astrid.packs.vibecomfy.production_engine import session_identity_digest
+
+                exact_facts = (
+                    readiness_profile.get("verified_facts", {}).get("exact", {})
+                    if isinstance(readiness_profile, Mapping)
+                    and isinstance(readiness_profile.get("verified_facts"), Mapping)
+                    else {}
+                )
+                model_digest = (
+                    exact_facts.get("model_digest")
+                    if isinstance(exact_facts, Mapping)
+                    else None
+                )
+                facts_digest = (
+                    readiness_profile.get("verified_facts_digest")
+                    if isinstance(readiness_profile, Mapping)
+                    else None
+                )
+                if not isinstance(vibe_session, Mapping):
+                    # pip_embedded is a valid local, non-persistent route. It
+                    # has no HC-03 session binding, so bind reuse to the
+                    # admitted workflow's resident requirements plus the
+                    # pinned dependency/source identity instead.
+                    session_identity_fields = {
+                        "profile": "pip_embedded",
+                        "source_digest": record.source_digest,
+                        "dependency_digest": record.dependency_digest,
+                        "workflow_resident_requirements": workflow_session_requirements,
+                    }
+                else:
+                    session_identity_fields = {
+                        "verified_facts_digest": facts_digest,
+                        "runtime_instance_id": (
+                            readiness_profile.get("runtime", {}).get("runtime_instance_id")
+                            if isinstance(readiness_profile.get("runtime"), Mapping)
+                            else None
+                        ),
+                        "source_revision": vibe_session.get("source_revision"),
+                        "source_content_digest": vibe_session.get("source_content_digest"),
+                        "config_digest": vibe_session.get("config_digest"),
+                        "server_url": vibe_session.get("server_url"),
+                        "workflow_resident_requirements": workflow_session_requirements,
+                    }
+                stable_session_identity = session_identity_digest(
+                    model_id,
+                    model_digest=model_digest,
+                    required_identity=session_identity_fields,
+                )
                 managed_binding = replace(
                     managed_binding,
-                    execution_identity=execution_identity,
+                    # Workflow/template/attempt identity remains in the
+                    # admitted child request.  ManagedToolSession compares
+                    # only this stable model/session identity so a compatible
+                    # workflow switch stays in the same owned session.
+                    execution_identity=stable_session_identity,
                 )
+                # A changed resident identity must release the current owned
+                # server before we construct a replacement adapter.  The
+                # owner restart mutates the in-memory HC-03 session binding
+                # after verifying the fresh registry; re-read that binding
+                # before any new adapter/session object is admitted.
+                current_binding = self.managed_tool_session.current_binding
+                if (
+                    current_binding is not None
+                    and current_binding.execution_identity != stable_session_identity
+                ):
+                    self.managed_tool_session.release(reason="capacity_replacement")
+                    readiness_profile = _read_readiness_profile_document()
+                    refreshed_session = (
+                        readiness_profile.get("vibecomfy_session")
+                        if isinstance(readiness_profile, Mapping)
+                        else None
+                    )
+                    if not isinstance(refreshed_session, Mapping):
+                        raise HostError("vibecomfy owner restart did not provide a fresh HC-03 session")
+                    vibe_session = refreshed_session
+                    fresh_facts = (
+                        readiness_profile.get("verified_facts", {}).get("exact", {})
+                        if isinstance(readiness_profile, Mapping)
+                        and isinstance(readiness_profile.get("verified_facts"), Mapping)
+                        else {}
+                    )
+                    fresh_model_digest = (
+                        fresh_facts.get("model_digest")
+                        if isinstance(fresh_facts, Mapping)
+                        else None
+                    )
+                    fresh_facts_digest = (
+                        readiness_profile.get("verified_facts_digest")
+                        if isinstance(readiness_profile, Mapping)
+                        else None
+                    )
+                    fresh_identity_fields = {
+                        "verified_facts_digest": fresh_facts_digest,
+                        "runtime_instance_id": (
+                            readiness_profile.get("runtime", {}).get("runtime_instance_id")
+                            if isinstance(readiness_profile.get("runtime"), Mapping)
+                            else None
+                        ),
+                        "source_revision": vibe_session.get("source_revision"),
+                        "source_content_digest": vibe_session.get("source_content_digest"),
+                        "config_digest": vibe_session.get("config_digest"),
+                        "server_url": vibe_session.get("server_url"),
+                        "workflow_resident_requirements": workflow_session_requirements,
+                    }
+                    stable_session_identity = session_identity_digest(
+                        model_id,
+                        model_digest=fresh_model_digest,
+                        required_identity=fresh_identity_fields,
+                    )
+                    managed_binding = replace(
+                        managed_binding, execution_identity=stable_session_identity
+                    )
             if capability_id == "vibecomfy.run" and isinstance(vibe_session, Mapping):
                 from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
 
@@ -4384,9 +4691,31 @@ class GenericPackHost:
                     endpoint=session_endpoint,
                     source_digest=session_source,
                     config_digest=session_config,
-                    execution_identity=execution_identity,
+                    execution_identity=stable_session_identity,
                 )
                 managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
+                from astrid.core.generation.backends.vibecomfy import vibecomfy_warmth_hint
+
+                current_warmth_hint = vibecomfy_warmth_hint(
+                    session_id=session_id,
+                    process_birth_id=session_birth,
+                    comfy_process_birth_id=str(vibe_session.get("comfy_process_birth_id") or ""),
+                    runtime_instance_id=managed_binding.runtime_instance_id,
+                    model_id=model_id,
+                    model_bytes_digest=str(exact_facts.get("model_digest") or ""),
+                    facts_digest=str(facts_digest or ""),
+                    source_revision=str(vibe_session.get("source_revision") or ""),
+                    source_content_digest=str(
+                        vibe_session.get("source_content_digest") or ""
+                    ),
+                    config_digest=str(vibe_session.get("config_digest") or ""),
+                )
+                self._vibecomfy_current_warmth_hint = current_warmth_hint
+                self._vibecomfy_requested_warmth_hint = (
+                    current_warmth_hint
+                    if self._vibecomfy_warmth_hint == current_warmth_hint
+                    else None
+                )
             self.managed_tool_session.open(
                 capability=managed_capability,
                 binding=managed_binding,
@@ -4425,37 +4754,13 @@ class GenericPackHost:
             output_root = root / "outputs"
             output_root.mkdir(parents=True, exist_ok=True)
             self.execution_policy.assert_deadline(execution_deadline)
-            pump_stop = threading.Event()
-            self.client.heartbeat(
-                task_id,
-                lease_token,
-                attempt_id=attempt_id,
-                fence=fence,
-            )
-
-            def pump_lease():
-                while not pump_stop.wait(5.0):
-                    try:
-                        self.client.heartbeat(
-                            task_id,
-                            lease_token,
-                            attempt_id=attempt_id,
-                            fence=fence,
-                        )
-                        current = self.client.task(task_id)
-                        current_task = current.get("task", current) if isinstance(current, Mapping) else current
-                        state = current_task.get("status") if isinstance(current_task, Mapping) else getattr(current_task, "state", None)
-                        if state == "cancelled":
-                            cancel_signal.set()
-                    except Exception:
-                        # The daemon fences settlement if a heartbeat is
-                        # lost; the subprocess is still cleaned up here.
-                        cancel_signal.set()
-
-            pump_thread = threading.Thread(target=pump_lease, name=f"astrid-heartbeat-{task_id}", daemon=True)
-            pump_thread.start()
-
             try:
+                # Setup/attestation may be slow, but a lost claim must never
+                # reach native queue submission or child launch.
+                if cancelled():
+                    handle_guard_abort()
+                    cancelled_attempt = True
+                    return {"task_id": task_id, "status": "cancelled", "cancelled": True}
                 if record.definition.command is not None:
                     result = self._run_command_definition(
                         record,
@@ -4479,6 +4784,14 @@ class GenericPackHost:
                         network_broker=network_broker,
                         storage_estimate=storage_estimate,
                     )
+                    # Checkout-server VibeComfy commands run inside the
+                    # attested HC-03 output root. Carry that effective root
+                    # back to the outer settlement layer; otherwise harvest
+                    # falls back to the empty attempt-local directory and
+                    # reports a missing manifest after Comfy completed.
+                    effective_output_root = getattr(result, "output_root", None)
+                    if isinstance(effective_output_root, (str, Path)):
+                        output_root = Path(effective_output_root).expanduser().resolve()
                 else:
                     # Dispatch through the process boundary.  The immutable
                     # admitted definition is serialized for the child so a
@@ -4510,10 +4823,25 @@ class GenericPackHost:
                         worker_env.clear()
                         worker_secrets.clear()
             finally:
-                if pump_stop is not None:
-                    pump_stop.set()
-                if pump_thread is not None:
-                    pump_thread.join(timeout=2)
+                # The outer run_task finally owns lease-pump shutdown and
+                # cleanup; this boundary only preserves child env cleanup.
+                pass
+            # The periodic lease pump may not get another turn after a fast
+            # command writes its terminal checkpoint. Persist that final
+            # checkpoint before harvesting and settling so a completed task
+            # never leaves the Runtime read model stuck at its last interval.
+            final_progress = read_progress()
+            if final_progress is not None and not cancelled():
+                try:
+                    self.client.heartbeat(
+                        task_id,
+                        lease_token,
+                        attempt_id=attempt_id,
+                        fence=fence,
+                        progress=final_progress,
+                    )
+                except Exception:
+                    cancel_signal.set()
             if cancelled():
                 handle_guard_abort()
                 if deadline_failed:
@@ -4639,10 +4967,13 @@ class GenericPackHost:
             network_evidence = self._network_evidence(
                 root,
                 admission=worker_admission if record.definition.command is None else network_admission,
-                # Every network-required settlement needs signed evidence. A
-                # Python child emits it through the hook; a native child must
-                # have its admitted proxy/broker emit the same contract.
-                required=bool(record.adapter.requires_network or record.definition.isolation.network),
+                # Provider egress requires host-owned signed broker evidence.
+                # A local-generation adapter may have ``isolation.network``
+                # solely because it talks to the host-owned Comfy daemon on
+                # loopback; that is diagnostic hook traffic, not provider
+                # egress, and must not be rejected for lacking a provider
+                # broker context.
+                required=bool(record.adapter.requires_network),
                 broker_required=network_broker is not None,
                 broker_context=network_broker,
             )
@@ -4714,6 +5045,10 @@ class GenericPackHost:
                 fence=fence,
             )
             settled = True
+            if capability_id == "vibecomfy.run" and self._vibecomfy_current_warmth_hint:
+                # The hint becomes reusable only after the Runtime settlement
+                # and managed-session observation both succeeded.
+                self._vibecomfy_warmth_hint = self._vibecomfy_current_warmth_hint
             return settlement
         except HostCancelled:
             handle_guard_abort()
@@ -4743,6 +5078,12 @@ class GenericPackHost:
             )
             raise
         finally:
+            # Keep the lease pump alive through harvesting, upload, and
+            # settlement; only stop it once the claimed attempt is terminal.
+            if pump_stop is not None:
+                pump_stop.set()
+            if pump_thread is not None:
+                pump_thread.join(timeout=2)
             cleanup_errors: list[str] = []
             cleanup_receipt: dict[str, Any] = {
                 "path": str(root),
@@ -4787,6 +5128,10 @@ class GenericPackHost:
                     and settled
                 )
                 if not retain_persistent_session:
+                    if capability_id == "vibecomfy.run":
+                        self._vibecomfy_warmth_hint = None
+                        self._vibecomfy_current_warmth_hint = None
+                        self._vibecomfy_requested_warmth_hint = None
                     try:
                         self.managed_tool_session.release(
                             reason=(
@@ -4799,6 +5144,10 @@ class GenericPackHost:
                         )
                     except Exception as exc:
                         cleanup_errors.append(f"managed release: {exc}")
+            if capability_id == "vibecomfy.run" and not settled:
+                self._vibecomfy_warmth_hint = None
+                self._vibecomfy_current_warmth_hint = None
+                self._vibecomfy_requested_warmth_hint = None
             if keep_attempt:
                 try:
                     retained_exists = _strict_root_exists(root)
@@ -5169,6 +5518,36 @@ def _cli() -> int:
             parser.error("--readiness-profile-hash does not match the readiness profile")
         os.environ["ASTRID_HOST_READINESS_PROFILE_PATH"] = str(readiness_path)
         os.environ["ASTRID_HOST_READINESS_PROFILE_HASH"] = actual_readiness_hash
+        # Make an explicitly selected local VibeComfy candidate visible to
+        # the host's approved dependency-path resolver as well as its child.
+        # Without this, the host would reject the candidate while constructing
+        # PYTHONPATH before it ever reached the child boundary.
+        try:
+            profile = json.loads(readiness_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            parser.error(f"readiness profile is unreadable: {exc}")
+        candidate = profile.get("vibecomfy_candidate") if isinstance(profile, Mapping) else None
+        session = profile.get("vibecomfy_session") if isinstance(profile, Mapping) else None
+        if isinstance(session, Mapping):
+            revision = session.get("source_revision")
+            content_digest = session.get("source_content_digest")
+            if isinstance(revision, str) and isinstance(content_digest, str):
+                os.environ[VIBECOMFY_ATTESTED_REVISION_ENV] = revision
+                os.environ[VIBECOMFY_ATTESTED_CONTENT_DIGEST_ENV] = content_digest
+        launch = profile.get("launch") if isinstance(profile, Mapping) else None
+        if isinstance(launch, Mapping):
+            model_root = launch.get("model_root")
+            if isinstance(model_root, str) and model_root:
+                if not os.path.isabs(model_root):
+                    parser.error("readiness profile launch.model_root must be absolute")
+                os.environ["ASTRID_VIBECOMFY_MODELS_ROOT"] = model_root
+        if isinstance(candidate, Mapping) and candidate.get("kind") == "local_snapshot":
+            revision = candidate.get("revision")
+            content_digest = candidate.get("source_content_digest")
+            if isinstance(revision, str) and isinstance(content_digest, str):
+                os.environ["ASTRID_VIBECOMFY_CANDIDATE_KIND"] = "local_snapshot"
+                os.environ["ASTRID_VIBECOMFY_CANDIDATE_REVISION"] = revision
+                os.environ["ASTRID_VIBECOMFY_CANDIDATE_CONTENT_DIGEST"] = content_digest
     ready_path = Path(args.ready_file).expanduser() if args.ready_file else None
     if ready_path is not None and (not ready_path.is_absolute() or ready_path.is_symlink()):
         parser.error("--ready-file must be an absolute non-symlink path")

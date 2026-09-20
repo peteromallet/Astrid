@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from astrid.core.foundation.hash import validate_digest
 
@@ -36,6 +36,13 @@ class MaterializedAsset:
     metadata: dict[str, Any]
     local_path: Path | None = None
     local_url: str | None = None
+
+
+class AssetURLResolver(Protocol):
+    """Resolve one staged asset to the URL visible to a renderer."""
+
+    def local_url(self, staged_path: str | Path) -> str:
+        """Return a renderer-local URL for a verified staged file."""
 
 
 def _contained(path: Path, root: Path) -> bool:
@@ -69,6 +76,7 @@ class AssetMaterializer:
         materialized_root: str | Path | None = None,
         staging_parent: str | Path | None = None,
         allow_derived_files: bool = False,
+        reuse_materialized_paths: bool = False,
     ) -> None:
         requested_registry = Path(registry_path).expanduser()
         if not requested_registry.exists():
@@ -77,6 +85,7 @@ class AssetMaterializer:
 
         self.materialized_objects = dict(materialized_objects or {})
         self.allow_derived_files = bool(allow_derived_files)
+        self.reuse_materialized_paths = bool(reuse_materialized_paths)
         path_values = [value for value in self.materialized_objects.values() if not isinstance(value, bytes)]
         if path_values and materialized_root is None:
             raise ValueError("materialized_root is required for path-backed runtime objects")
@@ -144,6 +153,12 @@ class AssetMaterializer:
         payload = resolved.read_bytes()
         if hashlib.sha256(payload).hexdigest() != digest:
             raise ValueError(f"Asset {key!r} managed object failed integrity check")
+        if self.reuse_materialized_paths:
+            # The runtime task adapter has already made this an invocation-owned,
+            # inode-isolated copy. Reusing it avoids a second full copy into the
+            # renderer stage, which matters for large timelines under the task
+            # scratch envelope. Integrity and root checks above still apply.
+            return resolved
         destination.write_bytes(payload)
         return destination
 
@@ -210,7 +225,7 @@ class AssetMaterializer:
 
     def resolved_registry(
         self,
-        server: "InvocationAssetServer | None" = None,
+        server: "AssetURLResolver | None" = None,
     ) -> dict[str, Any]:
         """Return a cloned render registry with attempt-local file URLs."""
 
@@ -226,6 +241,23 @@ class AssetMaterializer:
             asset.local_url = server.local_url(asset.local_path)
             entry["file"] = asset.local_url
         return resolved
+
+    @property
+    def serving_root(self) -> Path:
+        """Directory containing every path returned by ``resolved_registry``."""
+
+        if self._closed:
+            raise RuntimeError("Asset materializer is closed")
+        if not self.reuse_materialized_paths:
+            return self.staging_dir
+        if self.materialized_root is None:
+            raise RuntimeError("materialized_root is required when reusing materialized paths")
+        for asset in self.assets.values():
+            if asset.local_path is None or not _contained(asset.local_path, self.materialized_root):
+                # Byte-backed or derived assets still live in the disposable
+                # stage; mixed registries must not widen the serving root.
+                return self.staging_dir
+        return self.materialized_root
 
     def close(self) -> None:
         if self._closed:
@@ -449,13 +481,17 @@ class InvocationAssetServer:
             directory=str(self.staging_dir),
             allowed_origin=self.allowed_origin,
         )
-        # Remotion opens several browser workers and can request the same image
-        # concurrently.  TCPServer's default listen backlog is only five, so a
-        # burst can be reset by the kernel before a handler thread is created,
-        # surfacing in Chromium as ERR_EMPTY_RESPONSE.  Set this before bind;
-        # the symbol remains patchable in tests and for restricted runtimes.
+        # Remotion opens several browser workers and can request many timeline
+        # assets concurrently. TCPServer's default listen backlog is only five,
+        # and a large timeline can exceed the previous 128-entry safeguard
+        # before handler threads are created. The kernel then resets a pending
+        # connection, which Node surfaces as `socket hang up`. Keep the server
+        # reusable and let its request threads die with the invocation so a
+        # canceled render cannot hold the executor open during cleanup.
+        ThreadingHTTPServer.allow_reuse_address = True
+        ThreadingHTTPServer.daemon_threads = True
         ThreadingHTTPServer.request_queue_size = max(
-            int(getattr(ThreadingHTTPServer, "request_queue_size", 5)), 128
+            int(getattr(ThreadingHTTPServer, "request_queue_size", 5)), 1024
         )
         server = ThreadingHTTPServer((self.host, self.bind_port), handler)
         try:

@@ -40,6 +40,11 @@ _MUX_OVERHEAD_PERCENT = 3
 _MUX_FIXED_OVERHEAD_BYTES = _MIB
 _MIN_OPERATIONAL_GUARD_BYTES = 256 * _MIB
 _OPERATIONAL_GUARD_PERCENT = 20
+# Remotion creates a webpack bundle, Chromium profile/cache, and renderer
+# bookkeeping outside the media-size model below. Keep that deployment-owned
+# workspace allowance explicit so the live guard cannot trip just above an
+# otherwise correct timeline estimate.
+_REMOTION_RUNTIME_WORKSPACE_BYTES = 128 * _MIB
 _PARALLEL_ENCODE_WORKING_COPIES = 1
 # The managed render-export adapter keeps one staged asset copy and then makes
 # a second writable copy for the renderer. Both live under the attempt while
@@ -453,7 +458,8 @@ def estimate_managed_render_storage(
     peak_before_guard_bytes = base_bytes + phase_working_bytes
     operational_guard_bytes = max(
         _MIN_OPERATIONAL_GUARD_BYTES,
-        math.ceil(peak_before_guard_bytes * _OPERATIONAL_GUARD_PERCENT / 100),
+        math.ceil(peak_before_guard_bytes * _OPERATIONAL_GUARD_PERCENT / 100)
+        + _REMOTION_RUNTIME_WORKSPACE_BYTES,
     )
     estimated_total_bytes = peak_before_guard_bytes + operational_guard_bytes
     estimated_scratch_bytes = estimated_total_bytes - estimated_output_bytes
@@ -501,6 +507,7 @@ def estimate_managed_render_storage(
         "phase_working_bytes": phase_working_bytes,
         "peak_before_guard_bytes": peak_before_guard_bytes,
         "operational_guard_bytes": operational_guard_bytes,
+        "remotion_runtime_workspace_bytes": _REMOTION_RUNTIME_WORKSPACE_BYTES,
         "estimated_scratch_bytes": estimated_scratch_bytes,
         "estimated_output_bytes": estimated_output_bytes,
         "estimated_total_bytes": estimated_total_bytes,

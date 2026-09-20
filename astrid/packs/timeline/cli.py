@@ -16,15 +16,21 @@ product parser (``astrid/packs/shots/cli.py``) so project-level reusable shot
 ``list/create/show/add/remove/reorder`` commands are executable only beneath timelines
 (plan step 26, task T29). There is **no top-level shots family**.
 
-Verbs (exactly these eight plus the nested ``shots`` mount, one SDK call
-each):
+Verbs (the product routes plus the nested ``shots`` mount; read/write routes
+are thin SDK adapters, while ``retime-clip`` is an intentionally bounded
+read/CAS-save convenience operation):
 
 - ``create`` — ``client.timelines.create`` (project id/slug, slug, name,
   optional ``--config``/``--registry`` JSON, ``--default``, and
   ``--idempotency-key``; a fresh key is generated and returned when absent);
 - ``list`` — ``client.timelines.list`` (active timelines only), rendered as
   compact identity/count summaries; use ``show`` for the full document;
-- ``show`` — ``client.timelines.show`` by UUID, ULID, or slug;
+- ``show`` — ``client.timelines.show`` by UUID, ULID, or slug; ``--summary``
+  returns a bounded editor-oriented clip/track view instead of the full
+  document;
+- ``retime-clip`` — one scoped read/CAS-save operation for changing a clip's
+  start; the safe non-rippling default preserves the existing end, while
+  ``--preserve-duration`` explicitly slides the clip without changing length;
 - ``save`` — whole-document CAS ``client.timelines.save`` with
   ``--config``/``--registry`` and ``--expected-version``;
 - ``replace-clip`` — atomically replace one explicit managed-media clip through
@@ -196,7 +202,220 @@ def _timeline_summary(item: Any) -> Any:
 
 def _cmd_show(parsed: argparse.Namespace) -> int:
     result = parsed.client.timelines.show(parsed.project, parsed.ref)
+    if result.ok and parsed.summary:
+        result = _summary_result(result)
     return print_result(result, as_json=parsed.json)
+
+
+def _numeric(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _clip_duration(clip: Mapping[str, Any]) -> float | None:
+    hold = clip.get("hold")
+    if _numeric(hold):
+        return float(hold)
+    source_start = clip.get("from", 0)
+    source_end = clip.get("to")
+    speed = clip.get("speed", 1)
+    if _numeric(source_start) and _numeric(source_end) and _numeric(speed) and float(speed) > 0:
+        return max(0.0, (float(source_end) - float(source_start)) / float(speed))
+    return None
+
+
+def _compact_clip(clip: Any) -> Any:
+    if not isinstance(clip, Mapping):
+        return clip
+    summary: dict[str, Any] = {}
+    for source, target in (
+        ("id", "id"),
+        ("track", "track"),
+        ("clipType", "clip_type"),
+        ("clip_type", "clip_type"),
+        ("asset", "asset"),
+        ("shot_id", "shot_id"),
+    ):
+        value = clip.get(source)
+        if value is not None and target not in summary:
+            summary[target] = value
+    at = clip.get("at")
+    if _numeric(at):
+        summary["at"] = float(at)
+    duration = _clip_duration(clip)
+    if duration is not None:
+        summary["duration"] = duration
+        if _numeric(at):
+            summary["end"] = float(at) + duration
+    for key in ("hold", "from", "to", "speed"):
+        value = clip.get(key)
+        if value is not None and _numeric(value):
+            summary[key] = value
+    return summary
+
+
+def _compact_track(track: Any) -> Any:
+    if not isinstance(track, Mapping):
+        return track
+    summary: dict[str, Any] = {}
+    for key in ("id", "name", "label", "kind", "type"):
+        if track.get(key) is not None:
+            summary[key] = track[key]
+    return summary or dict(track)
+
+
+def _timeline_document_summary(data: Any) -> Any:
+    """Build the bounded read model used by editor agents.
+
+    This intentionally keeps timing and identity, while excluding prompts,
+    effect parameters, media URLs, and the full asset registry. The full
+    document remains available through the normal ``show`` route.
+    """
+    if not isinstance(data, Mapping):
+        return data
+    config = data.get("config") if isinstance(data.get("config"), Mapping) else {}
+    registry = data.get("registry") if isinstance(data.get("registry"), Mapping) else {}
+    clips = config.get("clips") if isinstance(config.get("clips"), list) else []
+    tracks = config.get("tracks") if isinstance(config.get("tracks"), list) else []
+    summary: dict[str, Any] = {
+        "kind": "timeline-summary",
+        "timeline_id": data.get("timeline_id"),
+        "project_id": data.get("project_id"),
+        "slug": data.get("slug"),
+        "name": data.get("name"),
+        "config_version": data.get("config_version", data.get("version")),
+        "archived": bool(data.get("archived", False)),
+        "track_count": len(tracks),
+        "clip_count": len(clips),
+        "asset_count": len(registry.get("assets", {})) if isinstance(registry.get("assets"), (Mapping, list, tuple)) else 0,
+        "tracks": [_compact_track(track) for track in tracks],
+        "clips": sorted(
+            [_compact_clip(clip) for clip in clips],
+            key=lambda clip: (float(clip.get("at", 0)) if isinstance(clip, Mapping) and _numeric(clip.get("at")) else 0.0, str(clip.get("track", "")) if isinstance(clip, Mapping) else ""),
+        ),
+    }
+    return summary
+
+
+def _summary_result(result: Any) -> Any:
+    from astrid.sdk.contracts import DomainResult
+
+    return DomainResult.success(
+        _timeline_document_summary(result.data),
+        receipt=result.receipt,
+        idempotency_key=result.idempotency_key,
+    )
+
+
+def _timing_snapshot(clip: Mapping[str, Any]) -> dict[str, float | None]:
+    at = float(clip.get("at", 0)) if _numeric(clip.get("at", 0)) else 0.0
+    duration = _clip_duration(clip)
+    return {
+        "at": at,
+        "duration": duration,
+        "end": at + duration if duration is not None else None,
+    }
+
+
+def _cmd_retime_clip(parsed: argparse.Namespace) -> int:
+    """Retiming convenience route: one bounded read followed by one CAS save.
+
+    The default is deliberately non-rippling: preserve the existing end. A
+    caller that means "slide this clip" must opt into ``preserve-duration``.
+    """
+    from copy import deepcopy
+
+    shown = parsed.client.timelines.show(parsed.project, parsed.ref)
+    if not shown.ok or not isinstance(shown.data, Mapping):
+        return print_result(shown, as_json=parsed.json)
+    data = shown.data
+    config = data.get("config")
+    registry = data.get("registry")
+    version = data.get("config_version", data.get("version"))
+    if not isinstance(config, Mapping) or not isinstance(registry, Mapping) or not _numeric(version):
+        from astrid.sdk.contracts import DomainResult, ErrorObject
+        return print_result(
+            DomainResult.failure(ErrorObject("invalid_timeline", "timeline is missing config, registry, or config_version")),
+            as_json=parsed.json,
+        )
+    if parsed.expected_version is not None and int(version) != parsed.expected_version:
+        from astrid.sdk.contracts import DomainResult, ErrorObject
+        return print_result(
+            DomainResult.failure(ErrorObject(
+                "stale_version",
+                f"timeline is at version {int(version)}; expected {parsed.expected_version}",
+                details={"expected_version": parsed.expected_version, "current_version": int(version)},
+            )),
+            as_json=parsed.json,
+        )
+    next_config = deepcopy(dict(config))
+    clips = next_config.get("clips")
+    if not isinstance(clips, list):
+        from astrid.sdk.contracts import DomainResult, ErrorObject
+        return print_result(
+            DomainResult.failure(ErrorObject("invalid_timeline", "timeline config has no clips list")),
+            as_json=parsed.json,
+        )
+    clip = next((item for item in clips if isinstance(item, Mapping) and item.get("id") == parsed.clip_id), None)
+    if clip is None:
+        from astrid.sdk.contracts import DomainResult, ErrorObject
+        return print_result(
+            DomainResult.failure(ErrorObject("not_found", f"clip not found: {parsed.clip_id}")),
+            as_json=parsed.json,
+        )
+    old_timing = _timing_snapshot(clip)
+    timing_policy = parsed.timing_policy
+    if parsed.hold is not None:
+        timing_policy = "preserve-duration"
+        if parsed.hold <= 0:
+            from astrid.sdk.contracts import DomainResult, ErrorObject
+            return print_result(
+                DomainResult.failure(ErrorObject("invalid_timing", "hold must be greater than zero")),
+                as_json=parsed.json,
+            )
+    old_end = old_timing["end"]
+    clip["at"] = parsed.at
+    if timing_policy == "preserve-end":
+        if old_end is None or old_end <= parsed.at:
+            from astrid.sdk.contracts import DomainResult, ErrorObject
+            return print_result(
+                DomainResult.failure(ErrorObject("invalid_timing", "preserve-end requires the new start to be before the existing end")),
+                as_json=parsed.json,
+            )
+        clip["hold"] = old_end - parsed.at
+        clip.pop("from", None)
+        clip.pop("to", None)
+    elif parsed.hold is not None:
+        clip["hold"] = parsed.hold
+    saved = parsed.client.timelines.save(
+        parsed.project,
+        parsed.ref,
+        config=next_config,
+        registry=registry,
+        expected_version=int(version),
+        idempotency_key=parsed.idempotency_key,
+    )
+    if saved.ok:
+        from astrid.sdk.contracts import DomainResult
+        after_timing = _timing_snapshot(clip)
+        saved_version = saved.data.get("config_version") if isinstance(saved.data, Mapping) else None
+        if saved_version is None and isinstance(saved.data, Mapping):
+            saved_version = saved.data.get("version")
+        return print_result(
+            DomainResult.success(
+                {
+                    "operation": "retime-clip",
+                    "clip_id": parsed.clip_id,
+                    "timing_policy": timing_policy,
+                    "before": old_timing,
+                    "after": after_timing,
+                    "config_version": saved_version,
+                },
+                receipt=saved.receipt,
+                idempotency_key=saved.idempotency_key,
+            ),
+            as_json=parsed.json,
+        )
+    return print_result(saved, as_json=parsed.json)
 
 
 def _cmd_save(parsed: argparse.Namespace) -> int:
@@ -776,8 +995,52 @@ def _configure_list(subparser: argparse.ArgumentParser) -> None:
 def _configure_show(subparser: argparse.ArgumentParser) -> None:
     _add_project_arg(subparser)
     subparser.add_argument("ref", help="Timeline UUID, ULID, or slug.")
+    subparser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Return a bounded editor summary with tracks, clip timing, and counts.",
+    )
     _add_json_flag(subparser)
     subparser.set_defaults(handler=_cmd_show)
+
+
+def _configure_retime_clip(subparser: argparse.ArgumentParser) -> None:
+    _add_project_arg(subparser)
+    subparser.add_argument("ref", help="Timeline UUID, ULID, or slug.")
+    subparser.add_argument("--clip-id", required=True, help="Authored clip id to retime.")
+    subparser.add_argument("--at", type=float, required=True, help="New timeline start in seconds.")
+    timing = subparser.add_mutually_exclusive_group()
+    timing.add_argument(
+        "--preserve-end",
+        dest="timing_policy",
+        action="store_const",
+        const="preserve-end",
+        help="Trim/extend the clip so its existing end stays fixed (the default).",
+    )
+    timing.add_argument(
+        "--preserve-duration",
+        dest="timing_policy",
+        action="store_const",
+        const="preserve-duration",
+        help="Slide the clip without changing its duration; downstream clips may move/overlap.",
+    )
+    timing.add_argument(
+        "--hold",
+        type=float,
+        default=None,
+        help="Set an explicit new timeline duration in seconds (implies preserve-duration).",
+    )
+    subparser.set_defaults(timing_policy="preserve-end")
+    subparser.add_argument(
+        "--expected-version",
+        dest="expected_version",
+        type=int,
+        default=None,
+        help="Optional exact version from the editor context; stale context fails before saving.",
+    )
+    _add_idempotency_key(subparser)
+    _add_json_flag(subparser)
+    subparser.set_defaults(handler=_cmd_retime_clip)
 
 
 def _configure_save(subparser: argparse.ArgumentParser) -> None:
@@ -1042,8 +1305,13 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "show",
-        help="Show one timeline by UUID, ULID, or slug.",
+        help="Show one timeline by UUID, ULID, or slug (use --summary for editor context).",
         configure=_configure_show,
+    ),
+    CommandSpec(
+        "retime-clip",
+        help="Retime one clip; preserve-end is the safe default, preserve-duration explicitly slides it.",
+        configure=_configure_retime_clip,
     ),
     CommandSpec(
         "save",
@@ -1113,7 +1381,7 @@ def build_parser(client: Any) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="astrid timelines",
         description=(
-            "Timeline create/list/show/save/replace-clip/archive/recover/history/diff/visualize/render "
+            "Timeline create/list/show/retime-clip/save/replace-clip/archive/recover/history/diff/visualize/render "
             "(product family); nested shots beneath 'timelines shots'."
         ),
     )

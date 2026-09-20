@@ -75,8 +75,8 @@ READY_METADATA = ReadyMetadata.build(
     template_id='source',
     inputs=PUBLIC_INPUT_METADATA,
     models=MODEL_ASSETS,
-    requirements={'missing_nodes': ['MiniMaxH3AVExtensionController', 'MiniMaxH3AVSourceAudioModeParam', 'MiniMaxH3AVStartModeParam', 'MiniMaxH3AudioVAECompatibility', 'MiniMaxH3CropTo32', 'MiniMaxH3CustomKeyframes', 'MiniMaxH3FinalizeVHSOutput', 'MiniMaxH3GeneratedAVMaskedContext', 'MiniMaxH3LastActiveVHSPreviewBarrier', 'MiniMaxH3SourceAudioPolicy', 'MiniMaxH3SourceAudioRegenLength', 'MiniMaxH3SourceAudioRegenMask', 'MiniMaxH3StartCanvasSelector', 'MiniMaxH3StartMaskedContext', 'MiniMaxH3StreamLiveExtensionAVToVHS', 'MiniMaxH3Validate24FPSVideo', 'Note']},
-    custom_node_packs={'ComfyUI-H3-Motion-Context-MultiRef': {'commit': '361624fb406b63eb6694442eac6c895fc1533a70', 'url': 'https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef.git', 'classes_used': ['MiniMaxH3AVExtensionController', 'MiniMaxH3AVSourceAudioModeParam', 'MiniMaxH3AVStartModeParam', 'MiniMaxH3AudioVAECompatibility', 'MiniMaxH3CropTo32', 'MiniMaxH3CustomKeyframes', 'MiniMaxH3FinalizeVHSOutput', 'MiniMaxH3GeneratedAVMaskedContext', 'MiniMaxH3LastActiveVHSPreviewBarrier', 'MiniMaxH3ReferenceToVideo', 'MiniMaxH3SigmaShift', 'MiniMaxH3SourceAudioPolicy', 'MiniMaxH3SourceAudioRegenLength', 'MiniMaxH3SourceAudioRegenMask', 'MiniMaxH3StartCanvasSelector', 'MiniMaxH3StartMaskedContext', 'MiniMaxH3StreamLiveExtensionAVToVHS', 'MiniMaxH3Validate24FPSVideo'], 'pip_packages': ['safetensors'], 'status': 'discovered'}, 'ComfyUI-VideoHelperSuite': {'commit': '4ee72c065db22c9d96c2427954dc69e7b908444b', 'url': 'https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git', 'class_schema_sha256': '8391e679554eecd5d324a3e34a713ff240e619e3a07476587845ba18c9fae310', 'classes_used': ['VHS_VideoCombine'], 'pip_packages': [], 'status': 'discovered'}},
+    requirements={'runtime': {'comfy_commit': 'ee71d5c4993f29086b27fde1629a945ae48425bf', 'comfy_version': '==0.36.0', 'packages': {'torch': '==2.10.0+cu130', 'comfy-kitchen': '==0.2.34', 'comfy-aimdo': '==0.5.3'}, 'launch_flags': ['--use-ck-attention', '--disable-comfy-compiler']}},
+    custom_node_packs={'ComfyUI-H3-Motion-Context-MultiRef': {'commit': '361624fb406b63eb6694442eac6c895fc1533a70', 'url': 'https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef.git', 'classes_used': ['MiniMaxH3AVExtensionController', 'MiniMaxH3AVSourceAudioModeParam', 'MiniMaxH3AVStartModeParam', 'MiniMaxH3AudioVAECompatibility', 'MiniMaxH3CropTo32', 'MiniMaxH3CustomKeyframes', 'MiniMaxH3FinalizeVHSOutput', 'MiniMaxH3GeneratedAVMaskedContext', 'MiniMaxH3LastActiveVHSPreviewBarrier', 'MiniMaxH3ReferenceToVideo', 'MiniMaxH3SigmaShift', 'MiniMaxH3SourceAudioPolicy', 'MiniMaxH3SourceAudioRegenLength', 'MiniMaxH3SourceAudioRegenMask', 'MiniMaxH3StartCanvasSelector', 'MiniMaxH3StartMaskedContext', 'MiniMaxH3StreamLiveExtensionAVToVHS', 'MiniMaxH3Validate24FPSVideo'], 'pip_packages': ['safetensors'], 'status': 'discovered'}, 'ComfyUI-VideoHelperSuite': {'commit': '4ee72c065db22c9d96c2427954dc69e7b908444b', 'url': 'https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git', 'class_schema_sha256': '8391e679554eecd5d324a3e34a713ff240e619e3a07476587845ba18c9fae310', 'classes_used': ['VHS_LoadVideoFFmpeg', 'VHS_VideoCombine'], 'pip_packages': [], 'status': 'discovered'}},
     source_ref='source.json',
     source_kind='raw_json',
     source_path='source.json',
@@ -171,11 +171,11 @@ def build() -> VibeWorkflow:
 
         minimaxh3avextensioncontroller = raw_call('MiniMaxH3AVExtensionController',
             _outputs=('start_mode', 'active_extensions', 'audio_feather_ticks', 'preview_mode', 'source_audio_mode'),
-            widget_0=EXISTING_VIDEO,
-            widget_1=1,
-            widget_2=8,
-            widget_3='All Active',
-            widget_4='Keep source audio',
+            start=EXISTING_VIDEO,
+            active_extensions=1,
+            audio_feather_ticks=8,
+            previews='All Active',
+            source_audio='Keep source audio',
         )
 
         loadimage = LoadImage(image='')
@@ -198,12 +198,12 @@ def build() -> VibeWorkflow:
 
         minimaxh3avstartmodeparam = raw_call('MiniMaxH3AVStartModeParam',
             _outputs=('start_mode',),
-            widget_0=EXISTING_VIDEO,
+            start=EXISTING_VIDEO,
         )
 
         minimaxh3avsourceaudiomodeparam = raw_call('MiniMaxH3AVSourceAudioModeParam',
             _outputs=('source_audio_mode',),
-            widget_0='Keep source audio',
+            source_audio='Keep source audio',
         )
 
         modelattentionbackend = raw_call('ModelAttentionBackend',
@@ -245,14 +245,8 @@ def build() -> VibeWorkflow:
 
         minimaxh3startcanvasselector = raw_call('MiniMaxH3StartCanvasSelector',
             _outputs=('width', 'height'),
-            widget_0=960,
-            widget_1=544,
-            widget_2=0,
-            widget_3=0,
             generated_height=resolutionselector.out('HEIGHT'),
             generated_width=resolutionselector.out('WIDTH'),
-            source_height=minimaxh3cropto32.out('height'),
-            source_width=minimaxh3cropto32.out('width'),
             start_mode=minimaxh3avstartmodeparam.out('start_mode'),
         )
 
@@ -418,11 +412,10 @@ def build() -> VibeWorkflow:
 
         minimaxh3customkeyframes = raw_call('MiniMaxH3CustomKeyframes',
             _outputs=('conditioning',),
-            widget_0='{"count":1,"positions":[1]}',
-            widget_1='1-based',
-            widget_2='disabled',
+            keyframe_state='{"count":1,"positions":[1]}',
+            indexing='1-based',
+            crop='disabled',
             conditioning=minimaxh3referencetovideo_8.out('positive'),
-            keyframe_image_1=loadimage_3.out('IMAGE'),
             latent=minimaxh3referencetovideo_8.out('LATENT'),
             vae=vaeloader.out('VAE'),
             _mode=4,
@@ -445,7 +438,7 @@ def build() -> VibeWorkflow:
         )
 
         basicguider_8 = BasicGuider(
-            conditioning=minimaxh3customkeyframes.out('conditioning'),
+            conditioning=minimaxh3referencetovideo_8.out('positive'),
             model=minimaxh3sigmashift.out('MODEL'),
             _mode=4,
         )
@@ -482,10 +475,8 @@ def build() -> VibeWorkflow:
             _outputs=('latent', 'trim_frames'),
             audio_feather_ticks=8,
             context_length=39,
-            widget_0=39,
-            widget_1=8,
-            widget_2=24,
-            widget_3='disabled',
+            source_fps=24,
+            crop='disabled',
             audio_vae=minimaxh3audiovaecompatibility.out('audio_vae'),
             latent=minimaxh3referencetovideo_2.out('LATENT'),
             live_starter_latent=samplercustomadvanced_8.out('OUTPUT'),
@@ -536,8 +527,8 @@ def build() -> VibeWorkflow:
 
         minimaxh3generatedavmaskedcontext = raw_call('MiniMaxH3GeneratedAVMaskedContext',
             _outputs=('latent', 'trim_frames'),
-            widget_0=39,
-            widget_1=8,
+            context_length=39,
+            audio_feather_ticks=8,
             latent=minimaxh3referencetovideo_3.out('LATENT'),
             source_latent=samplercustomadvanced_2.out('OUTPUT'),
             _mode=4,
@@ -580,8 +571,8 @@ def build() -> VibeWorkflow:
 
         minimaxh3generatedavmaskedcontext_2 = raw_call('MiniMaxH3GeneratedAVMaskedContext',
             _outputs=('latent', 'trim_frames'),
-            widget_0=39,
-            widget_1=8,
+            context_length=39,
+            audio_feather_ticks=8,
             latent=minimaxh3referencetovideo_4.out('LATENT'),
             source_latent=samplercustomadvanced_3.out('OUTPUT'),
             _mode=4,
@@ -627,8 +618,8 @@ def build() -> VibeWorkflow:
 
         minimaxh3generatedavmaskedcontext_3 = raw_call('MiniMaxH3GeneratedAVMaskedContext',
             _outputs=('latent', 'trim_frames'),
-            widget_0=39,
-            widget_1=8,
+            context_length=39,
+            audio_feather_ticks=8,
             latent=minimaxh3referencetovideo_5.out('LATENT'),
             source_latent=samplercustomadvanced_4.out('OUTPUT'),
             _mode=4,
@@ -674,8 +665,8 @@ def build() -> VibeWorkflow:
 
         minimaxh3generatedavmaskedcontext_4 = raw_call('MiniMaxH3GeneratedAVMaskedContext',
             _outputs=('latent', 'trim_frames'),
-            widget_0=39,
-            widget_1=8,
+            context_length=39,
+            audio_feather_ticks=8,
             latent=minimaxh3referencetovideo_6.out('LATENT'),
             source_latent=samplercustomadvanced_5.out('OUTPUT'),
             _mode=4,
@@ -721,8 +712,8 @@ def build() -> VibeWorkflow:
 
         minimaxh3generatedavmaskedcontext_5 = raw_call('MiniMaxH3GeneratedAVMaskedContext',
             _outputs=('latent', 'trim_frames'),
-            widget_0=39,
-            widget_1=8,
+            context_length=39,
+            audio_feather_ticks=8,
             latent=minimaxh3referencetovideo_7.out('LATENT'),
             source_latent=samplercustomadvanced_6.out('OUTPUT'),
             _mode=4,
@@ -798,7 +789,7 @@ def build() -> VibeWorkflow:
         minimaxh3lastactivevhspreviewbarrier = raw_call('MiniMaxH3LastActiveVHSPreviewBarrier',
             _outputs=('preview_gate',),
             active_extensions=1,
-            widget_0=6,
+            input_count=6,
             preview_1=vhs_videocombine_5.out('FILENAMES'),
             preview_2=vhs_videocombine_6.out('FILENAMES'),
             preview_3=vhs_videocombine_7.out('FILENAMES'),
@@ -812,17 +803,15 @@ def build() -> VibeWorkflow:
             active_extensions=1,
             context_frames=39,
             video_overlap_frames=39,
-            widget_0=6,
-            widget_1=39,
-            widget_10=True,
-            widget_2=39,
-            widget_3=24,
-            widget_4='disabled',
-            widget_5='video/masked_av_extension',
-            widget_6='yuv420p',
-            widget_7=19,
-            widget_8=False,
-            widget_9=True,
+            input_count=6,
+            source_fps=24,
+            crop='disabled',
+            filename_prefix='video/masked_av_extension',
+            pix_fmt='yuv420p',
+            crf=19,
+            save_metadata=False,
+            trim_to_audio=True,
+            save_output=True,
             audio_vae=minimaxh3audiovaecompatibility.out('audio_vae'),
             extension_1=samplercustomadvanced_2.out('OUTPUT'),
             extension_2=samplercustomadvanced_3.out('OUTPUT'),
@@ -842,6 +831,17 @@ def build() -> VibeWorkflow:
             filenames=minimaxh3streamliveextensionavtovhs.out('Filenames'),
         )
 
-        wf = wf.finalize(PUBLIC_INPUT_METADATA, outputs=[OutputSpec(node=vhs_videocombine_5)])
+        wf = wf.finalize(
+            PUBLIC_INPUT_METADATA,
+            outputs=[OutputSpec(
+                node=minimaxh3streamliveextensionavtovhs,
+                output_type='MiniMaxH3StreamLiveExtensionAVToVHS',
+                name='continuation',
+                artifact_kind='video',
+                mime_type='video/mp4',
+                filename_prefix='video/masked_av_extension',
+                expected_cardinality='one',
+            )],
+        )
         wf.strict_types = False
         return wf

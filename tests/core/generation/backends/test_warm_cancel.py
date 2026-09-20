@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
+import subprocess
 import sys
 import threading
 import types
@@ -13,6 +15,8 @@ from astrid.core.generation.backends.vibecomfy import (
     CheckoutServerAdapter,
     GenerationResult,
     VibeComfyEngine,
+    _assert_process_incarnation_gone,
+    _owner_session_command,
 )
 
 MODEL_DIGEST = "sha256:" + "a" * 64
@@ -32,6 +36,142 @@ def test_runtime_identity_rejects_arbitrary_label() -> None:
         VibeComfyEngine._runtime_identity("7f3a2d1e-5b4c-4a6d-9e12-0123456789ab")
         == "7f3a2d1e-5b4c-4a6d-9e12-0123456789ab"
     )
+
+
+def test_owner_restart_command_uses_only_named_start_id(tmp_path) -> None:
+    session_dir = tmp_path / "out" / "sessions" / "fixture"
+    session_dir.mkdir(parents=True)
+    (session_dir / "config.json").write_text(json.dumps({"port": 8188, "launch_flags": ["--use-ck-attention"]}), encoding="utf-8")
+    command = _owner_session_command(session_dir, "start")
+    assert command[command.index("session") + 1 : command.index("--runtime-root")] == [
+        "start",
+        "--id",
+        "fixture",
+    ]
+    assert command.count("fixture") == 1
+    assert "--launch-flag=--use-ck-attention" in command
+
+
+def test_process_absence_probe_uncertainty_fails_closed(monkeypatch) -> None:
+    from vibecomfy.runtime import session as runtime_session
+
+    monkeypatch.setattr("astrid.core.generation.backends.vibecomfy.os.kill", lambda pid, sig: None)
+    monkeypatch.setattr(runtime_session, "_process_start_identity", lambda pid: None)
+    with pytest.raises(RuntimeError, match="cannot identify"):
+        _assert_process_incarnation_gone(12345, "old-incarnation")
+
+
+def test_owner_restart_timeout_uses_saved_readiness_budget(tmp_path, monkeypatch) -> None:
+    from astrid.core.generation.backends import vibecomfy
+
+    session_dir = tmp_path / "out" / "sessions" / "fixture"
+    session_dir.mkdir(parents=True)
+    (session_dir / "config.json").write_text(
+        json.dumps({"port": 8188, "ready_timeout_sec": 900}), encoding="utf-8"
+    )
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._host_session = {
+        "session_dir": str(session_dir), "pid": 101, "comfy_pid": 102,
+        "process_birth_id": "daemon-old", "comfy_process_birth_id": "comfy-old",
+        "source_revision": "source", "source_content_digest": "sha256:" + "a" * 64,
+        "config_digest": "sha256:" + "b" * 64,
+    }
+    monkeypatch.setattr(vibecomfy, "_verify_owned_vibe_session", lambda *args: None)
+    monkeypatch.setattr(vibecomfy, "_assert_process_incarnation_gone", lambda *args: None)
+    monkeypatch.setattr(vibecomfy, "_owner_session_command", lambda *args, **kwargs: ["owner"])
+    calls = Mock(side_effect=[
+        subprocess.CompletedProcess(["owner"], 0),
+        subprocess.TimeoutExpired(["owner"], 930),
+    ])
+    monkeypatch.setattr(vibecomfy.subprocess, "run", calls)
+    with pytest.raises(RuntimeError, match="retained for reconciliation"):
+        adapter._restart_owned_session()
+    assert calls.call_args_list[1].kwargs["timeout"] == 930.0
+
+
+def test_owner_restart_refuses_attached_session_before_control(tmp_path, monkeypatch) -> None:
+    from astrid.core.generation.backends import vibecomfy
+
+    session_dir = tmp_path / "out" / "sessions" / "fixture"
+    session_dir.mkdir(parents=True)
+    (session_dir / "config.json").write_text(json.dumps({"port": 8188}), encoding="utf-8")
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._host_session = {
+        "session_dir": str(session_dir), "pid": 101, "comfy_pid": 102,
+        "process_birth_id": "daemon-old", "comfy_process_birth_id": "comfy-old",
+        "source_revision": "source", "source_content_digest": "sha256:" + "a" * 64,
+        "config_digest": "sha256:" + "b" * 64,
+    }
+    monkeypatch.setattr(vibecomfy, "_verify_owned_vibe_session", Mock(side_effect=ValueError("attached")))
+    run = Mock()
+    monkeypatch.setattr(vibecomfy.subprocess, "run", run)
+    with pytest.raises(ValueError, match="attached"):
+        adapter._restart_owned_session()
+    run.assert_not_called()
+
+
+def test_production_owner_bridge_refreshes_profile_and_registry(tmp_path, monkeypatch) -> None:
+    from astrid.core.execution import generic_host
+    from astrid.core.generation.backends import vibecomfy
+
+    session_dir = tmp_path / "out" / "sessions" / "fixture"
+    session_dir.mkdir(parents=True)
+    config = {"port": 8188, "ready_timeout_sec": 2, "launch_flags": ["--use-ck-attention"]}
+    config_bytes = json.dumps(config, sort_keys=True).encode("utf-8")
+    (session_dir / "config.json").write_bytes(config_bytes)
+    source_digest = "sha256:" + "c" * 64
+    (session_dir / "source_revision").write_text("source-a", encoding="utf-8")
+    (session_dir / "source_content_digest").write_text(source_digest, encoding="utf-8")
+    profile = {
+        "schema_version": "hc03-worker-readiness.v1",
+        "status": "ready",
+        "vibecomfy_session": {
+            "session_dir": str(session_dir), "pid": 101, "comfy_pid": 102,
+            "launch_token": "old-token", "process_birth_id": "daemon-old",
+            "comfy_process_birth_id": "comfy-old", "server_url": "http://127.0.0.1:8188",
+            "source_revision": "source-a", "source_content_digest": source_digest,
+            "config_digest": "sha256:" + hashlib.sha256(config_bytes).hexdigest(),
+        },
+    }
+    profile_path = tmp_path / "readiness.json"
+    profile_path.write_text(json.dumps(profile, sort_keys=True), encoding="utf-8")
+    monkeypatch.setenv("ASTRID_HOST_READINESS_PROFILE_PATH", str(profile_path))
+    monkeypatch.setenv(
+        "ASTRID_HOST_READINESS_PROFILE_HASH",
+        "sha256:" + hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+    )
+    start_script = (
+        "from pathlib import Path; import json; "
+        f"p=Path({str(session_dir)!r}); "
+        "(p/'pid').write_text('201'); (p/'comfy_pid').write_text('202'); "
+        "(p/'comfy_process_start_identity').write_text('comfy-new'); "
+        "(p/'url').write_text('http://127.0.0.1:8188'); "
+        "(p/'launch.json').write_text(json.dumps({'pid':201,'url':'http://127.0.0.1:8188','launch_token':'new-token','process_start_identity':'daemon-new','comfy_pid':202,'comfy_process_start_identity':'comfy-new'})); "
+        f"(p/'config.json').write_bytes({config_bytes!r})"
+    )
+    stop_script = "raise SystemExit(0)"
+    monkeypatch.setattr(
+        vibecomfy,
+        "_owner_session_command",
+        lambda _path, action, **kwargs: [sys.executable, "-c", start_script if action == "start" else stop_script],
+    )
+    monkeypatch.setattr(vibecomfy, "_verify_owned_vibe_session", lambda *args: None)
+    monkeypatch.setattr(vibecomfy, "_assert_process_incarnation_gone", lambda *args: None)
+    adapter = CheckoutServerAdapter("http://127.0.0.1:8188")
+    adapter._host_session = {
+        **profile["vibecomfy_session"], "model_bytes_digest": MODEL_DIGEST,
+    }
+    adapter._host_profile = profile
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+
+    evidence = adapter._restart_owned_session()
+    assert evidence["released"] is True
+    assert evidence["pid"] == 201
+    refreshed = generic_host._read_readiness_profile_document()
+    assert refreshed is not None
+    assert refreshed["vibecomfy_session"]["pid"] == 201
+    assert refreshed["vibecomfy_session"]["comfy_pid"] == 202
+    assert refreshed["vibecomfy_session"]["launch_token"] == "new-token"
 
 
 def _published_adapter(monkeypatch) -> CheckoutServerAdapter:
@@ -160,6 +300,85 @@ def test_adapter_release_probe_failure_poison_clears_published_warmth(monkeypatc
     assert adapter._engine.warm is False
     with pytest.raises(RuntimeError, match="poisoned or fence-pending"):
         adapter._engine.run(object(), runtime_instance_id=RUNTIME_A)
+
+
+def test_warmth_hint_is_permission_not_hot_proof_and_release_invalidates_it(monkeypatch) -> None:
+    _native_http(monkeypatch)
+    engine = VibeComfyEngine("http://gpu.example.test")
+    engine.adopt_warmth(
+        fingerprint="fingerprint-a",
+        warmth_identity="warmth-a",
+        model_bytes_digest=MODEL_DIGEST,
+        runtime_instance_id=RUNTIME_A,
+    )
+
+    assert engine.warm is False
+    retained = engine.prepare_session(
+        "fingerprint-a",
+        "warmth-a",
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest=MODEL_DIGEST,
+    )
+    assert retained["warm_reused"] is False
+    assert retained["retention_permitted"] is True
+    assert retained["warm_observed"] is False
+
+    released = engine.release(reason="intervening eviction")
+    assert released["ok"] is True
+    cold = engine.prepare_session(
+        "fingerprint-a",
+        "warmth-a",
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest=MODEL_DIGEST,
+    )
+    assert cold["lifecycle"] == "cold"
+    assert cold["retention_permitted"] is False
+
+
+def test_managed_release_requires_explicit_backend_completion(monkeypatch) -> None:
+    _native_http(monkeypatch)
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._host_session = {"managed": True}
+    adapter._revalidate_host_session = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+
+    result = adapter.release(reason="replacement")
+
+    assert result["ok"] is False
+    assert "completion observation" in result["error"]
+    assert adapter.poisoned is True
+
+
+def test_managed_release_accepts_only_explicit_model_unload_observation(monkeypatch) -> None:
+    _native_http(monkeypatch)
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._host_session = {"managed": True}
+    adapter._revalidate_host_session = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter._engine._post = Mock(  # type: ignore[method-assign]
+        side_effect=[{}, {"status": "success", "models_unloaded": True}]
+    )
+
+    result = adapter.release(reason="replacement")
+
+    assert result["ok"] is True
+    assert result["released"] is True
+
+
+def test_managed_cleanup_sends_no_control_calls_after_ownership_failure(monkeypatch) -> None:
+    calls = _native_http(monkeypatch)
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._host_session = {"managed": True}
+    adapter._revalidate_host_session = Mock(  # type: ignore[method-assign]
+        side_effect=RuntimeError("listener ownership changed")
+    )
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+
+    result = adapter.release(reason="replacement")
+
+    assert result["ok"] is False
+    assert calls == []
+    assert adapter.poisoned is True
 
 
 def test_warm_session_digest_change_cannot_reuse_warmth(monkeypatch) -> None:

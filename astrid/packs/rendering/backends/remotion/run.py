@@ -786,6 +786,7 @@ def _execute_remotion_locked(
                     materialized_objects=materialized_objects,
                     materialized_root=materialized_root,
                     allow_derived_files=materialized_root is not None,
+                    reuse_materialized_paths=materialized_root is not None,
                     staging_parent=staging_parent,
                 )
             )
@@ -794,7 +795,7 @@ def _execute_remotion_locked(
                 try:
                     asset_server = asset_lifecycle.enter_context(
                         InvocationAssetServer(
-                            materializer.staging_dir,
+                            materializer.serving_root,
                             allowed_origin=remotion_origin,
                         )
                     )
@@ -870,6 +871,12 @@ def _execute_remotion_locked(
                 "--allow-html-in-canvas",
                 "--enforce-audio-track",
                 f"--port={remotion_port}",
+                # Remotion otherwise starts multiple Chromium workers, each
+                # requesting the full managed registry at once.  The media
+                # server is invocation-scoped and intentionally lightweight;
+                # one worker keeps the request burst bounded for large
+                # timelines while preserving the same renderer and output.
+                "--concurrency=1",
             ]
             if alpha:
                 # ProRes 4444 is the only engine-native alpha mux in remotion

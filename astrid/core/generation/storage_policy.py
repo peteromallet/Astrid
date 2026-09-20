@@ -18,6 +18,9 @@ class ImageStoragePolicyError(ValueError):
     """Raised when a request or provider result is outside the bounded profile."""
 
 
+RUNTIME_OBJECT_MAX_BYTES = 64 * 1024 * 1024
+
+
 @dataclass(frozen=True, slots=True)
 class CloudT2IStoragePolicy:
     """Whole-task ceiling for the registry-backed cloud text-image route.
@@ -33,7 +36,7 @@ class CloudT2IStoragePolicy:
     """
 
     version: str = "astrid.cloud-t2i.registry.v1"
-    output_max_bytes: int = 64 * 1024 * 1024
+    output_max_bytes: int = RUNTIME_OBJECT_MAX_BYTES
     manifest_max_bytes: int = 1 * 1024 * 1024
     control_max_bytes: int = 1 * 1024 * 1024
     max_prompt_chars: int = 4_096
@@ -216,7 +219,7 @@ class CloudI2IStoragePolicy:
 
     version: str = "astrid.cloud-i2i.z-image.v1"
     source_max_bytes: int = 512_000
-    output_max_bytes: int = 64 * 1024 * 1024
+    output_max_bytes: int = RUNTIME_OBJECT_MAX_BYTES
     manifest_max_bytes: int = 1 * 1024 * 1024
     control_max_bytes: int = 1 * 1024 * 1024
     max_prompt_chars: int = 4_096

@@ -731,7 +731,7 @@ def test_product_help_lists_current_timeline_visualize_and_render_verbs() -> Non
     text = _product_help_text()
     assert "projects    [kernel] project create/list/show/update/select/current" in text
     assert "runs        [kernel] run list/show/cancel/retry/events/open" in text
-    assert "[pack: timeline] timelines create/list/show/save/archive/recover/history/diff/visualize/render" in text
+    assert "[pack: timeline] timelines create/list/show/retime-clip/save/archive/recover/history/diff/visualize/render" in text
 
 
 def test_print_product_help_prints_to_stdout(capsys) -> None:

@@ -213,6 +213,12 @@ class ManagedToolSession:
         with self._lock:
             return self._active is not None
 
+    @property
+    def current_binding(self) -> SessionBinding | None:
+        """Return the currently owned binding for an ordering decision."""
+        with self._lock:
+            return self._active.binding if self._active is not None else None
+
     def open(
         self,
         *,

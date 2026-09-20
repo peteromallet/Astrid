@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from astrid.core.pack.entrypoint import guard_canonical_entrypoint
+from astrid.core.generation.storage_policy import RUNTIME_OBJECT_MAX_BYTES
 
 guard_canonical_entrypoint("vibecomfy.run")
 
@@ -65,6 +66,15 @@ def _read_profile(path: str, digest: str) -> tuple[Mapping[str, Any], dict[str, 
         "declared_root": exact.get("root"),
         "declared_port": exact.get("port"),
     }
+
+
+def _assert_runtime_object_size(path: Path, *, label: str) -> None:
+    size = path.stat().st_size
+    if size > RUNTIME_OBJECT_MAX_BYTES:
+        raise RuntimeError(
+            f"{label} exceeds the Runtime per-object limit of "
+            f"{RUNTIME_OBJECT_MAX_BYTES} bytes"
+        )
 
 
 def _run(
@@ -130,6 +140,7 @@ def _run(
     destination = (out / "output.mp4").resolve()
     if source != destination:
         shutil.copy2(source, destination)
+    _assert_runtime_object_size(destination, label="typed Vibe output")
     output_name = {
         "vibecomfy.video_enhance": "enhanced_video",
         "vibecomfy.character_animation": "animated_video",
@@ -156,6 +167,7 @@ def _run(
         ),
         encoding="utf-8",
     )
+    _assert_runtime_object_size(out / "manifest.json", label="typed Vibe manifest")
 
 
 def build_parser() -> argparse.ArgumentParser:

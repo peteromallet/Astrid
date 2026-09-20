@@ -273,6 +273,7 @@ def _host_hf_token_env_vars(profile: Mapping[str, Any] | None = None) -> dict[st
 
 _RUNPOD_COMPUTE_DEFAULTS: dict[str, Any] = {
     "gpu_type": "NVIDIA GeForce RTX 4090",
+    "allowed_cuda_versions": None,
     "name_prefix": "pod",
     "image": "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
     "container_disk_gb": 200,
@@ -305,7 +306,7 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
     env = os.environ
     explicit: dict[str, Any] = {}
     profile_fields = (
-        "gpu_type", "storage_name", "max_runtime_seconds", "name_prefix", "image",
+        "gpu_type", "allowed_cuda_versions", "storage_name", "max_runtime_seconds", "name_prefix", "image",
         "container_disk_gb", "datacenter_id", "ports", "local_root", "remote_root",
         "volume_in_gb", "volume_mount_path",
         "remote_script", "timeout", "upload_mode", "excludes", "require_storage",
@@ -320,6 +321,16 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
             continue
         if field == "volume_mount_path" and not isinstance(value, str):
             continue
+        if field == "allowed_cuda_versions" and not isinstance(value, (str, list, tuple)):
+            continue
+        if field == "allowed_cuda_versions" and isinstance(value, str) and not value.strip():
+            raise AstridError("--allowed-cuda-versions must contain at least one version")
+        if field == "allowed_cuda_versions" and isinstance(value, str):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+            if not value:
+                raise AstridError("--allowed-cuda-versions must contain at least one version")
+        if field == "allowed_cuda_versions" and isinstance(value, (list, tuple)) and not value:
+            raise AstridError("allowed_cuda_versions must contain at least one version")
         if value is not None and not (field == "require_storage" and value is False):
             explicit[field] = value
     profile_arg = getattr(args, "compute_profile", None)
@@ -332,6 +343,7 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
     defaults["credentials"] = dict(_RUNPOD_COMPUTE_DEFAULTS["credentials"])
     env_fields = {
         "gpu_type": "RUNPOD_GPU_TYPE",
+        "allowed_cuda_versions": "RUNPOD_ALLOWED_CUDA_VERSIONS",
         "storage_name": "RUNPOD_STORAGE_NAME",
         "name_prefix": "RUNPOD_NAME_PREFIX",
         "image": "RUNPOD_WORKER_IMAGE",
@@ -346,6 +358,8 @@ def _resolve_compute_profile(args: argparse.Namespace, produces_dir: Path) -> di
     for field, env_name in env_fields.items():
         if env.get(env_name):
             defaults[field] = env[env_name]
+    if "RUNPOD_ALLOWED_CUDA_VERSIONS" in env and not env.get("RUNPOD_ALLOWED_CUDA_VERSIONS", "").strip():
+        raise AstridError("RUNPOD_ALLOWED_CUDA_VERSIONS must contain at least one version")
     for field, env_name in (
         ("max_runtime_seconds", "RUNPOD_MAX_RUNTIME_SECONDS"),
         ("container_disk_gb", "RUNPOD_CONTAINER_DISK_GB"),
@@ -419,6 +433,7 @@ def _build_pod_handle(
     ports: str | None,
     api_key_ref: str = "RUNPOD_API_KEY",
     volume_mount_path: str = "/workspace",
+    allowed_cuda_versions: Any = (),
 ) -> dict[str, Any]:
     return {
         "pod_id": pod.id,
@@ -439,6 +454,7 @@ def _build_pod_handle(
             "storage_name": storage_name,
             "network_volume_id": network_volume_id,
             "ports": ports or "8888/http,22/tcp",
+            "allowed_cuda_versions": list(allowed_cuda_versions or ()),
         },
     }
 
@@ -518,6 +534,7 @@ def _load_handle_and_config(handle_path: Path) -> tuple[dict[str, Any], Any]:
         container_disk_gb=snap.get("container_disk_in_gb", 200),
         disk_size_gb=snap.get("volume_in_gb", 0),
         volume_mount_path=snap.get("volume_mount_path", "/workspace"),
+        allowed_cuda_versions=snap.get("allowed_cuda_versions") or (),
         storage_name=snap.get("storage_name") or snap.get("network_volume_id"),
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
@@ -550,6 +567,9 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
     gpu_type = resolved["gpu_type"]
     if isinstance(gpu_type, str) and "," in gpu_type:
         gpu_type = [g.strip() for g in gpu_type.split(",") if g.strip()]
+    allowed_cuda_versions = resolved.get("allowed_cuda_versions") or ()
+    if isinstance(allowed_cuda_versions, str):
+        allowed_cuda_versions = [v.strip() for v in allowed_cuda_versions.split(",") if v.strip()]
     name_prefix = resolved.get("name_prefix")
     image = resolved.get("image")
     container_disk_gb = int(resolved["container_disk_gb"])
@@ -582,6 +602,7 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
         storage_name=storage_name,
         name_prefix=name_prefix,
         ports=ports,
+        allowed_cuda_versions=allowed_cuda_versions,
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
         ssh_public_key_path=os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH"),
@@ -623,6 +644,7 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
         ports=ports,
         api_key_ref=api_key_ref or "RUNPOD_API_KEY",
         volume_mount_path=volume_mount_path,
+        allowed_cuda_versions=allowed_cuda_versions,
     )
 
     _write_json(produces_dir / "pod_handle.json", handle)
@@ -863,6 +885,9 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
     gpu_type = resolved["gpu_type"]
     if isinstance(gpu_type, str) and "," in gpu_type:
         gpu_type = [g.strip() for g in gpu_type.split(",") if g.strip()]
+    allowed_cuda_versions = resolved.get("allowed_cuda_versions") or ()
+    if isinstance(allowed_cuda_versions, str):
+        allowed_cuda_versions = [v.strip() for v in allowed_cuda_versions.split(",") if v.strip()]
     name_prefix = resolved.get("name_prefix")
     image = resolved.get("image")
     container_disk_gb = int(resolved["container_disk_gb"])
@@ -904,6 +929,7 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
         storage_name=storage_name,
         name_prefix=name_prefix,
         ports=ports,
+        allowed_cuda_versions=allowed_cuda_versions,
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
         ssh_public_key_path=os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH"),
@@ -967,6 +993,7 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
             ports=ports,
             api_key_ref=api_key_ref or "RUNPOD_API_KEY",
             volume_mount_path=volume_mount_path,
+            allowed_cuda_versions=allowed_cuda_versions,
         )
 
         # *** Write pod_handle.json IMMEDIATELY (sweeper breadcrumb) ***
@@ -1075,6 +1102,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prov.add_argument("--produces-dir", type=Path, required=True, help="Produces output directory.")
     p_prov.add_argument("--compute-profile", help="Named user compute profile (ASTRID_COMPUTE_PROFILE takes precedence).")
     p_prov.add_argument("--gpu-type", help="GPU type (e.g. 'NVIDIA GeForce RTX 4090').")
+    p_prov.add_argument("--allowed-cuda-versions", help="Comma-separated CUDA host versions (e.g. 12.4,12.6).")
     p_prov.add_argument("--storage-name", help="Network storage volume name.")
     p_prov.add_argument("--max-runtime-seconds", type=int, help="Maximum pod lifetime in seconds.")
     p_prov.add_argument("--name-prefix", help="Pod name prefix for grouping.")
@@ -1115,6 +1143,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sess.add_argument("--produces-dir", type=Path, required=True, help="Produces output directory.")
     p_sess.add_argument("--compute-profile", help="Named user compute profile (ASTRID_COMPUTE_PROFILE takes precedence).")
     p_sess.add_argument("--gpu-type", help="GPU type.")
+    p_sess.add_argument("--allowed-cuda-versions", help="Comma-separated CUDA host versions (e.g. 12.4,12.6).")
     p_sess.add_argument("--storage-name", help="Network storage volume name.")
     p_sess.add_argument("--max-runtime-seconds", type=int, help="Maximum pod lifetime in seconds.")
     p_sess.add_argument("--name-prefix", help="Pod name prefix for grouping.")

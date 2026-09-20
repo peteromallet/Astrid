@@ -46,6 +46,12 @@ _EXPORTS = {
     "get_capability": ("invocation", "get_capability"),
     "invoke": ("invocation", "invoke"),
     "invoke_result": ("invocation", "invoke_result"),
+    "ExecutionLifecycle": ("execution_request", "ExecutionLifecycle"),
+    "ExecutionLimits": ("execution_request", "ExecutionLimits"),
+    "ExecutionRequest": ("execution_request", "ExecutionRequest"),
+    "ExecutionRequestError": ("execution_request", "ExecutionRequestError"),
+    "ExecutionTarget": ("execution_request", "ExecutionTarget"),
+    "normalize_execution_request": ("execution_request", "normalize_execution_request"),
 }
 
 _PRIVATE_EXPORTS = {

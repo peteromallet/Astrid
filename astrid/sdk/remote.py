@@ -14,6 +14,8 @@ from .contracts import DomainResult, ErrorObject
 from .pagination import page_pair, paged_rows
 from .workspace_client import WorkspaceClient, WorkspaceClientError
 
+from .execution_request import ExecutionRequest, ExecutionRequestError, normalize_execution_request
+
 
 def _full_mapping(value: Any) -> dict[str, Any] | None:
     """Copy a generated resource without narrowing its explicit fields."""
@@ -373,10 +375,28 @@ class RemoteMedia(_RemoteFamily):
 class RemoteTasks(_RemoteFamily):
     def register_executor(self, *, executor_id: str, capabilities: list[str], idempotency_key: str):
         return self._typed("register_executor", {"executor_id": executor_id, "capabilities": capabilities}, key=idempotency_key, idempotency_key=idempotency_key)
-    def register_capability(self, capability_id: str, definition_digest: str, *, idempotency_key=None):
-        return self._typed("register_capability", capability_id, definition_digest, key=idempotency_key, idempotency_key=idempotency_key)
-    def create(self, *, project_id: str | None, capability: str, spec: Mapping[str, Any], input_manifest=None, idempotency_key=None, settlement_effect=None, storage_estimate: Mapping[str, int] | None = None, capability_digest: str | None = None, generation_intent: Mapping[str, Any] | None = None):
+    def create(
+        self,
+        *,
+        project_id: str | None,
+        capability: str,
+        spec: Mapping[str, Any],
+        input_manifest=None,
+        idempotency_key=None,
+        settlement_effect=None,
+        storage_estimate: Mapping[str, int] | None = None,
+        capability_digest: str | None = None,
+        generation_intent: Mapping[str, Any] | None = None,
+        execution_request: ExecutionRequest | Mapping[str, Any] | None = None,
+    ):
         key = idempotency_key or uuid.uuid4().hex
+        try:
+            normalized_request = normalize_execution_request(execution_request)
+        except ExecutionRequestError as exc:
+            return DomainResult.failure(
+                ErrorObject("validation_error", str(exc), {"field": "execution_request"}),
+                idempotency_key=key,
+            )
         capabilities = paged_rows(self._client.list_capabilities, limit=50)
         if capabilities is None:
             return DomainResult.failure(
@@ -387,8 +407,23 @@ class RemoteTasks(_RemoteFamily):
                 ),
                 idempotency_key=key,
             )
-        match = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability), None)
-        if match is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability}), idempotency_key=key)
+        match = next(
+            (
+                item
+                for item in capabilities
+                if isinstance(item, Mapping) and item.get("capability_id") == capability
+            ),
+            None,
+        )
+        if match is None:
+            return DomainResult.failure(
+                ErrorObject(
+                    "not_found",
+                    "capability is not registered",
+                    {"capability_id": capability},
+                ),
+                idempotency_key=key,
+            )
         admission = {
             "key": key,
             "capability_id": capability,
@@ -402,6 +437,8 @@ class RemoteTasks(_RemoteFamily):
         }
         if generation_intent is not None:
             admission["generation_intent"] = generation_intent
+        if normalized_request is not None:
+            admission["execution_request"] = normalized_request
         return self._typed("admit_task", **admission)
     def claim(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
         return self._typed("claim_task", key=idempotency_key, executor_id=executor_id, capability_ids=capability_ids, idempotency_key=idempotency_key)
@@ -891,7 +928,17 @@ class RemoteGenerations(_RemoteFamily):
             ]
             enriched.append({**resource, "managed_outputs": matches})
         return self._with_data(result, [enriched, next_cursor])
-    def create_variant(self, generation_id: str, *, variant_id: str, object_id: str | None = None, variant_type="original", metadata=None, idempotency_key=None):
+
+    def create_variant(
+        self,
+        generation_id: str,
+        *,
+        variant_id: str,
+        object_id: str | None = None,
+        variant_type="original",
+        metadata=None,
+        idempotency_key=None,
+    ):
         key = idempotency_key or uuid.uuid4().hex
         return self._typed(
             "create_variant",
@@ -908,16 +955,24 @@ class RemoteGenerations(_RemoteFamily):
 class RemoteAstridClient:
     def __init__(self, transport: WorkspaceClient):
         self._transport = transport
-        self.projects, self.timelines, self.media = RemoteProjects(transport), RemoteTimelines(transport), RemoteMedia(transport)
-        self.tasks, self.runs, self.references = RemoteTasks(transport), RemoteRuns(transport), RemoteReferences(transport)
-        self.shots, self.generations = RemoteShots(transport), RemoteGenerations(transport)
+        self.projects = RemoteProjects(transport)
+        self.timelines = RemoteTimelines(transport)
+        self.media = RemoteMedia(transport)
+        self.tasks = RemoteTasks(transport)
+        self.runs = RemoteRuns(transport)
+        self.references = RemoteReferences(transport)
+        self.shots = RemoteShots(transport)
+        self.generations = RemoteGenerations(transport)
+
     def health(self): return self._transport.health()
-    def handshake(self, client_name: str, client_version: str, requested_scopes: list[str]): return self._transport.handshake(client_name, client_version, requested_scopes)
+    def handshake(self, client_name: str, client_version: str, requested_scopes: list[str]):
+        return self._transport.handshake(client_name, client_version, requested_scopes)
     def doctor(self): return self._transport.doctor()
     def create_backup(self, destination): return self._transport.create_backup(destination)
     def restore_backup(self, backup, destination): return self._transport.restore_backup(backup, destination)
     def export_realm(self): return self._transport.export_realm()
-    def tombstone_realm(self, *, reason=None, expected_version=None): return self._transport.tombstone_realm(reason=reason, expected_version=expected_version)
+    def tombstone_realm(self, *, reason=None, expected_version=None):
+        return self._transport.tombstone_realm(reason=reason, expected_version=expected_version)
     def recover_realm(self, *, expected_realm_id, expected_version, confirmation=None, noninteractive=True):
         return self._transport.recover_realm(
             expected_realm_id=expected_realm_id,
@@ -926,31 +981,52 @@ class RemoteAstridClient:
             noninteractive=noninteractive,
         )
     def purge_realm(self, confirmation): return self._transport.purge_realm(confirmation)
-    def invoke(self, capability_id: str, *, project_id: str, spec: Mapping[str, Any], input_object_ids: list[str] | None = None, idempotency_key: str | None = None, settlement_effect: Mapping[str, Any] | None = None):
-        capability_id = str(capability_id); key = idempotency_key or uuid.uuid4().hex
+
+    def invoke(
+        self,
+        capability_id: str,
+        *,
+        project_id: str,
+        spec: Mapping[str, Any],
+        input_object_ids: list[str] | None = None,
+        idempotency_key: str | None = None,
+        settlement_effect: Mapping[str, Any] | None = None,
+        execution_request: ExecutionRequest | Mapping[str, Any] | None = None,
+    ):
+        capability_id = str(capability_id)
+        key = idempotency_key or uuid.uuid4().hex
+        try:
+            normalized_request = normalize_execution_request(execution_request)
+        except ExecutionRequestError as exc:
+            return DomainResult.failure(
+                ErrorObject("validation_error", str(exc), {"field": "execution_request"}),
+                idempotency_key=key,
+            )
         capabilities = paged_rows(self._transport.list_capabilities, limit=50)
         if capabilities is None:
             return DomainResult.failure(
-                ErrorObject(
-                    "protocol_error",
-                    "runtime capability listing returned an invalid page",
-                    {},
-                ),
+                ErrorObject("protocol_error", "runtime capability listing returned an invalid page", {}),
                 idempotency_key=key,
             )
-        capability = next((item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability_id), None)
-        if capability is None: return DomainResult.failure(ErrorObject("not_found", "capability is not registered", {"capability_id": capability_id}), idempotency_key=key)
-        # Keep the generated client's complete mutation result intact.
-        # In particular, ``admit_task`` carries the server's committed
-        # receipt out-of-band alongside the task resource.
-        return self.tasks._typed(
-            "admit_task",
-            key=key,
-            capability_id=capability_id,
-            capability_digest=capability["definition_digest"],
-            input_object_ids=list(input_object_ids or []),
-            idempotency_key=key,
-            project_id=project_id,
-            spec=spec,
-            settlement_effect=settlement_effect,
+        capability = next(
+            (item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability_id),
+            None,
         )
+        if capability is None:
+            return DomainResult.failure(
+                ErrorObject("not_found", "capability is not registered", {"capability_id": capability_id}),
+                idempotency_key=key,
+            )
+        admission = {
+            "key": key,
+            "capability_id": capability_id,
+            "capability_digest": capability["definition_digest"],
+            "input_object_ids": list(input_object_ids or []),
+            "idempotency_key": key,
+            "project_id": project_id,
+            "spec": spec,
+            "settlement_effect": settlement_effect,
+        }
+        if normalized_request is not None:
+            admission["execution_request"] = normalized_request
+        return self.tasks._typed("admit_task", **admission)

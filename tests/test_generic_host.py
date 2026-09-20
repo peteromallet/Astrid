@@ -39,6 +39,7 @@ class FakeRuntime:
         self.uploaded_objects = {}
         self.failures = []
         self.heartbeats = []
+        self.heartbeat_progress = []
         self.capability_registrations = []
         self.tasks = {}
 
@@ -57,8 +58,10 @@ class FakeRuntime:
     def register_capability(self, capability_id, **payload):
         self.capability_registrations.append((capability_id, payload))
 
-    def heartbeat(self, task_id, lease_token, *, attempt_id, fence):
+    def heartbeat(self, task_id, lease_token, *, attempt_id, fence, progress=None):
         self.heartbeats.append((task_id, lease_token, attempt_id, fence))
+        if progress is not None:
+            self.heartbeat_progress.append((task_id, progress))
 
     def task(self, task_id):
         return self.tasks[task_id]
@@ -1700,6 +1703,39 @@ def test_register_and_run_uses_attempt_local_typed_output_and_cleanup(tmp_path):
     assert not list(tmp_path.glob("astrid-attempt-*"))
 
 
+def test_terminal_sidecar_progress_is_heartbeated_before_settlement(tmp_path):
+    manifest_path = _write_manifest(tmp_path / "echo")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["command"]["argv"] = [
+        "{python_exec}",
+        "-c",
+        "import os; from pathlib import Path; Path('{out}/answer.txt').write_text('ok'); Path(os.environ['ASTRID_PROGRESS_PATH']).write_text(__import__('json').dumps(dict(phase='complete', percent=100)))",
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    runtime = FakeRuntime()
+    host = GenericPackHost(pack_roots=[tmp_path], client=runtime)
+    host.discover()
+    host.register()
+    task = {
+        "task": {
+            "id": "task-terminal-progress",
+            "capability": "test.echo",
+            "project_id": "demo",
+            "attempt_id": "attempt-terminal-progress",
+            "fence": 1,
+            "spec": {"spec": {"inputs": {}}},
+        }
+    }
+    runtime.tasks["task-terminal-progress"] = task
+
+    settled = host.run_task(task, lease_token="lease-terminal-progress")
+
+    assert settled["task"]["status"] == "completed"
+    assert runtime.heartbeat_progress == [
+        ("task-terminal-progress", {"phase": "complete", "percent": 100})
+    ]
+
+
 def test_run_does_not_require_a_filesystem_free_space_floor(tmp_path, monkeypatch):
     _write_manifest(tmp_path / "echo")
     runtime = FakeRuntime()
@@ -2009,6 +2045,33 @@ def test_live_storage_counters_tolerate_a_file_vanishing_during_scan(
         return original_stat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", stat_without_vanished)
+    assert counter(root) == len(b"kept")
+
+
+@pytest.mark.parametrize("counter", (_attempt_tree_bytes, _storage_tree_bytes))
+def test_live_storage_counters_tolerate_a_directory_vanishing_during_scan(
+    tmp_path, monkeypatch, counter
+):
+    root = tmp_path / "attempt"
+    root.mkdir()
+    retained = root / "retained.bin"
+    retained.write_bytes(b"kept")
+    vanished_directory = root / ".render-service-fixture"
+    vanished_directory.mkdir()
+
+    original_rglob = Path.rglob
+
+    def rglob_without_vanished_directory(path, pattern):
+        if path != root:
+            return original_rglob(path, pattern)
+
+        def entries():
+            yield retained
+            raise FileNotFoundError(vanished_directory)
+
+        return entries()
+
+    monkeypatch.setattr(Path, "rglob", rglob_without_vanished_directory)
     assert counter(root) == len(b"kept")
 
 

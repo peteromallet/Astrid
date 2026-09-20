@@ -11,14 +11,28 @@ type Params = {
   __astridAssets?: Record<string, string>;
 };
 
+const renderableFile = (file: string | undefined): string | null => {
+  if (!file || !file.trim()) return null;
+  const value = file.trim();
+  if (
+    value.startsWith('http://')
+    || value.startsWith('https://')
+    || value.startsWith('/')
+    || value.startsWith('blob:')
+    || value.startsWith('data:')
+  ) {
+    return value;
+  }
+  return staticFile(value);
+};
+
 export default function FrameOverlay(
   props: ElementComponentProps,
 ): ReactElement | null {
   const params = narrowParams<Params>(props.params);
   const staged = params.__astridAssets ?? {};
-  const src = staged.frame
-    ? staticFile(staged.frame)
-    : staticFile('astrid-effects/frame-overlay/frame.png');
+  const src = renderableFile(staged.frame)
+    ?? staticFile('astrid-effects/frame-overlay/frame.png');
   return (
     <div style={{position: 'absolute', inset: 0, overflow: 'hidden'}}>
       <Img

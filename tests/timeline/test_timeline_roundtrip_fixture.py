@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURE_PATH = REPO_ROOT / "examples" / "hype.timeline.full.json"
 
 _ASTRID_TOP_LEVEL_OVERLAY = frozenset({"app"})
-_ASTRID_CLIP_OVERLAY = frozenset({"shot_id", "shot_occurrence_id", "shot_name"})
+_ASTRID_CLIP_OVERLAY = frozenset({"shot_id", "shot_occurrence_id", "shot_name", "elementRef"})
 
 
 def _load_shared_schema() -> tuple[dict, str] | None:

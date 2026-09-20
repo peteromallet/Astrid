@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""Element catalog facade over the Astrid elements registry."""
+"""Element catalog facade over the Astrid elements registry.
+
+The registry is the authority for executable element definitions.  The small
+descriptor projection below is deliberately data-only so editor hosts can
+discover the same effects, animations, and transitions without importing
+Python or re-implementing pack discovery.
+"""
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -16,6 +25,8 @@ from astrid.core.element.schema import ElementKind
 from astrid.core.foundation.paths import REPO_ROOT, WORKSPACE_ROOT
 
 TOOLS_DIR = REPO_ROOT
+EDITOR_CATALOG_VERSION = 1
+EDITOR_CATALOG_KINDS = ("effects", "animations", "transitions")
 
 
 def effects_root() -> Path:
@@ -77,6 +88,191 @@ def list_element_ids(
     registry = _registry(theme, project_slug=project_slug)
     normalized_kind = registry.element_kind_registry.normalize(kind)
     return [element.id for element in registry.list(kind=normalized_kind)]
+
+
+def list_element_descriptors(
+    kind: ElementKind | None = None,
+    *,
+    project_slug: str | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Return the stable editor-facing projection of the Astrid registry.
+
+    This is intentionally narrower than :class:`ElementDefinition`: absolute
+    filesystem paths and Python objects are not part of the host contract.
+    ``scripts/gen_element_catalog.py`` serializes this projection into the
+    Vite-importable TypeScript catalog consumed by Reigh.
+    """
+
+    registry = _registry(project_slug=project_slug)
+    normalized_kind = (
+        registry.element_kind_registry.normalize(kind)
+        if kind is not None
+        else None
+    )
+    definitions = registry.list(kind=normalized_kind)
+    if normalized_kind is None:
+        definitions = tuple(
+            definition
+            for definition in definitions
+            if definition.kind in EDITOR_CATALOG_KINDS
+        )
+    return tuple(_element_descriptor(definition) for definition in definitions)
+
+
+def _element_descriptor(definition: Any) -> dict[str, Any]:
+    metadata = definition.metadata
+    pack_id = metadata.get("pack_id")
+    if not isinstance(pack_id, str) or not pack_id:
+        pack_id = (
+            definition.source.split(":", 1)[1]
+            if definition.source.startswith("pack:")
+            else definition.source
+        )
+    label = metadata.get("label") or metadata.get("name") or definition.id
+    if not isinstance(label, str):
+        label = definition.id
+    description = definition.description or definition.short_description or ""
+    return {
+        "id": definition.id,
+        "kind": _singular_kind(definition.kind),
+        "label": label,
+        "description": description,
+        "shortDescription": definition.short_description,
+        "keywords": list(definition.keywords),
+        "defaults": _json_value(definition.defaults),
+        "schema": _json_value(definition.schema),
+        "parameters": _parameter_descriptors(definition.schema, definition.defaults),
+        "source": definition.source,
+        "packId": pack_id,
+        # This is a checkout-relative module path, not an absolute filesystem
+        # path. Editor hosts can resolve it through their configured Astrid
+        # source alias without making machine-local paths part of the catalog.
+        "componentPath": _component_path(definition),
+        "revision": _element_revision(definition),
+        "runtime": _json_value(definition.runtime),
+        "renderability": _renderability(definition),
+    }
+
+
+def _component_path(definition: Any) -> str:
+    """Return the stable path used by source-backed editor hosts."""
+
+    source_root = (REPO_ROOT / "astrid").resolve()
+    try:
+        return definition.component.resolve().relative_to(source_root).as_posix()
+    except ValueError:
+        # Registry extensions outside the checkout are still discoverable and
+        # renderable by Astrid, but are not safe to import into a Vite host.
+        return ""
+
+
+def _singular_kind(kind: str) -> str:
+    if kind.endswith("s"):
+        return kind[:-1]
+    return kind
+
+
+def _json_value(value: Any) -> Any:
+    """Copy JSON-shaped manifest data without leaking mutable registry state."""
+
+    return json.loads(json.dumps(value, sort_keys=True))
+
+
+def _parameter_descriptors(schema: Any, defaults: Any) -> list[dict[str, Any]]:
+    """Project the JSON Schema subset understood by the editor inspector."""
+
+    if not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict):
+        return []
+    default_values = defaults if isinstance(defaults, dict) else {}
+    parameters: list[dict[str, Any]] = []
+    for name in sorted(schema["properties"]):
+        property_schema = schema["properties"][name]
+        if not isinstance(property_schema, dict):
+            continue
+        parameter_type = _parameter_type(property_schema)
+        if parameter_type is None:
+            continue
+        parameter: dict[str, Any] = {
+            "name": name,
+            "label": _humanize(name),
+            "description": str(property_schema.get("description") or ""),
+            "type": parameter_type,
+        }
+        if name in default_values and isinstance(default_values[name], (bool, int, float, str)):
+            parameter["default"] = default_values[name]
+        if parameter_type == "number":
+            for source, target in (("minimum", "min"), ("maximum", "max"), ("multipleOf", "step")):
+                value = property_schema.get(source)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    parameter[target] = value
+        enum = property_schema.get("enum")
+        if parameter_type == "select" and isinstance(enum, list):
+            parameter["options"] = [
+                {"label": _humanize(str(option)), "value": str(option)}
+                for option in enum
+                if isinstance(option, (str, int, float)) and not isinstance(option, bool)
+            ]
+        parameters.append(parameter)
+    return parameters
+
+
+def _parameter_type(schema: dict[str, Any]) -> str | None:
+    schema_type = schema.get("type")
+    if schema_type in ("number", "integer"):
+        return "number"
+    if schema_type == "boolean":
+        return "boolean"
+    if schema_type == "string":
+        if isinstance(schema.get("enum"), list):
+            return "select"
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str) and "#" in pattern:
+            return "color"
+    return None
+
+
+def _humanize(value: str) -> str:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+    return spaced.replace("_", " ").replace("-", " ").strip().title()
+
+
+def _element_revision(definition: Any) -> str:
+    """Return a stable revision for the definition and its executable source."""
+
+    digest = hashlib.sha256()
+    payload = definition.to_dict()
+    # Absolute source paths are machine-local and must not affect the public
+    # revision. The component and asset contents are added below instead.
+    payload.pop("root", None)
+    payload.pop("component", None)
+    payload.pop("assets", None)
+    payload["asset_paths"] = {
+        asset.name: asset.path.as_posix()
+        for asset in sorted(definition.assets, key=lambda item: item.name)
+    }
+    digest.update(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    digest.update(b"\0")
+    if definition.component.is_file():
+        digest.update(definition.component.read_bytes())
+    for asset in sorted(definition.assets, key=lambda item: item.name):
+        asset_path = (definition.root / asset.path).resolve()
+        digest.update(asset.name.encode("utf-8"))
+        digest.update(b"\0")
+        if asset_path.is_file():
+            digest.update(asset_path.read_bytes())
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _renderability(definition: Any) -> dict[str, str]:
+    adapter = definition.runtime.get("adapter") if isinstance(definition.runtime, dict) else None
+    supported = adapter == "remotion" and definition.component.is_file()
+    status = "supported" if supported else "unknown"
+    return {
+        "preview": status,
+        "browserExport": status,
+        "workerExport": status,
+    }
 
 
 def _element(

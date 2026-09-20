@@ -237,14 +237,85 @@ def _command_label(command: Any) -> str:
     return str(command)
 
 
+def _local_media_tool(command: Any) -> bool:
+    """Allow only offline ffmpeg/ffprobe descendants with local arguments.
+
+    VibeComfy's VHS video writer legitimately launches ffmpeg after the
+    Python child has connected to the allowlisted Comfy endpoint.  The native
+    descendant hook cannot observe sockets opened by that binary, so permit
+    this narrow, auditable case only when the executable is a media tool and
+    none of its arguments names a URL or a network protocol.  Every other
+    native descendant remains fail-closed behind the broker/OS-owner gate.
+    """
+    if isinstance(command, (str, bytes)):
+        tokens = str(command).split()
+    elif isinstance(command, (list, tuple)):
+        tokens = [str(value) for value in command]
+    else:
+        return False
+    if not tokens:
+        return False
+    executable = Path(tokens[0]).name.lower()
+    if executable not in {"ffmpeg", "ffprobe"}:
+        return False
+    network_prefixes = ("http://", "https://", "rtmp://", "rtsp://", "tcp:", "udp:")
+    return not any(
+        token.lower().startswith(network_prefixes) or "://" in token.lower()
+        for token in tokens[1:]
+    )
+
+
+def _local_identity_tool(command: Any) -> bool:
+    """Allow only read-only Git identity probes used by attestation.
+
+    Managed VibeComfy sessions re-check their already-attested checkout while
+    preparing a run.  Those probes are native descendants, but they never
+    contact a remote: permitting only the exact metadata subcommands keeps the
+    descendant boundary fail-closed for fetch/clone/push and arbitrary Git
+    execution.
+    """
+    if not isinstance(command, (list, tuple)):
+        return False
+    tokens = [str(value) for value in command]
+    if not tokens or Path(tokens[0]).name.lower() != "git":
+        return False
+    # ``git -c key=value`` is a configuration override; ``ls-files -c`` is a
+    # harmless cache selector and is one of the attestation probes below.
+    if len(tokens) > 1 and tokens[1] == "-c":
+        return False
+    if len(tokens) > 1 and any(token.startswith("--config") for token in tokens[1:]):
+        return False
+    # VibeComfy/Astrid use these probes to bind a managed source checkout.
+    allowed = {
+        ("rev-parse", "HEAD"),
+        ("rev-parse", "--show-toplevel"),
+        ("ls-files", "-z", "-c", "-o", "--exclude-standard"),
+        ("status", "--porcelain", "--untracked-files=all"),
+    }
+    # Accept an optional local checkout selector, but never a remote URL.
+    if len(tokens) >= 3 and tokens[1] == "-C":
+        tokens = [tokens[0], *tokens[2:]]
+    return tuple(tokens[1:]) in allowed
+
+
 def _patch_native_descendants(originals: Mapping[tuple[Any, str], Any]) -> None:
     """Fail closed when a Python provider tries to escape via a native child."""
     original_popen = subprocess.Popen
 
     def guarded_popen(*args: Any, **kwargs: Any):
         command = args[0] if args else kwargs.get("args", "")
-        allowed = _validated_descendant_owner()
-        _record("native_descendant", allowed=allowed, detail=_command_label(command))
+        local_media = _local_media_tool(command)
+        local_identity = _local_identity_tool(command)
+        safe_invocation = not bool(kwargs.get("shell")) and not kwargs.get("executable")
+        allowed = safe_invocation and (_validated_descendant_owner() or local_media or local_identity)
+        _record(
+            "native_descendant",
+            allowed=allowed,
+            detail=(
+                "local-media-tool:" if local_media else
+                "local-identity-tool:" if local_identity else ""
+            ) + _command_label(command),
+        )
         if not allowed:
             raise NetworkPolicyError(
                 "network policy denied native descendant; use a validated observable proxy or OS broker"

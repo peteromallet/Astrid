@@ -610,6 +610,7 @@ def test_timelines_parser_has_visualize_and_no_aliases() -> None:
         "create",
         "list",
         "show",
+        "retime-clip",
         "save",
         "replace-clip",
         "archive",
@@ -617,6 +618,7 @@ def test_timelines_parser_has_visualize_and_no_aliases() -> None:
         "history",
         "diff",
         "visualize",
+        "inspect",
         "render",
     )
     assert all(spec.aliases == () for spec in COMMANDS)
@@ -626,6 +628,7 @@ def test_timelines_parser_has_visualize_and_no_aliases() -> None:
         "create",
         "list",
         "show",
+        "retime-clip",
         "save",
         "replace-clip",
         "archive",
@@ -633,6 +636,7 @@ def test_timelines_parser_has_visualize_and_no_aliases() -> None:
         "history",
         "diff",
         "visualize",
+        "inspect",
         "render",
         "shots",
     }
@@ -983,6 +987,145 @@ def test_timelines_show_is_one_sdk_call(capsys) -> None:
     assert rc == 0
     assert client.calls == [("timelines.show", {"project": "demo", "ref": "main"})]
     assert json.loads(capsys.readouterr().out)["data"]["slug"] == "main"
+
+
+def test_timelines_show_summary_is_bounded_and_keeps_clip_timing(capsys) -> None:
+    class _Timelines:
+        def show(self, project, ref):
+            return DomainResult.success({
+                "timeline_id": "T-1",
+                "project_id": "P-1",
+                "slug": ref,
+                "name": "Main",
+                "config_version": 8,
+                "config": {
+                    "tracks": [{"id": "picture", "name": "Picture"}],
+                    "clips": [{
+                        "id": "shot-1",
+                        "track": "picture",
+                        "clipType": "shot",
+                        "at": 1,
+                        "hold": 6,
+                        "params": {"prompt": "must not leak"},
+                    }],
+                },
+                "registry": {"assets": {"secret": {"url": "private"}}},
+            })
+
+    class _Client:
+        timelines = _Timelines()
+
+    rc = _run("timelines", ["show", "--summary", "--project", "demo", "main"], client=_Client())
+    assert rc == 0
+    summary = json.loads(capsys.readouterr().out)["data"]
+    assert summary["kind"] == "timeline-summary"
+    assert summary["config_version"] == 8
+    assert summary["clips"] == [{
+        "id": "shot-1",
+        "track": "picture",
+        "clip_type": "shot",
+        "at": 1.0,
+        "duration": 6.0,
+        "end": 7.0,
+        "hold": 6,
+    }]
+    assert "prompt" not in json.dumps(summary)
+    assert "private" not in json.dumps(summary)
+
+
+def test_timelines_retime_clip_reads_once_and_saves_with_cas(capsys) -> None:
+    class _Timelines:
+        def __init__(self):
+            self.calls = []
+
+        def show(self, project, ref):
+            self.calls.append(("show", project, ref))
+            return DomainResult.success({
+                "config_version": 8,
+                "config": {"clips": [{"id": "shot-1", "at": 0, "hold": 7}]},
+                "registry": {"assets": {}},
+            })
+
+        def save(self, project, ref, **kwargs):
+            self.calls.append(("save", project, ref, kwargs))
+            return DomainResult.success({"config_version": 9})
+
+    class _Client:
+        def __init__(self):
+            self.timelines = _Timelines()
+
+    client = _Client()
+    rc = _run("timelines", [
+        "retime-clip", "--project", "demo", "main", "--clip-id", "shot-1",
+        "--at", "1", "--preserve-end",
+    ], client=client)
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out)["data"]
+    assert result["operation"] == "retime-clip"
+    assert result["clip_id"] == "shot-1"
+    assert result["timing_policy"] == "preserve-end"
+    assert result["before"] == {"at": 0.0, "duration": 7.0, "end": 7.0}
+    assert result["after"] == {"at": 1.0, "duration": 6.0, "end": 7.0}
+    assert result["config_version"] == 9
+    assert client.timelines.calls[0] == ("show", "demo", "main")
+    assert client.timelines.calls[1][0:3] == ("save", "demo", "main")
+    assert client.timelines.calls[1][3]["expected_version"] == 8
+    assert client.timelines.calls[1][3]["config"]["clips"][0] == {
+        "id": "shot-1", "at": 1.0, "hold": 6.0,
+    }
+
+
+def test_timelines_retime_clip_defaults_to_preserve_end(capsys) -> None:
+    class _Timelines:
+        def show(self, project, ref):
+            return DomainResult.success({
+                "config_version": 3,
+                "config": {"clips": [{"id": "clip-1", "at": 2, "hold": 4}]},
+                "registry": {"assets": {}},
+            })
+
+        def save(self, project, ref, **kwargs):
+            assert kwargs["expected_version"] == 3
+            assert kwargs["config"]["clips"][0]["at"] == 3.0
+            assert kwargs["config"]["clips"][0]["hold"] == 3.0
+            return DomainResult.success({"config_version": 4})
+
+    class _Client:
+        timelines = _Timelines()
+
+    rc = _run("timelines", [
+        "retime-clip", "--project", "demo", "main", "--clip-id", "clip-1", "--at", "3",
+    ], client=_Client())
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out)["data"]
+    assert result["timing_policy"] == "preserve-end"
+    assert result["after"] == {"at": 3.0, "duration": 3.0, "end": 6.0}
+
+
+def test_timelines_retime_clip_preserve_duration_is_explicit_slide(capsys) -> None:
+    class _Timelines:
+        def show(self, project, ref):
+            return DomainResult.success({
+                "config_version": 3,
+                "config": {"clips": [{"id": "clip-1", "at": 2, "hold": 4}]},
+                "registry": {"assets": {}},
+            })
+
+        def save(self, project, ref, **kwargs):
+            assert kwargs["config"]["clips"][0] == {"id": "clip-1", "at": 10.0, "hold": 4}
+            return DomainResult.success({"config_version": 4})
+
+    class _Client:
+        timelines = _Timelines()
+
+    rc = _run("timelines", [
+        "retime-clip", "--project", "demo", "main", "--clip-id", "clip-1", "--at", "10",
+        "--preserve-duration",
+    ], client=_Client())
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out)["data"]
+    assert result["timing_policy"] == "preserve-duration"
+    assert result["after"] == {"at": 10.0, "duration": 4.0, "end": 14.0}
 
 
 def test_timelines_save_is_one_sdk_call_with_cas_args(capsys) -> None:

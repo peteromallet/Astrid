@@ -230,6 +230,16 @@ def test_media_command_rejects_before_profile_read_or_scratch_creation(tmp_path)
     assert not output.exists()
 
 
+def test_typed_media_output_enforces_runtime_per_object_limit(tmp_path, monkeypatch) -> None:
+    from astrid.packs.vibecomfy.media import run
+
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"12345")
+    monkeypatch.setattr(run, "RUNTIME_OBJECT_MAX_BYTES", 4)
+    with pytest.raises(RuntimeError, match="per-object limit"):
+        run._assert_runtime_object_size(output, label="typed Vibe output")
+
+
 def test_compilation_is_deterministic_and_rejects_native_wan_confusion() -> None:
     request = WanT2IRequest(prompt="a quiet lake")
     first = compile_wan_2_2_t2i(request)

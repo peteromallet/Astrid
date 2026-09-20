@@ -305,6 +305,53 @@ def test_provision_writes_pod_handle_and_cost(
                 del os.environ["RUNPOD_API_KEY"]
 
 
+def test_provision_forwards_and_persists_allowed_cuda_versions(
+    produces_dir: Path, mock_launch: MagicMock, mock_pod: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from astrid.packs.runpod.executors.provision.run import cmd_provision
+
+    class Args:
+        gpu_type = "NVIDIA GeForce RTX 4090"
+        allowed_cuda_versions = "13.0"
+        storage_name = None
+        max_runtime_seconds = None
+        name_prefix = None
+        image = None
+        container_disk_gb = None
+        volume_in_gb = None
+        volume_mount_path = None
+        datacenter_id = None
+        ports = None
+        require_storage = False
+        produces_dir = produces_dir
+
+    captured: dict[str, object] = {}
+    def config_factory(**kwargs):
+        captured.update(kwargs)
+        return MagicMock(**kwargs)
+
+    monkeypatch.setenv("RUNPOD_API_KEY", "test-key-rpa_0000000000000000000000000000000000000000000000")
+    with patch("runpod_lifecycle.RunPodConfig", side_effect=config_factory), \
+         patch("runpod_lifecycle.launch", mock_launch), \
+         patch("astrid.packs.runpod.executors._common._get_hourly_rate", return_value=0.5):
+        assert cmd_provision(Args(), produces_dir) == 0
+
+    assert captured["allowed_cuda_versions"] == ["13.0"]
+    handle = json.loads((produces_dir / "pod_handle.json").read_text())
+    assert handle["config_snapshot"]["allowed_cuda_versions"] == ["13.0"]
+    resolved = json.loads((produces_dir / "compute_resolved.json").read_text())
+    assert resolved["allowed_cuda_versions"] == ["13.0"]
+
+
+def test_empty_explicit_cuda_filter_fails_before_launch(produces_dir: Path) -> None:
+    from astrid.packs.runpod.executors.provision.run import _resolve_compute_profile
+
+    args = MagicMock()
+    args.allowed_cuda_versions = ",  ,"
+    with pytest.raises(AstridError, match="at least one version"):
+        _resolve_compute_profile(args, produces_dir)
+
+
 def test_provision_storage_required_fails_before_launch_with_ensure_storage_hint(
     produces_dir: Path,
     mock_launch: MagicMock,

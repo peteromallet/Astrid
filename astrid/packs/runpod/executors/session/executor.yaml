@@ -24,6 +24,11 @@
         "optional": true
       },
       {
+        "input": "allowed_cuda_versions",
+        "flag": "--allowed-cuda-versions",
+        "optional": true
+      },
+      {
         "input": "storage_name",
         "flag": "--storage-name",
         "optional": true
@@ -121,6 +126,12 @@
     {
       "description": "GPU type to request (e.g. RTX 4090, A100).",
       "name": "gpu_type",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "description": "Comma-separated CUDA host versions for RunPod placement (e.g. 12.4,12.6).",
+      "name": "allowed_cuda_versions",
       "required": false,
       "type": "string"
     },

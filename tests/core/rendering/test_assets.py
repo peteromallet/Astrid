@@ -7,6 +7,7 @@ import shutil
 import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -79,6 +80,29 @@ def test_path_backed_runtime_object_requires_explicit_materialized_root(tmp_path
         AssetMaterializer(registry, materialized_objects={"media-path": source})
     with AssetMaterializer(registry, materialized_objects={"media-path": source}, materialized_root=root) as materializer:
         assert materializer.assets["main"].local_path.read_bytes() == payload
+
+
+def test_path_backed_runtime_object_can_be_served_without_a_second_copy(
+    tmp_path: Path, server
+) -> None:
+    payload = b"reuse the invocation-owned input"
+    root = tmp_path / "materialized"
+    root.mkdir()
+    source = root / "object.bin"
+    source.write_bytes(payload)
+    registry = _write_registry(tmp_path / "assets.json", object_id="media-path", payload=payload)
+
+    with AssetMaterializer(
+        registry,
+        materialized_objects={"media-path": source},
+        materialized_root=root,
+        reuse_materialized_paths=True,
+    ) as materializer:
+        assert materializer.assets["main"].local_path == source
+        assert not list(materializer.staging_dir.iterdir())
+        with server(materializer.serving_root) as running:
+            resolved = materializer.resolved_registry(running)
+            assert _read(resolved["assets"]["main"]["file"])[2] == payload
 
 
 def test_runtime_object_digest_is_verified_before_staging(tmp_path: Path) -> None:
@@ -169,6 +193,25 @@ def test_asset_server_is_loopback_single_port_and_joins_thread(tmp_path: Path, s
         assert missing.value.code == 404
     assert thread is not None and not thread.is_alive()
     running.close()
+
+
+def test_asset_server_accepts_large_parallel_remotion_burst(tmp_path: Path, server) -> None:
+    staging = tmp_path / "stage"
+    staging.mkdir()
+    asset = staging / "asset.bin"
+    asset.write_bytes(b"asset" * 1024)
+
+    with server(staging) as running:
+        urls = [running.local_url(asset) for _ in range(192)]
+        # Keep client pressure below the OS's own connect burst while still
+        # exercising more requests than the historical 128-entry backlog.
+        with ThreadPoolExecutor(max_workers=64) as pool:
+            responses = list(pool.map(lambda url: _read(url), urls))
+
+        assert all(status == 200 and body == asset.read_bytes() for status, _, body in responses)
+        assert running._server is not None
+        assert running._server.request_queue_size >= 1024
+        assert running._server.daemon_threads is True
 
 
 def test_asset_server_cors_allows_exact_origin_and_denies_near_matches(tmp_path: Path, server) -> None:

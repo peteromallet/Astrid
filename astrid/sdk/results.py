@@ -283,14 +283,85 @@ def _join_managed_generation_outputs(
     payload: Mapping[str, Any],
     managed_outputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Append joined D1 rows without dropping generic manifest outputs."""
+    """Join D1 rows, replacing legacy copies of the same deliverable."""
     normalized = _normalize_generation_payload(payload)
     manifest = normalized.get("manifest")
     normalized_manifest = dict(manifest) if isinstance(manifest, Mapping) else {}
     outputs = normalized_manifest.get("outputs")
     existing_outputs = list(outputs) if isinstance(outputs, list) else []
-    normalized_manifest["outputs"] = [*existing_outputs, *managed_outputs]
+    def identity_details(output: Any) -> dict[str, Any] | None:
+        if not isinstance(output, Mapping):
+            return None
+        association_id = output.get("association_id")
+        name = output.get("output_port", output.get("name"))
+        if name is None:
+            return None
+        digest = output.get("digest") or output.get("content_hash") or ""
+        try:
+            ordinal = int(output["ordinal"]) if "ordinal" in output else None
+        except (TypeError, ValueError):
+            return None
+        selector = output.get("selector")
+        selector = selector if isinstance(selector, Mapping) else {}
+        return {
+            "association_id": str(association_id) if association_id else None,
+            "output_port": str(name),
+            "group_key": output.get("group_key", selector.get("group_key")),
+            "variant_key": output.get("variant_key", selector.get("variant_key")),
+            "ordinal": ordinal,
+            "digest": str(digest),
+        }
+
+    def matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
+        if left["output_port"] != right["output_port"]:
+            return False
+        for field in ("group_key", "variant_key", "ordinal", "digest"):
+            left_value = left[field]
+            right_value = right[field]
+            if left_value is not None and right_value is not None and left_value != right_value:
+                return False
+        return True
+
+    joined = list(existing_outputs)
+    for output in managed_outputs:
+        managed = identity_details(output)
+        if managed is None:
+            joined.append(output)
+            continue
+        if managed["association_id"] and any(
+            (existing := identity_details(item)) is not None
+            and existing["association_id"] == managed["association_id"]
+            for item in joined
+        ):
+            continue
+        legacy_matches = [
+            index
+            for index, item in enumerate(joined)
+            if (existing := identity_details(item)) is not None
+            and existing["association_id"] is None
+            and matches(existing, managed)
+        ]
+        if legacy_matches:
+            # A managed association is the canonical copy of this deliverable;
+            # replace legacy manifest rows so their stale local paths cannot win.
+            joined[legacy_matches[0]] = output
+            for index in reversed(legacy_matches[1:]):
+                del joined[index]
+            continue
+        if any(
+            (existing := identity_details(item)) is not None
+            and existing["association_id"] is not None
+            and matches(existing, managed)
+            for item in joined
+        ):
+            continue
+        joined.append(output)
+    normalized_manifest["outputs"] = joined
     normalized["manifest"] = normalized_manifest
+    # The executor's local spool is removed after Runtime settlement. A
+    # managed row is canonical, but it is not a caller-local materialization.
+    normalized["image_paths"] = []
+    normalized["run_dir"] = None
     return normalized
 
 
@@ -383,7 +454,7 @@ def _reconstruct_generation_result(result: InvocationResult) -> Any:
         raise CapabilityRuntimeError(
             f"generation executor payload {generation_result_key!r} must be a mapping or GenerationResult"
         )
-    if explicit_generation_payload and managed_outputs:
+    if managed_outputs:
         generation_payload = _join_managed_generation_outputs(
             generation_payload,
             managed_outputs,

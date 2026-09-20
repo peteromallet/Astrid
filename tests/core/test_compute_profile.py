@@ -12,6 +12,7 @@ from astrid.core.compute_profile import (
     credential_value,
     load_profile,
     resolve_compute_profile,
+    validate_profile,
     write_resolved_snapshot,
 )
 
@@ -98,3 +99,10 @@ def test_profile_rejects_literal_credentials_and_snapshot_has_only_references(tm
 def test_env_selected_missing_profile_is_an_actionable_error(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="compute profile 'missing'"):
         resolve_compute_profile(env={"ASTRID_COMPUTE_PROFILE": "missing"}, home=tmp_path)
+
+
+def test_allowed_cuda_versions_profile_is_normalized_and_rejects_empty(tmp_path: Path) -> None:
+    valid = validate_profile(_profile("cuda", allowed_cuda_versions="12.4, 12.6"))
+    assert valid["allowed_cuda_versions"] == ["12.4", "12.6"]
+    with pytest.raises(ValueError, match="at least one version"):
+        validate_profile(_profile("empty", allowed_cuda_versions=[]))

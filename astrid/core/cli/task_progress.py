@@ -5,13 +5,14 @@ polls ``client.tasks.show`` and turns changes in that read model into a quiet,
 operator-friendly progress stream.
 """
 
-from __future__ import annotations
-
+import json
 import shlex
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, TextIO
+
+from astrid.sdk.execution_request import execution_binding_from_task, execution_request_from_task
 
 from astrid.sdk.contracts import DomainResult, ErrorObject
 
@@ -226,6 +227,8 @@ def task_observation(
     if not isinstance(attempt_number, int):
         version = task.get("version")
         attempt_number = max(0, version - 1) if isinstance(version, int) else None
+    execution_request = execution_request_from_task(task)
+    execution_binding = execution_binding_from_task(task)
     observation = {
         "kind": kind,
         "task_id": str(task.get("task_id") or task.get("id") or ""),
@@ -241,6 +244,8 @@ def task_observation(
         "attempt_id": attempt_id,
         "attempt_number": attempt_number,
         "waiting_reason": _waiting_reason(task, state),
+        "execution_request": execution_request,
+        "execution_binding": execution_binding,
         "version": task.get("version"),
         "updated_at": task.get("updated_at"),
     }
@@ -257,6 +262,19 @@ def render_observation(observation: Mapping[str, Any]) -> str:
     )
     attempt = observation.get("attempt_id") or "-"
     waiting = observation.get("waiting_reason") or "-"
+    request = observation.get("execution_request")
+    target = request.get("target") if isinstance(request, Mapping) else None
+    target_text = (
+        json.dumps(target, sort_keys=True, separators=(",", ":"))
+        if isinstance(target, Mapping)
+        else "unavailable"
+    )
+    binding = observation.get("execution_binding")
+    binding_text = (
+        json.dumps(binding, sort_keys=True, separators=(",", ":"))
+        if isinstance(binding, Mapping)
+        else "unbound"
+    )
     queue_position = observation.get("queue_position")
     queue = str(queue_position) if isinstance(queue_position, int) else "unavailable"
     progress_percent = observation.get("progress_percent")
@@ -282,6 +300,7 @@ def render_observation(observation: Mapping[str, Any]) -> str:
         f"  phase={observation.get('phase', 'unknown')}  queue={queue}"
         f"  progress={progress}  speed={speed_text}  eta={eta}"
         f"  heartbeat={heartbeat}  attempt={attempt}  waiting={waiting}"
+        f"  target={target_text}  binding={binding_text}"
     )
     return line + (f"\n  unavailable: {'; '.join(unavailable)}" if unavailable else "")
 
@@ -293,6 +312,8 @@ def _change_signature(task: Mapping[str, Any]) -> tuple[Any, ...]:
         task.get("version"),
         task.get("attempt_id"),
         task.get("waiting_reason") or task.get("blocked_reason"),
+        repr(execution_request_from_task(task)),
+        repr(execution_binding_from_task(task)),
         task.get("last_heartbeat_at") or task.get("heartbeat_at") or task.get("updated_at"),
     )
 

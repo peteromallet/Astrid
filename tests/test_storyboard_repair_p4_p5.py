@@ -77,6 +77,27 @@ def test_image_media_is_emitted_as_a_bounded_window() -> None:
     assert "hold" not in no_vo_broll[0]
 
 
+def test_root_static_image_hold_is_valid_for_render_expansion() -> None:
+    config = {
+        "tracks": [{"id": "frame", "kind": "visual"}],
+        "clips": [{
+            "id": "frame-overlay",
+            "at": 0.0,
+            "hold": 5.0,
+            "track": "frame",
+            "clipType": "media",
+            "asset": "frame-overlay",
+        }],
+    }
+    expanded, _ = expand_shot_clips(
+        config,
+        {"assets": {"frame-overlay": {"type": "image"}}},
+        load_timeline=lambda _ref: ({"clips": []}, {"assets": {}}),
+    )
+
+    assert expanded["clips"] == config["clips"]
+
+
 def test_expansion_rejects_unbounded_image_media_before_renderer() -> None:
     config = {
         "clips": [

@@ -8,7 +8,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -17,8 +17,10 @@ import astrid.core.generation.backends.vibecomfy as backend_module
 from astrid.core.generation.backends.vibecomfy import (
     COMFYUI_VERSION,
     VIBECOMFY_ENGINE_REVISION,
+    VIBECOMFY_WARMTH_HINT_ENV,
     CheckoutServerAdapter,
     _validate_checkout_server_url,
+    vibecomfy_warmth_hint,
 )
 from astrid.core.model_catalog.schema import BackendSpec, ModeSpec, ModelEntry
 
@@ -552,6 +554,49 @@ def test_from_host_session_requires_owned_registry_and_binds_hc03(
     assert adapter._bound_fingerprint
 
 
+def test_from_host_session_adopts_only_matching_host_warmth_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _hc03_profile(tmp_path)
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch)
+    session = profile["vibecomfy_session"]
+    exact = profile["verified_facts"]["exact"]
+    hint = vibecomfy_warmth_hint(
+        session_id=str(Path(session["session_dir"])),
+        process_birth_id=session["process_birth_id"],
+        comfy_process_birth_id=session["comfy_process_birth_id"],
+        runtime_instance_id=RUNTIME_A,
+        model_id="z-image",
+        model_bytes_digest=exact["model_digest"],
+        facts_digest=profile["verified_facts_digest"],
+        source_revision=session["source_revision"],
+        source_content_digest=session["source_content_digest"],
+        config_digest=session["config_digest"],
+    )
+    monkeypatch.setenv(VIBECOMFY_WARMTH_HINT_ENV, hint)
+    adapter = CheckoutServerAdapter.from_host_session(
+        hc03_profile=profile,
+        model_id="z-image",
+        template_id="different-compatible-workflow",
+        invocation_identity="task-2",
+    )
+
+    assert adapter._engine.warm is False
+    assert adapter._engine.last_warm_reused is False
+    assert adapter._engine._retention_hint is not None
+    adapter._revalidate_host_session = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    prepared = adapter.warm_session(
+        adapter._bound_fingerprint,
+        adapter._bound_warmth_identity,
+        runtime_instance_id=RUNTIME_A,
+        model_bytes_digest=exact["model_digest"],
+    )
+    assert prepared["retention_permitted"] is True
+    assert prepared["warm_reused"] is False
+
+
 def test_from_host_session_rejects_reachability_without_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -589,8 +634,15 @@ def test_run_compiled_workflow_uses_bundle_and_private_output_custody(
     vibecomfy = pytest.importorskip("vibecomfy")
     from vibecomfy.workflow import VibeWorkflow, WorkflowSource
     import vibecomfy.workflow_bundle as workflow_bundle
-
     profile = _hc03_profile(tmp_path)
+    class _TargetSchema:
+        def refresh(self) -> dict[str, object]:
+            return {}
+
+    target_schema_module = types.ModuleType("vibecomfy.schema")
+    target_schema_module.get_target_schema_provider = lambda **_: _TargetSchema()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vibecomfy.schema", target_schema_module)
+
     output_root = tmp_path / "outputs"
     monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
     _patch_remote_open(monkeypatch, output=b"artifact")
@@ -619,7 +671,7 @@ def test_run_compiled_workflow_uses_bundle_and_private_output_custody(
     adapter._run_workflow = Mock(return_value=SimpleNamespace(metadata_path=metadata_path))  # type: ignore[method-assign]
     generated = adapter.run_compiled_workflow(workflow, output_root / "task-1")
     bundle.require_canonical_authority.assert_called_once_with("checkout_server execution")
-    bundle.compile.assert_called_once_with()
+    bundle.compile.assert_called_once_with(schema_provider=ANY, models_root=None)
     assert generated[0].read_bytes() == b"artifact"
 
 
@@ -629,8 +681,15 @@ def test_run_compiled_workflow_accepts_canonical_bundle_loader_result(
     pytest.importorskip("vibecomfy")
     from vibecomfy.workflow import VibeWorkflow, WorkflowSource
     from vibecomfy.workflow_bundle import WorkflowBundle
-
     profile = _hc03_profile(tmp_path)
+    class _TargetSchema:
+        def refresh(self) -> dict[str, object]:
+            return {}
+
+    target_schema_module = types.ModuleType("vibecomfy.schema")
+    target_schema_module.get_target_schema_provider = lambda **_: _TargetSchema()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vibecomfy.schema", target_schema_module)
+
     output_root = tmp_path / "outputs"
     monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
     _patch_remote_open(monkeypatch, output=b"artifact")
@@ -670,7 +729,7 @@ def test_run_compiled_workflow_accepts_canonical_bundle_loader_result(
     bundle.require_canonical_authority.assert_called_once_with(
         "checkout_server execution"
     )
-    bundle.compile.assert_called_once_with()
+    bundle.compile.assert_called_once_with(schema_provider=ANY, models_root=None)
     assert generated[0].read_bytes() == b"artifact"
 
 

@@ -607,7 +607,24 @@ class WorkspaceClient:
         spec: Mapping[str, Any] | None = None,
         generation_intent: Mapping[str, Any] | None = None,
         storage_estimate: Mapping[str, int] | None = None,
+        required_facts: Mapping[str, Any] | None = None,
+        execution_request: Mapping[str, Any] | None = None,
     ) -> Any:
+        """Admit one task while carrying optional target metadata.
+
+        ``execution_request`` is a client-owned extension until the runtime
+        schema grows a first-class field.  The existing runtime transport
+        persists the request in the task spec envelope, so show/restart paths
+        retain it; scheduler enforcement remains a runtime-owner concern.
+        """
+        wire_spec = dict(spec or {})
+        if execution_request is not None:
+            from .execution_request import normalize_execution_request
+
+            normalized = normalize_execution_request(execution_request)
+            if normalized is None:
+                raise ValueError("execution_request must not normalize to null")
+            wire_spec["execution_request"] = normalized
         return self._call_generated(
             "admit_task",
             capability_id=capability_id,
@@ -617,9 +634,10 @@ class WorkspaceClient:
             schema_version=schema_version,
             settlement_effect=settlement_effect,
             project_id=project_id,
-            spec=spec,
+            spec=wire_spec if execution_request is not None else spec,
             generation_intent=generation_intent,
             storage_estimate=storage_estimate,
+            required_facts=required_facts,
         )
 
     def get_task(self, task_id: str) -> Any:

@@ -2,9 +2,10 @@
 
 PROTOCOL = "workspace.v1"
 COMPONENT_MANIFEST_SHA256 = 'sha256:dc91a45390f33582f0299f81285d165128e1885a9fd62b4ccffa7b8e465ed63a'
-SCHEMA_DIGEST = 'sha256:e64d2bd291f7e746d66cc688e673ee98dd240117e42131dbcde613080993c2d4'
+SCHEMA_DIGEST = 'sha256:e3fdf36ffed8deb2f6bdf2f4b470d9cba88b3327ebf6f079d95d8cf53dd351db'
 OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listManagedOutputs', 'getManagedOutput', 'adoptManagedOutput', 'getProjectObjectLocation', 'exportManagedOutput', 'updateManagedOutputLifecycle', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
 
-# Astrid provenance: generated.py and __init__.py are byte-identical to this commit.
+# Astrid provenance: generated.py and this metadata file are synchronized with
+# the Runtime contract at the current checkout revision.
 SOURCE_REPOSITORY = "https://github.com/banodoco/banodoco-workspace-runtime.git"
-SOURCE_COMMIT = "90f4a9f22764bc66fa8b30d7d9081c6ac6307328"
+SOURCE_COMMIT = "46e413c31cfeb2f64546e50e22500cfce80e989a"

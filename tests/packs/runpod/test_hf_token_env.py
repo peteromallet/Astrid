@@ -94,3 +94,27 @@ def test_load_handle_and_config_resolves_runpod_key_from_shared_file(monkeypatch
     assert handle["pod_id"] == "pod-test"
     assert config.kwargs["api_key"] == "shared-runpod-key"
     assert "shared-runpod-key" not in handle_path.read_text(encoding="utf-8")
+
+
+def test_load_handle_and_config_rehydrates_allowed_cuda_versions(monkeypatch, tmp_path: Path) -> None:
+    class FakeRunPodConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_module = types.ModuleType("runpod_lifecycle")
+    fake_module.RunPodConfig = FakeRunPodConfig
+    monkeypatch.setitem(sys.modules, "runpod_lifecycle", fake_module)
+    monkeypatch.setenv("RUNPOD_API_KEY", "rp_test_key")
+    handle_path = tmp_path / "pod_handle.json"
+    handle_path.write_text(json.dumps({
+        "pod_id": "pod-test",
+        "gpu_type": "NVIDIA A40",
+        "config_snapshot": {
+            "api_key_ref": "RUNPOD_API_KEY",
+            "container_disk_in_gb": 200,
+            "allowed_cuda_versions": ["13.0"],
+        },
+    }), encoding="utf-8")
+
+    _handle, config = runpod_run._load_handle_and_config(handle_path)
+    assert config.kwargs["allowed_cuda_versions"] == ["13.0"]

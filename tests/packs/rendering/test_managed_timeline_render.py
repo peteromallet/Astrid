@@ -279,6 +279,56 @@ def test_snapshot_validation_rejects_missing_registry_asset() -> None:
         validate_managed_render_snapshot(_snapshot(runtime))
 
 
+def test_snapshot_validation_accepts_revision_pinned_astrid_element() -> None:
+    from astrid.core.element import catalog as element_catalog
+
+    descriptor = next(item for item in element_catalog.list_element_descriptors() if item["kind"] == "effect")
+    runtime = _Runtime()
+    runtime.timeline["config"] = {
+        "tracks": [{"id": "visual", "kind": "visual", "label": "Visual"}],
+        "clips": [{
+            "id": "overlay",
+            "at": 0,
+            "hold": 1,
+            "track": "visual",
+            "clipType": descriptor["id"],
+            "elementRef": {
+                "id": descriptor["id"],
+                "kind": "effect",
+                "revision": descriptor["revision"],
+            },
+        }],
+    }
+    validate_managed_render_snapshot(_snapshot(runtime))
+
+
+def test_snapshot_validation_rejects_stale_or_draft_pinned_element() -> None:
+    from astrid.core.element import catalog as element_catalog
+
+    descriptor = next(item for item in element_catalog.list_element_descriptors() if item["kind"] == "effect")
+    runtime = _Runtime()
+    base_clip = {
+        "id": "overlay",
+        "at": 0,
+        "hold": 1,
+        "track": "visual",
+        "clipType": descriptor["id"],
+    }
+    runtime.timeline["config"] = {
+        "tracks": [{"id": "visual", "kind": "visual", "label": "Visual"}],
+        "clips": [{**base_clip, "elementRef": {"id": descriptor["id"], "kind": "effect", "revision": "sha256:stale"}}],
+    }
+    with pytest.raises(ManagedRenderValidationError, match="stale revision"):
+        validate_managed_render_snapshot(_snapshot(runtime))
+
+    runtime.timeline["config"]["clips"] = [{
+        **base_clip,
+        "elementRef": {"id": descriptor["id"], "kind": "effect", "revision": "draft-local"},
+    }]
+    with pytest.raises(ManagedRenderValidationError, match="preview-only"):
+        validate_managed_render_snapshot(_snapshot(runtime))
+
+
 def _render_clock() -> dict[str, object]:
     return {
         "authored_duration_frames": 8910,

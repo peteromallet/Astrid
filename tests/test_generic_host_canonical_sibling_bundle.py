@@ -110,12 +110,13 @@ def test_host_child_rejects_modified_canonical_member_before_launch(
 
     monkeypatch.setattr(production_engine, "load_workflow_path", fake_loader)
     inputs = {"workflow": "", **members}
-    host_identity, model_id, template_id = _prepare_vibecomfy_execution_identity(
+    host_identity, model_id, template_id, session_requirements = _prepare_vibecomfy_execution_identity(
         inputs,
         tmp_path / "host-attempt",
         None,
     )
     assert (model_id, template_id) == ("vibecomfy", "fixture-workflow")
+    assert session_requirements["model_id"] == "vibecomfy"
 
     members["source"].write_bytes(b'{"nodes":[{"id":1}],"links":[]}\n')
     launch = Mock()

@@ -7,8 +7,8 @@ import pytest
 from astrid.core._shared.result_manifest import harvest_staged_outputs
 from astrid.core.contracts.schema import Output
 from astrid.core.execution.generic_host import GenericPackHost, HostError
-from astrid.sdk.invocation import _generation_publish_effect, _kernel_invoke
-from astrid.sdk.results import Capability
+from astrid.sdk.invocation import _automatic_generation_intent, _generation_publish_effect, _kernel_invoke
+from astrid.sdk.results import Capability, _join_managed_generation_outputs
 
 
 def _capability() -> Capability:
@@ -126,6 +126,116 @@ def test_effect_resolves_each_real_sdk_modality_port_and_excludes_extras() -> No
         }
         effect = _generation_publish_effect(capability, project="project-1", generation_intent=intent)
         assert effect["payload"]["groups"][0]["selectors"][0]["output_port"] == port
+
+
+def test_effect_uses_typed_specialized_output_ports() -> None:
+    for capability_id, modality, port, artifact in (
+        ("fal.fal_foley", "audio", "audio", "audio"),
+        ("fal.h3_video", "video", "generated_videos", "video/clip"),
+        ("vibecomfy.character_animation", "video", "animated_video", "video"),
+        ("vibecomfy.video_enhance", "video", "enhanced_video", "video"),
+    ):
+        capability = Capability(
+            id=capability_id,
+            capability_type="executor",
+            native_kind="executor",
+            handle=SimpleNamespace(),
+            outputs=(Output(name=port, type="file", artifact_type=artifact),),
+        )
+        effect = _generation_publish_effect(
+            capability,
+            project="project-1",
+            generation_intent={
+                "version": 1,
+                "modality": modality,
+                "partial_success_policy": "reject",
+                "groups": [{"group_key": "main", "selectors": [{"selector": "main-0", "ordinal": 0, "variant_key": "original"}]}],
+            },
+        )
+        assert effect["payload"]["groups"][0]["selectors"][0]["output_port"] == port
+
+
+def test_automatic_generation_intent_is_bounded_and_leaves_opaque_prompt_files_explicit() -> None:
+    assert _automatic_generation_intent(
+        _capability(), {}, modality="video"
+    ) == {
+        "version": 1,
+        "modality": "video",
+        "partial_success_policy": "reject",
+        "groups": [{
+            "group_key": "main",
+            "selectors": [{
+                "selector": "main-0",
+                "ordinal": 0,
+                "variant_key": "original",
+                "required": True,
+            }],
+        }],
+    }
+    openai = SimpleNamespace(id="generation.generate_image_openai", capability_type="executor", inputs=())
+    assert _automatic_generation_intent(openai, {}, modality="image") is None
+    generic = SimpleNamespace(id="vibecomfy.run", capability_type="executor", inputs=())
+    assert _automatic_generation_intent(generic, {}, modality=None) is None
+
+
+def test_generic_vibe_explicit_intent_uses_its_single_untyped_file_output() -> None:
+    capability = Capability(
+        id="vibecomfy.run",
+        capability_type="executor",
+        native_kind="executor",
+        handle=SimpleNamespace(),
+        outputs=(
+            Output(name="rendered", type="file", artifact_type=None),
+            Output(name="result_manifest", type="file", artifact_type=None),
+        ),
+    )
+    effect = _generation_publish_effect(
+        capability,
+        project="project-1",
+        generation_intent={
+            "version": 1,
+            "modality": "image",
+            "partial_success_policy": "reject",
+            "groups": [{
+                "group_key": "main",
+                "selectors": [{
+                    "selector": "main-0",
+                    "ordinal": 0,
+                    "variant_key": "original",
+                }],
+            }],
+        },
+    )
+    assert effect["payload"]["groups"][0]["selectors"][0]["output_port"] == "rendered"
+
+
+def test_managed_generation_join_deduplicates_and_removes_staging_paths() -> None:
+    row = _managed_output("generation-1")
+    payload = {
+        "image_paths": ["/tmp/astrid-attempt-dead/outputs/generated.mp4"],
+        "run_dir": "/tmp/astrid-attempt-dead",
+        "manifest": {"outputs": [dict(row)]},
+    }
+    joined = _join_managed_generation_outputs(payload, [dict(row)])
+    assert len(joined["manifest"]["outputs"]) == 1
+    assert joined["image_paths"] == []
+    assert joined["run_dir"] is None
+
+
+def test_managed_generation_join_replaces_legacy_copy_with_canonical_row() -> None:
+    row = _managed_output("generation-1")
+    legacy = {
+        "name": "generated_videos",
+        "ordinal": 0,
+        "content_hash": row["digest"],
+        "path": "/tmp/astrid-attempt-dead/outputs/generated.mp4",
+    }
+    joined = _join_managed_generation_outputs(
+        {"manifest": {"outputs": [legacy, dict(legacy)]}},
+        [dict(row)],
+    )
+    assert joined["manifest"]["outputs"] == [row]
+    assert "path" not in joined["manifest"]["outputs"][0]
 
 
 def _host_record() -> SimpleNamespace:

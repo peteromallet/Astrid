@@ -22,6 +22,8 @@ from astrid.core.contracts.binding import (
     expand_command,
 )
 
+from .execution_request import ExecutionRequest, ExecutionRequestError, normalize_execution_request
+
 from ._module import _sdk_module
 from .exceptions import (
     AstridSDKError,
@@ -1290,6 +1292,15 @@ def _invocation_outputs(
     payload = raw_result.get("payload")
     if isinstance(payload, Mapping) and isinstance(payload.get("outputs"), Mapping):
         outputs.update(payload["outputs"])
+    managed_outputs = raw_result.get("managed_outputs")
+    if isinstance(managed_outputs, list):
+        # These rows are Runtime-owned identities and remain valid after the
+        # private attempt spool is removed. Do not substitute their filenames
+        # with local paths; callers can request explicit materialization.
+        outputs["managed_outputs"] = [
+            _json_safe(item) for item in managed_outputs
+            if isinstance(item, Mapping)
+        ]
     if manifest_path is not None:
         manifest = Path(manifest_path)
         try:
@@ -1443,12 +1454,14 @@ def _validate_generation_intent(
         seen_ordinals: set[int] = set()
         seen_variant_keys: set[str] = set()
         for selector_index, selector in enumerate(selectors):
-            if not isinstance(selector, Mapping) or set(selector) != {
+            if not isinstance(selector, Mapping) or not {
                 "selector", "ordinal", "variant_key"
+            }.issubset(selector) or set(selector) - {
+                "selector", "ordinal", "variant_key", "required"
             }:
                 raise CapabilityValidationError(
                     f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
-                    "must contain exactly selector, ordinal, and variant_key"
+                    "must contain selector, ordinal, variant_key, and optional required"
                 )
             selector_name = selector["selector"]
             ordinal = selector["ordinal"]
@@ -1468,6 +1481,12 @@ def _validate_generation_intent(
                     f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
                     "variant_key must be non-empty"
                 )
+            required = selector.get("required", False)
+            if not isinstance(required, bool):
+                raise CapabilityValidationError(
+                    f"generation_intent.groups[{group_index}].selectors[{selector_index}] "
+                    "required must be a boolean"
+                )
             if ordinal in seen_ordinals:
                 raise CapabilityValidationError(
                     f"generation_intent group {group_key!r} has duplicate ordinal {ordinal}"
@@ -1479,13 +1498,14 @@ def _validate_generation_intent(
                 )
             seen_ordinals.add(ordinal)
             seen_variant_keys.add(variant_key)
-            copied_selectors.append(
-                {
-                    "selector": selector_name,
-                    "ordinal": ordinal,
-                    "variant_key": variant_key,
-                }
-            )
+            copied_selector = {
+                "selector": selector_name,
+                "ordinal": ordinal,
+                "variant_key": variant_key,
+            }
+            if "required" in selector:
+                copied_selector["required"] = required
+            copied_selectors.append(copied_selector)
         copied_groups.append({"group_key": group_key, "selectors": copied_selectors})
 
     return {
@@ -1504,7 +1524,106 @@ def _generation_capability_modality(capability_id: str) -> str | None:
         return "video"
     if capability_id.startswith("generation.generate_audio"):
         return "audio"
+    if capability_id in {"wan2gp.generate_video", "fal.h3_video", "vibecomfy.character_animation", "vibecomfy.video_enhance"}:
+        return "video"
+    if capability_id == "fal.fal_foley":
+        return "audio"
     return None
+
+
+def _generation_primary_output_port(capability: Any, modality: str) -> str:
+    """Resolve the single published file port for a typed generation route."""
+    expected = {
+        "image": "generated_images",
+        "video": "generated_videos",
+        "audio": "generated_audio",
+    }[modality]
+    declared_outputs = getattr(capability, "outputs", None)
+    if not declared_outputs:
+        definition = getattr(capability, "definition", None)
+        declared_outputs = (
+            definition.get("outputs", ())
+            if isinstance(definition, Mapping)
+            else getattr(definition, "outputs", ())
+        )
+
+    def output_field(output: Any, field: str) -> Any:
+        if isinstance(output, Mapping):
+            return output.get(field)
+        return getattr(output, field, None)
+
+    candidates = [
+        str(output_field(output, "name"))
+        for output in declared_outputs or ()
+        if output_field(output, "type") == "file"
+        and not str(output_field(output, "name") or "").endswith("_manifest")
+        and output_field(output, "artifact_type")
+    ]
+    if candidates.count(expected) == 1:
+        return expected
+    if len(candidates) == 1:
+        return candidates[0]
+    untyped_candidates = [
+        str(output_field(output, "name"))
+        for output in declared_outputs or ()
+        if output_field(output, "type") == "file"
+        and not str(output_field(output, "name") or "").endswith("_manifest")
+    ]
+    if len(untyped_candidates) == 1:
+        return untyped_candidates[0]
+    raise CapabilityValidationError(
+        f"generation capability must declare exactly one primary {modality!r} output"
+    )
+
+
+def _automatic_generation_intent(
+    capability: Any,
+    inputs: Mapping[str, Any],
+    *,
+    modality: str | None,
+) -> dict[str, Any] | None:
+    """Build a bounded default publication declaration for typed routes.
+
+    Routes whose output cardinality comes from an opaque prompt file are left
+    opt-in: admission cannot safely invent their selector set. Typed routes
+    with a declared count, or a single fixed output, can use the canonical
+    settlement path without requiring every caller to hand-compose D1 JSON.
+    """
+    if modality is None or getattr(capability, "capability_type", None) != "executor":
+        return None
+    capability_id = str(getattr(capability, "id", ""))
+    if capability_id == "generation.generate_image_openai":
+        return None
+
+    count_value: Any = inputs.get("count")
+    if count_value is None:
+        for port in getattr(capability, "inputs", ()) or ():
+            if getattr(port, "name", None) == "count":
+                count_value = getattr(port, "default", None)
+                break
+    if count_value is None:
+        count = 1
+    else:
+        try:
+            count = int(count_value)
+        except (TypeError, ValueError):
+            return None
+        if count < 1 or count > 128:
+            return None
+    selectors = []
+    for ordinal in range(count):
+        selectors.append({
+            "selector": f"main-{ordinal}",
+            "ordinal": ordinal,
+            "variant_key": "original" if ordinal == 0 else f"variant-{ordinal}",
+            "required": True,
+        })
+    return {
+        "version": 1,
+        "modality": modality,
+        "partial_success_policy": "reject",
+        "groups": [{"group_key": "main", "selectors": selectors}],
+    }
 
 
 def _generation_publish_effect(
@@ -1519,36 +1638,7 @@ def _generation_publish_effect(
             "generation publication requires a project-scoped task"
         )
     modality = generation_intent["modality"]
-    expected_port = {
-        "image": "generated_images",
-        "video": "generated_videos",
-        "audio": "generated_audio",
-    }[modality]
-    declared_outputs = getattr(capability, "outputs", None)
-    if not declared_outputs:
-        definition = getattr(capability, "definition", None)
-        if isinstance(definition, Mapping):
-            declared_outputs = definition.get("outputs", ())
-        else:
-            declared_outputs = getattr(definition, "outputs", ())
-
-    def output_field(output: Any, field: str) -> Any:
-        if isinstance(output, Mapping):
-            return output.get(field)
-        return getattr(output, field, None)
-
-    matching_ports = [
-        output_field(output, "name")
-        for output in declared_outputs
-        if output_field(output, "name") == expected_port
-        and output_field(output, "type") == "file"
-        and not str(output_field(output, "name") or "").endswith("_manifest")
-        and output_field(output, "artifact_type")
-    ]
-    if matching_ports != [expected_port]:
-        raise CapabilityValidationError(
-            f"generation capability must declare exactly one primary {expected_port!r} output"
-        )
+    output_port = _generation_primary_output_port(capability, modality)
     groups = []
     for group in generation_intent["groups"]:
         groups.append({
@@ -1558,7 +1648,8 @@ def _generation_publish_effect(
                     "selector": selector["selector"],
                     "ordinal": selector["ordinal"],
                     "variant_key": selector["variant_key"],
-                    "output_port": expected_port,
+                    "output_port": output_port,
+                    **({"required": selector["required"]} if "required" in selector else {}),
                 }
                 for selector in group["selectors"]
             ],
@@ -1588,6 +1679,7 @@ def _kernel_invoke(
     idempotency_context: Mapping[str, Any] | None = None,
     admission_metadata: Mapping[str, Any] | None = None,
     generation_intent: Mapping[str, Any] | None = None,
+    execution_request: Mapping[str, Any] | None = None,
     storage_estimate: Mapping[str, int] | None = None,
     registry: Any | None = None,
     _client: Any | None = None,
@@ -1630,6 +1722,8 @@ def _kernel_invoke(
         # Keep the transparent estimate out of capability inputs: it is task
         # admission evidence, not an executor-authored input.
         spec["admission_metadata"] = _json_safe_mapping(dict(admission_metadata))
+    if execution_request is not None:
+        spec["execution_request"] = dict(execution_request)
     # Managed renders authorize their snapshot registry media at admission:
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
@@ -1800,6 +1894,8 @@ def _kernel_invoke(
         admission["settlement_effect"] = _generation_publish_effect(
             capability, project=project, generation_intent=generation_intent
         )
+    if execution_request is not None:
+        admission["execution_request"] = dict(execution_request)
     result = create_task(**admission)
     result_ok = bool(getattr(result, "ok", isinstance(result, Mapping)))
     data = getattr(result, "data", result if isinstance(result, Mapping) else None)
@@ -2009,6 +2105,7 @@ def invoke(
     out: Path | str | None = None,
     project: str | None = None,
     inputs: Mapping[str, Any] | None = None,
+    execution_request: ExecutionRequest | Mapping[str, Any] | None = None,
     outputs: Mapping[str, Any] | None = None,
     brief: Path | str | None = None,
     dry_run: bool = False,
@@ -2023,6 +2120,10 @@ def invoke(
     timeout_seconds: float = 3600.0,
     poll_seconds: float = 1.0,
 ) -> InvocationResult:
+    try:
+        normalized_execution_request = normalize_execution_request(execution_request)
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
     _client = client
     sdk_module = _sdk_module()
     include_elements = kind == "element"
@@ -2045,26 +2146,42 @@ def invoke(
     if capability.capability_type == "element":
         raise UnsupportedCapabilityError(f"elements are not invokable via the SDK: {capability.id}")
 
-    generation_modalities = {
-        "generation.generate_image": "image",
-        "generation.generate_video": "video",
-        "generation.generate_audio": "audio",
-    }
-    modality = generation_modalities.get(capability.id)
     intent_modality = _generation_capability_modality(str(capability.id))
     request_inputs = dict(inputs or {})
     generation_intent: dict[str, Any] | None = None
     if "generation_intent" in request_inputs:
-        if intent_modality is None:
+        if intent_modality is None and capability.id != "vibecomfy.run":
             raise CapabilityValidationError(
                 "generation_intent is only accepted for generation capabilities"
             )
+        if intent_modality is None:
+            raw_intent = request_inputs["generation_intent"]
+            intent_modality = (
+                raw_intent.get("modality")
+                if isinstance(raw_intent, Mapping)
+                else None
+            )
+            if intent_modality not in {"image", "video", "audio"}:
+                raise CapabilityValidationError(
+                    "vibecomfy.run generation_intent must declare image, video, or audio modality"
+                )
         generation_intent = _validate_generation_intent(
             request_inputs["generation_intent"],
             modality=intent_modality,
         )
         # Intent is admission metadata, not an executor-facing input port.
         request_inputs.pop("generation_intent")
+    elif not dry_run:
+        generation_intent = _automatic_generation_intent(
+            capability,
+            request_inputs,
+            modality=intent_modality,
+        )
+        if intent_modality is not None and generation_intent is None:
+            raise CapabilityValidationError(
+                f"{capability.id} requires explicit generation_intent because its "
+                "output cardinality is not safely inferable at admission"
+            )
 
     if isinstance(project, str) and not project.strip():
         project = None
@@ -2186,6 +2303,11 @@ def invoke(
     # and live invocation.  This keeps generic ``sdk.invoke`` from accepting
     # an impossible model/mode/backend cell (or FLF request missing its end
     # frame) and discovering the problem only after kernel admission.
+    modality = {
+        "generation.generate_image": "image",
+        "generation.generate_video": "video",
+        "generation.generate_audio": "audio",
+    }.get(str(capability.id))
     if modality is not None:
         model_registry = sdk_module._load_model_registry(
             project_root=project_root,
@@ -2307,6 +2429,8 @@ def invoke(
         }
         if generation_intent is not None:
             kernel_kwargs["generation_intent"] = generation_intent
+        if normalized_execution_request is not None:
+            kernel_kwargs["execution_request"] = normalized_execution_request
         if registry is not None:
             kernel_kwargs["registry"] = registry
         kr, kt, ka, mpath, raw_result, ok, _ = _kernel_invoke(
@@ -2323,7 +2447,7 @@ def invoke(
                 poll_seconds=poll_seconds,
                 read_managed_outputs=(
                     capability.capability_type == "executor"
-                    and capability.id.startswith("generation.generate_")
+                    and intent_modality is not None
                 ),
             )
             if waited_attempt_id:

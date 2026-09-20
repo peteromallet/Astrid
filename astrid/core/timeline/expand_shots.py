@@ -112,7 +112,12 @@ def expand_shot_clips(
                     "explicit from/to source bounds"
                 )
 
-    _reject_unbounded_stills(clips)
+    # Root-level image holds are valid static visual overlays. The FFmpeg
+    # backend explicitly supports them (for example, a full-frame transparent
+    # frame layer) and their authored `hold` already provides the timeline
+    # duration. The stricter bounded-window rule applies to stills inside a
+    # shot sub-document, where expansion must preserve source-window
+    # semantics before flattening the child into the parent render snapshot.
 
     shot_ordinal = 0
     for clip in clips:

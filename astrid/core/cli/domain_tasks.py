@@ -52,6 +52,8 @@ from typing import Any
 from astrid.core.cli.domain_output import print_result
 from astrid.core.cli.registration import CommandSpec, register_product_commands
 from astrid.core.cli.task_progress import follow_task, task_handoff
+from astrid.sdk.execution_request import ExecutionRequestError, normalize_execution_request
+
 from astrid.sdk.contracts import DomainResult
 
 __all__ = ["COMMANDS", "build_parser"]
@@ -83,6 +85,20 @@ def _parse_json_array(value: str) -> list[Any]:
     if not isinstance(parsed, list):
         raise argparse.ArgumentTypeError("must be a JSON array")
     return parsed
+
+def _parse_execution_request(value: str) -> dict[str, Any]:
+    """Parse and normalize one target-aware execution request."""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid execution request: {exc.msg}") from exc
+    try:
+        normalized = normalize_execution_request(parsed)
+    except ExecutionRequestError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    if normalized is None:
+        raise argparse.ArgumentTypeError("execution request must be an object")
+    return normalized
 
 
 def _positive_float(value: str) -> float:
@@ -126,13 +142,16 @@ def _add_project_arg(subparser: argparse.ArgumentParser) -> None:
 
 
 def _cmd_create(parsed: argparse.Namespace) -> int:
-    result = parsed.client.tasks.create(
-        project_id=parsed.project,
-        capability=parsed.capability,
-        spec=parsed.spec,
-        input_manifest=parsed.input_manifest,
-        idempotency_key=parsed.idempotency_key,
-    )
+    kwargs = {
+        "project_id": parsed.project,
+        "capability": parsed.capability,
+        "spec": parsed.spec,
+        "input_manifest": parsed.input_manifest,
+        "idempotency_key": parsed.idempotency_key,
+    }
+    if parsed.execution_request is not None:
+        kwargs["execution_request"] = parsed.execution_request
+    result = parsed.client.tasks.create(**kwargs)
     if result.ok and isinstance(result.data, dict):
         data = dict(result.data)
         task_id = str(data.get("task_id") or data.get("id") or "")
@@ -255,6 +274,16 @@ def _configure_create(subparser: argparse.ArgumentParser) -> None:
         type=_parse_json_array,
         default=None,
         help="Optional input manifest as a JSON array.",
+    )
+    subparser.add_argument(
+        "--execution-request",
+        dest="execution_request",
+        type=_parse_execution_request,
+        default=None,
+        help=(
+            "Target-aware execution request JSON. The target must be exactly "
+            "one of default, profile, machine, or runpod."
+        ),
     )
     _add_idempotency_key(subparser)
     _add_json_flag(subparser)

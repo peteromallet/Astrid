@@ -27,6 +27,76 @@ def test_execution_identity_digest_is_stable_and_model_bound() -> None:
     )
 
 
+def test_session_identity_ignores_workflow_identity_but_binds_model_bytes() -> None:
+    first = production_engine.session_identity_digest(
+        "model-a", model_digest="sha256:" + "a" * 64
+    )
+    same_model_other_workflow = production_engine.session_identity_digest(
+        "model-a", model_digest="sha256:" + "a" * 64
+    )
+    changed_model = production_engine.session_identity_digest(
+        "model-b", model_digest="sha256:" + "a" * 64
+    )
+    changed_bytes = production_engine.session_identity_digest(
+        "model-a", model_digest="sha256:" + "b" * 64
+    )
+
+    assert same_model_other_workflow == first
+    assert changed_model != first
+    assert changed_bytes != first
+
+
+def test_session_identity_binds_verified_auxiliary_runtime_and_config_identity() -> None:
+    base = {
+        "verified_facts_digest": "sha256:" + "1" * 64,
+        "runtime_instance_id": "runtime-a",
+        "source_revision": "revision-a",
+        "source_content_digest": "sha256:" + "2" * 64,
+        "config_digest": "sha256:" + "3" * 64,
+        "server_url": "http://gpu.example.test:8188",
+    }
+    first = production_engine.session_identity_digest(
+        "model-a", model_digest="sha256:" + "a" * 64, required_identity=base
+    )
+    for field, changed in (
+        ("verified_facts_digest", "sha256:" + "4" * 64),
+        ("config_digest", "sha256:" + "5" * 64),
+        ("source_content_digest", "sha256:" + "6" * 64),
+        ("runtime_instance_id", "runtime-b"),
+    ):
+        candidate = dict(base)
+        candidate[field] = changed
+        assert production_engine.session_identity_digest(
+            "model-a", model_digest="sha256:" + "a" * 64, required_identity=candidate
+        ) != first
+
+
+def test_loaded_workflow_session_requirements_include_auxiliary_assets_and_loader_settings() -> None:
+    workflow = SimpleNamespace(
+        metadata={
+            "model_assets": [{"name": "vae.safetensors", "sha256": "a" * 64}],
+            "comfy_configuration": {"cache_none": True},
+            "loader_settings": {"dtype": "bf16"},
+            "requirements": {"models": ["vae.safetensors"], "runtime": {"comfy_version": "==0.26.0"}},
+        }
+    )
+    loaded = production_engine.LoadedWorkflow(
+        resolved=SimpleNamespace(workflow=workflow),
+        model_id="model-a",
+        template_id="workflow-a",
+        workflow_identity="workflow-a",
+        workflow_revision="revision-a",
+        workflow_content_digest="sha256:" + "b" * 64,
+    )
+
+    identity = production_engine.loaded_workflow_session_requirements(loaded)
+
+    assert identity["model_id"] == "model-a"
+    assert identity["resident_metadata"]["model_assets"][0]["name"] == "vae.safetensors"
+    assert identity["resident_metadata"]["comfy_configuration"]["cache_none"] is True
+    assert identity["resident_metadata"]["loader_settings"]["dtype"] == "bf16"
+
+
 def test_loaded_identity_is_bound_to_canonical_metadata_and_content() -> None:
     base = production_engine.LoadedWorkflow(
         resolved=object(),

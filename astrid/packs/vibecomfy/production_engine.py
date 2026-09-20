@@ -54,6 +54,43 @@ class LoadedWorkflow:
     workflow_content_digest: str
 
 
+def _workflow_comfyui_version_requirement(resolved: Any) -> str | None:
+    """Read the canonical workflow's typed ComfyUI version declaration."""
+    bundle = _canonical_bundle_value(resolved)
+    workflow = getattr(bundle, "workflow", None)
+    requirements = getattr(workflow, "requirements", None)
+    runtime = getattr(requirements, "runtime", None)
+    declared = getattr(runtime, "comfy_version", None)
+    if declared is None and isinstance(getattr(workflow, "metadata", None), Mapping):
+        raw = workflow.metadata.get("requirements")
+        if isinstance(raw, Mapping) and isinstance(raw.get("runtime"), Mapping):
+            declared = raw["runtime"].get("comfy_version")
+    if declared is None:
+        return None
+    if not isinstance(declared, str) or not declared.strip():
+        raise ProductionEngineError(
+            "workflow requirements.runtime.comfy_version must be a non-empty string"
+        )
+    return declared.strip()
+
+
+def _profile_comfyui_version_requirement(hc03_profile: Any) -> str | None:
+    """Read the release-bound ComfyUI contract from a worker profile."""
+    if not isinstance(hc03_profile, Mapping):
+        return None
+    runtime = hc03_profile.get("runtime")
+    if not isinstance(runtime, Mapping):
+        return None
+    declared = runtime.get("comfyui_version")
+    if declared is None:
+        return None
+    if not isinstance(declared, str) or not declared.strip():
+        raise ProductionEngineError(
+            "worker readiness runtime.comfyui_version must be a non-empty string"
+        )
+    return declared.strip()
+
+
 def _bootstrap_embedded_comfy_client() -> Path:
     """Select and import the embedded-client ComfyUI tree for pip execution."""
     candidates: list[str | Path] = []
@@ -374,6 +411,101 @@ def loaded_workflow_execution_identity(
     )
 
 
+def loaded_workflow_session_requirements(loaded: LoadedWorkflow) -> dict[str, Any]:
+    """Extract resident-engine requirements from the admitted canonical bundle.
+
+    This deliberately excludes prompts, seeds, and workflow graph identity.
+    It includes model/auxiliary asset declarations and loader/runtime settings
+    that can change what remains resident in the engine.
+    """
+    workflow = getattr(loaded.resolved, "workflow", None)
+    metadata = getattr(workflow, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    requirements = getattr(workflow, "requirements", None)
+    if requirements is not None:
+        to_dict = getattr(requirements, "to_dict", None)
+        if callable(to_dict):
+            requirements = to_dict()
+        elif isinstance(requirements, Mapping):
+            requirements = dict(requirements)
+        else:
+            requirements = repr(requirements)
+    else:
+        requirements = metadata.get("requirements", {})
+    resident_keys = (
+        "model_assets",
+        "comfy_configuration",
+        "loader",
+        "loader_settings",
+        "model_set",
+        "auxiliary_models",
+    )
+    resident_metadata = {
+        key: metadata[key]
+        for key in resident_keys
+        if key in metadata
+    }
+    return {
+        "model_id": loaded.model_id,
+        "requirements": requirements,
+        "resident_metadata": resident_metadata,
+    }
+
+
+def session_identity_digest(
+    model_id: str,
+    *,
+    model_digest: str | None = None,
+    required_identity: Mapping[str, object] | None = None,
+) -> str:
+    """Return the stable engine/session identity for resident model state.
+
+    Workflow/template and invocation fields intentionally do not participate
+    here.  They remain part of ``loaded_workflow_execution_identity`` so the
+    child still verifies the exact invocation, while the host can retain one
+    compatible VibeComfy session across workflow changes.
+    """
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ProductionEngineError("session model_id must be a non-empty string")
+    if model_digest is not None and (
+        not isinstance(model_digest, str) or not model_digest.strip()
+    ):
+        raise ProductionEngineError("session model_digest must be a non-empty string")
+    identity = None
+    if required_identity is not None:
+        if not isinstance(required_identity, Mapping):
+            raise ProductionEngineError("session required_identity must be an object")
+        identity = {}
+        for key, value in required_identity.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ProductionEngineError("session required_identity has an invalid key")
+            if value == "":
+                raise ProductionEngineError(
+                    f"session required_identity field {key!r} is incomplete"
+                )
+            try:
+                json.dumps(value, sort_keys=True, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                raise ProductionEngineError(
+                    f"session required_identity field {key!r} is not canonical JSON"
+                ) from exc
+            identity[key] = value
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "schema": "astrid.vibecomfy.session-identity.v1",
+                "model_id": model_id.strip(),
+                "model_digest": model_digest,
+                "required_identity": identity,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+
+
 def _profile_id(value: Any) -> str:
     if not isinstance(value, Mapping):
         raise ProductionEngineError("production engine request lacks an execution profile")
@@ -551,11 +683,23 @@ def _run_profile(
         raise ProductionEngineError("checkout_server lacks its verified HC-03 profile")
     from astrid.core.generation.backends.vibecomfy import CheckoutServerAdapter
 
+    workflow_comfyui_version = _workflow_comfyui_version_requirement(resolved)
+    profile_comfyui_version = _profile_comfyui_version_requirement(hc03_profile)
+    if (
+        workflow_comfyui_version is not None
+        and profile_comfyui_version is not None
+        and workflow_comfyui_version != profile_comfyui_version
+    ):
+        raise ProductionEngineError(
+            "workflow and worker profile ComfyUI version contracts disagree: "
+            f"workflow={workflow_comfyui_version!r} profile={profile_comfyui_version!r}"
+        )
     adapter = CheckoutServerAdapter.from_host_session(
         hc03_profile=hc03_profile,
         model_id=model_id,
         template_id=template_id,
         invocation_identity=task_identity,
+        expected_comfyui_version=workflow_comfyui_version or profile_comfyui_version,
     )
     with _checkout_cancellation(adapter) as was_cancelled:
         try:

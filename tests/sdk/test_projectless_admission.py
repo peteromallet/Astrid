@@ -63,6 +63,38 @@ def test_knowledge_reads_use_runtime_admission_without_selection(monkeypatch, ca
     assert admitted[0]["_client"] is client
 
 
+def test_openai_generation_requires_explicit_publication_intent(monkeypatch):
+    fake_capability = SimpleNamespace(
+        id="generation.generate_image_openai",
+        capability_type="executor",
+        native_kind="external",
+        definition={"metadata": {"project_scope": "required"}},
+        inputs=(),
+    )
+    fake_registry = SimpleNamespace(
+        get=lambda executor_id: SimpleNamespace(
+            to_dict=lambda: {"id": executor_id, "version": "1"}
+        )
+    )
+    fake_sdk = SimpleNamespace(
+        _load_registries=lambda **kwargs: (fake_registry, None, None),
+        get_capability=lambda *args, **kwargs: fake_capability,
+    )
+    monkeypatch.setattr(invocation, "_sdk_module", lambda: fake_sdk)
+    monkeypatch.setattr(
+        invocation,
+        "_kernel_invoke",
+        lambda *args, **kwargs: pytest.fail("unpublished OpenAI generation must not be admitted"),
+    )
+    with pytest.raises(invocation.CapabilityValidationError, match="requires explicit generation_intent"):
+        invocation.invoke(
+            "generation.generate_image_openai",
+            kind="executor",
+            inputs={"prompts_file": "prompt-list.json"},
+            project="project-1",
+        )
+
+
 @pytest.mark.parametrize("project", [None, "", "   "])
 def test_corpus_write_still_requires_project(monkeypatch, project):
     client = SimpleNamespace(projects=SimpleNamespace(current=lambda: DomainResult.failure(

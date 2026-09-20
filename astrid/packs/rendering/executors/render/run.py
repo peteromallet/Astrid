@@ -42,6 +42,26 @@ _SERVICE: RenderService | None = None
 _MAX_CLI_ERROR_CHARS = 3_500
 
 
+def _report_progress(phase: str, percent: int) -> None:
+    """Publish bounded phase progress for the generic Astrid host.
+
+    The renderer is still a synchronous command, so this intentionally reports
+    lifecycle checkpoints rather than pretending to know frame-level progress.
+    Direct CLI callers are unaffected when the host has not supplied a path.
+    """
+    raw_path = os.environ.get("ASTRID_PROGRESS_PATH")
+    if not raw_path:
+        return
+    path = Path(raw_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps({"phase": phase, "percent": max(0, min(100, int(percent)))}, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
 def _renderer_cli_error(exc: RendererException) -> str:
     """Keep structured renderer reasons actionable across the CLI boundary."""
 
@@ -300,6 +320,7 @@ def render(
     and publication happen in the service; this facade only adapts files and
     output naming.
     """
+    _report_progress("admit", 0)
     out_path = Path(out_path)
     validate_output_name(out_path.name)
     previous_outputs = (
@@ -344,6 +365,8 @@ def render(
             "materialized_objects": dict(materialized_objects or {}),
         }
     )
+    _report_progress("prepare_inputs", 5)
+    _report_progress("render", 10)
     output = _default_service().render(
         request,
         selector=selector,
@@ -354,7 +377,9 @@ def render(
         Path(output),
         timeline_authority=timeline_authority,
     )
+    _report_progress("validate_output", 90)
     _write_render_manifest(Path(output), timeline_path=timeline_path, selector=selector)
+    _report_progress("complete", 100)
     return output
 
 

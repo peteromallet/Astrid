@@ -79,6 +79,7 @@
   "isolation": {
     "mode": "subprocess",
     "network": true,
+    "env_passthrough": ["RUNPOD_SSH_IDENTITY_PATH"],
     "requirements": [
       "runpod-lifecycle>=0.3"
     ]

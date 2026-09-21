@@ -942,6 +942,22 @@ def _provider_routes(record: "CapabilityRecord", inputs: Mapping[str, Any] | Non
             dynamic_routes.append(
                 f"{parsed.scheme}://{parsed.hostname.lower()}:{parsed.port or (443 if parsed.scheme == 'https' else 80)}"
             )
+    resolver = str(policy.get("dynamic_route_resolver") or "").strip()
+    if resolver == "runpod_pod_handle_ssh":
+        handle_names = policy.get("dynamic_tcp_inputs", ("pod_handle",))
+        if isinstance(handle_names, str):
+            handle_names = (handle_names,)
+        from astrid.core.execution.provider_route_resolvers import (
+            resolve_runpod_pod_handle_ssh_route,
+        )
+
+        for name in handle_names or ():
+            raw = (inputs or {}).get(str(name))
+            if raw is None:
+                raise HostError(
+                    f"dynamic provider route input {name!r} is missing"
+                )
+            dynamic_routes.append(resolve_runpod_pod_handle_ssh_route(raw))
     return tuple(dict.fromkeys([*(str(route) for route in (routes or ())), *dynamic_routes]))
 
 
@@ -1235,14 +1251,52 @@ def _fixed_request_scope(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return scope
 
 
+def _admitted_spec_envelope(raw_spec: Any) -> Mapping[str, Any]:
+    """Return the immutable capability request from a runtime task envelope.
+
+    Runtime task snapshots have one stable wrapper around the immutable
+    capability request::
+
+        task.spec         = admission envelope
+        task.spec.spec    = capability request
+        task.spec.spec.inputs
+
+    A few older in-process callers provide the capability request directly.
+    Accept that compatibility shape, but never recursively unwrap arbitrary
+    mappings or silently accept conflicting duplicate fields.
+    """
+    if not isinstance(raw_spec, Mapping):
+        raise HostError("runtime task is missing its immutable spec envelope")
+    nested = raw_spec.get("spec")
+    if nested is None:
+        return raw_spec
+    if not isinstance(nested, Mapping):
+        raise HostError("runtime task immutable spec envelope has a non-object spec")
+    for key in (
+        "capability_id",
+        "kind",
+        "inputs",
+        "params",
+        "outputs",
+        "runtime_dependencies",
+        "authority_context",
+    ):
+        if key in raw_spec and key in nested and raw_spec[key] != nested[key]:
+            raise HostError(f"runtime task spec has conflicting {key!r} values")
+    return nested
+
+
+def _admitted_task_spec(task_data: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Decode the canonical immutable request from a task snapshot."""
+    return _admitted_spec_envelope(task_data.get("spec"))
+
+
 def _assert_fixed_request_scope(record: Any, task_data: Mapping[str, Any]) -> None:
     """Reject task parameters that escape a capability's declared profile."""
     scope = _fixed_request_scope(record.definition.metadata)
     if not scope:
         return
-    spec = task_data.get("spec")
-    if isinstance(spec, Mapping) and isinstance(spec.get("spec"), Mapping):
-        spec = spec["spec"]
+    spec = _admitted_task_spec(task_data)
     params = spec.get("params") if isinstance(spec, Mapping) else None
     if not isinstance(params, Mapping):
         raise HostError(f"capability {record.id!r} requires a fixed request scope")
@@ -2617,10 +2671,7 @@ class GenericPackHost:
                 raise HostError(f"managed input {name!r} is not authorized by task input_object_ids")
             return normalized
 
-        admitted = spec.get("spec")
-        if not isinstance(admitted, Mapping):
-            raise HostError("runtime task is missing its immutable spec envelope")
-        input_spec = admitted
+        input_spec = _admitted_spec_envelope(spec)
         values = dict(input_spec.get("inputs", {})) if isinstance(input_spec.get("inputs", {}), Mapping) else {}
         params = input_spec.get("params")
         bounded_policy = None
@@ -3072,8 +3123,8 @@ class GenericPackHost:
             raise ProviderRouteGrantError("provider route grant requires a ready network provider")
         if not _host_managed_broker(policy) or not _tcp_broker_supports(policy):
             raise ProviderRouteGrantError("provider route grant requires a supported host-managed TCP broker")
-        spec = task_data.get("spec") if isinstance(task_data.get("spec"), Mapping) else {}
-        inputs = spec.get("inputs") if isinstance(spec.get("inputs"), Mapping) else {}
+        inputs_spec = _admitted_task_spec(task_data)
+        inputs = inputs_spec.get("inputs") if isinstance(inputs_spec.get("inputs"), Mapping) else {}
         routes = _provider_routes(record, inputs)
         descriptor = (policy or {}).get("broker", {})
         binding = ProviderRouteGrantAuthority.binding(
@@ -5273,6 +5324,21 @@ class GenericPackHost:
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
         task_id = str(claim_data["task_id"])
+        lease_id = str(claim_data.get("lease_id") or "")
+        attempt_id = str(claim_data.get("attempt_id") or "")
+        fence = claim_data.get("fence")
+        if not lease_id or not attempt_id or fence is None:
+            raise HostError("generated claim operation returned incomplete lease identity")
+        # Claim ownership immediately.  All subsequent task decoding and
+        # provider preparation runs under this attempt's lease; a preparation
+        # error must reach run_task's fenced failure path rather than escaping
+        # claim_once and waiting for the lease to expire.
+        self.client.heartbeat(
+            task_id,
+            lease_id,
+            attempt_id=attempt_id,
+            fence=int(fence),
+        )
         task = self._client_operation("task")(task_id)
         if isinstance(task, Mapping):
             task_data = dict(task.get("task", task))
@@ -5315,25 +5381,45 @@ class GenericPackHost:
             task_data["expected_effect"] = claim_data["expected_effect"]
         if claim_data.get("generation_intent") is not None:
             task_data["generation_intent"] = claim_data["generation_intent"]
+        provider_route_grant = (
+            task_data.get("provider_route_grant")
+            or (
+                task_data.get("spec", {}).get("provider_route_grant")
+                if isinstance(task_data.get("spec"), Mapping)
+                else None
+            )
+            or self._pending_provider_grants.pop(task_id, None)
+        )
+        capability_record = self.capabilities.get(str(task_data.get("capability")))
+        if (
+            provider_route_grant is None
+            and capability_record is not None
+            and capability_record.adapter.family == "provider"
+            and capability_record.definition.isolation.network
+        ):
+            try:
+                provider_route_grant = self.request_provider_route_grant({"task": task_data})
+            except Exception as exc:
+                try:
+                    self.client.fail(
+                        task_id,
+                        lease_id,
+                        str(exc),
+                        retryable=False,
+                        attempt_id=attempt_id,
+                        fence=int(fence),
+                    )
+                except Exception as runtime_exc:
+                    raise HostError(
+                        "provider route preparation failed and could not be recorded"
+                    ) from runtime_exc
+                raise HostError(f"provider route preparation failed: {exc}") from exc
         return self.run_task(
             {"task": task_data},
-            lease_token=str(claim_data.get("lease_id") or ""),
-            attempt_id=str(claim_data["attempt_id"]),
-            fence=int(claim_data["fence"]),
-            provider_route_grant=(
-                task_data.get("provider_route_grant")
-                or (task_data.get("spec", {}).get("provider_route_grant") if isinstance(task_data.get("spec"), Mapping) else None)
-                or self._pending_provider_grants.pop(task_id, None)
-                or (
-                    self.request_provider_route_grant({"task": task_data})
-                    if (
-                        self.capabilities.get(str(task_data.get("capability"))) is not None
-                        and self.capabilities[str(task_data.get("capability"))].adapter.family == "provider"
-                        and self.capabilities[str(task_data.get("capability"))].definition.isolation.network
-                    )
-                    else None
-                )
-            ),
+            lease_token=lease_id,
+            attempt_id=attempt_id,
+            fence=int(fence),
+            provider_route_grant=provider_route_grant,
         )
 
     def run(self, *, once: bool = False, poll_seconds: float = 1.0, max_tasks: int | None = None) -> list[Mapping[str, Any]]:

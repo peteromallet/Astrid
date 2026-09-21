@@ -57,8 +57,11 @@ class _BrokerHandler(socketserver.StreamRequestHandler):
                 headers[name.lower()] = value.strip()
         if line.startswith("CONNECT "):
             target = line.split(" ", 2)[1] if len(line.split(" ", 2)) > 1 else ""
-            allowed = broker._route_allowed(f"https://{target}/")
-            broker._record("route", f"https://{target}/", allowed=allowed)
+            # CONNECT is an explicit raw TCP route.  Keep that distinction in
+            # evidence instead of disguising SSH as an HTTPS request.
+            route = f"tcp://{target}"
+            allowed = broker._route_allowed(route)
+            broker._record("route", route, allowed=allowed)
             if not allowed:
                 self._response(HTTPStatus.FORBIDDEN, b"broker route was not admitted")
                 return
@@ -214,9 +217,14 @@ class ObservableNetworkBroker:
         if not self._strict:
             return True
         parsed = urlsplit(target)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if parsed.scheme not in {"http", "https", "tcp"} or not parsed.hostname:
             return False
-        normalized = f"{parsed.scheme}://{parsed.hostname.lower()}:{parsed.port or (443 if parsed.scheme == 'https' else 80)}{parsed.path or '/'}"
+        default_port = 443 if parsed.scheme == "https" else 80
+        if parsed.scheme == "tcp":
+            default_port = None
+        normalized = f"{parsed.scheme}://{parsed.hostname.lower()}:{parsed.port or default_port}"
+        if parsed.scheme != "tcp":
+            normalized += parsed.path or "/"
         for route in self.allowed_routes:
             candidate = str(route).strip()
             if candidate == target or candidate == normalized:
@@ -231,7 +239,10 @@ class ObservableNetworkBroker:
                 declared_port = declared.port if has_scheme or ":" in candidate.rsplit("/", 1)[-1] else None
             except ValueError:
                 continue
-            if declared.hostname and declared.hostname.lower() == parsed.hostname.lower() and (declared_port is None or declared_port == (parsed.port or (443 if parsed.scheme == "https" else 80))):
+            if has_scheme and declared.scheme != parsed.scheme:
+                continue
+            actual_port = parsed.port or default_port
+            if declared.hostname and declared.hostname.lower() == parsed.hostname.lower() and (declared_port is None or declared_port == actual_port):
                 return True
         return False
 

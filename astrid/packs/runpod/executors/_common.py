@@ -521,6 +521,64 @@ def _load_handle_and_config(handle_path: Path) -> tuple[dict[str, Any], Any]:
     from runpod_lifecycle import RunPodConfig
 
     handle = json.loads(handle_path.read_text(encoding="utf-8"))
+    if handle.get("schema_version") == "astrid.runpod.claim.v1":
+        # Claim waiters deliberately emit an operator/lifecycle handle rather
+        # than pretending that a reused pod was provisioned by Astrid.  The
+        # canonical executor can still reattach safely: resolve the exact pod
+        # by id, verify its live provider state, and enrich only the in-memory
+        # view with the fields the provision-handle contract requires.
+        pod_id = str(handle.get("pod_id") or "").strip()
+        if not pod_id:
+            raise AstridError(
+                "claim handle is missing pod_id",
+                recovery_command="rerun the claim waiter to produce a valid lifecycle handle",
+            )
+        api_key_ref = str(handle.get("api_key_ref") or "RUNPOD_API_KEY")
+        from astrid.core.util.credentials_scope import CredentialsScope
+
+        credential = CredentialsScope.resolve_local("runpod", env_var=api_key_ref)
+        api_key = credential.value
+        from runpod_lifecycle.api import get_pod_status
+
+        status = get_pod_status(pod_id, api_key)
+        if not isinstance(status, dict):
+            raise AstridError(
+                f"claimed RunPod pod {pod_id} was not found under the configured account",
+                recovery_command="verify the claim handle and RunPod account, then retry",
+            )
+        if status.get("desired_status") not in {"RUNNING", "PROVISIONING"}:
+            raise AstridError(
+                f"claimed RunPod pod {pod_id} is not attachable (status={status.get('desired_status')!r})",
+                recovery_command="wait for the claimed pod to return to RUNNING or reclaim a compatible pod",
+            )
+        hourly_rate = status.get("cost_per_hr")
+        if not isinstance(hourly_rate, (int, float)) or isinstance(hourly_rate, bool):
+            raise AstridError(
+                f"RunPod did not return live pricing for claimed pod {pod_id}; refusing to fabricate a cost",
+                recovery_command="recheck the provider status and retry once cost_per_hr is available",
+            )
+        snapshot = {
+            "api_key_ref": api_key_ref,
+            "datacenter_id": None,
+            "image": handle.get("worker_image"),
+            "container_disk_in_gb": int(handle.get("container_disk_gb", 200)),
+            "volume_in_gb": int(handle.get("network_volume_size_gb", 0)),
+            "volume_mount_path": str(handle.get("volume_mount_path") or "/workspace"),
+            "storage_name": handle.get("storage_name"),
+            "network_volume_id": handle.get("network_volume_id"),
+            "ports": "8888/http,22/tcp",
+            "allowed_cuda_versions": list(handle.get("allowed_cuda_versions") or ()),
+        }
+        if not isinstance(snapshot["image"], str) or not snapshot["image"].strip():
+            raise AstridError(
+                f"claim handle for pod {pod_id} is missing worker_image",
+                recovery_command="re-run the CUDA-qualified claim waiter",
+            )
+        handle = {
+            **handle,
+            "hourly_rate": float(hourly_rate),
+            "config_snapshot": snapshot,
+        }
     api_key_ref = handle["config_snapshot"]["api_key_ref"]
     from astrid.core.util.credentials_scope import CredentialsScope
 
@@ -531,6 +589,7 @@ def _load_handle_and_config(handle_path: Path) -> tuple[dict[str, Any], Any]:
     config = RunPodConfig(
         api_key=api_key,
         gpu_type=handle.get("gpu_type", "NVIDIA GeForce RTX 4090"),
+        worker_image=snap.get("image") or "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
         container_disk_gb=snap.get("container_disk_in_gb", 200),
         disk_size_gb=snap.get("volume_in_gb", 0),
         volume_mount_path=snap.get("volume_mount_path", "/workspace"),
@@ -538,8 +597,14 @@ def _load_handle_and_config(handle_path: Path) -> tuple[dict[str, Any], Any]:
         storage_name=snap.get("storage_name") or snap.get("network_volume_id"),
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
-        ssh_public_key_path=os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH"),
-        ssh_private_key_path=os.environ.get("RUNPOD_SSH_PRIVATE_KEY_PATH"),
+        ssh_public_key_path=(
+            os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH")
+            or os.environ.get("RUNPOD_SSH_IDENTITY_PUBLIC_PATH")
+        ),
+        ssh_private_key_path=(
+            os.environ.get("RUNPOD_SSH_PRIVATE_KEY_PATH")
+            or os.environ.get("RUNPOD_SSH_IDENTITY_PATH")
+        ),
         env_vars=_host_hf_token_env_vars(),
     )
     return handle, config
@@ -605,8 +670,14 @@ def cmd_provision(args: argparse.Namespace, produces_dir: Path) -> int:
         allowed_cuda_versions=allowed_cuda_versions,
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
-        ssh_public_key_path=os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH"),
-        ssh_private_key_path=os.environ.get("RUNPOD_SSH_PRIVATE_KEY_PATH"),
+        ssh_public_key_path=(
+            os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH")
+            or os.environ.get("RUNPOD_SSH_IDENTITY_PUBLIC_PATH")
+        ),
+        ssh_private_key_path=(
+            os.environ.get("RUNPOD_SSH_PRIVATE_KEY_PATH")
+            or os.environ.get("RUNPOD_SSH_IDENTITY_PATH")
+        ),
         env_vars=_host_hf_token_env_vars(resolved),
     )
 
@@ -932,8 +1003,14 @@ def cmd_session(args: argparse.Namespace, produces_dir: Path) -> int:
         allowed_cuda_versions=allowed_cuda_versions,
         ssh_public_key=os.environ.get("RUNPOD_SSH_PUBLIC_KEY"),
         ssh_private_key=os.environ.get("RUNPOD_SSH_PRIVATE_KEY"),
-        ssh_public_key_path=os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH"),
-        ssh_private_key_path=os.environ.get("RUNPOD_SSH_PRIVATE_KEY_PATH"),
+        ssh_public_key_path=(
+            os.environ.get("RUNPOD_SSH_PUBLIC_KEY_PATH")
+            or os.environ.get("RUNPOD_SSH_IDENTITY_PUBLIC_PATH")
+        ),
+        ssh_private_key_path=(
+            os.environ.get("RUNPOD_SSH_PRIVATE_KEY_PATH")
+            or os.environ.get("RUNPOD_SSH_IDENTITY_PATH")
+        ),
         env_vars=_host_hf_token_env_vars(resolved),
     )
 

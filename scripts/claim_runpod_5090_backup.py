@@ -7,6 +7,11 @@ the exact GPU/storage request is retried until capacity appears.  The
 network-volume size is discovered and echoed back unchanged; the 200 GB
 request applies only to the pod's disposable container disk.
 
+The defaults target the prepared H3 CUDA-13 release: they request the
+validated image/host profile and verify the mounted release venv before the
+script reports success. Override them only for another explicitly prepared
+runtime profile.
+
 On success the script prints a secret-free pod handle and exits, leaving the
 pod running.  Pass ``--handle-path`` when a durable local breadcrumb is useful;
 the handle can be handed to ``runpod-lifecycle terminate <pod-id> --yes``.
@@ -17,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shlex
 import sys
 import time
 from datetime import datetime, timezone
@@ -37,6 +43,45 @@ DEFAULT_CONTAINER_DISK_GB = 200
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_CAPACITY_WINDOW_SECONDS = 3600
 DEFAULT_READY_TIMEOUT_SECONDS = 900
+DEFAULT_WORKER_IMAGE = "runpod/base:1.0.3-dev-fix-pytorch-version-verification-cuda1300-ubuntu2404"
+DEFAULT_ALLOWED_CUDA_VERSIONS = ("13.0",)
+DEFAULT_RELEASE_ROOT = "/workspace/h3-golden/releases/h3-cu130-v1-candidate"
+
+
+async def _preflight_release(pod: Any, release_root: str) -> dict[str, str]:
+    """Verify the mounted prepared release before keeping a claimed pod."""
+    python_path = f"{release_root}/runtime/venv/bin/python"
+    launcher_path = f"{release_root}/runtime/launch-comfy.sh"
+    command = f"""
+set -eu
+test -d /workspace
+test -x {shlex.quote(python_path)}
+test -x {shlex.quote(launcher_path)}
+nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+{shlex.quote(python_path)} -B - <<'PY'
+import sys
+import torch
+
+if sys.version_info[:2] != (3, 12):
+    raise SystemExit(f"release requires Python 3.12, got {{sys.version}}")
+if torch.version.cuda != "13.0":
+    raise SystemExit(f"release requires CUDA 13.0 Torch, got {{torch.version.cuda!r}}")
+if not torch.cuda.is_available():
+    raise SystemExit("Torch reports CUDA unavailable")
+torch.cuda.init()
+print(f"python={{sys.version.split()[0]}} torch={{torch.__version__}} torch_cuda={{torch.version.cuda}} gpu={{torch.cuda.get_device_name(0)}}")
+PY
+"""
+    exit_code, stdout, stderr = await pod.exec_ssh(command, timeout=120)
+    if exit_code != 0:
+        detail = (stderr or stdout).strip()[-4000:]
+        raise RuntimeError(f"H3 release preflight failed for {release_root}: {detail}")
+    return {
+        "release_root": release_root,
+        "release_python": python_path,
+        "release_launcher": launcher_path,
+        "probe": stdout.strip(),
+    }
 
 
 def _utc_now() -> str:
@@ -85,6 +130,7 @@ def _handle(
     config: RunPodConfig,
     volume: dict[str, Any],
     claimed_at: str,
+    preflight: dict[str, str],
 ) -> dict[str, Any]:
     selected_gpu = getattr(pod, "_gpu_type", None) or config.gpu_type
     selected_storage = getattr(pod, "_storage_name", None) or config.storage_name
@@ -101,7 +147,10 @@ def _handle(
         "container_disk_gb": config.container_disk_gb,
         "volume_mount_path": config.volume_mount_path,
         "allowed_cuda_versions": list(config.allowed_cuda_versions),
+        "worker_image": config.worker_image,
+        "template_id": config.template_id,
         "name_prefix": config.name_prefix,
+        "runtime_preflight": preflight,
     }
 
 
@@ -116,6 +165,11 @@ async def _claim(args: argparse.Namespace) -> dict[str, Any]:
         container_disk_gb=args.container_disk_gb,
         min_memory_gb=args.min_memory_gb,
         name_prefix=args.name_prefix,
+        worker_image=args.worker_image,
+        # The validated H3 image is authoritative; do not let the generic
+        # runpod-torch-v240 template silently replace it.
+        template_id=args.template_id,
+        allowed_cuda_versions=tuple(args.allowed_cuda_versions.split(",")),
     )
     volume = await _require_existing_volume(config, args.storage_name)
     # The lifecycle substrate uses disk_size_gb as the desired network-volume
@@ -125,7 +179,9 @@ async def _claim(args: argparse.Namespace) -> dict[str, Any]:
     _log(
         f"watching gpu={args.gpu_type!r} storage={args.storage_name!r} "
         f"volume_id={volume.get('id')!r} volume_size_gb={int(volume['size'])} "
-        f"container_disk_gb={args.container_disk_gb} poll_seconds={args.poll_seconds}"
+        f"container_disk_gb={args.container_disk_gb} image={args.worker_image!r} "
+        f"allowed_cuda={config.allowed_cuda_versions!r} release={args.release_root!r} "
+        f"poll_seconds={args.poll_seconds}"
     )
 
     deadline = (
@@ -158,12 +214,14 @@ async def _claim(args: argparse.Namespace) -> dict[str, Any]:
             # check and SSH metadata lookup both pass.
             await pod.wait_ready(timeout=args.ready_timeout_seconds)
             ssh = await pod._ensure_ssh_details()
+            preflight = await _preflight_release(pod, args.release_root)
             result = _handle(
                 pod=pod,
                 ssh=ssh,
                 config=config,
                 volume=volume,
                 claimed_at=_utc_now(),
+                preflight=preflight,
             )
             if args.handle_path:
                 result["handle_path"] = str(Path(args.handle_path).expanduser())
@@ -218,6 +276,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-type", default=DEFAULT_GPU)
     parser.add_argument("--storage-name", default=DEFAULT_STORAGE)
     parser.add_argument("--container-disk-gb", type=int, default=DEFAULT_CONTAINER_DISK_GB)
+    parser.add_argument("--image", dest="worker_image", default=DEFAULT_WORKER_IMAGE)
+    parser.add_argument(
+        "--allowed-cuda-versions",
+        default=",".join(DEFAULT_ALLOWED_CUDA_VERSIONS),
+        help="Provider host CUDA versions compatible with the selected release.",
+    )
+    parser.add_argument(
+        "--template-id",
+        default=None,
+        help="Optional provider template; defaults to none so the validated image is authoritative.",
+    )
+    parser.add_argument("--release-root", default=DEFAULT_RELEASE_ROOT)
     parser.add_argument("--min-memory-gb", type=int, default=32)
     parser.add_argument("--poll-seconds", type=int, default=DEFAULT_POLL_SECONDS)
     parser.add_argument(
@@ -251,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
     if args.max_wait_seconds < 0:
         raise SystemExit("--max-wait-seconds must be zero or positive")
+    if not any(part.strip() for part in args.allowed_cuda_versions.split(",")):
+        raise SystemExit("--allowed-cuda-versions must contain at least one version")
 
     try:
         result = asyncio.run(_claim(args))

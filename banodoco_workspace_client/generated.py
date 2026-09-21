@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 PROTOCOL = "workspace.v1"
-SCHEMA_DIGEST = "sha256:e3fdf36ffed8deb2f6bdf2f4b470d9cba88b3327ebf6f079d95d8cf53dd351db"
-OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listManagedOutputs', 'getManagedOutput', 'adoptManagedOutput', 'getProjectObjectLocation', 'exportManagedOutput', 'updateManagedOutputLifecycle', 'listProjectRuns', 'createTimeline', 'listTimelines', 'createTimelineDocument', 'getTimeline', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
+SCHEMA_DIGEST = "sha256:fe33a4d44067d29098310b5a220888945b8df6ce4d14f927fb210f8c5a05bc9d"
+OPERATIONS = ('health', 'handshake', 'getRealm', 'doctor', 'createBackup', 'restoreBackup', 'exportRealm', 'tombstoneRealm', 'recoverRealm', 'purgeRealm', 'listProjects', 'createProject', 'getProject', 'updateProject', 'currentProject', 'selectProject', 'listDocuments', 'createDocument', 'getDocument', 'updateDocument', 'listProjectObjects', 'ingestProjectObject', 'listProjectTasks', 'listManagedOutputs', 'getManagedOutput', 'adoptManagedOutput', 'getProjectObjectLocation', 'exportManagedOutput', 'updateManagedOutputLifecycle', 'listProjectRuns', 'createTimeline', 'listTimelines', 'getProjectTimeline', 'publishParentComposition', 'getProjectParentCompositionRevision', 'createTimelineDocument', 'getProjectShotRevision', 'getProjectTimelineRevision', 'updateTimeline', 'listTimelineHistory', 'replaceTimelineClip', 'diffTimeline', 'archiveTimeline', 'recoverTimeline', 'createShot', 'getShot', 'updateShot', 'archiveShot', 'recoverShot', 'createReference', 'createProjectShot', 'listProjectShots', 'getProjectShot', 'updateProjectShot', 'archiveProjectShot', 'recoverProjectShot', 'addShotItem', 'removeShotItem', 'promoteProjectShotCandidate', 'reorderShotItems', 'listProjectShotTextBindings', 'setProjectShotTextBinding', 'getProjectShotTextBinding', 'setProjectShotTextBindingById', 'rebindProjectShotTextBinding', 'createProjectReference', 'listProjectReferences', 'getProjectReference', 'updateProjectReference', 'archiveProjectReference', 'recoverProjectReference', 'associateReference', 'setPrimaryReference', 'linkReferences', 'getReference', 'updateReference', 'archiveReference', 'recoverReference', 'listMediaRelations', 'createMediaRelation', 'ingestObject', 'getObject', 'headObject', 'admitTask', 'claimTask', 'getTask', 'cancelTask', 'retryTask', 'getRun', 'cancelRun', 'retryRun', 'listRunEvents', 'listEvents', 'registerExecutor', 'listCapabilities', 'registerCapability', 'listGenerations', 'createGeneration', 'getGeneration', 'listVariants', 'createVariant', 'getVariant', 'settleAttempt', 'prepareReboot', 'checkpointAttempt', 'publishTimelineRender', 'failAttempt', 'heartbeatAttempt', 'requestReboot', 'resumeAttempt')
 
 
 @dataclass(frozen=True)
@@ -699,7 +699,7 @@ class WorkspaceClient:
         if slug is not None: content["slug"] = slug
         if name is not None: content["name"] = name
         document = self.update_document(project_id, f"timeline:{timeline_id}", expected_version=expected_version, idempotency_key=idempotency_key, content=content)
-        timeline = self.get_timeline(timeline_id)
+        timeline = self.get_project_timeline(project_id, timeline_id)
         result = dict(timeline)
         result.update({"slug": content.get("slug", timeline_id), "name": content.get("name", timeline_id), "config_version": document.version, "config": dict(config), "registry": dict(registry)})
         return MutationResult(result, document.receipt)
@@ -710,8 +710,23 @@ class WorkspaceClient:
         items, next_cursor = self._page(value)
         return list(items), next_cursor
 
-    def get_timeline(self, timeline_id: str) -> Mapping[str, Any]:
-        return self._json(self._request("GET", f"/v1/timelines/{_path_part(timeline_id)}")[2])
+    def publish_parent_composition(self, project_id: str, timeline_id: str, publication: Mapping[str, Any], *, idempotency_key: str) -> MutationResult:
+        payload = dict(publication)
+        payload["project_id"] = project_id
+        payload["timeline_id"] = timeline_id
+        return self._mutation_json(self._request("POST", f"/v1/projects/{_path_part(project_id)}/timelines/{_path_part(timeline_id)}/composition-revisions", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})[2])
+
+    def get_project_shot_revision(self, project_id: str, shot_id: str, revision: str) -> Mapping[str, Any]:
+        return self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/shots/{_path_part(shot_id)}/revisions/{_path_part(revision)}")[2])
+
+    def get_project_timeline_revision(self, project_id: str, timeline_id: str, revision: str) -> Mapping[str, Any]:
+        return self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/timelines/{_path_part(timeline_id)}/revisions/{_path_part(revision)}")[2])
+
+    def get_project_parent_composition_revision(self, project_id: str, timeline_id: str, revision: str) -> Mapping[str, Any]:
+        return self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/timelines/{_path_part(timeline_id)}/composition-revisions/{_path_part(revision)}")[2])
+
+    def get_project_timeline(self, project_id: str, timeline_id: str) -> Mapping[str, Any]:
+        return self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/timelines/{_path_part(timeline_id)}")[2])
 
     def list_timeline_history(self, timeline_id: str, *, cursor: str | None = None, limit: int = 50) -> tuple[list[Mapping[str, Any]], str | None]:
         query = f"?limit={int(limit)}" + (f"&cursor={_path_part(cursor)}" if cursor else "")

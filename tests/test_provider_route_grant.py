@@ -91,6 +91,46 @@ def test_provider_route_grant_expires_and_missing_grant_fails_closed() -> None:
         )
 
 
+def test_provider_route_grant_reads_runtime_nested_task_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = GenericPackHost(
+        pack_roots=[_pack(tmp_path, protocols=["dns", "tcp"])],
+        credential_source={},
+    )
+    record = host.discover()[0]
+    host.preflight()
+    assert record.ready or host.capabilities[record.id].ready
+
+    seen: dict[str, object] = {}
+
+    def fake_routes(_record, inputs):
+        seen.update(inputs)
+        return ("tcp://127.0.0.1:22",)
+
+    monkeypatch.setattr("astrid.core.execution.generic_host._provider_routes", fake_routes)
+    task = {
+        "task": {
+            "id": "nested-runtime-envelope",
+            "capability": record.id,
+            "spec": {
+                "capability_digest": "sha256:" + "a" * 64,
+                "schema_version": "1",
+                "spec": {
+                    "capability_id": record.id,
+                    "kind": "executor",
+                    "inputs": {"pod_handle": "/tmp/pod-handle.json"},
+                },
+            },
+        }
+    }
+
+    token = host.request_provider_route_grant(task)
+
+    assert token.startswith("provider-route-grant-v1.")
+    assert seen == {"pod_handle": "/tmp/pod-handle.json"}
+
+
 def test_provider_route_grant_concurrent_consumers_have_one_winner() -> None:
     authority = ProviderRouteGrantAuthority(secret=b"host-only-secret")
     token = authority.issue(

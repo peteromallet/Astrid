@@ -45,17 +45,41 @@ local setup and replacement path.
 
 ## Quick-start
 
-```python
-# One-shot session with guaranteed cleanup
-import astrid.sdk as sdk
-result = sdk.invoke(
-    "runpod.session",
-    inputs={"script": "./train.py", "gpu_type": "NVIDIA RTX 4090"},
-    out="./out",
-)
+For a prepared existing pod, the standalone `runpod-lifecycle run POD_ID
+--script /path/to/job/run.sh --keep-pod` is the practical upload/execute/fetch
+path. It does not create Astrid task history. See the
+[operator guide](../../../../guides/spinning-up-and-executing-tasks-on-runpod.md)
+for verified behavior, storage checks, timeout limits and current native
+integration prerequisites.
 
-# Manual lifecycle
-result = sdk.invoke("runpod.provision", inputs={"gpu_type": "NVIDIA RTX 4090"}, out="./pod_handle.json")
-result = sdk.invoke("runpod.exec", inputs={"pod_id": "<id>", "script": "./train.py"}, out="./artifacts")
-result = sdk.invoke("runpod.teardown", inputs={"pod_id": "<id>"})
+For native invocation, use a connected client and the manifest's exact input
+names. `runpod.exec` accepts `pod_handle` and `remote_script`, not `pod_id` and
+`script`. The claim waiter's smaller handle is not a provision handle.
+
+```python
+from astrid.sdk import AstridClient
+
+with AstridClient.open_from_launcher() as client:
+    result = client.invoke_result(
+        "runpod.exec",
+        kind="executor",
+        project="<selected project>",
+        inputs={
+            "pod_handle": "/path/to/astrid-provision-pod_handle.json",
+            "local_root": "/path/to/job",
+            "remote_script": "/path/to/job/run.sh",
+            "remote_root": "/workspace/unique-job-id",
+            "timeout": 900,
+            "upload_mode": "sftp_walk",
+        },
+        wait=True,
+    )
+    if not result.ok:
+        raise RuntimeError(result.error)
 ```
+
+Verify managed output settlement; successful remote exit alone does not prove
+artifact delivery. `runpod.exec` leaves the pod alive; `runpod.session`
+terminates it. Keep-running timeout currently stops local polling, not remote
+inference, so bound the owned workload separately. Do not run concurrent
+detached lifecycle jobs on one pod until their shared temporary paths are fixed.

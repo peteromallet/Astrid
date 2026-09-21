@@ -4,6 +4,19 @@ This is the operator checklist for an Astrid/VibeComfy GPU job. It is
 deliberately conservative: a pod is a paid, mutable machine. Do not start one
 until the authority, budget, storage, and ownership checks below are true.
 
+For the practical existing-pod upload/execute/fetch/keep-running path, start
+with [Spinning up and executing tasks on RunPod](spinning-up-and-executing-tasks-on-runpod.md).
+That lifecycle path is live-verified; automatic scheduler-backed remote
+`vibecomfy.run` placement is a separate, incomplete integration. The H3 gates
+below apply to H3 generation, not to a small transport-only smoke test.
+
+The continuation-specific execution sequence is documented in the linked
+guide's [continuation-guide test](spinning-up-and-executing-tasks-on-runpod.md#3a-run-the-continuation-guide-test).
+It deliberately separates the one-step capacity smoke from the creative
+175-frame starter plus 260-frame native-context continuation. The smoke can
+prove that the graph reaches sampling; only the subsequent raw-output and seam
+review can prove that the continuation is usable.
+
 ## H3 fail-closed preflight (before creative downloads)
 
 For the pinned MiniMax H3 chain, treat the canonical CUDA 13 stack as a
@@ -16,10 +29,10 @@ Before downloading the full model/creative set, require all of these gates:
 1. **Constrain placement at the provider.** Use RunPod GraphQL
    `podFindAndDeployOnDemand` with the actual `allowedCudaVersions` (or the
    schema's `minCudaVersion`) required by the pinned CUDA 13 stack. Verify the
-   returned machine, not just the requested image tag. The current
-   `runpod-lifecycle==0.3` CLI and Python launch helpers do not expose these
-   fields, so do not invent a lifecycle flag or profile key; use an authorized
-   direct-provider fallback or add/test substrate support first. See the
+   returned machine, not just the requested image tag. The current inspected
+   lifecycle checkout supports `--allowed-cuda-versions` and the Python
+   `allowed_cuda_versions` field; verify the installed version with CLI help.
+   Older 18 September examples predate that support. See the
    [official placement filter](https://docs.runpod.io/sdks/graphql/manage-pods#filter-by-cuda-version)
    and the [dated compatibility evidence](astrid-intro-regeneration-20260918.md).
 2. **Verify the live stack.** Record `nvidia-smi` driver/CUDA capability,
@@ -68,6 +81,20 @@ lock hash, model hashes or valid receipts, live CUDA/CK backend, and the
 five-frame smoke. Then run the production-shape capacity diagnostic above.
 If any check differs, fail closed and rebuild/promote a new golden artifact;
 do not silently mutate the validated image in place.
+
+For the current H3 candidate, the placement and release contract is:
+
+```text
+image:              runpod/base:1.0.3-dev-fix-pytorch-version-verification-cuda1300-ubuntu2404
+allowed host CUDA:  13.0
+release root:       /workspace/h3-golden/releases/h3-cu130-v1-candidate
+python:             runtime/venv/bin/python
+Comfy entrypoint:   runtime/launch-comfy.sh
+```
+
+The image, host-CUDA constraint, and mounted release are one contract. A pod
+that merely has an RTX 5090 or a mounted `/workspace` is not compatible unless
+the direct release-venv CUDA preflight passes.
 
 ### Storage-first bootstrap on a network volume
 
@@ -174,8 +201,15 @@ workflow pin.
 
 Use Astrid's RunPod pack, backed by `runpod-lifecycle>=0.3`:
 
-- `runpod.session` is the preferred one-shot route. It provisions, executes,
-  and tears down in `try/finally`.
+- `runpod.session` is for disposable one-shot jobs. It provisions, executes,
+  and tears down in `try/finally`; do not use it when the pod must stay running.
+- For an existing pod, `runpod-lifecycle run POD_ID --script <job-script>
+  --keep-pod` already ships, executes and fetches results without a remote
+  Astrid worker. Its outputs are local files, not automatically managed media.
+- `runpod.exec` wraps that runner through Astrid and leaves the pod alive.
+  It currently requires the full handle from `runpod.provision`, not the
+  claim waiter's smaller handle. Verify the runtime, executor dependencies,
+  SSH transport admission and managed settlement before claiming native success.
 - Use `runpod.provision` → `runpod.exec`/`runpod.pull` → `runpod.teardown`
   when several sequential GPU stages must share a warm ComfyUI process/cache.
 - Provisioning writes `pod_handle.json` immediately. It contains the pod ID,
@@ -212,7 +246,14 @@ VibeComfy checkout, and queues a workflow against
 `http://127.0.0.1:8188`. Its refusal to overwrite an existing attempt directory
 is part of the safety boundary.
 
-### Canonical Astrid task submission on an attached GPU
+### Optional worker-backed Astrid task submission: incomplete integration
+
+The following describes the worker-backed acceptance contract, not a working
+automatic pod-attach command in the inspected checkout. `execution_request`
+is currently stored as task metadata; it does not attach a pod or enforce
+placement. Do not block ordinary `runpod.exec`/lifecycle jobs on implementing
+this integration. See the [practical operator path](spinning-up-and-executing-tasks-on-runpod.md)
+and the separate [build brief](../docs/projects/astrid-unified-execution/runpod-task-execution-build-brief.md).
 
 For worker-backed generation, submit through Runtime's task queue rather than
 calling Comfy's `/prompt` endpoint directly. Carry the exact capability digest,
@@ -314,16 +355,14 @@ RunPod's GraphQL `podFindAndDeployOnDemand` supports `allowedCudaVersions`.
 For a workflow requiring CUDA 13, request the corresponding allowed host
 version (for example `allowedCudaVersions: ["13.0"]`) instead of assuming every
 5090 host meets the requirement. Still verify the observed host and runtime
-after launch. This is an API input, **not** an invented lifecycle CLI flag.
+after launch. The current lifecycle CLI exposes this as `--allowed-cuda-versions`.
 See the official [CUDA placement filter](https://docs.runpod.io/sdks/graphql/manage-pods#filter-by-cuda-version).
 
-The inspected `runpod-lifecycle==0.3.0` launch CLI and
-`create_pod`/`create_pod_with_fallbacks` functions do not expose that constraint.
-Do not silently ignore it or copy a made-up profile key: either add and test
-support in that substrate, or explicitly document an authorized direct-provider
-fallback with the same credential, exact-handle, budget, preservation, and
-teardown rules. This missing placement constraint was a major cause of the
-18 September compatibility detour. The earlier unfiltered attempt did not
+The 2026-09-21 inspected checkout passes `allowed_cuda_versions` through launch,
+fallback and probe. Check installed CLI help rather than relying on the package
+version string alone. Earlier revisions lacked that support; this missing
+placement constraint was a major cause of the 18 September compatibility detour.
+The earlier unfiltered attempt did not
 enforce it; a subsequent direct-provider relaunch created pod
 `t2bwv16uualmsr` on 18 September 2026 with
 `allowedCudaVersions: ["13.0"]` at the recorded `$0.99/hour` rate. The host

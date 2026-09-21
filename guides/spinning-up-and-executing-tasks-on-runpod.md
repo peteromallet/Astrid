@@ -206,6 +206,44 @@ The prepared pod needs a registered Astrid `GenericPackHost` for
 claims the task, runs VibeComfy, stages the result, and settles it. Keep the
 RunPod handle and task id in the receipt so the result remains traceable.
 
+Start the worker before submitting the task, in this order:
+
+1. Claim or select the exact prepared pod and record its `pod_id`, SSH address,
+   and mounted release. Start one reverse SSH tunnel from the pod to the local
+   Astrid Runtime. The acceptance run used remote port `50604` forwarding to
+   the local Runtime port `59683`; read the current local port from
+   `.astrid-data/runtime/discovery.json`.
+2. Upload the current Astrid/VibeComfy source, boot manifest, readiness profile,
+   and input objects to a fresh staging directory on `/workspace`. Put the
+   worker credential on the pod's container disk at
+   `/tmp/astrid-pack-host.token` with mode `0600`; do not use the volume copy
+   when its permissions are group/world-readable.
+3. Start exactly one generic host with the canonical identity and capability:
+
+   ```bash
+   "$RUNTIME/venv/bin/python" -m astrid.core.execution.generic_host run \
+     --pack-root "$SRC/astrid/packs/vibecomfy" \
+     --runtime-endpoint http://127.0.0.1:50604 \
+     --credential-file /tmp/astrid-pack-host.token \
+     --executor-id astrid-pack-host --max-concurrency 1 \
+     --register --poll-seconds 1 \
+     --attempt-root "$JOB/attempts" \
+     --ready-file "$JOB/generic-host.ready.json" \
+     --source-checkout "$SRC" \
+     --support-root /tmp/astrid-host \
+     --boot-manifest-path /tmp/astrid-host/boot-manifest.json \
+     --boot-manifest-hash "$BOOT_HASH" \
+     --readiness-profile-path "$JOB/hc03-readiness.json" \
+     --readiness-profile-hash "sha256:$PROFILE_HASH"
+   ```
+
+   The shell variables are the fresh staging paths and hashes from the
+   uploaded release. Only one worker may use `astrid-pack-host` at a time;
+   pause a local worker with that identity while the RunPod worker is active.
+4. Wait for the Runtime capability row `vibecomfy.run` to become `ready`.
+   A ready file only proves that the process started; it is not registration
+   proof. Submit the task only after the live capability digest is visible.
+
 Create the task through Astrid, rather than calling ComfyUI directly. Put the
 generation intent at the admission level. Its `metadata` object is the light
 association layer for caller labels such as `shot_id`; Runtime copies it to
@@ -308,6 +346,16 @@ The task id, attempt id, output association, Generation id, `shot_id`, local
 path, byte count and digest belong in the receipt. A direct Comfy/VibeComfy
 smoke is useful diagnosis, but it does not replace this task-to-Generation
 check.
+
+After the local object downloads and media checks pass, terminate the exact
+pod that was used. Do not terminate by GPU type or by the storage volume:
+
+```bash
+runpod-lifecycle terminate <claimed-pod-id> --yes
+runpod-lifecycle list
+```
+
+The final list must show no pods before the run is closed.
 
 The acceptance run on 2026-09-22 used task
 `2e61fe96ac544d1c96e85800c24b2850`, published Generation

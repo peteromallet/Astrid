@@ -206,18 +206,55 @@ The prepared pod needs a registered Astrid `GenericPackHost` for
 claims the task, runs VibeComfy, stages the result, and settles it. Keep the
 RunPod handle and task id in the receipt so the result remains traceable.
 
-Create a task with a complete D1 generation intent. The optional `metadata`
-object is the light association layer for caller labels such as `shot_id`;
-Runtime copies it to every Generation published by that task group.
+Create the task through Astrid, rather than calling ComfyUI directly. Put the
+generation intent at the admission level. Its `metadata` object is the light
+association layer for caller labels such as `shot_id`; Runtime copies it to
+the Generation published by the task. The raw `tasks create` route also needs
+the generic `generation.publish_v1` settlement effect. The higher-level SDK
+invocation route composes that effect from the registered capability, so this
+is publication metadata, not an H3 adapter.
 
 ```bash
-cat > /tmp/generation-task.json <<'JSON'
+# Replace the angle-bracket placeholders with the claimed pod, project, and
+# managed workflow object before running this command.
+cat > /tmp/task-spec.json <<'JSON'
 {
   "inputs": {"workflow": {"digest": "sha256:<workflow-object>"}},
-  "input_digests": [{"name": "workflow", "digest": "sha256:<workflow-object>"}],
-  "generation_intent": {
+  "input_digests": [{"name": "workflow", "digest": "sha256:<workflow-object>"}]
+}
+JSON
+
+cat > /tmp/generation-intent.json <<'JSON'
+{
+  "version": 1,
+  "modality": "video",
+  "partial_success_policy": "reject",
+  "groups": [{
+    "group_key": "main",
+    "selectors": [{
+      "selector": "main-0",
+      "ordinal": 0,
+      "variant_key": "original",
+      "required": true
+    }]
+  }],
+  "metadata": {
+    "shot_id": "shot-17",
+    "scene_id": "scene-3",
+    "take": 2
+  }
+}
+JSON
+
+cat > /tmp/generation-effect.json <<'JSON'
+{
+  "effect_type": "generation.publish_v1",
+  "target_id": "<project-id>",
+  "payload": {
     "version": 1,
     "modality": "video",
+    "generation_type": "vibecomfy.run",
+    "metadata": {"shot_id": "shot-17", "scene_id": "scene-3", "take": 2},
     "partial_success_policy": "reject",
     "groups": [{
       "group_key": "main",
@@ -225,28 +262,33 @@ cat > /tmp/generation-task.json <<'JSON'
         "selector": "main-0",
         "ordinal": 0,
         "variant_key": "original",
-        "required": true
+        "required": true,
+        "output_port": "vibecomfy_run"
       }]
-    }],
-    "metadata": {
-      "shot_id": "shot-17",
-      "scene_id": "scene-3",
-      "take": 2
-    }
+    }]
   }
 }
 JSON
 
-python3 -m astrid tasks create --project <project-id-or-slug> \
+python3 -m astrid tasks create --project <project-id> \
   --capability vibecomfy.run \
-  --spec "$(cat /tmp/generation-task.json)" \
+  --spec "$(cat /tmp/task-spec.json)" \
   --input-manifest '["sha256:<workflow-object>"]' \
+  --generation-intent "$(cat /tmp/generation-intent.json)" \
+  --settlement-effect "$(cat /tmp/generation-effect.json)" \
   --execution-request '{"target":{"kind":"runpod","pod_id":"<claimed-pod-id>","provider_account_ref":"runpod-default"},"lifecycle":{"mode":"leave_running"},"limits":{"max_queue_seconds":300,"max_runtime_seconds":1800}}' \
   --idempotency-key "generation-<unique-key>" \
   --json
 ```
 
-Follow the returned `task_id` until it is `completed` or `settled`. Then read
+The effect's `target_id` must be the same project id passed to the command. For
+a capability whose primary output port differs, use that declared port in the
+generic effect. Do not put `generation_intent` inside `spec`: that makes it
+opaque executor input and does not publish a Generation. If using
+`client.invoke_result("vibecomfy.run", kind="executor", ...)`, pass the intent
+in `inputs`; the SDK validates it and composes the same settlement effect.
+
+Follow the returned `task_id` until it is `succeeded` or `settled`. Then read
 the task's managed output associations and the Generation created by the
 `generation.publish_v1` settlement. Download each selected object through the
 Runtime object API, verify its SHA-256 and media decode locally, and only then
@@ -258,7 +300,7 @@ from astrid.sdk import AstridClient
 with AstridClient.open_from_launcher() as client:
     task = client.tasks.show("<task-id>")
     outputs = client.tasks.list_managed_outputs("<task-id>")
-    generation_rows = client.generations.list("<project-id-or-slug>")
+    generation_rows = client.generations.list("<project-id>")
     data = client.media.read_bytes(outputs.data[0]["object_id"])
 ```
 
@@ -266,6 +308,13 @@ The task id, attempt id, output association, Generation id, `shot_id`, local
 path, byte count and digest belong in the receipt. A direct Comfy/VibeComfy
 smoke is useful diagnosis, but it does not replace this task-to-Generation
 check.
+
+The acceptance run on 2026-09-22 used task
+`2e61fe96ac544d1c96e85800c24b2850`, published Generation
+`generation-5f60f79456bb0309c8c394f765e219f7ebcb9ca343765fc74ba3d9e0c6f0cf6c`,
+verified two decoded MP4 outputs locally, and terminated the claimed pod. The
+local receipt is kept under
+`Astrid/.otto/runs/astrid-runpod-task-queue-20260918/artifacts/managed-generation-8step-20260921-r5i/`.
 
 ## 5. Astrid-native lifecycle invocation
 

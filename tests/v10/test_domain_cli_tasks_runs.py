@@ -30,10 +30,15 @@ class _Tasks:
     def __init__(self, owner: "_Client") -> None:
         self.owner = owner
 
-    def create(self, *, project_id, capability, spec, input_manifest=None, idempotency_key=None):
-        self.owner.calls.append(("tasks.create", {"project_id": project_id,
-            "capability": capability, "spec": spec, "input_manifest": input_manifest,
-            "idempotency_key": idempotency_key}))
+    def create(self, *, project_id, capability, spec, input_manifest=None,
+               generation_intent=None, settlement_effect=None, idempotency_key=None):
+        call = {"project_id": project_id, "capability": capability, "spec": spec,
+                "input_manifest": input_manifest, "idempotency_key": idempotency_key}
+        if generation_intent is not None:
+            call["generation_intent"] = generation_intent
+        if settlement_effect is not None:
+            call["settlement_effect"] = settlement_effect
+        self.owner.calls.append(("tasks.create", call))
         key = idempotency_key or "generated-key"
         return DomainResult.success({"id": "T-1", "project_id": project_id, "status": "queued"},
             receipt=_receipt("core.task.create", key), idempotency_key=key)
@@ -165,10 +170,26 @@ def test_mutations_forward_only_canonical_arguments(capsys) -> None:
 
 def test_tasks_create_forwards_generated_contract(capsys) -> None:
     client = _Client()
+    generation_intent = {
+        "version": 1,
+        "modality": "video",
+        "partial_success_policy": "reject",
+        "groups": [{"group_key": "main", "selectors": []}],
+        "metadata": {"shot_id": "shot-1"},
+    }
+    settlement_effect = {
+        "effect_type": "generation.publish_v1",
+        "target_id": "P-1",
+        "payload": {"version": 1, "modality": "video", "groups": []},
+    }
     assert _run("tasks", ["create", "--project", "P-1", "--capability", "cap.a",
-        "--spec", '{"x": 1}', "--input-manifest", '[{"media_id":"M-1"}]', "--json"], client) == 0
+        "--spec", '{"x": 1}', "--input-manifest", '[{"media_id":"M-1"}]',
+        "--generation-intent", json.dumps(generation_intent),
+        "--settlement-effect", json.dumps(settlement_effect), "--json"], client) == 0
     assert client.calls == [("tasks.create", {"project_id": "P-1", "capability": "cap.a",
-        "spec": {"x": 1}, "input_manifest": [{"media_id": "M-1"}], "idempotency_key": None})]
+        "spec": {"x": 1}, "input_manifest": [{"media_id": "M-1"}],
+        "generation_intent": generation_intent, "settlement_effect": settlement_effect,
+        "idempotency_key": None})]
     envelope = json.loads(capsys.readouterr().out)
     assert set(envelope) == ENVELOPE_KEYS and envelope["receipt"] is not None
     assert envelope["data"]["handoff"]["follow"] == (

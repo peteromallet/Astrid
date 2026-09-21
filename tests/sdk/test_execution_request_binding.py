@@ -55,6 +55,15 @@ class _Transport:
         return {"task_id": "T-1", "run_id": "R-1", "state": "queued"}
 
 
+class _MixedCapabilityTransport(_Transport):
+    def list_capabilities(self, *, cursor=None, limit=50):
+        del cursor, limit
+        return [[
+            {"capability_id": "vibecomfy.run", "definition_digest": "sha256:stale", "status": "unavailable"},
+            {"capability_id": "vibecomfy.run", "definition_digest": "sha256:live", "status": "ready"},
+        ], None]
+
+
 def test_normalizes_one_target_without_mutating_creative_input() -> None:
     original = json.loads(json.dumps(PROFILE_REQUEST))
     normalized = normalize_execution_request(original)
@@ -105,6 +114,18 @@ def test_remote_task_create_carries_target_and_conflicts_on_changed_request() ->
             idempotency_key="same-key",
             execution_request={"target": {"kind": "machine", "id": "machine-1"}},
         )
+
+
+def test_remote_task_create_prefers_ready_duplicate_capability() -> None:
+    transport = _MixedCapabilityTransport()
+    result = RemoteTasks(transport).create(
+        project_id="P-1",
+        capability="vibecomfy.run",
+        spec={},
+        idempotency_key="ready-key",
+    )
+    assert result.ok
+    assert transport.calls[0]["capability_digest"] == "sha256:live"
 
 
 def test_invalid_request_returns_validation_without_capability_lookup() -> None:

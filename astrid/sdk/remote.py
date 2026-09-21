@@ -407,13 +407,17 @@ class RemoteTasks(_RemoteFamily):
                 ),
                 idempotency_key=key,
             )
+        matching = [
+            item
+            for item in capabilities
+            if isinstance(item, Mapping) and item.get("capability_id") == capability
+        ]
+        # Multiple executors can advertise the same capability. Prefer a live
+        # ready registration over an unavailable static/local registration;
+        # otherwise a stale first row can mask a healthy RunPod worker.
         match = next(
-            (
-                item
-                for item in capabilities
-                if isinstance(item, Mapping) and item.get("capability_id") == capability
-            ),
-            None,
+            (item for item in matching if item.get("status") == "ready"),
+            matching[0] if matching else None,
         )
         if match is None:
             return DomainResult.failure(

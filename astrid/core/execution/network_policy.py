@@ -298,6 +298,18 @@ def _local_identity_tool(command: Any) -> bool:
     return tuple(tokens[1:]) in allowed
 
 
+def _local_process_probe(command: Any) -> bool:
+    """Allow the narrow local listener probe used by managed sessions."""
+    if not isinstance(command, (list, tuple)):
+        return False
+    tokens = [str(value) for value in command]
+    if len(tokens) != 6 or Path(tokens[0]).name.lower() != "lsof":
+        return False
+    if tokens[1:4] != ["-nP", "-t", "-a"] or tokens[5] != "-sTCP:LISTEN":
+        return False
+    return tokens[4].startswith("-iTCP:") and tokens[4][7:].isdigit()
+
+
 def _patch_native_descendants(originals: Mapping[tuple[Any, str], Any]) -> None:
     """Fail closed when a Python provider tries to escape via a native child."""
     original_popen = subprocess.Popen
@@ -306,14 +318,18 @@ def _patch_native_descendants(originals: Mapping[tuple[Any, str], Any]) -> None:
         command = args[0] if args else kwargs.get("args", "")
         local_media = _local_media_tool(command)
         local_identity = _local_identity_tool(command)
+        local_process = _local_process_probe(command)
         safe_invocation = not bool(kwargs.get("shell")) and not kwargs.get("executable")
-        allowed = safe_invocation and (_validated_descendant_owner() or local_media or local_identity)
+        allowed = safe_invocation and (
+            _validated_descendant_owner() or local_media or local_identity or local_process
+        )
         _record(
             "native_descendant",
             allowed=allowed,
             detail=(
                 "local-media-tool:" if local_media else
-                "local-identity-tool:" if local_identity else ""
+                "local-identity-tool:" if local_identity else
+                "local-process-probe:" if local_process else ""
             ) + _command_label(command),
         )
         if not allowed:

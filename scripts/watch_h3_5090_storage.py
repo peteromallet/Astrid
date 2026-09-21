@@ -583,7 +583,7 @@ def start_remote_generic_host(client: paramiko.SSHClient, handle: dict[str, Any]
     if rc != 0:
         raise RuntimeError(f"stale generic-host witness cleanup failed: {err[-500:]}")
     profile_script = """
-set -u
+set -eu
 BASE=__BASE__
 TEST=__TEST__
 SRC=__SRC__
@@ -596,7 +596,7 @@ export BASE TEST
 export PYTHONPATH=\"$SRC:$BASE/runtime/vibecomfy:$BASE/runtime/ComfyUI\"
 export VIBECOMFY_HEADLESS=1
 # The release image can omit Astrid's small schema-validator closure.  Install
-// only these packages with --no-deps, so Torch/CUDA cannot be changed.
+# only these packages with --no-deps, so Torch/CUDA cannot be changed.
 /usr/bin/uv pip install -q --python \"$PY\" --no-deps \\
   \"jsonschema>=4.0\" \"jsonschema-specifications>=2023.03.6\" \\
   \"referencing>=0.30\" \"rpds-py>=0.7\" \"attrs>=22.2\" \\
@@ -785,6 +785,31 @@ def run_astrid_e2e(client: paramiko.SSHClient, handle: dict[str, Any]) -> dict[s
             },
         },
     }
+    generation_intent = spec["generation_intent"]
+    settlement_effect = {
+        "effect_type": "generation.publish_v1",
+        "target_id": "astrid-intro",
+        "payload": {
+            "version": 1,
+            "modality": generation_intent["modality"],
+            "generation_type": "vibecomfy.run",
+            "metadata": generation_intent["metadata"],
+            "partial_success_policy": generation_intent["partial_success_policy"],
+            "groups": [
+                {
+                    "group_key": group["group_key"],
+                    "selectors": [
+                        {
+                            **selector,
+                            "output_port": "vibecomfy_run",
+                        }
+                        for selector in group["selectors"]
+                    ],
+                }
+                for group in generation_intent["groups"]
+            ],
+        },
+    }
     # Registration is asynchronous: a ready-file only means the host process
     # started, not that the runtime has published its final capability digest.
     # Wait for the live registry before admission so the task cannot be bound
@@ -815,12 +840,19 @@ def run_astrid_e2e(client: paramiko.SSHClient, handle: dict[str, Any]) -> dict[s
         "lifecycle": {"mode": "leave_running"},
         "limits": {"max_queue_seconds": 300, "max_runtime_seconds": 1800},
     }
-    key = "astrid-h3-5090-e2e-" + str(handle["pod_id"])
+    key = (
+        "astrid-h3-5090-e2e-"
+        + str(handle["pod_id"])
+        + "-"
+        + os.environ.get("ASTRID_E2E_IDEMPOTENCY_SUFFIX", "initial")
+    )
     args = [
         "python3", "-m", "astrid", "tasks", "create", "--project", "astrid-intro",
         "--capability", "vibecomfy.run",
         "--spec", json.dumps(spec, separators=(",", ":")),
         "--input-manifest", json.dumps(list(object_ids.values()), separators=(",", ":")),
+        "--generation-intent", json.dumps(generation_intent, separators=(",", ":")),
+        "--settlement-effect", json.dumps(settlement_effect, separators=(",", ":")),
         "--execution-request", json.dumps(target, separators=(",", ":")),
         "--idempotency-key", key, "--json",
     ]
@@ -904,7 +936,7 @@ PY
                 "stderr": observed.stderr[-2000:],
             }, None
         states.append({"recorded_at_utc": now(), "state": state, "payload": payload})
-        if state in {"completed", "failed", "cancelled", "settled"}:
+        if state in {"completed", "succeeded", "failed", "cancelled", "settled"}:
             break
         time.sleep(5)
     receipt["task_id"] = task_id
@@ -926,13 +958,13 @@ PY
             "stderr": cancel.stderr[-2000:],
         }
     receipt["status"] = (
-        "completed" if final_state in {"completed", "settled"}
+        "completed" if final_state in {"completed", "succeeded", "settled"}
         else "queue_or_execution_timeout"
     )
     # Settlement is not complete until the result manifest and the selected
     # raw MP4s are independently decoded.  Keep this evidence beside the
     # task/events payload so a successful state cannot hide bad media.
-    if final_state in {"completed", "settled"}:
+    if final_state in {"completed", "succeeded", "settled"}:
         probe_command = f'''set -u
 BASE={shlex.quote(BASE)}
 TEST={shlex.quote(TEST)}

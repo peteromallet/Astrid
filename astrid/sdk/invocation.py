@@ -37,6 +37,68 @@ from .exceptions import (
 from .results import DiscoveryResult, InvocationResult, _json_safe, _json_safe_mapping
 
 
+_MAX_GENERATION_METADATA_BYTES = 16 * 1024
+_MAX_GENERATION_METADATA_DEPTH = 8
+
+
+def _validate_generation_metadata(value: Any) -> dict[str, Any]:
+    """Return a small JSON metadata object safe to persist with a generation."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise CapabilityValidationError("generation_intent.metadata must be an object")
+
+    def copy_json(item: Any, *, path: str, depth: int = 0) -> Any:
+        if depth > _MAX_GENERATION_METADATA_DEPTH:
+            raise CapabilityValidationError(
+                f"{path} exceeds the maximum metadata nesting depth of "
+                f"{_MAX_GENERATION_METADATA_DEPTH}"
+            )
+        if item is None or isinstance(item, (str, bool, int)):
+            return item
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise CapabilityValidationError(f"{path} must contain only finite JSON values")
+            return item
+        if isinstance(item, Mapping):
+            copied: dict[str, Any] = {}
+            for key, nested in item.items():
+                if not isinstance(key, str) or not key:
+                    raise CapabilityValidationError(
+                        f"{path} keys must be non-empty strings"
+                    )
+                copied[key] = copy_json(nested, path=f"{path}.{key}", depth=depth + 1)
+            return copied
+        if isinstance(item, list):
+            return [
+                copy_json(nested, path=f"{path}[{index}]", depth=depth + 1)
+                for index, nested in enumerate(item)
+            ]
+        raise CapabilityValidationError(
+            f"{path} must contain only JSON objects, arrays, strings, numbers, booleans, or null"
+        )
+
+    copied = copy_json(value, path="generation_intent.metadata")
+    try:
+        encoded = json.dumps(
+            copied,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise CapabilityValidationError(
+            "generation_intent.metadata must be valid UTF-8 JSON"
+        ) from exc
+    if len(encoded) > _MAX_GENERATION_METADATA_BYTES:
+        raise CapabilityValidationError(
+            "generation_intent.metadata must be at most "
+            f"{_MAX_GENERATION_METADATA_BYTES} bytes"
+        )
+    return copied
+
+
 def _expanded_config_hash(config: Mapping[str, Any]) -> str:
     """Hash the exact in-memory expansion sent to the renderer."""
     payload = json.dumps(
@@ -1394,10 +1456,12 @@ def _validate_generation_intent(
     """Validate and copy the opaque D1 generation intent envelope."""
     if not isinstance(value, Mapping):
         raise CapabilityValidationError("generation_intent must be an object")
-    if set(value) != {"version", "modality", "partial_success_policy", "groups"}:
+    required_keys = {"version", "modality", "partial_success_policy", "groups"}
+    allowed_keys = required_keys | {"metadata"}
+    if not required_keys.issubset(value) or set(value) - allowed_keys:
         raise CapabilityValidationError(
-            "generation_intent must contain exactly version, modality, "
-            "partial_success_policy, and groups"
+            "generation_intent must contain version, modality, "
+            "partial_success_policy, groups, and optional metadata"
         )
     version = value["version"]
     if isinstance(version, bool) or not isinstance(version, int) or version != 1:
@@ -1508,12 +1572,15 @@ def _validate_generation_intent(
             copied_selectors.append(copied_selector)
         copied_groups.append({"group_key": group_key, "selectors": copied_selectors})
 
-    return {
+    result = {
         "version": 1,
         "modality": modality,
         "partial_success_policy": partial_success_policy,
         "groups": copied_groups,
     }
+    if "metadata" in value:
+        result["metadata"] = _validate_generation_metadata(value["metadata"])
+    return result
 
 
 def _generation_capability_modality(capability_id: str) -> str | None:
@@ -1661,7 +1728,7 @@ def _generation_publish_effect(
             "version": 1,
             "modality": modality,
             "generation_type": str(capability.id),
-            "metadata": {},
+            "metadata": _validate_generation_metadata(generation_intent.get("metadata")),
             "partial_success_policy": generation_intent["partial_success_policy"],
             "groups": groups,
         },

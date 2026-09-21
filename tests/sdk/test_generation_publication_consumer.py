@@ -7,7 +7,13 @@ import pytest
 from astrid.core._shared.result_manifest import harvest_staged_outputs
 from astrid.core.contracts.schema import Output
 from astrid.core.execution.generic_host import GenericPackHost, HostError
-from astrid.sdk.invocation import _automatic_generation_intent, _generation_publish_effect, _kernel_invoke
+from astrid.sdk.invocation import (
+    _automatic_generation_intent,
+    _generation_publish_effect,
+    _kernel_invoke,
+    _validate_generation_intent,
+)
+from astrid.sdk.exceptions import CapabilityValidationError
 from astrid.sdk.results import Capability, _join_managed_generation_outputs
 
 
@@ -60,6 +66,53 @@ def test_effect_preserves_group_selector_order_and_schema_port() -> None:
     }
 
 
+def test_generation_metadata_is_carried_into_the_published_generation() -> None:
+    intent = {
+        "version": 1,
+        "modality": "video",
+        "partial_success_policy": "allow",
+        "groups": [
+            {"group_key": "main", "selectors": [{"selector": "s", "ordinal": 0, "variant_key": "v"}]}
+        ],
+        "metadata": {
+            "shot_id": "shot-17",
+            "scene_id": "scene-3",
+            "labels": ["hero", "wide"],
+            "review": {"selected": False},
+        },
+    }
+
+    validated = _validate_generation_intent(intent, modality="video")
+    effect = _generation_publish_effect(
+        _capability(), project="project-1", generation_intent=validated
+    )
+
+    assert validated["metadata"] == intent["metadata"]
+    assert effect["payload"]["metadata"] == intent["metadata"]
+
+
+@pytest.mark.parametrize(
+    "metadata, match",
+    [
+        ("shot-17", "must be an object"),
+        ({"shot_id": float("nan")}, "finite JSON values"),
+        ({"shot_id": "x" * (16 * 1024)}, "at most 16384 bytes"),
+    ],
+)
+def test_generation_metadata_is_small_and_json_safe(metadata, match) -> None:
+    intent = {
+        "version": 1,
+        "modality": "video",
+        "partial_success_policy": "allow",
+        "groups": [
+            {"group_key": "main", "selectors": [{"selector": "s", "ordinal": 0, "variant_key": "v"}]}
+        ],
+        "metadata": metadata,
+    }
+    with pytest.raises(CapabilityValidationError, match=match):
+        _validate_generation_intent(intent, modality="video")
+
+
 def test_kernel_admission_predeclares_typed_effect_and_omits_it_without_intent() -> None:
     calls = []
 
@@ -72,10 +125,15 @@ def test_kernel_admission_predeclares_typed_effect_and_omits_it_without_intent()
     intent = {
         "version": 1, "modality": "video", "partial_success_policy": "reject",
         "groups": [{"group_key": "g", "selectors": [{"selector": "s", "ordinal": 0, "variant_key": "v"}]}],
+        "metadata": {"shot_id": "shot-17", "take": 2},
     }
     _kernel_invoke(_capability(), kind="executor", project="project-1", inputs={}, outputs={}, generation_intent=intent, _client=client)
     _kernel_invoke(_capability(), kind="executor", project="project-1", inputs={}, outputs={}, _client=client)
     assert calls[0]["settlement_effect"]["effect_type"] == "generation.publish_v1"
+    assert calls[0]["generation_intent"]["metadata"] == {"shot_id": "shot-17", "take": 2}
+    assert calls[0]["settlement_effect"]["payload"]["metadata"] == {
+        "shot_id": "shot-17", "take": 2
+    }
     assert calls[0]["settlement_effect"]["payload"]["groups"][0]["selectors"][0]["output_port"] == "generated_videos"
     assert "settlement_effect" not in calls[1]
 

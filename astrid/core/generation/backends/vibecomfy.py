@@ -8,8 +8,8 @@ invalid template, not an invitation to infer a node target.
 
 from __future__ import annotations
 
-import hashlib
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -35,12 +35,12 @@ from astrid.core.generation.backends.base import (
     parse_dimension_pair,
     split_feature_support,
 )
-from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
 from astrid.core.generation.vibecomfy_dependency import (
     VIBECOMFY_ATTESTED_CONTENT_DIGEST_ENV,
     VIBECOMFY_ATTESTED_REVISION_ENV,
     VIBECOMFY_ENGINE_REVISION,
 )
+from astrid.core.model_catalog.schema import BackendSpec, ModelEntry
 
 logger = logging.getLogger(__name__)
 
@@ -1179,7 +1179,13 @@ class VibeComfyEngine:
         except (OSError, urllib_error.URLError) as exc:
             raise ValueError(f"checkout_server {path} request failed") from exc
 
-    def run(self, workflow: Any, *, runtime_instance_id: str | None = None) -> Any:
+    def run(
+        self,
+        workflow: Any,
+        *,
+        runtime_instance_id: str | None = None,
+        config: Any | None = None,
+    ) -> Any:
         """Run one workflow without allowing poisoned lifecycle reuse."""
         with self._lock:
             if self._operation is not None:
@@ -1232,7 +1238,10 @@ class VibeComfyEngine:
                     runtime_args = (bundle.compile(), bundle)
                 else:
                     runtime_args = (workflow,)
-            result = run_sync(*runtime_args, server_url=self._origin)
+            runtime_kwargs: dict[str, Any] = {"server_url": self._origin}
+            if config is not None:
+                runtime_kwargs["config"] = config
+            result = run_sync(*runtime_args, **runtime_kwargs)
             with self._lock:
                 # A containment transition may have superseded this run.  A
                 # result from the old incarnation is never eligible for
@@ -1334,6 +1343,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
         self._output_root: Path | None = None
         self._bound_fingerprint: str | None = None
         self._bound_warmth_identity: str | None = None
+        self._last_run_result: Any | None = None
 
     @classmethod
     def from_host_session(
@@ -1982,7 +1992,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
             raise ValueError("checkout_server live source revision changed")
         _verify_owned_vibe_session(session_dir, pid)
 
-    def run_compiled_workflow(self, workflow: Any, out_dir: Path) -> list[Path]:
+    def run_compiled_workflow(
+        self,
+        workflow: Any,
+        out_dir: Path,
+        *,
+        task_identity: str | None = None,
+        attempt_identity: str | None = None,
+    ) -> list[Path]:
         """Compile one canonical workflow, run it, and custody private outputs."""
         if self._bound_fingerprint is None or self._bound_warmth_identity is None:
             raise ValueError("checkout_server has no verified workflow binding")
@@ -2000,6 +2017,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
         except ValueError as exc:
             raise ValueError("checkout_server output directory escaped HC-03 output root") from exc
         destination.mkdir(parents=True, exist_ok=True)
+        self._last_run_result = None
 
         try:
             self._revalidate_host_session()
@@ -2063,8 +2081,32 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 runtime_instance_id=self._runtime_instance_id,
                 model_bytes_digest=model_bytes_digest,
             )
-            result = self._run_workflow((approved, bundle))
-            return self._collect_outputs(result, destination)
+            runtime_config = None
+            if task_identity is not None or attempt_identity is not None:
+                from vibecomfy.runtime.session import SessionConfig
+
+                config_values: dict[str, Any] = {}
+                workflow_config = (
+                    metadata.get("comfy_configuration")
+                    if isinstance(metadata, Mapping)
+                    else None
+                )
+                if isinstance(workflow_config, Mapping):
+                    config_values.update(dict(workflow_config))
+                # Host-issued identity augments the workflow's runtime
+                # configuration.  It must not replace settings such as the
+                # output directory when an explicit server owns execution.
+                if task_identity is not None:
+                    config_values["task_id"] = task_identity
+                if attempt_identity is not None:
+                    config_values["attempt_id"] = attempt_identity
+                runtime_config = SessionConfig.from_dict(
+                    config_values
+                )
+            result = self._run_workflow((approved, bundle), config=runtime_config)
+            outputs = self._collect_outputs(result, destination)
+            self._last_run_result = result
+            return outputs
         except BaseException:
             self._engine._abort_preparation()
             raise
@@ -2110,7 +2152,9 @@ class CheckoutServerAdapter(VibeComfyBackend):
             self._revalidate_host_session()
         self._probe_system_stats()
 
-    def _run_workflow(self, workflow: Any) -> Any:
+    def _run_workflow(
+        self, workflow: Any, *, config: Any | None = None
+    ) -> Any:
         """Probe version and submit with the canonical runtime identity."""
         self._origin = _validate_checkout_server_url(self._origin)
         self._probe_system_stats()
@@ -2121,7 +2165,9 @@ class CheckoutServerAdapter(VibeComfyBackend):
             raise ValueError(
                 "checkout_server runtime_instance_id is required from canonical health/bootstrap"
             )
-        return self._engine.run(workflow, runtime_instance_id=instance_id)
+        return self._engine.run(
+            workflow, runtime_instance_id=instance_id, config=config
+        )
 
     def _collect_outputs(self, result: Any, out_dir: Path) -> list[Path]:
         """Custody remote outputs through validated Comfy ``/view`` downloads."""

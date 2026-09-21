@@ -54,6 +54,20 @@ class LoadedWorkflow:
     workflow_content_digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class ProductionRunResult:
+    """Structured producer completion retained across the engine boundary."""
+
+    outputs: tuple[Path, ...]
+    managed_generation_result_path: Path | None = None
+    managed_generation_result: dict[str, Any] | None = None
+    producer_run_id: str | None = None
+    attempt_id: str | None = None
+
+
+_LAST_PRODUCTION_RESULT: ProductionRunResult | None = None
+
+
 def _workflow_comfyui_version_requirement(resolved: Any) -> str | None:
     """Read the canonical workflow's typed ComfyUI version declaration."""
     bundle = _canonical_bundle_value(resolved)
@@ -523,7 +537,14 @@ def _canonical_bundle(resolved: Any) -> tuple[Any, Any]:
     return bundle.compile(), bundle
 
 
-def _embedded_session_config(bundle: Any, destination: Path, comfy_root: Path) -> Any:
+def _embedded_session_config(
+    bundle: Any,
+    destination: Path,
+    comfy_root: Path,
+    *,
+    task_identity: str,
+    attempt_identity: str | None = None,
+) -> Any:
     """Build a pinned SessionConfig for the embedded profile.
 
     The Comfy-specific values remain in VibeComfy's ``extra`` mapping; the
@@ -586,6 +607,9 @@ def _embedded_session_config(bundle: Any, destination: Path, comfy_root: Path) -
     config.extra["output_directory"] = str(
         (destination / "engine-output").resolve()
     )
+    config.extra["task_id"] = task_identity
+    if attempt_identity is not None:
+        config.extra["attempt_id"] = attempt_identity
     return config
 
 
@@ -610,7 +634,37 @@ def _checkout_cancellation(control: Any):
             signal.signal(signum, handler)
 
 
-def _run_profile(
+def _result_from_runtime_result(
+    result: Any,
+    outputs: tuple[Path, ...],
+) -> ProductionRunResult:
+    raw_path = getattr(result, "managed_generation_result_path", None)
+    result_path = Path(raw_path).expanduser().resolve() if raw_path else None
+    payload: dict[str, Any] | None = None
+    if result_path is not None:
+        if not result_path.is_file():
+            raise ProductionEngineError(
+                f"VibeComfy declared a managed-generation result that is missing: {result_path}"
+            )
+        try:
+            decoded = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProductionEngineError(
+                f"VibeComfy managed-generation result is unreadable: {result_path}"
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise ProductionEngineError("VibeComfy managed-generation result must be an object")
+        payload = decoded
+    return ProductionRunResult(
+        outputs=outputs,
+        managed_generation_result_path=result_path,
+        managed_generation_result=payload,
+        producer_run_id=(str(payload["producer_run_id"]) if payload and payload.get("producer_run_id") else None),
+        attempt_id=(str(payload["attempt_id"]) if payload and payload.get("attempt_id") else None),
+    )
+
+
+def _run_profile_result(
     resolved: Any,
     profile_id: str,
     hc03_profile: Any,
@@ -619,7 +673,8 @@ def _run_profile(
     template_id: str,
     task_identity: str,
     destination: Path,
-) -> tuple[Path, ...]:
+    attempt_identity: str | None = None,
+) -> ProductionRunResult:
     if profile_id == "pip_embedded":
         comfy_root = _bootstrap_embedded_comfy_client()
         from vibecomfy.runtime.run import run_embedded_sync
@@ -644,7 +699,13 @@ def _run_profile(
             result = run_embedded_sync(
                 record,
                 bundle,
-                config=_embedded_session_config(bundle, destination, comfy_root),
+                config=_embedded_session_config(
+                    bundle,
+                    destination,
+                    comfy_root,
+                    task_identity=task_identity,
+                    attempt_identity=attempt_identity,
+                ),
             )
         finally:
             if previous_warm is None:
@@ -677,7 +738,7 @@ def _run_profile(
         outputs: list[Path] = []
         for raw in raw_outputs:
             outputs.append(Path(raw).resolve(strict=True))
-        return tuple(outputs)
+        return _result_from_runtime_result(result, tuple(outputs))
 
     if not isinstance(hc03_profile, Mapping):
         raise ProductionEngineError("checkout_server lacks its verified HC-03 profile")
@@ -703,11 +764,47 @@ def _run_profile(
     )
     with _checkout_cancellation(adapter) as was_cancelled:
         try:
-            return tuple(adapter.run_compiled_workflow(resolved, destination))
+            outputs = tuple(
+                adapter.run_compiled_workflow(
+                    resolved,
+                    destination,
+                    task_identity=task_identity,
+                    attempt_identity=attempt_identity,
+                )
+            )
+            return _result_from_runtime_result(
+                getattr(adapter, "_last_run_result", None), outputs
+            )
         except BaseException:
             if not was_cancelled():
                 adapter.release(reason="failed")
             raise
+
+
+def _run_profile(
+    resolved: Any,
+    profile_id: str,
+    hc03_profile: Any,
+    *,
+    model_id: str,
+    template_id: str,
+    task_identity: str,
+    destination: Path,
+    attempt_identity: str | None = None,
+) -> tuple[Path, ...]:
+    """Compatibility projection for callers that only need output paths."""
+    global _LAST_PRODUCTION_RESULT
+    _LAST_PRODUCTION_RESULT = _run_profile_result(
+        resolved,
+        profile_id,
+        hc03_profile,
+        model_id=model_id,
+        template_id=template_id,
+        task_identity=task_identity,
+        destination=destination,
+        attempt_identity=attempt_identity,
+    )
+    return _LAST_PRODUCTION_RESULT.outputs
 
 
 def run_workflow_path(
@@ -720,6 +817,7 @@ def run_workflow_path(
     template_id: str = "vibecomfy.run",
     hc03_profile: Any = None,
     expected_execution_identity: str | None = None,
+    attempt_identity: str | None = None,
 ) -> tuple[Path, ...]:
     """Run a file workflow through the reviewed production-engine path.
 
@@ -742,7 +840,12 @@ def run_workflow_path(
         actual_identity = loaded_workflow_execution_identity(loaded, hc03_profile)
         if actual_identity != expected_execution_identity:
             raise ProductionEngineError("workflow execution identity changed before launch")
-    return _run_profile(
+    global _LAST_PRODUCTION_RESULT
+    _LAST_PRODUCTION_RESULT = None
+    profile_kwargs: dict[str, Any] = {}
+    if attempt_identity is not None:
+        profile_kwargs["attempt_identity"] = attempt_identity
+    outputs = _run_profile(
         loaded.resolved,
         profile_id,
         hc03_profile,
@@ -750,7 +853,50 @@ def run_workflow_path(
         template_id=loaded.template_id,
         task_identity=task_identity,
         destination=destination_path,
+        **profile_kwargs,
     )
+    return outputs
+
+
+def run_workflow_result_path(
+    workflow_path: str | Path,
+    destination: str | Path,
+    *,
+    task_identity: str,
+    profile_id: str = "pip_embedded",
+    model_id: str = "vibecomfy",
+    template_id: str = "vibecomfy.run",
+    hc03_profile: Any = None,
+    expected_execution_identity: str | None = None,
+    attempt_identity: str | None = None,
+) -> ProductionRunResult:
+    """Run a workflow while retaining the producer result envelope.
+
+    This projects the existing path API so callers and test doubles that still
+    replace ``run_workflow_path`` continue to work.
+    """
+    global _LAST_PRODUCTION_RESULT
+    _LAST_PRODUCTION_RESULT = None
+    kwargs: dict[str, Any] = {
+        "task_identity": task_identity,
+        "profile_id": profile_id,
+        "hc03_profile": hc03_profile,
+        "expected_execution_identity": expected_execution_identity,
+    }
+    if model_id != "vibecomfy":
+        kwargs["model_id"] = model_id
+    if template_id != "vibecomfy.run":
+        kwargs["template_id"] = template_id
+    if attempt_identity is not None:
+        kwargs["attempt_identity"] = attempt_identity
+    outputs = run_workflow_path(
+        workflow_path,
+        destination,
+        **kwargs,
+    )
+    if _LAST_PRODUCTION_RESULT is not None:
+        return _LAST_PRODUCTION_RESULT
+    return ProductionRunResult(outputs=tuple(Path(path) for path in outputs))
 
 
 def execute(request_path: str | Path, out: str | Path, result_path: str | Path) -> None:

@@ -55,6 +55,29 @@ class _Response(io.BytesIO):
         return self._payload
 
 
+def test_checkout_run_workflow_forwards_runtime_config_to_real_engine_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = CheckoutServerAdapter("https://gpu.example.test")
+    probe = Mock()
+    monkeypatch.setattr(adapter, "_probe_system_stats", probe)
+    engine = SimpleNamespace(
+        prepared_runtime_instance_id=RUNTIME_A,
+        runtime_instance_id=None,
+        run=Mock(return_value="result"),
+    )
+    adapter._engine = engine
+    config = object()
+    workflow = object()
+
+    assert adapter._run_workflow(workflow, config=config) == "result"
+
+    probe.assert_called_once_with()
+    engine.run.assert_called_once_with(
+        workflow, runtime_instance_id=RUNTIME_A, config=config
+    )
+
+
 def _entry(template_hash: str, template: str = "image/z_image") -> ModelEntry:
     return ModelEntry(
         id="z-image",
@@ -673,6 +696,67 @@ def test_run_compiled_workflow_uses_bundle_and_private_output_custody(
     bundle.require_canonical_authority.assert_called_once_with("checkout_server execution")
     bundle.compile.assert_called_once_with(schema_provider=ANY, models_root=None)
     assert generated[0].read_bytes() == b"artifact"
+
+
+def test_run_compiled_workflow_augments_workflow_config_with_host_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("vibecomfy")
+    from vibecomfy.workflow import VibeWorkflow, WorkflowSource
+    import vibecomfy.workflow_bundle as workflow_bundle
+
+    profile = _hc03_profile(tmp_path)
+    class _TargetSchema:
+        def refresh(self) -> dict[str, object]:
+            return {}
+
+    target_schema_module = types.ModuleType("vibecomfy.schema")
+    target_schema_module.get_target_schema_provider = lambda **_: _TargetSchema()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "vibecomfy.schema", target_schema_module)
+    monkeypatch.setattr(backend_module, "_verify_owned_vibe_session", lambda *_: None)
+    _patch_remote_open(monkeypatch, output=b"artifact")
+    adapter = CheckoutServerAdapter.from_host_session(
+        hc03_profile=profile,
+        model_id="z-image",
+        template_id="image/z_image",
+        invocation_identity="task-1",
+    )
+    output_root = tmp_path / "outputs"
+    workflow = VibeWorkflow(
+        id="image/z_image",
+        source=WorkflowSource(id="image/z_image"),
+        metadata={
+            "ready_template": "image/z_image",
+            "comfy_configuration": {
+                "output_directory": str(output_root / "remote-output"),
+                "cache_policy": "none",
+            },
+        },
+    )
+    bundle = Mock()
+    bundle.workflow = workflow
+    bundle.workflow_identity = workflow.id
+    bundle.require_canonical_authority.return_value = None
+    bundle.compile.return_value = object()
+    monkeypatch.setattr(workflow_bundle, "load_bundle", lambda _: bundle)
+    metadata_path = tmp_path / "run-metadata.json"
+    metadata_path.write_text(
+        json.dumps({"comfy_outputs": [{"filename": "artifact.png", "subfolder": "", "type": "output"}]}),
+        encoding="utf-8",
+    )
+    adapter._run_workflow = Mock(return_value=SimpleNamespace(metadata_path=metadata_path))  # type: ignore[method-assign]
+    adapter.run_compiled_workflow(
+        workflow,
+        output_root / "task-1",
+        task_identity="host-task",
+        attempt_identity="host-attempt",
+    )
+
+    config = adapter._run_workflow.call_args.kwargs["config"]
+    assert config.extra["task_id"] == "host-task"
+    assert config.extra["attempt_id"] == "host-attempt"
+    assert config.cache_policy == "none"
+    assert config.extra["output_directory"] == str(output_root / "remote-output")
 
 
 def test_run_compiled_workflow_accepts_canonical_bundle_loader_result(

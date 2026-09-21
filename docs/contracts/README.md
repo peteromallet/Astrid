@@ -20,6 +20,10 @@ platform contract is the final authority.
   extension via `extensions.artifact_types.types`.  The definitive guide
   for third-party pack authors shipping typed capabilities.
 
+
+- **[managed-generation-result-v1.md](managed-generation-result-v1.md)** —
+  the strict, engine-neutral managed-generation profile of the universal
+  `manifest.json` result contract.
 ## Normative Contracts
 
 - **[platform-contract.md](platform-contract.md)** — The normative v1

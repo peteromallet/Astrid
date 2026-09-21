@@ -374,6 +374,7 @@ _HOST_OWNED_ENVELOPE_PORTS = (
     "task_spec_json",
     "input_object_paths_json",
     "task_identity",
+    "attempt_identity",
     "execution_identity",
     "engine_python",
     "readiness_profile_json",
@@ -533,6 +534,8 @@ def _bind_host_owned_command_values(
                 "out",
                 "run_root",
                 "python_exec",
+                "task_identity",
+                "attempt_identity",
                 *_HOST_OWNED_ENVELOPE_PORTS,
                 "input_object_ids",
                 "materialized_root",
@@ -562,6 +565,10 @@ def _bind_host_owned_command_values(
     if "task_identity" in declared:
         values["task_identity"] = str(
             (admission or {}).get("task_id") or attempt.name
+        )
+    if "attempt_identity" in declared:
+        values["attempt_identity"] = str(
+            (admission or {}).get("attempt_id") or attempt.name
         )
     if "execution_identity" in declared:
         values["execution_identity"] = str(
@@ -3237,6 +3244,7 @@ class GenericPackHost:
                     field: harvested[field]
                     for field in (
                         "producer", "provenance", "durability", "regeneration", "coverage",
+                        "media_type",
                     )
                     if field in harvested
                 },

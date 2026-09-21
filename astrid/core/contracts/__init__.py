@@ -1,5 +1,7 @@
 """Shared Astrid schema contracts used across executors and orchestrators."""
 
+import importlib
+
 from .artifact_types import (
     ARTIFACT_TYPE_REGISTRY,
     ArtifactTypeDescriptor,
@@ -104,4 +106,34 @@ __all__ = [
     "WriterError",
     "WriterShutdownError",
     "WriterSidecarError",
+    "MANAGED_GENERATION_RESULT_KIND",
+    "MANAGED_GENERATION_RESULT_SCHEMA_VERSION",
+    "PHASE_NAMES",
+    "PHASE_STATUSES",
+    "ManagedGenerationOutput",
+    "ManagedGenerationPhaseOutcome",
+    "ManagedGenerationResult",
+    "ManagedGenerationResultError",
+    "read_managed_generation_result",
+    "validate_managed_generation_result",
 ]
+
+_MANAGED_GENERATION_RESULT_EXPORTS = {
+    "MANAGED_GENERATION_RESULT_KIND",
+    "MANAGED_GENERATION_RESULT_SCHEMA_VERSION",
+    "PHASE_NAMES",
+    "PHASE_STATUSES",
+    "ManagedGenerationOutput",
+    "ManagedGenerationPhaseOutcome",
+    "ManagedGenerationResult",
+    "ManagedGenerationResultError",
+    "read_managed_generation_result",
+    "validate_managed_generation_result",
+}
+
+
+def __getattr__(name: str):
+    if name in _MANAGED_GENERATION_RESULT_EXPORTS:
+        module = importlib.import_module(".managed_generation_result", __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

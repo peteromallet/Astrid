@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence, TypedDict
+from typing import Any, Mapping, NotRequired, Sequence, TypedDict
 
 from astrid.core.contracts.errors import AstridError
 from astrid.core.foundation.atomic_io import write_json_atomic as _atomic_write_json
@@ -573,6 +573,7 @@ class HarvestedOutput(TypedDict):
     bytes: int
     role: str
     is_primary: bool
+    media_type: NotRequired[str]
 
 
 def outputs_required(definition: Any) -> bool:
@@ -824,6 +825,11 @@ def _collect_manifest_files(
                 "role": role,
                 "is_primary": is_primary,
                 "ordinal_explicit": "ordinal" in entry,
+                **(
+                    {"media_type": entry["media_type"]}
+                    if isinstance(entry.get("media_type"), str)
+                    else {}
+                ),
                 **{
                     field: entry[field]
                     for field in (

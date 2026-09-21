@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import sys
-import importlib
 import hashlib
+import importlib
 import json
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -267,6 +267,136 @@ def test_run_executor_rejects_outputs_outside_private_custody(
             workflow,
             tmp_path / "outputs",
             task_identity="task-1",
+        )
+
+
+def _managed_result_fixture(tmp_path: Path, *, task_id: str = "task-1") -> tuple[Path, dict]:
+    producer_root = tmp_path / "producer-run"
+    output = producer_root / "outputs" / "final.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"managed-video")
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    payload = {
+        "schema_version": 1,
+        "kind": "managed-generation-result.v1",
+        "inputs": {"prompt": "generalized"},
+        "outputs": [{
+            "producer_output_id": "vibecomfy:video:0",
+            "output_port": "video",
+            "ordinal": 0,
+            "path": "outputs/final.mp4",
+            "media_type": "video/mp4",
+            "bytes": output.stat().st_size,
+            "sha256": digest,
+        }],
+        "created": "2026-09-21T12:00:00Z",
+        "warnings": [],
+        "task_id": task_id,
+        "attempt_id": "attempt-1",
+        "producer_run_id": "producer-1",
+        "outcomes": {
+            "execution": {"status": "succeeded"},
+            "retrieval": {"status": "succeeded"},
+            "verification": {"status": "succeeded"},
+            "publication": {"status": "not_started"},
+        },
+        "evidence": {
+            "producer": {"engine": {"name": "vibecomfy"}},
+            "transport": {"location": {"opaque": True}},
+        },
+    }
+    envelope = producer_root / "managed-generation-result.json"
+    envelope.write_text(json.dumps(payload), encoding="utf-8")
+    return envelope, payload
+
+
+def test_managed_result_is_rebased_and_keeps_producer_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    run = importlib.import_module("astrid.packs.vibecomfy.executors.run.run")
+    envelope, payload = _managed_result_fixture(tmp_path)
+    production = production_engine.ProductionRunResult(
+        outputs=(envelope.parent / "outputs" / "final.mp4",),
+        managed_generation_result_path=envelope,
+        managed_generation_result=payload,
+    )
+
+    manifest = run._materialize_managed_generation_result(
+        tmp_path / "host-spool",
+        production,
+        task_identity="task-1",
+        workflow_path=tmp_path / "workflow.py",
+    )
+
+    output = manifest["outputs"][0]
+    assert output["name"] == "vibecomfy_run"
+    assert output["ordinal"] == 0
+    assert output["output_port"] == "vibecomfy_run"
+    assert output["producer"]["output_port"] == "video"
+    assert output["producer"]["media_type"] == "video/mp4"
+    assert output["content_hash"].startswith("sha256:")
+    assert manifest["managed_generation_result_path"] == (
+        "managed-generation/managed-generation-result.json"
+    )
+    assert manifest["managed_generation_result"]["outputs"][0]["path"] == (
+        "outputs/0000-video.mp4"
+    )
+    assert manifest["outputs"][0]["path"] == "outputs/0000-video.mp4"
+    receipt = next(item for item in manifest["outputs"] if item["name"] == "result_manifest")
+    assert receipt["path"] == "outputs/managed-generation-result.json"
+    assert receipt["media_type"] == "application/json"
+    assert (tmp_path / "host-spool" / "outputs" / "0000-video.mp4").read_bytes() == b"managed-video"
+    assert (tmp_path / "host-spool" / "outputs" / "managed-generation-result.json").is_file()
+
+
+def test_managed_result_from_previous_attempt_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    run = importlib.import_module("astrid.packs.vibecomfy.executors.run.run")
+    envelope, payload = _managed_result_fixture(tmp_path)
+    production = production_engine.ProductionRunResult(
+        outputs=(),
+        managed_generation_result_path=envelope,
+        managed_generation_result=payload,
+    )
+
+    with pytest.raises(ValueError, match="attempt_id"):
+        run._materialize_managed_generation_result(
+            tmp_path / "host-spool",
+            production,
+            task_identity="task-1",
+            attempt_identity="attempt-2",
+            workflow_path=tmp_path / "workflow.py",
+        )
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda payload: payload.update({"task_id": "stale-task"}),
+    lambda payload: payload["outputs"][0].update({"sha256": "0" * 64}),
+    lambda payload: payload["outcomes"]["verification"].update({"status": "failed"}),
+])
+def test_managed_result_invalid_or_late_completion_fails_closed(
+    tmp_path: Path, mutation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    run = importlib.import_module("astrid.packs.vibecomfy.executors.run.run")
+    envelope, payload = _managed_result_fixture(tmp_path)
+    mutation(payload)
+    envelope.write_text(json.dumps(payload), encoding="utf-8")
+    production = production_engine.ProductionRunResult(
+        outputs=(),
+        managed_generation_result_path=envelope,
+        managed_generation_result=payload,
+    )
+
+    with pytest.raises(ValueError, match="managed-generation result"):
+        run._materialize_managed_generation_result(
+            tmp_path / "host-spool",
+            production,
+            task_identity="task-1",
+            workflow_path=tmp_path / "workflow.py",
         )
 
 

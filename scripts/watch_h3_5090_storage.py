@@ -763,7 +763,27 @@ def run_astrid_e2e(client: paramiko.SSHClient, handle: dict[str, Any]) -> dict[s
     spec = {
         "inputs": {name: {"digest": digest} for name, digest in object_ids.items()},
         "input_digests": [{"name": name, "digest": digest} for name, digest in object_ids.items()],
-        "generation_intent": {"modality": "video", "purpose": "h3-continuation-e2e"},
+        # Keep the task on the generalized D1 publication path.  The metadata
+        # is deliberately just a small caller-owned label bag; Runtime copies
+        # it to the resulting Generation while task/run/attempt lineage stays
+        # authoritative in the normal publication records.
+        "generation_intent": {
+            "version": 1,
+            "modality": "video",
+            "partial_success_policy": "reject",
+            "groups": [{
+                "group_key": "main",
+                "selectors": [
+                    {"selector": "main-0", "ordinal": 0, "variant_key": "original", "required": True},
+                    {"selector": "main-1", "ordinal": 1, "variant_key": "variant-1", "required": True},
+                ],
+            }],
+            "metadata": {
+                "shot_id": "runpod-managed-generation-8step-20260921",
+                "source": "canonical-runpod-task-path",
+                "steps": 8,
+            },
+        },
     }
     # Registration is asynchronous: a ready-file only means the host process
     # started, not that the runtime has published its final capability digest.

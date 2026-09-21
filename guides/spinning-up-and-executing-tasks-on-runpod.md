@@ -10,13 +10,12 @@ workspace runtime or an Astrid generic worker installed on the pod.
 Astrid's `runpod.exec` wraps the same library runner, adding Astrid admission,
 project/task receipts, artifact handling and cost records when invoked through
 a working Astrid runtime. Its local executor controls the remote workload over
-SSH. This is a supported lifecycle capability, not scheduler-enforced remote
-`vibecomfy.run`.
+SSH.
 
-Automatic remote-worker attachment/placement through
-`tasks create --capability vibecomfy.run --execution-request …` is a separate,
-incomplete integration. Its stored target is not proof of placement. Do not
-require that unfinished integration for ordinary lifecycle-backed jobs.
+For a generation that must become an Astrid task and Generation, use the
+canonical task path below. A pod being reachable or a VibeComfy file existing
+on the pod is not success; success requires task settlement, a managed output
+association, a Generation record, and a verified local download.
 
 ## 1. Resolve the exact pod and existing storage
 
@@ -200,7 +199,75 @@ candidate venv was missing Torch while the provider Python exposed
 `torch==2.4.1+cu124`; that mismatch is a fail-closed preflight finding, not a
 successful continuation run.
 
-## 4. Astrid-native lifecycle invocation
+## 4. Canonical Astrid task path on a prepared RunPod pod
+
+The prepared pod needs a registered Astrid `GenericPackHost` for
+`vibecomfy.run`, connected to the same Runtime that admits the task. The host
+claims the task, runs VibeComfy, stages the result, and settles it. Keep the
+RunPod handle and task id in the receipt so the result remains traceable.
+
+Create a task with a complete D1 generation intent. The optional `metadata`
+object is the light association layer for caller labels such as `shot_id`;
+Runtime copies it to every Generation published by that task group.
+
+```bash
+cat > /tmp/generation-task.json <<'JSON'
+{
+  "inputs": {"workflow": {"digest": "sha256:<workflow-object>"}},
+  "input_digests": [{"name": "workflow", "digest": "sha256:<workflow-object>"}],
+  "generation_intent": {
+    "version": 1,
+    "modality": "video",
+    "partial_success_policy": "reject",
+    "groups": [{
+      "group_key": "main",
+      "selectors": [{
+        "selector": "main-0",
+        "ordinal": 0,
+        "variant_key": "original",
+        "required": true
+      }]
+    }],
+    "metadata": {
+      "shot_id": "shot-17",
+      "scene_id": "scene-3",
+      "take": 2
+    }
+  }
+}
+JSON
+
+python3 -m astrid tasks create --project <project-id-or-slug> \
+  --capability vibecomfy.run \
+  --spec "$(cat /tmp/generation-task.json)" \
+  --input-manifest '["sha256:<workflow-object>"]' \
+  --execution-request '{"target":{"kind":"runpod","pod_id":"<claimed-pod-id>","provider_account_ref":"runpod-default"},"lifecycle":{"mode":"leave_running"},"limits":{"max_queue_seconds":300,"max_runtime_seconds":1800}}' \
+  --idempotency-key "generation-<unique-key>" \
+  --json
+```
+
+Follow the returned `task_id` until it is `completed` or `settled`. Then read
+the task's managed output associations and the Generation created by the
+`generation.publish_v1` settlement. Download each selected object through the
+Runtime object API, verify its SHA-256 and media decode locally, and only then
+terminate the exact pod id:
+
+```python
+from astrid.sdk import AstridClient
+
+with AstridClient.open_from_launcher() as client:
+    task = client.tasks.show("<task-id>")
+    outputs = client.tasks.list_managed_outputs("<task-id>")
+    generation_rows = client.generations.list("<project-id-or-slug>")
+    data = client.media.read_bytes(outputs.data[0]["object_id"])
+```
+
+The task id, attempt id, output association, Generation id, `shot_id`, local
+path, byte count and digest belong in the receipt. A direct Comfy/VibeComfy
+smoke is useful diagnosis, but it does not replace this task-to-Generation
+check.
+
+## 5. Astrid-native lifecycle invocation
 
 Use the connected SDK and exact manifest input names:
 
@@ -245,7 +312,7 @@ Its prerequisites differ from the proven standalone CLI:
   an exec_result.json or a local download directory. The task capability here
   is runpod.exec; it is not a remote vibecomfy.run task.
 
-## 5. New pods, only when requested
+## 6. New pods, only when requested
 
 For the prepared H3 release, use the repository claim waiter. It is a thin
 operator wrapper around the canonical lifecycle launch path: it preserves the

@@ -22,6 +22,16 @@ def test_explicit_media_type_wins_over_artifact_semantics() -> None:
     ) == "video/custom"
 
 
+def test_generic_or_missing_media_type_is_inferred_from_filename() -> None:
+    assert _settlement_media_type({"filename": "render.mp4"}) == "video/mp4"
+    assert _settlement_media_type(
+        {"artifact_type": "application/octet-stream", "filename": "render.mp4"}
+    ) == "video/mp4"
+    assert _settlement_media_type(
+        {"artifact_type": "application/octet-stream", "filename": "payload.bin"}
+    ) == "application/octet-stream"
+
+
 def test_upload_boundary_preserves_filename_for_video_mime_mapping(tmp_path) -> None:
     output = tmp_path / "render.mp4"
     output.write_bytes(b"video")

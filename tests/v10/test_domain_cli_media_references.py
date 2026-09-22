@@ -1,8 +1,8 @@
 """Product CLI family tests: media and nested references (m4 plan step 27).
 
 Task T30 proves the ``media`` product family
-(``astrid/core/cli/domain_media.py``): exactly the five planned verbs
-(``import|list|show|verify|relate``) are reachable through one-call
+(``astrid/core/cli/domain_media.py``): the planned verbs
+(``import|list|show|verify|relate|thumbnails``) are reachable through one-call
 SDK adapters, import accepts **only files/folders**, relate accepts only the
 frozen five relation kinds, and the manifest-declared nested ``references``
 mount (``astrid/packs/references/cli.py``) exposes exactly
@@ -397,7 +397,7 @@ def _subparser_choices(parser: argparse.ArgumentParser) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_media_parser_has_exactly_five_verbs_plus_references_mount() -> None:
+def test_media_parser_has_thumbnail_backfill_and_references_mount() -> None:
     from astrid.core.cli.domain_media import COMMANDS, build_parser
     from astrid.packs.references.cli import COMMANDS as REFERENCE_COMMANDS
 
@@ -407,6 +407,7 @@ def test_media_parser_has_exactly_five_verbs_plus_references_mount() -> None:
         "show",
         "verify",
         "relate",
+        "thumbnails",
     )
     assert all(spec.aliases == () for spec in COMMANDS)
     parser = build_parser(
@@ -419,6 +420,7 @@ def test_media_parser_has_exactly_five_verbs_plus_references_mount() -> None:
         "show",
         "verify",
         "relate",
+        "thumbnails",
         "references",
     }
 

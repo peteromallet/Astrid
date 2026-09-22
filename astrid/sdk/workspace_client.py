@@ -178,6 +178,9 @@ class WorkspaceClient:
     def __init__(self, endpoint: str, token: str):
         self.endpoint, self.token = resolve_runtime_connection(endpoint, token)
         self._generated = GeneratedWorkspaceClient(self.endpoint, self.token)
+        # Populated after the explicit Astrid handshake.  On-demand local
+        # Runtime work must use the authenticated actor as its executor.
+        self.actor_id: str | None = None
 
     def _call_generated(self, operation: str, *args: Any, **kwargs: Any) -> Any:
         """Invoke one generated operation and normalize its typed value."""
@@ -211,9 +214,11 @@ class WorkspaceClient:
                 "cancel_task", "retry_task", "cancel_run", "retry_run", "get_run",
                 "list_project_runs", "list_events", "list_run_events", "list_managed_outputs",
                 "get_managed_output", "list_generations",
-                "get_generation", "list_variants", "create_generation", "create_variant",
+                "get_generation", "list_variants", "attach_variant_thumbnail",
+                "mark_variant_viewed", "mark_generation_variants_viewed",
+                "create_generation", "create_variant",
                 "list_capabilities", "register_capability", "claim_task", "register_executor",
-                "settle_attempt", "publish_timeline_render",
+                "settle_attempt", "fail_attempt", "publish_timeline_render",
             }
             if operation not in operations:
                 raise ValueError(f"unknown generated workspace operation: {operation!r}")
@@ -657,8 +662,19 @@ class WorkspaceClient:
     def cancel_task(self, task_id: str, *, idempotency_key: str) -> Any:
         return self._call_generated("cancel_task", task_id, idempotency_key=idempotency_key)
 
-    def retry_task(self, task_id: str, *, idempotency_key: str) -> Any:
-        return self._call_generated("retry_task", task_id, idempotency_key=idempotency_key)
+    def retry_task(
+        self,
+        task_id: str,
+        *,
+        idempotency_key: str,
+        expected_version: int | None = None,
+    ) -> Any:
+        return self._call_generated(
+            "retry_task",
+            task_id,
+            idempotency_key=idempotency_key,
+            expected_version=expected_version,
+        )
 
     def cancel_run(self, run_id: str, *, idempotency_key: str) -> Any:
         return self._call_generated("cancel_run", run_id, idempotency_key=idempotency_key)
@@ -694,6 +710,29 @@ class WorkspaceClient:
 
     def list_variants(self, generation_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_variants", generation_id, cursor=cursor, limit=limit)
+
+    def attach_variant_thumbnail(
+        self,
+        variant_id: str,
+        *,
+        thumbnail_object_id: str,
+        source_object_id: str,
+        recipe_version: int = 1,
+        idempotency_key: str,
+    ) -> Any:
+        return self._call_generated(
+            "attach_variant_thumbnail", variant_id,
+            thumbnail_object_id=thumbnail_object_id,
+            source_object_id=source_object_id,
+            recipe_version=recipe_version,
+            idempotency_key=idempotency_key,
+        )
+
+    def mark_variant_viewed(self, variant_id: str, *, idempotency_key: str) -> Any:
+        return self._call_generated("mark_variant_viewed", variant_id, idempotency_key=idempotency_key)
+
+    def mark_generation_variants_viewed(self, generation_id: str, *, idempotency_key: str) -> Any:
+        return self._call_generated("mark_generation_variants_viewed", generation_id, idempotency_key=idempotency_key)
 
     def create_generation(self, project_id: str, generation_id: str, *, metadata: Mapping[str, Any] | None = None, type: str = "generation", source_task_id: str | None = None, idempotency_key: str) -> Any:
         return self._call_generated("create_generation", project_id, generation_id, metadata=metadata, type=type, source_task_id=source_task_id, idempotency_key=idempotency_key)
@@ -747,6 +786,27 @@ class WorkspaceClient:
 
     def settle_attempt(self, attempt_id: str, settlement: Mapping[str, Any], *, idempotency_key: str) -> Any:
         return self._call_generated("settle_attempt", attempt_id, settlement, idempotency_key=idempotency_key)
+
+    def fail_attempt(
+        self,
+        attempt_id: str,
+        *,
+        lease_id: str,
+        fence: int,
+        error: Mapping[str, Any],
+        runtime_epoch: int,
+        idempotency_key: str,
+    ) -> Any:
+        """Explicitly fail a leased attempt through the generated Runtime API."""
+        return self._call_generated(
+            "fail_attempt",
+            attempt_id,
+            lease_id=lease_id,
+            fence=fence,
+            error=error,
+            runtime_epoch=runtime_epoch,
+            idempotency_key=idempotency_key,
+        )
 
     def publish_timeline_render(
         self,

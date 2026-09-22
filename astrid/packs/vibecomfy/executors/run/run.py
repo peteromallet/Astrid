@@ -9,6 +9,7 @@ guard_canonical_entrypoint('vibecomfy.run')
 import argparse
 import hashlib
 import json
+import mimetypes
 import shutil
 import subprocess
 import sys
@@ -312,6 +313,8 @@ def _run_and_settle(
                 "ordinal": ordinal,
                 "role": "result",
                 "is_primary": ordinal == 0,
+                "media_type": mimetypes.guess_type(source.name)[0]
+                or "application/octet-stream",
             }
         )
 

@@ -199,6 +199,26 @@ def _cmd_relate(parsed: argparse.Namespace) -> int:
     return print_result(result, as_json=parsed.json)
 
 
+def _cmd_thumbnail_backfill(parsed: argparse.Namespace) -> int:
+    result = parsed.client.media.backfill_thumbnails(
+        parsed.project,
+        generation_id=parsed.generation_id,
+        limit=parsed.limit,
+        dry_run=parsed.dry_run,
+    )
+    return print_result(result, as_json=parsed.json)
+
+
+def _cmd_variant_thumbnail_backfill(parsed: argparse.Namespace) -> int:
+    result = parsed.client.media.backfill_variant_thumbnails(
+        parsed.project,
+        generation_id=parsed.generation_id,
+        limit=parsed.limit,
+        dry_run=parsed.dry_run,
+    )
+    return print_result(result, as_json=parsed.json)
+
+
 # -- parser ----------------------------------------------------------------
 
 
@@ -293,6 +313,45 @@ def _configure_relate(subparser: argparse.ArgumentParser) -> None:
     subparser.set_defaults(handler=_cmd_relate)
 
 
+def _configure_thumbnails(subparser: argparse.ArgumentParser) -> None:
+    nested = subparser.add_subparsers(dest="thumbnail_command", required=True)
+    backfill = nested.add_parser(
+        "backfill",
+        help="Extract missing Runtime Generation thumbnails through managed custody.",
+    )
+    _add_project_arg(backfill)
+    backfill.add_argument(
+        "--generation-id",
+        default=None,
+        help="Restrict the bounded scan to one Generation.",
+    )
+    backfill.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        choices=range(1, 101),
+        metavar="1..100",
+        help="Maximum Generations to scan (default: 50).",
+    )
+    backfill.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scan and extract eligibility without Runtime mutations.",
+    )
+    _add_json_flag(backfill)
+    backfill.set_defaults(handler=_cmd_thumbnail_backfill)
+    variants = nested.add_parser(
+        "backfill-variants",
+        help="Extract and attach source-correct posters for every visual variant.",
+    )
+    _add_project_arg(variants)
+    variants.add_argument("--generation-id", default=None, help="Restrict the scan to one Generation.")
+    variants.add_argument("--limit", type=int, default=100, choices=range(1, 501), metavar="1..500")
+    variants.add_argument("--dry-run", action="store_true")
+    _add_json_flag(variants)
+    variants.set_defaults(handler=_cmd_variant_thumbnail_backfill)
+
+
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "import",
@@ -321,6 +380,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
         help="Materialize one media relation edge "
         "(frozen five kinds; constraints delegated to the service).",
         configure=_configure_relate,
+    ),
+    CommandSpec(
+        "thumbnails",
+        help="Runtime-owned Generation thumbnail operations.",
+        configure=_configure_thumbnails,
     ),
 )
 

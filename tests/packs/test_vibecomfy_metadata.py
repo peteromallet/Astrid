@@ -140,6 +140,10 @@ class VibeComfyStructuredMetadataTest(unittest.TestCase):
                 self.assertEqual(entry["ordinal"], ordinal)
                 self.assertEqual(entry["role"], "result")
                 self.assertEqual(entry["is_primary"], ordinal == 0)
+                self.assertEqual(
+                    entry["media_type"],
+                    "image/png" if ordinal == 0 else "video/mp4",
+                )
                 self.assertTrue(entry["content_hash"].startswith("sha256:"))
                 self.assertGreater(entry["bytes"], 0)
                 self.assertTrue((out / entry["path"]).is_file())

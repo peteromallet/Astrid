@@ -55,6 +55,7 @@ class _RemoteFamily:
             # on the generated client.
             if operation == "add_shot_item": value = self._client.add_shot_item(*args, **kwargs)
             elif operation == "admit_task": value = self._client.admit_task(*args, **kwargs)
+            elif operation == "attach_variant_thumbnail": value = self._client.attach_variant_thumbnail(*args, **kwargs)
             elif operation == "archive_project_reference": value = self._client.archive_project_reference(*args, **kwargs)
             elif operation == "archive_project_shot": value = self._client.archive_project_shot(*args, **kwargs)
             elif operation == "archive_timeline": value = self._client.archive_timeline(*args, **kwargs)
@@ -99,6 +100,8 @@ class _RemoteFamily:
             elif operation == "list_timeline_history": value = self._client.list_timeline_history(*args, **kwargs)
             elif operation == "list_timelines": value = self._client.list_timelines(*args, **kwargs)
             elif operation == "list_variants": value = self._client.list_variants(*args, **kwargs)
+            elif operation == "mark_generation_variants_viewed": value = self._client.mark_generation_variants_viewed(*args, **kwargs)
+            elif operation == "mark_variant_viewed": value = self._client.mark_variant_viewed(*args, **kwargs)
             elif operation == "publish_timeline_render": value = self._client.publish_timeline_render(*args, **kwargs)
             elif operation == "promote_project_shot_candidate": value = self._client.promote_project_shot_candidate(*args, **kwargs)
             elif operation == "recover_project_reference": value = self._client.recover_project_reference(*args, **kwargs)
@@ -369,6 +372,63 @@ class RemoteMedia(_RemoteFamily):
 
     def list_relations(self, project, *, cursor=None, limit=50):
         return self._typed("list_media_relations", project, cursor=cursor, limit=limit)
+
+    def backfill_thumbnails(
+        self,
+        project: str,
+        *,
+        generation_id: str | None = None,
+        limit: int = 50,
+        dry_run: bool = False,
+    ) -> DomainResult[Any]:
+        """Run the bounded Runtime-owned thumbnail backfill on demand."""
+        from astrid.core.execution.thumbnail_backfill import (
+            ThumbnailBackfillError,
+            run_thumbnail_backfill,
+        )
+
+        try:
+            report = run_thumbnail_backfill(
+                self._client,
+                project=project,
+                actor_id=getattr(self._client, "actor_id", None),
+                limit=limit,
+                generation_id=generation_id,
+                dry_run=dry_run,
+            )
+        except ThumbnailBackfillError as exc:
+            return DomainResult.failure(ErrorObject("validation_error", str(exc), {}))
+        except WorkspaceClientError as exc:
+            return DomainResult.failure(ErrorObject(exc.code, exc.message, exc.details))
+        return DomainResult.success(report.as_dict())
+
+    def backfill_variant_thumbnails(
+        self,
+        project: str,
+        *,
+        generation_id: str | None = None,
+        limit: int = 100,
+        dry_run: bool = False,
+    ) -> DomainResult[Any]:
+        """Backfill source-correct posters on every Runtime variant."""
+        from astrid.core.execution.thumbnail_backfill import (
+            ThumbnailBackfillError,
+            run_variant_thumbnail_backfill,
+        )
+
+        try:
+            report = run_variant_thumbnail_backfill(
+                self._client,
+                project=project,
+                generation_id=generation_id,
+                limit=limit,
+                dry_run=dry_run,
+            )
+        except ThumbnailBackfillError as exc:
+            return DomainResult.failure(ErrorObject("validation_error", str(exc), {}))
+        except WorkspaceClientError as exc:
+            return DomainResult.failure(ErrorObject(exc.code, exc.message, exc.details))
+        return DomainResult.success(report.as_dict())
 
 
 

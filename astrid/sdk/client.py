@@ -188,6 +188,7 @@ class AstridClient:
                 expected_realm=realm_id,
                 expected_actor=actor_id,
             )
+            workspace.actor_id = actor_id
             return workspace
 
         try:

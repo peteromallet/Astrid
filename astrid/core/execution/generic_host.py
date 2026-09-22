@@ -14,6 +14,7 @@ import heapq
 import hmac
 import importlib.util
 import json
+import mimetypes
 import os
 import secrets as secrets_module
 import shutil
@@ -29,22 +30,32 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from astrid.core._shared.result_manifest import (
+    HarvestError,
+    harvest_staged_outputs,
+    outputs_required,
+)
 from astrid.core.contracts.binding import (
     BindingError,
     assert_provided_inputs_bound,
     expand_command,
 )
 from astrid.core.contracts.errors import AstridError
-from astrid.core._shared.result_manifest import (
-    HarvestError,
-    harvest_staged_outputs,
-    outputs_required,
-)
 from astrid.core.env_vars import (
     ASTRID_INTERNAL_INVOCATION,
     ASTRID_PACKS_PATH,
 )
 from astrid.core.execution.capability_ledger import load_capability_ledger
+from astrid.core.execution.guards import (
+    EvidenceCapError,
+    ExecutionGuardError,
+    ExecutionGuardPolicy,
+)
+from astrid.core.execution.managed_tool_session import (
+    CapabilityDescriptor,
+    ManagedToolSession,
+    SessionBinding,
+)
 from astrid.core.execution.process_group import (
     _process_snapshot,
     popen_owned_group,
@@ -65,23 +76,19 @@ from astrid.core.execution.provider_route_grant import (
     ProviderRouteGrantAuthority,
     ProviderRouteGrantError,
 )
-from astrid.core.subprocess_env import build_child_subprocess_env
+from astrid.core.execution.thumbnails import (
+    THUMBNAIL_RECIPE_VERSION,
+    ThumbnailError,
+    extract_thumbnail,
+    is_visual_media_type,
+)
 from astrid.core.generation.vibecomfy_dependency import (
     VIBECOMFY_ATTESTED_CONTENT_DIGEST_ENV,
     VIBECOMFY_ATTESTED_REVISION_ENV,
     dependency_pythonpath,
 )
+from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.core.util.secrets import load_local_api_key_with_source
-from astrid.core.execution.managed_tool_session import (
-    CapabilityDescriptor,
-    ManagedToolSession,
-    SessionBinding,
-)
-from astrid.core.execution.guards import (
-    EvidenceCapError,
-    ExecutionGuardError,
-    ExecutionGuardPolicy,
-)
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -131,13 +138,18 @@ def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
 
     explicit = descriptor.get("media_type")
     if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip()
+        explicit = explicit.strip()
+        if explicit.lower() != "application/octet-stream":
+            return explicit
     artifact_type = str(descriptor.get("artifact_type") or "")
     filename = descriptor.get("filename")
-    if artifact_type == "clip/visual" and isinstance(filename, str):
-        media_type = _VIDEO_SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
-        if media_type is not None:
-            return media_type
+    if isinstance(filename, str) and filename:
+        suffix_media_type = _VIDEO_SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
+        if suffix_media_type is not None:
+            return suffix_media_type
+        guessed_media_type = mimetypes.guess_type(filename)[0]
+        if guessed_media_type and guessed_media_type.lower() != "application/octet-stream":
+            return guessed_media_type
     return artifact_type or "application/octet-stream"
 
 
@@ -3376,6 +3388,137 @@ class GenericPackHost:
                 )
         return outputs
 
+    def _generation_thumbnail_outputs(
+        self,
+        outputs: Sequence[Mapping[str, Any]],
+        *,
+        attempt_root: Path,
+        task_data: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        """Derive Runtime-owned thumbnails for visual generation outputs.
+
+        Thumbnails are host-side auxiliary outputs.  They are deliberately
+        appended after ``_typed_outputs`` so the creative output ordinals,
+        selectors, and primary flags remain untouched.  Runtime validates the
+        source digest and attaches the thumbnail to the corresponding
+        generation during settlement.
+        """
+        expected_effect = task_data.get("expected_effect")
+        if not isinstance(expected_effect, Mapping) or expected_effect.get("effect_type") not in {
+            "generation.publish_v1",
+            "generation.create_with_variant",
+            "generation.variant.append",
+        }:
+            return [], []
+
+        output_root = (attempt_root / "outputs").resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        occupied_filenames = {
+            Path(str(output.get("filename") or "")).name
+            for output in outputs
+            if output.get("filename")
+        }
+        thumbnails: list[dict[str, Any]] = []
+        diagnostics: list[dict[str, str]] = []
+        thumbnails_by_digest: dict[str, dict[str, Any]] = {}
+        creative_digests = {
+            output.get("digest")
+            for output in outputs
+            if output.get("role", "result") == "result"
+            and isinstance(output.get("digest"), str)
+        }
+        storage_estimate = _task_storage_estimate(task_data)
+        thumbnail_index = 0
+        for output in outputs:
+            if output.get("role", "result") != "result":
+                continue
+            media_type = _settlement_media_type(output)
+            if not is_visual_media_type(media_type):
+                continue
+            source_object_id = output.get("digest")
+            source_path = output.get("path")
+            if (
+                not isinstance(source_object_id, str)
+                or not source_object_id.startswith("sha256:")
+                or len(source_object_id) != 71
+                or not isinstance(source_path, str)
+            ):
+                continue
+
+            while True:
+                filename = f"thumbnail-{thumbnail_index:04d}.jpg"
+                thumbnail_index += 1
+                if filename not in occupied_filenames and not (output_root / filename).exists():
+                    occupied_filenames.add(filename)
+                    break
+            destination = output_root / filename
+            try:
+                result = extract_thumbnail(
+                    Path(source_path),
+                    destination,
+                    media_type,
+                )
+            except (ThumbnailError, OSError, ValueError, SyntaxError) as exc:
+                # A thumbnail is an enhancement.  A decoder or ffmpeg failure
+                # must never discard the successfully harvested creative file.
+                destination.unlink(missing_ok=True)
+                if len(diagnostics) < 16:
+                    diagnostics.append(
+                        {
+                            "code": "thumbnail_extraction_failed",
+                            "message": str(exc)[:240],
+                            "source_object_id": source_object_id,
+                            "media_type": media_type[:120],
+                            "action": "inspect the source media and thumbnail decoder",
+                        }
+                    )
+                continue
+
+            thumbnail_digest = "sha256:" + hashlib.sha256(destination.read_bytes()).hexdigest()
+            # Runtime rejects two managed outputs with the same digest within
+            # one settlement.  A thumbnail equal to its creative source adds
+            # no information, so omit this optional auxiliary entirely.
+            if thumbnail_digest in creative_digests:
+                destination.unlink(missing_ok=True)
+                continue
+            existing = thumbnails_by_digest.get(thumbnail_digest)
+            if existing is not None:
+                source_object_ids = existing["provenance"]["thumbnail"]["source_object_ids"]
+                if source_object_id not in source_object_ids:
+                    source_object_ids.append(source_object_id)
+                destination.unlink(missing_ok=True)
+                continue
+
+            # Thumbnail extraction is optional.  Do not turn a successful
+            # creative publication into an output-budget failure just because
+            # its enhancement would exceed the already-admitted envelope.
+            if storage_estimate is not None:
+                output_bytes = _storage_tree_bytes(output_root)
+                if output_bytes > int(storage_estimate["output_bytes"]):
+                    destination.unlink(missing_ok=True)
+                    continue
+
+            descriptor = {
+                "name": "thumbnail",
+                "output_port": "thumbnail",
+                "path": str(result.path),
+                "filename": result.path.name,
+                "artifact_type": "image/jpeg",
+                "media_type": "image/jpeg",
+                "size": result.path.stat().st_size,
+                "role": "thumbnail",
+                "durability": "durable",
+                "provenance": {
+                    "thumbnail": {
+                        "source_object_ids": [source_object_id],
+                        "recipe_version": THUMBNAIL_RECIPE_VERSION,
+                    }
+                },
+            }
+            thumbnails.append(descriptor)
+            thumbnails_by_digest[thumbnail_digest] = descriptor
+        return thumbnails, diagnostics
+
     def _child_environment(
         self,
         record: CapabilityRecord,
@@ -4938,6 +5081,12 @@ class GenericPackHost:
                     else None
                 ),
             )
+            thumbnail_outputs, thumbnail_diagnostics = self._generation_thumbnail_outputs(
+                typed_outputs,
+                attempt_root=root,
+                task_data=task_data,
+            )
+            typed_outputs.extend(thumbnail_outputs)
             publication_result: Mapping[str, Any] | None = None
             if capability_id == "rendering.assemble_timeline":
                 publication_result = self._publish_assembled_timeline(
@@ -5023,6 +5172,8 @@ class GenericPackHost:
             }
             if publication_result is not None:
                 payload["timeline_render_publication"] = dict(publication_result)
+            if thumbnail_diagnostics:
+                payload["thumbnail_diagnostics"] = thumbnail_diagnostics
             network_evidence = self._network_evidence(
                 root,
                 admission=worker_admission if record.definition.command is None else network_admission,

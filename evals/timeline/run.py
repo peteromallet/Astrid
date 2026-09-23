@@ -353,6 +353,23 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     available = _available_paths(case_dir)
     missing = [name for name in required if name not in available]
     setup_failures = [f"malformed artifact: {name}" for name in malformed]
+    reported_status = _agent_public_status(agent)
+    if reported_status in {"setup_failed", "setup_failure"}:
+        # Coordinator/native-launcher setup failures are terminal before
+        # semantic checks. Preserve their concrete reason instead of running
+        # private invariants against artifacts which could not be created.
+        failure_cause = agent.get("failure_cause", {})
+        if isinstance(failure_cause, Mapping):
+            raw_setup = failure_cause.get("setup", ())
+            if isinstance(raw_setup, list):
+                setup_failures.extend(
+                    str(reason) for reason in raw_setup if isinstance(reason, str) and reason
+                )
+            summary = failure_cause.get("summary")
+            if isinstance(summary, str) and summary and summary not in setup_failures:
+                setup_failures.append(summary)
+        if not setup_failures:
+            setup_failures.append("native launcher reported setup failure without a reason")
     if not isinstance(case.get("required_artifacts", []), list) or not case.get("required_artifacts"):
         setup_failures.append("case contract must declare at least one required artifact")
     check_results: list[CheckResult] = []
@@ -427,7 +444,6 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     }
     # Score is based on evidence, never on agent self-report. Safety violations
     # and setup failures are hard zeros; unavailable tools are blocked instead.
-    reported_status = _agent_public_status(agent)
     launcher_status = _launcher_process_status(agent)
     status = "pending"
     if source_mutated or forbidden_publish:
@@ -599,7 +615,11 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
 
 def validate_isolated_target(endpoint: str | None, credential: Path | None,
                              isolation_contract_path: Path | None) -> tuple[bool, str]:
-    """Require a caller-supplied proof descriptor before any live adapter runs."""
+    """Validate the target descriptor before host boundary verification.
+
+    This descriptor is admission metadata, not isolation proof.  The native
+    launcher separately requires a live cross-boundary supervisor receipt.
+    """
     if not endpoint or not credential or not isolation_contract_path:
         return False, "live execution requires explicit isolated endpoint, credential, and isolation contract"
     if not credential.is_file():
@@ -618,7 +638,7 @@ def validate_isolated_target(endpoint: str | None, credential: Path | None,
         return False, "isolated agent endpoint must not grant canonical source access"
     if contract.get("canonical_fallback") is True or contract.get("source_access_available_to_agent") is True:
         return False, "isolated agent target must not enable canonical fallback or source access"
-    return True, "explicit isolated target accepted"
+    return True, "target descriptor accepted for host boundary verification"
 
 
 def _write_json_atomic(path: Path, value: Any) -> None:

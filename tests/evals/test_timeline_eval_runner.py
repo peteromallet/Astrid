@@ -107,6 +107,34 @@ def test_setup_failures_are_not_attributed_to_agent(tmp_path: Path) -> None:
     assert report["failure_cause"]["setup"]
 
 
+def test_launcher_setup_reason_precedes_unreachable_target_invariants(tmp_path: Path) -> None:
+    reason = (
+        "A01 setup failed: prepared_targets_root is missing; "
+        "disposable target A01/target.json was not prepared"
+    )
+    case = {
+        "id": "A01",
+        "required_artifacts": ["after.json"],
+        "hidden_checks": [{
+            "id": "a01_target_selector",
+            "check": "path_equals",
+            "artifact": "after",
+            "path": "target.selector_clip_id",
+            "expected": "shot_b01",
+        }],
+    }
+    report = grade_case(case, tmp_path, {
+        "agent_status": "setup_failed",
+        "launcher_process_status": "not_started",
+        "failure_cause": {"setup": [reason], "summary": reason},
+    })
+    assert report["status"] == "setup_failed"
+    assert report["failure_cause"]["setup"] == [reason]
+    assert report["failure_cause"]["agent_or_invariant"] == []
+    assert report["failure_cause"]["summary"] == reason
+    assert report["check_results"] == []
+
+
 def test_missing_checker_capability_is_blocked_not_a_pass(tmp_path: Path) -> None:
     _dump(tmp_path / "candidate.json", {"some": "candidate"})
     case = {"id": "A01", "required_artifacts": ["candidate.json"], "hidden_checks": [{"id": "pixels", "check": "decoded_media"}]}

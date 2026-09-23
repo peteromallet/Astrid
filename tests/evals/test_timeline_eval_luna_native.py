@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import copy
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -10,7 +12,11 @@ import pytest
 from evals.timeline import luna_native
 from evals.timeline.checks import run_checks
 from evals.timeline.luna_native import DEFAULT_MODEL, run_attempt
-from evals.timeline.worker_boundary import BoundaryRequirements
+from evals.timeline.worker_boundary import (
+    BoundaryRequirements,
+    ProtectedPath,
+    WorkerLaunchObservation,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -252,32 +258,79 @@ def _boundary_requirements(
         case_id=case_id,
         worker_id="test-worker",
         model_boundary_id="test-model-boundary",
-        selected_case_path=str(tmp_path / attempt_name / "cases" / case_id),
-        disposable_credential_path=str(tmp_path / "credential.json"),
-        skill_path=skill["path"],
+        host_selected_case_path=str(tmp_path / attempt_name / "cases" / case_id),
+        selected_case_path=f"/worker/cases/{case_id}",
+        disposable_credential_path="/worker/authority/credential.json",
+        skill_path="/worker/public-skill/SKILL.md",
         skill_sha256=skill["sha256"],
         public_package_digest="sha256:test-public-package",
         disposable_endpoint="http://127.0.0.1:9001",
         disposable_realm_id="test-realm",
+        disposable_runtime_receipt_id="test-runtime-receipt",
         canonical_endpoint="https://canonical.invalid",
-        canonical_paths=("/private/canonical.json",),
-        private_paths=("/private/grader.json",),
-        sibling_paths=("/private/sibling/case.json",),
+        coordinator_paths=(ProtectedPath("coordinator", "/host/coordinator", "/private/coordinator"),),
+        source_paths=(ProtectedPath("source", "/host/source", "/private/source"),),
+        sibling_paths=(ProtectedPath("sibling", "/host/sibling", "/private/sibling"),),
+        agent_case_paths=(ProtectedPath("agent-case", "/host/prior", "/private/prior"),),
         denied_endpoints=("https://other.invalid",),
     )
 
 
 def _install_fake_boundary(
     monkeypatch, tmp_path: Path, case_id: str = "A01", attempt_name: str = "attempt-live",
-) -> BoundaryRequirements:
+) -> tuple[BoundaryRequirements, object]:
     requirements = _boundary_requirements(tmp_path, case_id, attempt_name)
 
     class Receipt:
+        worker_id = requirements.worker_id
+        boundary_id = requirements.model_boundary_id
+        runtime_receipt_id = "test-container-receipt"
+        challenge = "test-boundary-challenge"
+        selected_case_path = requirements.selected_case_path
+
         def as_dict(self):
-            return {"status": "pass", "boundary_id": requirements.model_boundary_id}
+            return {
+                "status": "pass",
+                "boundary_id": requirements.model_boundary_id,
+                "runtime_receipt_id": self.runtime_receipt_id,
+                "challenge": self.challenge,
+            }
+
+    class Supervisor:
+        def launch_worker(self, request):
+            started = time.monotonic()
+            try:
+                completed = subprocess.run(
+                    request.argv,
+                    cwd=requirements.host_selected_case_path,
+                    env=dict(request.environment),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=request.timeout_seconds,
+                    check=False,
+                )
+                status = "completed" if completed.returncode == 0 else "failed"
+                returncode = completed.returncode
+                stdout, stderr = completed.stdout, completed.stderr
+            except subprocess.TimeoutExpired as exc:
+                status, returncode = "timeout", None
+                stdout, stderr = exc.stdout or "", exc.stderr or ""
+            return WorkerLaunchObservation(
+                worker_id=request.worker_id,
+                boundary_id=request.boundary_id,
+                runtime_receipt_id=request.runtime_receipt_id,
+                challenge=request.challenge,
+                status=status,
+                returncode=returncode,
+                elapsed_seconds=time.monotonic() - started,
+                stdout=stdout,
+                stderr=stderr,
+            )
 
     monkeypatch.setattr(luna_native, "prove_worker_boundary", lambda _supervisor, _requirements: Receipt())
-    return requirements
+    return requirements, Supervisor()
 
 
 def _target() -> dict[str, object]:
@@ -361,7 +414,7 @@ def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | No
     monkeypatch.setattr(luna_native, "_connect_readback_adapter", lambda **_kwargs: adapter)
     if invoke is not None:
         monkeypatch.setattr(luna_native, "_invoke", invoke)
-    boundary_requirements = _install_fake_boundary(monkeypatch, tmp_path)
+    boundary_requirements, boundary_supervisor = _install_fake_boundary(monkeypatch, tmp_path)
     aggregate = run_attempt(
         SUITE,
         tmp_path / "attempt-live",
@@ -374,7 +427,7 @@ def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | No
         isolated_credential=credential,
         isolation_contract=contract,
         prepared_targets_root=targets,
-        boundary_supervisor=object(),
+        boundary_supervisor=boundary_supervisor,
         boundary_requirements={"A01": boundary_requirements},
     )
     return aggregate, calls
@@ -385,6 +438,10 @@ def test_prepared_target_is_copied_and_preflight_allows_one_launch(tmp_path, mon
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
     case_dir = tmp_path / "attempt-live/cases/A01"
     assert json.loads((case_dir / "target.json").read_text(encoding="utf-8"))["project_id"] == "project-test"
+    public_brief = json.loads((case_dir / "brief.json").read_text(encoding="utf-8"))
+    assert public_brief["fixture_entry_point"]["root"] == "/worker/cases/A01"
+    assert public_brief["skill_reference"]["path"] == "/worker/public-skill/SKILL.md"
+    assert str(case_dir) not in json.dumps(public_brief)
     assert (case_dir / "before.json").is_file()
     result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
     assert not (case_dir / "after.json").exists()
@@ -535,7 +592,7 @@ def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, mo
     source_reader = _ReadbackAdapter(_closure())
     monkeypatch.setattr("evals.timeline.run.validate_isolated_target", lambda *_args: (True, "ok"))
     monkeypatch.setattr(luna_native, "_connect_readback_adapter", lambda **_kwargs: target_reader)
-    boundary_requirements = _install_fake_boundary(
+    boundary_requirements, boundary_supervisor = _install_fake_boundary(
         monkeypatch, tmp_path, "L01", attempt_name="attempt-nav",
     )
     sequence = []
@@ -544,6 +601,8 @@ def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, mo
         sequence.append(("boundary", requirements.model_boundary_id))
 
         class Receipt:
+            boundary_id = requirements.model_boundary_id
+
             def as_dict(self):
                 return {"status": "pass", "boundary_id": requirements.model_boundary_id}
 
@@ -565,7 +624,7 @@ def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, mo
         execute=True, launchable_ids={"L01"}, isolated_endpoint="http://127.0.0.1:9001",
         isolated_credential=credential, isolation_contract=contract,
         prepared_targets_root=targets, source_reader=source_reader,
-        boundary_supervisor=object(), boundary_requirements={"L01": boundary_requirements},
+        boundary_supervisor=boundary_supervisor, boundary_requirements={"L01": boundary_requirements},
     )
     assert sequence == [
         ("boundary", "test-model-boundary"),

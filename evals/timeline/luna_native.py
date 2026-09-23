@@ -46,9 +46,12 @@ from .independent_readback import (
 )
 from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
 from .worker_boundary import (
+    BoundaryReceipt,
     BoundaryRequirements,
     BoundarySupervisor,
     BoundaryUnavailable,
+    WorkerLaunchRequest,
+    launch_in_proven_boundary,
     prove_worker_boundary,
 )
 
@@ -325,6 +328,7 @@ def _public_brief(
     fixture_root: Path,
     case_dir: Path,
     skill_reference: Mapping[str, str],
+    worker_case_path: str | None = None,
 ) -> dict[str, Any]:
     """Build one agent-visible brief without verifier-only fields."""
     source = dict(public_case or visible_brief(case))
@@ -333,14 +337,15 @@ def _public_brief(
     source = {key: value for key, value in source.items() if key not in HIDDEN_KEYS}
     source.setdefault("id", case.get("id"))
     source.setdefault("version", case.get("version"))
+    visible_case_path = worker_case_path or str(case_dir.resolve())
     source["fixture_entry_point"] = {
         # Do not disclose the shared fixture repository: it contains private
         # manifests, answer material (notably the A10 brightness ordering),
         # grader inputs and other cases.  A real disposable seed places only
         # the selected case's public entry point under this directory.
-        "root": str(case_dir.resolve()),
+        "root": visible_case_path,
         "case_id": str(case["id"]),
-        "case_directory": str(case_dir.resolve()),
+        "case_directory": visible_case_path,
         "scope": "selected-case-only",
         "read_only": case.get("kind") == "navigation",
         "entrypoint_path": "entrypoint/entrypoint.json" if case.get("kind") == "navigation" else "target.json",
@@ -453,13 +458,25 @@ def _invoke(
     skill_reference: Mapping[str, str],
     public_target: Mapping[str, Any] | None,
     fixture_only: bool = False,
+    boundary_supervisor: BoundarySupervisor | None = None,
+    boundary_receipt: BoundaryReceipt | None = None,
+    boundary_requirements: BoundaryRequirements | None = None,
 ) -> tuple[str, int | None, float, list[dict[str, Any]], str]:
-    """Invoke exactly one fresh OMP context and capture stdout/stderr as trace."""
+    """Invoke one fresh OMP context locally (fixture-only) or via the proven host.
+
+    A live evaluation is never started with coordinator-local ``Popen``.  The
+    host supervisor which issued the boundary receipt must launch the model in
+    that exact worker runtime using the same unpredictable challenge.
+    """
     timeout_value = _mapping(case.get("timeout")).get("value", 600)
     try:
         timeout_seconds = max(1.0, float(timeout_value))
     except (TypeError, ValueError):
         timeout_seconds = 600.0
+    worker_case_dir = (
+        boundary_requirements.selected_case_path
+        if boundary_requirements is not None else str(case_dir)
+    )
     command = [
         omp_bin,
         "--model", model,
@@ -468,7 +485,7 @@ def _invoke(
         "--mode", "json",
         "--auto-approve",
         "--max-time", f"{int(timeout_seconds)}s",
-        "--cwd", str(case_dir),
+        "--cwd", worker_case_dir,
         "--print",
         _prompt(case, skill_reference=skill_reference, public_target=public_target),
     ]
@@ -483,40 +500,72 @@ def _invoke(
         "model_boundary_id": model_boundary_id,
         "invocation": command,
     }]
-    try:
-        child_env = _clean_child_environment()
-        if isolated_endpoint and public_target is not None:
-            child_env.update({
-                "ASTRID_TIMELINE_EVAL_ENDPOINT": isolated_endpoint,
-                "ASTRID_TIMELINE_EVAL_CREDENTIAL": str(isolated_credential),
-                "ASTRID_TIMELINE_EVAL_ISOLATION_CONTRACT": str(isolation_contract),
-                "ASTRID_TIMELINE_EVAL_SOURCE_ACCESS": "false",
-            })
-        if fixture_only:
-            child_env["ASTRID_TIMELINE_EVAL_FIXTURE_ONLY"] = "1"
-        process = subprocess.Popen(
-            command,
-            cwd=case_dir,
-            env=child_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+    child_env = _clean_child_environment()
+    if isolated_endpoint and public_target is not None:
+        credential_path = (
+            boundary_requirements.disposable_credential_path
+            if boundary_requirements is not None else str(isolated_credential)
         )
-    except OSError as exc:
+        child_env.update({
+            "ASTRID_TIMELINE_EVAL_ENDPOINT": isolated_endpoint,
+            "ASTRID_TIMELINE_EVAL_CREDENTIAL": credential_path,
+            "ASTRID_TIMELINE_EVAL_SOURCE_ACCESS": "false",
+        })
+    if fixture_only:
+        child_env["ASTRID_TIMELINE_EVAL_FIXTURE_ONLY"] = "1"
+    if not fixture_only:
+        try:
+            if boundary_receipt is None or boundary_requirements is None:
+                raise BoundaryUnavailable("live launch has no proven worker boundary receipt")
+            observed = launch_in_proven_boundary(
+                boundary_supervisor,
+                boundary_receipt,
+                WorkerLaunchRequest(
+                    worker_id=boundary_requirements.worker_id,
+                    boundary_id=boundary_receipt.boundary_id,
+                    runtime_receipt_id=boundary_receipt.runtime_receipt_id,
+                    challenge=boundary_receipt.challenge,
+                    argv=tuple(command),
+                    cwd=worker_case_dir,
+                    environment=child_env,
+                    timeout_seconds=timeout_seconds,
+                ),
+            )
+        except (BoundaryUnavailable, OSError, TypeError, ValueError) as exc:
+            elapsed = max(0.0, time.monotonic() - started)
+            events.append({"event": "launcher_error", "at": _now(), "error": f"{type(exc).__name__}: {exc}"})
+            events.append({"event": "launcher_exit", "at": _now(), "status": "unavailable", "returncode": None})
+            return "unavailable", None, elapsed, events, ""
+        stdout, stderr = observed.stdout, observed.stderr
+        elapsed = observed.elapsed_seconds
+        status = observed.status
+        returncode = observed.returncode
+    else:
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=case_dir,
+                env=child_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            elapsed = max(0.0, time.monotonic() - started)
+            events.append({"event": "launcher_error", "at": _now(), "error": f"{type(exc).__name__}: {exc}"})
+            events.append({"event": "launcher_exit", "at": _now(), "status": "unavailable", "returncode": None})
+            return "unavailable", None, elapsed, events, ""
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+            status = "completed" if process.returncode == 0 else "failed"
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            status = "timeout"
         elapsed = max(0.0, time.monotonic() - started)
-        events.append({"event": "launcher_error", "at": _now(), "error": f"{type(exc).__name__}: {exc}"})
-        events.append({"event": "launcher_exit", "at": _now(), "status": "unavailable", "returncode": None})
-        return "unavailable", None, elapsed, events, ""
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-        status = "completed" if process.returncode == 0 else "failed"
-    except subprocess.TimeoutExpired:
-        process.kill()
-        stdout, stderr = process.communicate()
-        status = "timeout"
-    elapsed = max(0.0, time.monotonic() - started)
+        returncode = process.returncode
     for stream, text in (("stdout", stdout), ("stderr", stderr)):
         for line_number, line in enumerate((text or "").splitlines(), 1):
             events.append({
@@ -529,13 +578,13 @@ def _invoke(
         "event": "launcher_exit",
         "at": _now(),
         "status": status,
-        "returncode": process.returncode,
+        "returncode": returncode,
         "elapsed_seconds": elapsed,
     })
     output = stdout or ""
     if stderr:
         output += ("\n" if output else "") + stderr
-    return status, process.returncode, elapsed, events, output
+    return status, returncode, elapsed, events, output
 
 
 def _merge_result(
@@ -985,6 +1034,12 @@ def run_attempt(
         case_id = _safe_case_id(case["id"])
         case_dir = cases_root / case_id
         case_dir.mkdir()
+        case_boundary_requirements = (boundary_requirements or {}).get(case_id)
+        case_skill_reference = dict(skill_reference)
+        if not fixture_only and isinstance(case_boundary_requirements, BoundaryRequirements):
+            # The coordinator checkout path is private. Workers receive only
+            # the public package path inside their own boundary.
+            case_skill_reference["path"] = case_boundary_requirements.skill_path
         target_setup_error: str | None = None
         prepared_target: Mapping[str, Any] | None = None
         should_prepare_target = prepared_targets_root is not None and (
@@ -1016,7 +1071,12 @@ def run_attempt(
             target_setup_error = f"selected navigation entry point could not be prepared: {entrypoint_error}"
         _write_json(case_dir / "brief.json", _public_brief(
             case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir,
-            skill_reference=skill_reference,
+            skill_reference=case_skill_reference,
+            worker_case_path=(
+                case_boundary_requirements.selected_case_path
+                if not fixture_only and isinstance(case_boundary_requirements, BoundaryRequirements)
+                else None
+            ),
         ))
         checks_setup_error: str | None = None
         try:
@@ -1099,8 +1159,8 @@ def run_attempt(
             continue
         if not fixture_only and case_id == "A01" and prepared_targets_root is None:
             reason = (
-                "A01 requires a coordinator-owned prepared_targets_root containing "
-                "A01/target.json; refusing to launch without a disposable target"
+                "A01 setup failed: prepared_targets_root is missing; "
+                "disposable target A01/target.json was not prepared"
             )
             _write_json(case_dir / "attempt.json", {
                 "kind": ATTEMPT_KIND,
@@ -1137,10 +1197,10 @@ def run_attempt(
                 _fixture_blocked_result(case, attempt_id=attempt_id, reason=reason, case_dir=case_dir)
                 _write_json(case_dir / "checks.json", hidden_checks)
                 continue
-        boundary_receipt: Mapping[str, Any] | None = None
+        boundary_receipt: BoundaryReceipt | None = None
         model_boundary_id: str | None = None
         if not fixture_only:
-            requirements = (boundary_requirements or {}).get(case_id)
+            requirements = case_boundary_requirements
             try:
                 if not isinstance(requirements, BoundaryRequirements):
                     raise BoundaryUnavailable(
@@ -1148,15 +1208,14 @@ def run_attempt(
                     )
                 if (
                     requirements.case_id != case_id
-                    or Path(requirements.selected_case_path).resolve() != case_dir.resolve()
+                    or Path(requirements.host_selected_case_path).resolve() != case_dir.resolve()
                     or requirements.skill_sha256 != skill_reference.get("sha256")
                 ):
                     raise BoundaryUnavailable(
                         "host boundary requirements do not match case path or pinned skill hash"
                     )
-                attestation = prove_worker_boundary(boundary_supervisor, requirements)
-                boundary_receipt = attestation.as_dict()
-                model_boundary_id = requirements.model_boundary_id
+                boundary_receipt = prove_worker_boundary(boundary_supervisor, requirements)
+                model_boundary_id = boundary_receipt.boundary_id
             except (BoundaryUnavailable, TypeError, ValueError, OSError) as exc:
                 reason = f"active worker boundary preflight failed; refusing model launch: {exc}"
                 _write_json(case_dir / "attempt.json", {
@@ -1246,9 +1305,15 @@ def run_attempt(
             isolated_endpoint=isolated_endpoint,
             isolated_credential=isolated_credential,
             isolation_contract=isolation_contract,
-            skill_reference=skill_reference,
+            skill_reference=case_skill_reference,
             public_target=public_target,
             fixture_only=fixture_only,
+            boundary_supervisor=boundary_supervisor,
+            boundary_receipt=boundary_receipt,
+            boundary_requirements=(
+                case_boundary_requirements
+                if isinstance(case_boundary_requirements, BoundaryRequirements) else None
+            ),
         )
         _trace_lines(case_dir, events=events)
         merged_result = _merge_result(
@@ -1324,7 +1389,7 @@ def run_attempt(
                 "case_id": case_id,
                 "readback": dict(readback_result),
                 "safety": dict(_mapping(readback_result.get("safety"))),
-                "boundary": dict(boundary_receipt) if boundary_receipt else None,
+                "boundary": boundary_receipt.as_dict() if boundary_receipt else None,
             })
         # Only worker-authored fields remain in result.json. The coordinator's
         # exact readback/safety sidecar is written outside the worker result

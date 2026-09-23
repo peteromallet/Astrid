@@ -184,6 +184,30 @@ def test_trace_tool_calls_count_only_embedded_tool_starts(tmp_path: Path) -> Non
     assert report["tool_calls"] == 1
 
 
+def test_aggregate_recovers_legacy_status_from_preserved_write_trace(tmp_path: Path) -> None:
+    attempt = tmp_path / "attempt-legacy"
+    case_dir = attempt / "cases" / "A10"
+    case_dir.mkdir(parents=True)
+    _dump(case_dir / "result.json", {"execution_status": "completed"})
+    nested = json.dumps({
+        "event": "tool_execution_start",
+        "toolName": "write",
+        "args": {"path": "result.json", "content": '{"status":"blocked"}'},
+    })
+    _dump(case_dir / "trace.jsonl", {"event": "agent_output", "text": nested})
+    suite = {"suite_id": "s", "suite_version": "2", "cases": [{
+        "id": "A10", "kind": "action", "required_artifacts": ["result.json"],
+        "hidden_checks": [{"id": "terminal", "check": "path_equals", "artifact": "result",
+                           "path": "edit_made", "expected": True}],
+    }]}
+    report = aggregate_attempt(suite, attempt)
+    assert report["cases"][0]["status"] == "blocked"
+    assert report["cases"][0]["derived_agent_status"] == "blocked"
+    # The original launcher result is preserved; only graded-result.json is a
+    # derived regrade artifact.
+    assert json.loads((case_dir / "result.json").read_text())["execution_status"] == "completed"
+
+
 def test_aggregate_preserves_partial_and_marks_absent_cases_not_run(tmp_path: Path) -> None:
     attempt = tmp_path / "attempt-1"
     case_dir = attempt / "cases" / "L01"

@@ -284,7 +284,7 @@ def _merge_result(
     # lifecycle.  In particular, an agent can honestly report ``blocked``
     # after discovering that a requested public capability is unavailable
     # even though OMP itself exited successfully.
-    reported_status = str(result.get("execution_status", "")).lower()
+    reported_status = str(result.get("execution_status", result.get("status", ""))).lower()
     terminal_statuses = {
         "passed", "failed", "blocked", "missing_capability", "setup_failed",
         "precondition_failed", "unavailable", "fixture_blocked", "timeout",

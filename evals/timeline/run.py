@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -205,6 +206,53 @@ def _trace_summary(case_dir: Path) -> dict[str, Any]:
     return {"present": True, "events": events, "tool_calls": tool_calls,
             "tool_execution_events": tool_calls, "invalid_lines": invalid_lines,
             "complete": not invalid_lines}
+
+
+def _recover_terminal_status_from_trace(case_dir: Path) -> str | None:
+    """Recover an explicit agent result status from preserved OMP output.
+
+    Older native attempts wrote ``status`` rather than ``execution_status`` and
+    the launcher subsequently replaced the file with its process status.  The
+    trace still contains the tool-call payload that wrote the original record;
+    recover only a recognized terminal value for a derived regrade, leaving the
+    original ``result.json`` untouched.
+    """
+    path = case_dir / "trace.jsonl"
+    if not path.is_file():
+        return None
+    terminal = {
+        "passed", "failed", "blocked", "missing_capability", "setup_failed",
+        "precondition_failed", "unavailable", "fixture_blocked", "timeout",
+        "timed_out", "not_run",
+    }
+    # The result content is itself JSON embedded in the outer OMP JSONL, so
+    # quotes may be either literal or backslash-escaped after one decode.
+    pattern = re.compile(r'\\?"(?:execution_status|status)\\?"\s*:\s*\\?"([a-z_]+)\\?"')
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(row, Mapping) or row.get("event") != "agent_output":
+                    continue
+                text = row.get("text")
+                if not isinstance(text, str) or "result.json" not in text:
+                    continue
+                # Restrict recovery to a tool payload that writes the result
+                # file; ordinary prose mentioning a status is not evidence.
+                if '"toolName"' not in text and '"name"' not in text:
+                    continue
+                if '"write"' not in text:
+                    continue
+                for match in pattern.finditer(text):
+                    candidate = match.group(1).lower()
+                    if candidate in terminal:
+                        return candidate
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
 
 
 def grade_case(case: Mapping[str, Any], case_dir: Path,
@@ -444,7 +492,20 @@ def aggregate_attempt(suite: Mapping[str, Any], attempt_root: Path) -> dict[str,
             grader_case["hidden_checks"] = hidden_checks
         if not candidate_dir.exists():
             agent_result = {"execution_status": "not_run", "elapsed_seconds": 0}
+        # Preserve original attempt files, but derive a corrected status when
+        # an older launcher overwrote an explicit ``status: blocked`` result
+        # with the successful subprocess lifecycle.
+        recovered = _recover_terminal_status_from_trace(candidate_dir) if candidate_dir.exists() else None
+        lifecycle_status = str(agent_result.get("execution_status", "")).lower()
+        if recovered and lifecycle_status in {"completed", "failed", "timeout", "unavailable"}:
+            agent_result = dict(agent_result)
+            agent_result["execution_status"] = recovered
+            agent_result["derived_agent_status"] = recovered
+            agent_result["launcher_original_execution_status"] = "completed"
         report = grade_case(grader_case, candidate_dir, agent_result, hidden_checks=hidden_checks)
+        if recovered:
+            report["derived_agent_status"] = recovered
+            report["original_execution_status"] = "completed"
         if candidate_dir.exists():
             report["attempt_id"] = attempt_root.name
             report["case_id"] = case_id

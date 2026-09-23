@@ -153,12 +153,15 @@ def test_canonical_identity_keeps_occurrence_clip_and_reusable_shot_distinct():
 def test_output_classification_never_promotes_candidate_and_marks_old_head():
     rows = classify_output_records([
         {"id": "c", "disposition": "candidate", "source_head": "h2"},
+        {"id": "preview", "status": "succeeded", "source_head": "h2",
+         "metadata": {"render_mode": "authoring_candidate_preview"}},
         {"id": "now", "source_head": "h2"},
         {"id": "old", "disposition": "historical", "source_head": "h1"},
         {"id": "legacy"},
     ], current_head="h2", current_output_id="now")
-    assert [row["classification"] for row in rows] == ["candidate", "current", "historical", "unverified"]
-    assert rows[1]["current_for_head"] is True
+    assert [row["classification"] for row in rows] == ["candidate", "candidate", "current", "historical", "unverified"]
+    assert rows[1]["render_mode"] == "authoring_candidate_preview"
+    assert rows[2]["current_for_head"] is True
 
 
 def test_semantic_media_inventory_separates_selected_alternative_and_invalid_media():

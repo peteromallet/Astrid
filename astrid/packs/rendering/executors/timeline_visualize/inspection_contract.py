@@ -208,7 +208,19 @@ def classify_output_records(
         ) if key in raw}
         output_id = raw.get("output_id") or raw.get("id") or raw.get("run_id")
         disposition = str(raw.get("disposition") or raw.get("kind") or raw.get("status") or "").lower()
-        if raw.get("is_candidate") is True or raw.get("candidate") is True or disposition in {
+        metadata = raw.get("metadata") if isinstance(raw.get("metadata"), Mapping) else {}
+        provenance = raw.get("provenance") if isinstance(raw.get("provenance"), Mapping) else {}
+        render_mode = str(
+            raw.get("render_mode") or metadata.get("render_mode")
+            or provenance.get("render_mode") or ""
+        ).lower()
+        candidate_provenance = render_mode in {
+            "authoring_candidate_preview", "authoring_preview", "candidate_preview",
+            "unpublished_candidate_preview",
+        }
+        if candidate_provenance:
+            row["render_mode"] = render_mode
+        if raw.get("is_candidate") is True or raw.get("candidate") is True or candidate_provenance or disposition in {
             "candidate", "preview", "unpublished", "draft",
         }:
             classification = "candidate"

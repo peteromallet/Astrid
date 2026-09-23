@@ -200,8 +200,16 @@ def test_fixture_item_remap_fallback_changes_only_schema_known_references(monkey
 
 def test_real_disposable_runtime_handshake_and_project_id_allocation(tmp_path):
     """Exercise the generated Runtime transport against a fresh temporary realm."""
-    from runtime_protocol.daemon import RuntimeDaemon
-    from runtime_protocol.store import RealmStore
+    daemon_module = pytest.importorskip(
+        "runtime_protocol.daemon",
+        reason="real Runtime integration requires the sibling Runtime checkout on PYTHONPATH",
+    )
+    store_module = pytest.importorskip(
+        "runtime_protocol.store",
+        reason="real Runtime integration requires the sibling Runtime checkout on PYTHONPATH",
+    )
+    RuntimeDaemon = daemon_module.RuntimeDaemon
+    RealmStore = store_module.RealmStore
 
     from astrid.sdk.workspace_client import WorkspaceClient
 

@@ -293,8 +293,9 @@ def run_a01_integration_gate(
         "source_safety": {
             "status": "outside_gate_boundary",
             "reason": (
-                "canonical source is not mounted in the disposable gate; worker boundary "
-                "denial and coordinator source readback remain separate admission evidence"
+                "the target-only gate does not connect to or read the canonical source "
+                "closure; worker boundary denial and coordinator source readback remain "
+                "separate admission evidence"
             ),
         },
         "derivative": disclosure,
@@ -364,4 +365,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

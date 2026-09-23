@@ -501,6 +501,58 @@ def _lookup_dotted(value: Any, path: str) -> Any:
     return current
 
 
+def _fixture_requirement_reasons(
+    case: dict[str, Any], manifest: dict[str, Any], manifest_path: Path,
+    eval_root: Path | None = None,
+) -> list[str]:
+    """Check case-declared prerequisites against the pinned fixture contents.
+
+    Requirements live with the fixture case instead of a runner-side case-ID
+    table, so adding an artifact or adapter can directly change readiness.
+    Supported predicates stay deliberately small: explicit values, exact
+    equality, or a regular file constrained to the fixture evidence root.
+    """
+    requirements = case.get("fixture_requirements", [])
+    if not isinstance(requirements, list):
+        return ["fixture_requirements must be an array"]
+    reasons: list[str] = []
+    for index, requirement in enumerate(requirements):
+        if not isinstance(requirement, dict):
+            reasons.append(f"fixture requirement {index} is malformed")
+            continue
+        scope = requirement.get("scope", "manifest")
+        path = requirement.get("path")
+        predicate = requirement.get("predicate", "explicit")
+        label = str(requirement.get("reason") or f"required fixture prerequisite {scope}.{path} is unavailable")
+        if not isinstance(path, str) or not path:
+            reasons.append(f"fixture requirement {index} has no dotted path")
+            continue
+        root = manifest if scope == "manifest" else manifest.get("targets") if scope == "targets" else None
+        if root is None:
+            reasons.append(f"fixture requirement {index} has unsupported scope {scope!r}")
+            continue
+        value = _lookup_dotted(root, path)
+        available = False
+        if predicate == "explicit":
+            available = _is_explicit(value)
+        elif predicate == "equals":
+            available = value == requirement.get("expected")
+        elif predicate == "file":
+            if isinstance(value, str) and value:
+                candidate = _resolve_file(
+                    manifest_path, value, eval_root or manifest_path.parent,
+                )
+                if candidate and candidate.is_file() and not candidate.is_symlink():
+                    expected_digest = requirement.get("sha256")
+                    available = expected_digest is None or _file_digest(candidate) == expected_digest
+        else:
+            reasons.append(f"fixture requirement {index} has unsupported predicate {predicate!r}")
+            continue
+        if not available:
+            reasons.append(label)
+    return reasons
+
+
 def _has_explicit_units(case: dict[str, Any]) -> bool:
     return _is_explicit(case.get("units")) or _is_explicit(
         (case.get("timing") or {}).get("unit")
@@ -655,6 +707,7 @@ def build_readiness(
                 target_catalog = {}
             readiness = validate_case(row, kind, path, target_catalog)
             specific_reasons = []
+            specific_reasons.extend(_fixture_requirement_reasons(row, manifest, path, eval_root))
             for problem in group_problems:
                 if kind == "action" and any(problem.startswith(prefix) for prefix in ("A05", "A06", "A09", "A10")):
                     if problem.startswith(case_id):
@@ -671,18 +724,6 @@ def build_readiness(
                     for alias in aliases:
                         if not isinstance(alias, str) or _lookup_dotted(target_catalog, alias) is None:
                             specific_reasons.append(f"target alias {alias!r} has no pinned target record")
-                # These tasks explicitly require live/historical examples that
-                # the source-only closure does not currently contain.
-                unprovided = {
-                    "L04": "text, visualizer, browser, and managed-render readers are not bundled",
-                    "L05": "requested retained historical video alternative is absent from this closure",
-                    "L06": "required stale/invalid detached candidate and diagnostic are absent",
-                    "L07": "separate legacy clipType=shot fixture is absent",
-                    "L09": "canonical current and historical output bytes/provenance are absent",
-                    "L10": "voice playback adapter is not bundled with the fixture",
-                }
-                if case_id in unprovided:
-                    specific_reasons.append(unprovided[case_id])
             readiness.reasons.extend(specific_reasons)
             if readiness.reasons:
                 readiness.readiness = "blocked"

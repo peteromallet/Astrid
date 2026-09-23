@@ -28,21 +28,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Mapping
 
-from .fixture import SOURCE_PROJECT_ID, SOURCE_TIMELINE_ID
+from .fixture import (
+    FixtureError,
+    SOURCE_PROJECT_ID,
+    SOURCE_TIMELINE_ID,
+    materialize_public_navigation_entrypoint,
+)
 from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
 from .independent_readback import (
+    EXACT_CLOSURE_NAVIGATION,
     IndependentReadbackError,
     ReadbackContract,
     ReadbackObservation,
     observe_case_before,
     verify_case_after,
+    verify_navigation_after,
 )
 from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
+from .worker_boundary import (
+    BoundaryRequirements,
+    BoundarySupervisor,
+    BoundaryUnavailable,
+    prove_worker_boundary,
+)
 
 
 DEFAULT_SUITE = Path(__file__).with_name("suite.json")
 DEFAULT_BRIEFS = Path(__file__).with_name("cases") / "agent_briefs.json"
 DEFAULT_MODEL = "openai-codex/gpt-5.6-luna"
+DEFAULT_THINKING = "high"
 ATTEMPT_KIND = "astrid.timeline-eval.case-attempt.v1"
 ATTEMPT_RESULT_KIND = "astrid.timeline-eval.native-attempt.v1"
 CASE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
@@ -101,14 +115,84 @@ def _skill_reference() -> dict[str, str]:
     }
 
 
+def _sha256_file(path: Path) -> str | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _attempt_fingerprints(
+    fixture_root: Path, suite_path: Path, briefs_path: Path,
+    skill_reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[2]
+    sources = {
+        "runner": Path(__file__).resolve(),
+        "grader": repo_root / "evals/timeline/run.py",
+        "fixture_builder": repo_root / "evals/timeline/fixture.py",
+        "fixture_manifest": repo_root / "evals/timeline/fixture_manifest.py",
+        "checker": repo_root / "evals/timeline/checks.py",
+        "readback_contract": repo_root / "evals/timeline/independent_readback.py",
+        "runtime_adapter": repo_root / "evals/timeline/runtime_adapter.py",
+        "worker_boundary": repo_root / "evals/timeline/worker_boundary.py",
+        "suite": suite_path,
+        "public_briefs": briefs_path,
+    }
+    implementation = {
+        name: {"path": str(path), "sha256": _sha256_file(path)}
+        for name, path in sources.items()
+    }
+    fixture_files: list[dict[str, str]] = []
+    if fixture_root.is_dir() and not fixture_root.is_symlink():
+        for path in sorted(fixture_root.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                digest = _sha256_file(path)
+                if digest:
+                    fixture_files.append({
+                        "path": path.relative_to(fixture_root).as_posix(),
+                        "sha256": digest,
+                    })
+    fixture_tree = hashlib.sha256(json.dumps(
+        fixture_files, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    return {
+        "implementation": implementation,
+        "runtime": {
+            "adapter_sha256": implementation["runtime_adapter"]["sha256"],
+            "readback_sha256": implementation["readback_contract"]["sha256"],
+            "server_build": "not exposed by the supplied Runtime receipt",
+        },
+        "skill": dict(skill_reference),
+        "fixture": {
+            "root": str(fixture_root),
+            "file_count": len(fixture_files),
+            "tree_sha256": fixture_tree,
+        },
+        "checker": {
+            "implementation_sha256": implementation["checker"]["sha256"],
+            "suite_sha256": implementation["suite"]["sha256"],
+        },
+    }
+
+
 def _readback_contract(
     case: Mapping[str, Any], target: Mapping[str, Any], fixture_root: Path,
 ) -> ReadbackContract:
     case_id = str(case.get("id", ""))
     locator = _mapping(target.get("target_locator"))
-    projection = locator.get("readback_projection")
-    if not isinstance(projection, str) or not projection:
+    projection = locator.get("readback_projection") or target.get("readback_projection")
+    if case.get("kind") == "navigation":
+        projection = projection or EXACT_CLOSURE_NAVIGATION
+        if projection != EXACT_CLOSURE_NAVIGATION:
+            raise IndependentReadbackError("navigation target requires exact_closure_navigation.v1")
+    elif not isinstance(projection, str) or not projection:
         raise IndependentReadbackError("public target has no declared semantic readback projection")
+    if case.get("kind") == "action" and projection != "active_media_replacement.v1":
+        raise IndependentReadbackError(f"unsupported action readback projection: {projection}")
     expected_digest: str | None = None
     if case_id == "A01":
         manifest = load_json(fixture_root / "action" / "manifest.json")
@@ -259,8 +343,18 @@ def _public_brief(
         "case_directory": str(case_dir.resolve()),
         "scope": "selected-case-only",
         "read_only": case.get("kind") == "navigation",
-        "instruction": "Use only this supplied fixture entry point and public tools; do not read suite or grader files.",
+        "entrypoint_path": "entrypoint/entrypoint.json" if case.get("kind") == "navigation" else "target.json",
+        "instruction": "Use only this selected-case entry point and public tools; do not read suite or grader files.",
     }
+    observation_fields = {
+        "L01": ["head_revision_id", "selected_image_media_id"],
+        "L02": ["expanded_occurrences"],
+        "L03": ["montage_media_ids", "music_cue_times_seconds"],
+        "L08": ["available_segment_titles", "missing_text_roles"],
+    }
+    case_id = str(case.get("id", ""))
+    if case.get("kind") == "navigation" and case_id in observation_fields:
+        source["required_observation_fields"] = observation_fields[case_id]
     source["skill_reference"] = dict(skill_reference)
     return source
 
@@ -304,12 +398,15 @@ def _prompt(
     capabilities = _mapping(_mapping(public_target).get("capabilities"))
     edit_capability = _mapping(capabilities.get("edit"))
     route = edit_capability.get("route") if edit_capability.get("status") == "available" else None
-    route_instructions = (
+    if case.get("kind") == "navigation":
+        route_instructions = "This is a read-only navigation task. Do not publish or modify the supplied entry point.\n"
+    else:
+        route_instructions = (
         "This case has the exact public edit capability " + str(route) + ". Use it only if its target locator and preconditions match. "
         "For publication, preserve the exact returned JSON response as top-level publication_response in result.json, including new_head and dependency_manifest.\n"
         if route else
-        "No case-specific edit route is declared available. Do not claim an edit or substitute another route; report unavailable/blocked if the task requires a change.\n"
-    )
+        "No case-specific edit capability is declared available. Check the supplied canonical skill for another documented route admitted by this receipt; if none applies, report unavailable/blocked instead of guessing or claiming success.\n"
+        )
     return (
         "You are the evaluated Luna agent in one fresh, bounded context.\n"
         f"Read the canonical timeline skill at {skill_reference['path']} (version {skill_reference['version']}, sha256 {skill_reference['sha256']}) and verify the bytes before acting.\n"
@@ -319,13 +416,14 @@ def _prompt(
         "Perform the requested navigation or candidate edit if the fixture supports it. "
         "If a precondition or public capability is unavailable, stop and report that honestly.\n"
         + route_instructions
-        + "For A01, use the exact expected_head, occurrence_id, selector_clip_id, and admitted source object from target.json; do not use the legacy replace-clip route. "
-        "When target_locator.replacement_asset_key is present, resolve that exact semantic "
-        "asset key in the disposable registry; do not choose a media object by digest order, "
-        "filename guess, or visual similarity.\n"
+        + "Follow the selected target receipt's locator, preconditions, and case-specific advertised capabilities. "
+        "A documented same-schema authoring-bundle route is acceptable only when the receipt admits it; "
+        "do not assume it is available when the receipt does not. The legacy whole-config save is a separate route.\n"
         "The disposable Runtime connection is available only through the supplied "
         "ASTRID_TIMELINE_EVAL_ENDPOINT and ASTRID_TIMELINE_EVAL_CREDENTIAL environment "
         "variables; use those for authenticated public calls and never probe a canonical endpoint.\n"
+        "For read-only navigation, write top-level navigation_performed: true and an observations object "
+        "with the fields named in brief.json; use exact values from the selected entry point/readback, not guesses. "
         "Record useful evidence under evidence/ and write a JSON result record to result.json "
         "when you can. For an edit, include top-level edit_made: true, saved_to_test_timeline: true, "
         "and the observed post-save head/receipt; do not put the only terminal flag under a nested "
@@ -345,6 +443,8 @@ def _invoke(
     *,
     omp_bin: str,
     model: str,
+    thinking: str,
+    model_boundary_id: str | None,
     case: Mapping[str, Any],
     case_dir: Path,
     isolated_endpoint: str | None = None,
@@ -363,6 +463,7 @@ def _invoke(
     command = [
         omp_bin,
         "--model", model,
+        "--thinking", thinking,
         "--no-session",
         "--mode", "json",
         "--auto-approve",
@@ -378,11 +479,13 @@ def _invoke(
         "case_id": str(case["id"]),
         "fresh_context": True,
         "model": model,
+        "thinking": thinking,
+        "model_boundary_id": model_boundary_id,
         "invocation": command,
     }]
     try:
         child_env = _clean_child_environment()
-        if isolated_endpoint:
+        if isolated_endpoint and public_target is not None:
             child_env.update({
                 "ASTRID_TIMELINE_EVAL_ENDPOINT": isolated_endpoint,
                 "ASTRID_TIMELINE_EVAL_CREDENTIAL": str(isolated_credential),
@@ -446,6 +549,8 @@ def _merge_result(
     elapsed: float,
     output: str,
     model: str,
+    thinking: str,
+    model_boundary_id: str | None,
 ) -> dict[str, Any]:
     agent_result: dict[str, Any] = {}
     result_path = case_dir / "result.json"
@@ -515,6 +620,8 @@ def _merge_result(
         "launcher": {
             "kind": "omp",
             "model": model,
+            "thinking": thinking,
+            "model_boundary_id": model_boundary_id,
             "output_captured": bool(output),
             "one_shot": True,
             "no_session": True,
@@ -527,13 +634,85 @@ def _merge_result(
 
 
 def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[str, Any]]:
-    """Return only checkers already implemented by ``checks.py``.
+    """Return exact, case-specific checks or an explicit missing-oracle result.
 
-    Most narrative checks need decoded media, audio, or a case-specific oracle
-    that is not currently available.  They intentionally remain ungraded
-    rather than being approximated here.
+    Worker terminal flags are never semantic checks. When a case has no
+    independent supported oracle yet, the missing capability is recorded
+    instead of being approximated with `edit_made` or `navigation_performed`.
     """
     case_id = str(case.get("id"))
+    if case.get("kind") == "navigation":
+        info_path = fixture_root / "informational" / "fixture.json"
+        info = load_json(info_path)
+        fixture_case = next((row for row in _mapping(info).get("cases", [])
+                             if isinstance(row, Mapping) and row.get("id") == case_id), {})
+        catalog = _mapping(_mapping(info).get("targets"))
+        source = _mapping(info.get("source"))
+
+        def resolve(alias: str) -> Any:
+            value: Any = catalog
+            for part in alias.split("."):
+                value = value.get(part) if isinstance(value, Mapping) else None
+            return value
+
+        checks: list[dict[str, Any]] = []
+        if case_id == "L01":
+            target = _mapping(resolve("intro_b01"))
+            media_handles = target.get("media_handles", [])
+            media = next((row.get("media_id") for row in media_handles
+                          if isinstance(row, Mapping) and row.get("role") == "selected_image"), None)
+            expected = {
+                "head_revision_id": source.get("head"),
+                "selected_image_media_id": media,
+            }
+            checks = [
+                {"id": f"l01_{name}", "check": "path_equals", "artifact": "result",
+                 "path": f"observations.{name}", "expected": value}
+                for name, value in expected.items() if value is not None
+            ]
+        elif case_id == "L02":
+            aliases = ["intro_b01", "ideas_b03"]
+            expected = []
+            for alias in aliases:
+                target = _mapping(resolve(alias))
+                image = next((item.get("media_id") for item in target.get("media_handles", [])
+                              if isinstance(item, Mapping) and item.get("role") == "selected_image"), None)
+                expected.append({
+                    "occurrence_id": target.get("occurrence_id"),
+                    "shot_id": target.get("shot_id"),
+                    "shot_revision_id": target.get("shot_revision_id"),
+                    "internal_timeline_revision_id": target.get("internal_timeline_revision_id"),
+                    "selected_image_media_id": image,
+                })
+            checks = [{"id": "l02_expanded_identities", "check": "path_equals",
+                       "artifact": "result", "path": "observations.expanded_occurrences",
+                       "expected": expected}]
+        elif case_id == "L03":
+            collection = load_json(fixture_root / "action" / "A09-images.json")
+            expected_ids = [row.get("media_id") for row in collection.get("images", [])
+                            if isinstance(row, Mapping)]
+            expected_cues = collection.get("cue_times_seconds", [])
+            checks = [
+                {"id": "l03_montage_collection", "check": "path_equals", "artifact": "result",
+                 "path": "observations.montage_media_ids", "expected": expected_ids},
+                {"id": "l03_supplied_cue_times", "check": "path_equals", "artifact": "result",
+                 "path": "observations.music_cue_times_seconds", "expected": expected_cues},
+            ]
+        elif case_id == "L08":
+            target = _mapping(resolve("authored_segment_text"))
+            expected_titles = [row.get("text") for row in target.get("segments", [])
+                               if isinstance(row, Mapping)]
+            checks = [
+                {"id": "l08_exact_segment_titles", "check": "path_equals", "artifact": "result",
+                 "path": "observations.available_segment_titles", "expected": expected_titles},
+                {"id": "l08_missing_roles", "check": "path_equals", "artifact": "result",
+                 "path": "observations.missing_text_roles", "expected": target.get("missing_roles", [])},
+            ]
+        if checks:
+            return checks
+        return [{"id": f"{case_id.lower()}_semantic_oracle_unavailable",
+                 "check": "semantic_oracle_unavailable"}]
+
     action_manifest = fixture_root / "action" / "manifest.json"
     manifest: Mapping[str, Any] = {}
     if action_manifest.is_file():
@@ -544,24 +723,12 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
     rows = manifest.get("cases", []) if isinstance(manifest, Mapping) else []
     fixture_case = next((row for row in rows if isinstance(row, Mapping) and row.get("id") == case_id), {})
     targets = _mapping(fixture_case).get("targets", {})
-    # Every case needs at least one independent, machine-runnable terminal
-    # assertion.  This generic result check is deliberately small: it grades
-    # whether the fresh agent actually reported the requested operation, while
-    # the case-specific checks below add stronger semantic invariants where the
-    # fixture already provides an oracle.
-    generic = {
-        "id": f"{case_id.lower()}_terminal_operation",
-        "check": "path_equals",
-        "artifact": "result",
-        "path": "navigation_performed" if case.get("kind") == "navigation" else "edit_made",
-        "expected": True,
-    }
     if case_id == "A01":
         media = _mapping(fixture_case).get("media", {})
         expected_digest = media.get("new_image_digest")
         if not isinstance(expected_digest, str) or not expected_digest:
             raise SetupError("A01 private manifest must provide media.new_image_digest")
-        checks: list[dict[str, Any]] = [generic, {
+        checks: list[dict[str, Any]] = [{
             "id": "a01_target_selector",
             "check": "path_equals",
             "artifact": "after",
@@ -610,8 +777,6 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
             expected = [original[0], original[1], closing, middle] if closing and middle else []
             if expected:
                 return [{
-                    **generic,
-                }, {
                     "id": "a03_order",
                     "check": "order",
                     "artifact": "after",
@@ -620,7 +785,7 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                     "expected_ids": expected,
                 }]
     if case_id == "A04":
-        return [generic, {
+        return [{
             "id": "a04_identity_disjoint",
             "check": "identity_disjoint",
             "before_artifact": "before",
@@ -629,7 +794,7 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
             "duplicate_ids_path": "duplicate.identity_ids",
         }]
     if case_id == "A09":
-        return [generic, {
+        return [{
             "id": "a09_panel_coverage",
             "check": "panel_coverage",
             "artifact": "after",
@@ -648,7 +813,7 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                 images = collection.get("images", []) if isinstance(collection, Mapping) else []
                 expected = [row.get("media_id") for row in images if isinstance(row, Mapping) and row.get("media_id")]
                 if len(expected) == 200:
-                    return [generic, {
+                    return [{
                         "id": "a10_brightness_order",
                         "check": "order",
                         "artifact": "after",
@@ -658,7 +823,8 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                     }]
             except SetupError:
                 pass
-    return [generic]
+    return [{"id": f"{case_id.lower()}_semantic_oracle_unavailable",
+             "check": "semantic_oracle_unavailable"}]
 
 
 def _fixture_blocked_result(
@@ -699,6 +865,7 @@ def run_attempt(
     briefs_path: Path = DEFAULT_BRIEFS,
     omp_bin: str = "omp",
     model: str = DEFAULT_MODEL,
+    thinking: str = DEFAULT_THINKING,
     execute: bool = True,
     launchable_ids: Collection[str] | None = None,
     isolated_endpoint: str | None = None,
@@ -706,6 +873,9 @@ def run_attempt(
     isolation_contract: Path | None = None,
     prepared_targets_root: Path | None = None,
     fixture_only: bool = False,
+    source_reader: Any | None = None,
+    boundary_supervisor: BoundarySupervisor | None = None,
+    boundary_requirements: Mapping[str, BoundaryRequirements] | None = None,
 ) -> dict[str, Any]:
     """Run and aggregate one immutable 20-case attempt.
 
@@ -719,6 +889,8 @@ def run_attempt(
         raise NativeLauncherError("suite must contain a non-empty cases array")
     if attempt_root is None:
         raise NativeLauncherError("an explicit fresh attempt root is required")
+    if thinking not in {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}:
+        raise NativeLauncherError(f"unsupported OMP thinking level: {thinking}")
     if execute and not fixture_only:
         from .run import validate_isolated_target
         allowed, message = validate_isolated_target(
@@ -746,17 +918,29 @@ def run_attempt(
         skill_setup_error = f"{type(exc).__name__}: {exc}"
     readiness = {row.case_id: row for row in build_readiness(suite_path, fixture_root)}
     forced = set(launchable_ids) if launchable_ids is not None else None
+    fingerprints = _attempt_fingerprints(fixture_root, suite_path, briefs_path, skill_reference)
+    fingerprint_sha256 = hashlib.sha256(json.dumps(
+        fingerprints, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
     top_level = {
         "kind": ATTEMPT_RESULT_KIND,
         "attempt_id": attempt_id,
         "suite_id": suite.get("suite_id"),
         "suite_version": suite.get("suite_version"),
         "model": model,
+        "model_binding": {
+            "requested_model": model,
+            "resolved_model": model,
+            "resolution": "fully-qualified OMP model binding; provider-side alias resolution is not separately exposed",
+            "reasoning": thinking,
+        },
         "fresh_context_per_case": True,
         "case_count": len(suite["cases"]),
         "started_at": _now(),
         "canonical_fallback_available": False,
         "skill_reference": dict(skill_reference),
+        "fingerprints": fingerprints,
+        "fingerprint_sha256": fingerprint_sha256,
         "execution": "native_omp" if execute else "dry_run",
         "isolation": {
             "fixture_only": fixture_only,
@@ -802,6 +986,16 @@ def run_attempt(
                 )
             except (NativeLauncherError, SetupError) as exc:
                 target_setup_error = str(exc)
+        entrypoint_error: str | None = None
+        if case.get("kind") == "navigation":
+            try:
+                materialize_public_navigation_entrypoint(
+                    case_id, fixture_root=fixture_root, destination=case_dir,
+                )
+            except (FixtureError, OSError, ValueError, json.JSONDecodeError) as exc:
+                entrypoint_error = f"{type(exc).__name__}: {exc}"
+        if target_setup_error is None and entrypoint_error is not None:
+            target_setup_error = f"selected navigation entry point could not be prepared: {entrypoint_error}"
         _write_json(case_dir / "brief.json", _public_brief(
             case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir,
             skill_reference=skill_reference,
@@ -829,6 +1023,8 @@ def run_attempt(
                 "session_id": session_id,
                 "started_at": _now(),
                 "model": model,
+                "thinking": thinking,
+                "fingerprint_sha256": fingerprint_sha256,
                 "execution": "fixture_blocked",
             })
             _fixture_blocked_result(case, attempt_id=attempt_id, reason=reason, case_dir=case_dir)
@@ -843,6 +1039,8 @@ def run_attempt(
                 "session_id": f"{attempt_id}-{case_id}-not-launched",
                 "started_at": _now(),
                 "model": model,
+                "thinking": thinking,
+                "fingerprint_sha256": fingerprint_sha256,
                 "execution": "setup_failed",
             })
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=target_setup_error)
@@ -857,6 +1055,8 @@ def run_attempt(
                 "session_id": f"{attempt_id}-{case_id}-not-launched",
                 "started_at": _now(),
                 "model": model,
+                "thinking": thinking,
+                "fingerprint_sha256": fingerprint_sha256,
                 "execution": "setup_failed",
             })
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=checks_setup_error)
@@ -871,6 +1071,8 @@ def run_attempt(
                 "session_id": f"{attempt_id}-{case_id}-not-launched",
                 "started_at": _now(),
                 "model": model,
+                "thinking": thinking,
+                "fingerprint_sha256": fingerprint_sha256,
                 "execution": "setup_failed",
                 "skill_error": skill_setup_error,
             })
@@ -887,6 +1089,8 @@ def run_attempt(
                 "session_id": f"{attempt_id}-{case_id}-not-launched",
                 "started_at": _now(),
                 "model": model,
+                "thinking": thinking,
+                "fingerprint_sha256": fingerprint_sha256,
                 "execution": "setup_failed",
             })
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
@@ -912,6 +1116,44 @@ def run_attempt(
                 _fixture_blocked_result(case, attempt_id=attempt_id, reason=reason, case_dir=case_dir)
                 _write_json(case_dir / "checks.json", hidden_checks)
                 continue
+        boundary_receipt: Mapping[str, Any] | None = None
+        model_boundary_id: str | None = None
+        if not fixture_only:
+            requirements = (boundary_requirements or {}).get(case_id)
+            try:
+                if not isinstance(requirements, BoundaryRequirements):
+                    raise BoundaryUnavailable(
+                        "no typed host boundary requirements were supplied for this selected case"
+                    )
+                if (
+                    requirements.case_id != case_id
+                    or Path(requirements.selected_case_path).resolve() != case_dir.resolve()
+                    or requirements.skill_sha256 != skill_reference.get("sha256")
+                ):
+                    raise BoundaryUnavailable(
+                        "host boundary requirements do not match case path or pinned skill hash"
+                    )
+                attestation = prove_worker_boundary(boundary_supervisor, requirements)
+                boundary_receipt = attestation.as_dict()
+                model_boundary_id = requirements.model_boundary_id
+            except (BoundaryUnavailable, TypeError, ValueError, OSError) as exc:
+                reason = f"active worker boundary preflight failed; refusing model launch: {exc}"
+                _write_json(case_dir / "attempt.json", {
+                    "kind": ATTEMPT_KIND,
+                    "attempt_id": attempt_id,
+                    "case_id": case_id,
+                    "fresh_context": False,
+                    "session_id": f"{attempt_id}-{case_id}-not-launched",
+                    "started_at": _now(),
+                    "model": model,
+                    "thinking": thinking,
+                    "fingerprint_sha256": fingerprint_sha256,
+                    "execution": "setup_failed",
+                    "boundary_error": reason,
+                })
+                _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
+                _write_json(case_dir / "checks.json", hidden_checks)
+                continue
         session_id = f"{attempt_id}-{case_id}-{uuid.uuid4().hex[:12]}"
         started_at = _now()
         _write_json(case_dir / "attempt.json", {
@@ -922,6 +1164,13 @@ def run_attempt(
             "session_id": session_id,
             "started_at": started_at,
             "model": model,
+            "thinking": thinking,
+            "model_boundary_id": model_boundary_id,
+            "fingerprint_sha256": fingerprint_sha256,
+            "target_receipt_sha256": hashlib.sha256(json.dumps(
+                public_target, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest() if public_target is not None else None,
+            "entrypoint_sha256": _sha256_file(case_dir / "entrypoint" / "entrypoint.json"),
             "execution": "native_omp",
         })
         # A seeded native case may expose a public target.json. Read its exact
@@ -943,8 +1192,12 @@ def run_attempt(
                     contract=isolation_contract,
                 )
                 readback_contract = _readback_contract(case, public_target, fixture_root)
-                before_observation = observe_case_before(readback_adapter, public_target, readback_contract)
-                _require_a01_protected_roles(before_observation.target)
+                before_observation = observe_case_before(
+                    readback_adapter, public_target, readback_contract,
+                    source_reader=source_reader,
+                )
+                if case.get("kind") == "action" and case_id == "A01":
+                    _require_a01_protected_roles(before_observation.target)
             except Exception as exc:  # adapter failures are a failed gate, not an agent success
                 readback_error = f"{type(exc).__name__}: {exc}"
         if public_target is not None and not fixture_only and readback_error is not None:
@@ -965,6 +1218,8 @@ def run_attempt(
         status, returncode, elapsed, events, output = _invoke(
             omp_bin=omp_bin,
             model=model,
+            thinking=thinking,
+            model_boundary_id=model_boundary_id,
             case=case,
             case_dir=case_dir,
             isolated_endpoint=isolated_endpoint,
@@ -985,6 +1240,8 @@ def run_attempt(
             elapsed=elapsed,
             output=output,
             model=model,
+            thinking=thinking,
+            model_boundary_id=model_boundary_id,
         )
         readback_result: Mapping[str, Any] | None = None
         if public_target is not None and not fixture_only and readback_error is None:
@@ -995,48 +1252,63 @@ def run_attempt(
                         credential=isolated_credential,
                         contract=isolation_contract,
                     )
-                publication_response = merged_result.get("publication_response")
-                if (
-                    isinstance(publication_response, Mapping)
-                    and before_observation is not None
-                    and readback_contract is not None
-                ):
-                    case_readback = verify_case_after(
+                if case.get("kind") == "navigation" and before_observation is not None and readback_contract is not None:
+                    case_readback = verify_navigation_after(
                         readback_adapter, public_target, readback_contract,
-                        before_observation, _publication_payload(publication_response),
+                        before_observation, source_reader=source_reader,
                     )
                     readback_result = case_readback.as_dict()
-                    if isinstance(case_readback.after, Mapping):
-                        _require_a01_protected_roles(case_readback.after)
                 else:
-                    readback_result = {
-                        "status": "unavailable",
-                        "before_observed": before_observation is not None,
-                        "after_observed": False,
-                        "safety": {"source_unchanged": None, "test_target_only": None},
-                        "reasons": ("exact publication response with dependency_manifest is missing",),
-                    }
+                    publication_response = merged_result.get("publication_response")
+                    if (
+                        isinstance(publication_response, Mapping)
+                        and before_observation is not None
+                        and readback_contract is not None
+                    ):
+                        case_readback = verify_case_after(
+                            readback_adapter, public_target, readback_contract,
+                            before_observation, _publication_payload(publication_response),
+                            source_reader=source_reader,
+                        )
+                        readback_result = case_readback.as_dict()
+                        if case_id == "A01" and isinstance(case_readback.after, Mapping):
+                            _require_a01_protected_roles(case_readback.after)
+                    else:
+                        readback_result = {
+                            "status": "unavailable",
+                            "before_observed": before_observation is not None,
+                            "after_observed": False,
+                            "safety": {"source_unchanged": None, "test_target_only": None},
+                            "reasons": ("exact publication response with dependency_manifest is missing",),
+                        }
             except Exception as exc:  # noqa: BLE001 - adapter boundary is external
                 readback_error = f"{type(exc).__name__}: {exc}"
-        if public_target is not None and not fixture_only:
-            if before_observation is not None:
-                _write_json(case_dir / "before.json", {"target": before_observation.target})
-            if isinstance(readback_result, Mapping) and isinstance(readback_result.get("after"), Mapping):
-                _write_json(case_dir / "after.json", {"target": readback_result["after"]})
-            if readback_result is None:
-                readback_result = {
-                    "status": "unavailable",
-                    "before_observed": before_observation is not None,
-                    "after_observed": False,
-                    "safety": {"source_unchanged": None, "test_target_only": None},
-                    "reasons": (readback_error or "post-publication readback unavailable",),
-                }
-            merged_result["independent_readback"] = dict(readback_result)
-            # Independent proof is retained separately from agent self-report;
-            # unavailable source/sibling evidence remains unknown, not pass.
-            if isinstance(readback_result.get("safety"), Mapping):
-                merged_result["independent_safety"] = dict(readback_result["safety"])
-            _write_json(case_dir / "result.json", merged_result)
+        if readback_result is None:
+            readback_result = {
+                "status": "unavailable",
+                "before_observed": before_observation is not None,
+                "after_observed": False,
+                "safety": {"source_unchanged": None, "test_target_only": None,
+                           "read_only_target": None},
+                "reasons": (readback_error or "independent readback unavailable",),
+            }
+        if before_observation is not None:
+            _write_json(case_dir / "before.json", {"target": before_observation.target})
+        if isinstance(readback_result.get("after"), Mapping):
+            _write_json(case_dir / "after.json", {"target": readback_result["after"]})
+        if not fixture_only:
+            coordinator_path = attempt_root / "coordinator" / "cases" / case_id / "readback.json"
+            _write_json(coordinator_path, {
+                "kind": "astrid.timeline-eval.coordinator-evidence.v1",
+                "case_id": case_id,
+                "readback": dict(readback_result),
+                "safety": dict(_mapping(readback_result.get("safety"))),
+                "boundary": dict(boundary_receipt) if boundary_receipt else None,
+            })
+        # Only worker-authored fields remain in result.json. The coordinator's
+        # exact readback/safety sidecar is written outside the worker result
+        # after process exit and is consumed separately by aggregate_attempt.
+        _write_json(case_dir / "result.json", merged_result)
         # Hidden checks are deliberately installed only after the agent exits.
         _write_json(case_dir / "checks.json", hidden_checks)
 
@@ -1056,6 +1328,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempt-root", type=Path, required=True)
     parser.add_argument("--omp-bin", default="omp", help="OMP executable (default: omp)")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--thinking", default=DEFAULT_THINKING,
+                        choices=("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"))
     parser.add_argument("--isolated-endpoint", help="explicit disposable Runtime endpoint")
     parser.add_argument("--isolated-credential", type=Path,
                         help="credential file for the disposable Runtime")
@@ -1075,6 +1349,7 @@ def main(argv: list[str] | None = None) -> int:
             briefs_path=args.briefs,
             omp_bin=args.omp_bin,
             model=args.model,
+            thinking=args.thinking,
             execute=not args.dry_run,
             isolated_endpoint=args.isolated_endpoint,
             isolated_credential=args.isolated_credential,

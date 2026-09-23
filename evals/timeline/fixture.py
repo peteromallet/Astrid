@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -282,6 +283,10 @@ def public_target_receipt(
         "internal_revision_ids": sorted(identities.internal_revision_ids.values()),
         "owned_media_ids": sorted(str(value) for value in seed.get("owned_media", {}).values()),
     }
+    if read_only:
+        # A navigation receipt observes the whole exact closure. It does not
+        # inherit the active-media replacement projection or A01 role checks.
+        receipt["readback_projection"] = "exact_closure_navigation.v1"
     if isinstance(locator, Mapping):
         receipt["target_locator"] = dict(locator)
     if a01_route_available:
@@ -290,6 +295,145 @@ def public_target_receipt(
         # through a route whose target contract they do not satisfy.
         receipt["edit_route"] = "timelines replace-parent-media"
     return receipt
+
+
+def materialize_public_navigation_entrypoint(
+    case_id: str, *, fixture_root: Path, destination: Path,
+) -> dict[str, Any]:
+    """Copy only a selected navigation case's pinned public inputs.
+
+    No suite, grader, or sibling-case data is copied into the worker directory.
+    The offline copy is read-only by contract and reset by discarding this
+    selected-case directory and materializing it again from the pinned export.
+    """
+    fixture_root = fixture_root.expanduser().absolute()
+    manifest_path = fixture_root / "informational" / "fixture.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    cases = manifest.get("cases", [])
+    row = next((value for value in cases if isinstance(value, Mapping) and value.get("id") == case_id), None)
+    if not isinstance(row, Mapping):
+        raise FixtureError(f"navigation case {case_id} has no pinned public fixture entry")
+    targets = manifest.get("targets", {})
+    aliases = row.get("targets", [])
+    if not isinstance(aliases, list) or not aliases:
+        raise FixtureError(f"navigation case {case_id} has no selected target aliases")
+    selected: dict[str, Any] = {}
+    for alias in aliases:
+        if not isinstance(alias, str):
+            raise FixtureError(f"navigation case {case_id} has a malformed target alias")
+        cursor: Any = targets
+        for part in alias.split("."):
+            cursor = cursor.get(part) if isinstance(cursor, Mapping) else None
+        if cursor is None:
+            raise FixtureError(f"navigation target alias {alias!r} is not present in the pinned fixture")
+        selected[alias] = json.loads(json.dumps(cursor))
+
+    source = manifest.get("source", {})
+    media_root_value = source.get("media_root") if isinstance(source, Mapping) else None
+    media_root = (manifest_path.parent / str(media_root_value)).resolve() if media_root_value else None
+    eval_root = fixture_root.parent.parent.resolve()
+    if media_root is not None:
+        try:
+            media_root.relative_to(eval_root)
+        except ValueError as exc:
+            raise FixtureError("pinned navigation media root escapes the evaluation evidence root") from exc
+
+    destination = destination.expanduser().absolute()
+    if destination.is_symlink() or not destination.is_dir():
+        raise FixtureError(f"selected navigation destination must be an existing directory: {destination}")
+    entry_root = destination / "entrypoint"
+    if entry_root.exists():
+        if entry_root.is_symlink() or not entry_root.is_dir() or any(entry_root.iterdir()):
+            raise FixtureError(f"selected navigation entrypoint must be new and empty: {entry_root}")
+    else:
+        entry_root.mkdir()
+    copied_media: dict[str, str] = {}
+
+    def copy_media(media_id: Any, handle: Any, *, source_root: Path | None = None) -> str | None:
+        if not isinstance(media_id, str) or not media_id.startswith("sha256:") or not isinstance(handle, str):
+            return None
+        source_root = source_root or media_root
+        if source_root is None:
+            raise FixtureError("pinned navigation media root is unavailable")
+        unresolved_source_path = source_root / handle
+        if unresolved_source_path.is_symlink():
+            raise FixtureError(f"selected navigation media handle is a symlink: {media_id}")
+        source_path = unresolved_source_path.resolve()
+        try:
+            source_path.relative_to(source_root.resolve())
+        except ValueError as exc:
+            raise FixtureError("selected media handle escapes its pinned fixture root") from exc
+        if not source_path.is_file() or source_path.is_symlink():
+            raise FixtureError(f"selected navigation media bytes are missing: {media_id}")
+        digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if digest != media_id.removeprefix("sha256:"):
+            raise FixtureError(f"selected navigation media bytes fail their digest: {media_id}")
+        filename = media_id.removeprefix("sha256:")
+        relative = f"media/{filename}"
+        target_path = entry_root / relative
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if not target_path.exists():
+            shutil.copyfile(source_path, target_path)
+        copied_media[media_id] = relative
+        return relative
+
+    def rewrite_handles(value: Any) -> None:
+        if isinstance(value, dict):
+            if "media_id" in value and "handle" in value:
+                local_path = copy_media(value.get("media_id"), value.get("handle"))
+                if local_path:
+                    value["local_path"] = local_path
+            for child in value.values():
+                rewrite_handles(child)
+        elif isinstance(value, list):
+            for child in value:
+                rewrite_handles(child)
+
+    rewrite_handles(selected)
+    related_inputs: dict[str, Any] = {}
+    if case_id == "L03":
+        action_root = fixture_root / "action"
+        collection = json.loads((action_root / "A09-images.json").read_text(encoding="utf-8"))
+        collection_rows = collection.get("images", [])
+        for item in collection_rows:
+            if isinstance(item, Mapping):
+                item["local_path"] = copy_media(
+                    item.get("media_id"), item.get("path"), source_root=action_root,
+                )
+        related_inputs["montage_collection"] = collection
+        related_inputs["music_cue_times_seconds"] = list(collection.get("cue_times_seconds", []))
+        related_inputs["cue_source"] = "supplied A09 fixture cue list; no beat detection is implied"
+
+    entrypoint = {
+        "kind": "astrid.timeline-eval.offline-navigation-entry.v1",
+        "case_id": case_id,
+        "read_only": True,
+        "reset": "discard this selected-case copy and rematerialize from the same pinned fixture",
+        "source": {
+            "project_slug": source.get("project_slug"),
+            "timeline_id": source.get("timeline_id"),
+            "head_revision_id": source.get("head"),
+            "closure_digest": source.get("closure_digest"),
+            "frame_rate": source.get("frame_rate"),
+        },
+        "target_receipt": {
+            "kind": "astrid.timeline-eval.offline-navigation-target.v1",
+            "case_id": case_id,
+            "target_aliases": list(aliases),
+            "readback_projection": "exact_closure_navigation.v1",
+            "source_head": source.get("head"),
+            "source_closure_digest": source.get("closure_digest"),
+            "media_ids": sorted(copied_media),
+            "offline_only": True,
+        },
+        "targets": selected,
+        "related_inputs": related_inputs,
+        "media": copied_media,
+    }
+    (entry_root / "entrypoint.json").write_text(
+        json.dumps(entrypoint, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return entrypoint
 
 
 def _public_target_locator(
@@ -535,5 +679,6 @@ __all__ = [
     "ACTION_CASES", "Baseline", "CaseIdentities", "DisposableEndpoint", "FIXTURE_BUILDER_VERSION",
     "FixtureError", "FixtureRuntime", "MediaRequirement", "export_baseline", "derive_case_identities",
     "public_target_receipt",
+    "materialize_public_navigation_entrypoint",
     "idempotency_key", "require_disposable_endpoint", "reset_case", "seed_case",
 ]

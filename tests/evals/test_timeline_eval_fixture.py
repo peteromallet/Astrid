@@ -18,10 +18,12 @@ from evals.timeline.fixture import (
     derive_case_identities,
     export_baseline,
     idempotency_key,
+    materialize_public_navigation_entrypoint,
     public_target_receipt,
     reset_case,
     seed_case,
 )
+from evals.timeline.fixture_manifest import DEFAULT_FIXTURE_ROOT
 
 MEDIA_BYTES = b"fixture-image-bytes-v1"
 MEDIA_DIGEST = "sha256:" + sha256(MEDIA_BYTES).hexdigest()
@@ -207,6 +209,29 @@ def test_public_target_receipt_does_not_advertise_a01_route_for_other_cases(tmp_
     assert target["case_id"] == "A02"
     assert target["capabilities"]["edit"]["status"] == "unavailable"
     assert "edit_route" not in target
+
+
+def test_offline_navigation_entrypoint_materializes_only_selected_case_and_receipt(tmp_path):
+    destination = tmp_path / "case-L03"
+    destination.mkdir()
+    entrypoint = materialize_public_navigation_entrypoint(
+        "L03", fixture_root=DEFAULT_FIXTURE_ROOT, destination=destination,
+    )
+    assert entrypoint["kind"] == "astrid.timeline-eval.offline-navigation-entry.v1"
+    assert entrypoint["read_only"] is True
+    assert entrypoint["target_receipt"]["kind"] == "astrid.timeline-eval.offline-navigation-target.v1"
+    assert entrypoint["target_receipt"]["offline_only"] is True
+    assert entrypoint["target_receipt"]["readback_projection"] == "exact_closure_navigation.v1"
+    assert set(entrypoint["targets"]) == {"intro_b01", "ideas_b02", "ideas_b03", "closing_sign"}
+    assert entrypoint["related_inputs"]["music_cue_times_seconds"]
+    for media_id, relative in entrypoint["media"].items():
+        media_path = destination / "entrypoint" / relative
+        assert media_path.is_file()
+        assert "sha256:" + sha256(media_path.read_bytes()).hexdigest() == media_id
+    with pytest.raises(FixtureError, match="must be new and empty"):
+        materialize_public_navigation_entrypoint(
+            "L03", fixture_root=DEFAULT_FIXTURE_ROOT, destination=destination,
+        )
 
 
 def test_cases_share_runtime_project_but_keep_distinct_runtime_timeline_ids(tmp_path):

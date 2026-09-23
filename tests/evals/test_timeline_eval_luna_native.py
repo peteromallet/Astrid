@@ -10,6 +10,7 @@ import pytest
 from evals.timeline import luna_native
 from evals.timeline.checks import run_checks
 from evals.timeline.luna_native import DEFAULT_MODEL, run_attempt
+from evals.timeline.worker_boundary import BoundaryRequirements
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -128,7 +129,7 @@ def test_prompt_does_not_claim_a_universal_edit_route():
         {"id": "A02"}, skill_reference={"path": "/skill", "version": "v1", "sha256": "hash"},
         public_target={"capabilities": {"edit": {"status": "unavailable", "reason": "not seeded"}}},
     )
-    assert "No case-specific edit route is declared available" in prompt
+    assert "No case-specific edit capability is declared available" in prompt
     assert "use the public timelines replace-parent-media route" not in prompt
 
 
@@ -227,6 +228,42 @@ def _isolation_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return credential, contract, tmp_path / "targets"
 
 
+def _boundary_requirements(
+    tmp_path: Path, case_id: str = "A01", attempt_name: str = "attempt-live",
+) -> BoundaryRequirements:
+    skill = luna_native._skill_reference()
+    return BoundaryRequirements(
+        case_id=case_id,
+        worker_id="test-worker",
+        model_boundary_id="test-model-boundary",
+        selected_case_path=str(tmp_path / attempt_name / "cases" / case_id),
+        disposable_credential_path=str(tmp_path / "credential.json"),
+        skill_path=skill["path"],
+        skill_sha256=skill["sha256"],
+        public_package_digest="sha256:test-public-package",
+        disposable_endpoint="http://127.0.0.1:9001",
+        disposable_realm_id="test-realm",
+        canonical_endpoint="https://canonical.invalid",
+        canonical_paths=("/private/canonical.json",),
+        private_paths=("/private/grader.json",),
+        sibling_paths=("/private/sibling/case.json",),
+        denied_endpoints=("https://other.invalid",),
+    )
+
+
+def _install_fake_boundary(
+    monkeypatch, tmp_path: Path, case_id: str = "A01", attempt_name: str = "attempt-live",
+) -> BoundaryRequirements:
+    requirements = _boundary_requirements(tmp_path, case_id, attempt_name)
+
+    class Receipt:
+        def as_dict(self):
+            return {"status": "pass", "boundary_id": requirements.model_boundary_id}
+
+    monkeypatch.setattr(luna_native, "prove_worker_boundary", lambda _supervisor, _requirements: Receipt())
+    return requirements
+
+
 def _target() -> dict[str, object]:
     return {
         "endpoint": "http://127.0.0.1:9001",
@@ -308,6 +345,7 @@ def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | No
     monkeypatch.setattr(luna_native, "_connect_readback_adapter", lambda **_kwargs: adapter)
     if invoke is not None:
         monkeypatch.setattr(luna_native, "_invoke", invoke)
+    boundary_requirements = _install_fake_boundary(monkeypatch, tmp_path)
     aggregate = run_attempt(
         SUITE,
         tmp_path / "attempt-live",
@@ -320,6 +358,8 @@ def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | No
         isolated_credential=credential,
         isolation_contract=contract,
         prepared_targets_root=targets,
+        boundary_supervisor=object(),
+        boundary_requirements={"A01": boundary_requirements},
     )
     return aggregate, calls
 
@@ -332,8 +372,10 @@ def test_prepared_target_is_copied_and_preflight_allows_one_launch(tmp_path, mon
     assert (case_dir / "before.json").is_file()
     result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
     assert not (case_dir / "after.json").exists()
-    assert result["independent_readback"]["status"] == "unavailable"
-    assert result["independent_readback"]["safety"] == {"source_unchanged": None, "test_target_only": None}
+    assert "independent_readback" not in result
+    evidence = json.loads((tmp_path / "attempt-live/coordinator/cases/A01/readback.json").read_text(encoding="utf-8"))
+    assert evidence["readback"]["status"] == "unavailable"
+    assert evidence["safety"] == {"source_unchanged": None, "test_target_only": None}
     assert "publication_response" not in result
     assert aggregate["case_count"] == 20
 
@@ -369,6 +411,7 @@ def test_exact_publication_response_and_dependency_manifest_feed_contract(tmp_pa
     }
 
     def invoke(**kwargs):
+        assert kwargs["model_boundary_id"] == "test-model-boundary"
         adapter.closures["head-after"] = after
         adapter.head = "head-after"
         luna_native._write_json(kwargs["case_dir"] / "result.json", {
@@ -384,7 +427,9 @@ def test_exact_publication_response_and_dependency_manifest_feed_contract(tmp_pa
         tmp_path, monkeypatch, target=_target(), adapter=adapter, invoke=invoke,
     )
     result = json.loads((tmp_path / "attempt-live/cases/A01/result.json").read_text())
-    readback = result["independent_readback"]
+    assert "independent_readback" not in result
+    evidence = json.loads((tmp_path / "attempt-live/coordinator/cases/A01/readback.json").read_text())
+    readback = evidence["readback"]
     assert readback["committed_revisions"]["returned_parent"] == "head-after"
     assert readback["committed_revisions"]["returned_shots"] == [["shot-target", "shot-rev-after"]]
     assert readback["media_digest_evidence"]["matched"] is True
@@ -404,7 +449,7 @@ def test_missing_prepared_target_fails_closed_without_launch(tmp_path, monkeypat
     assert next(row for row in aggregate["cases"] if row["id"] == "A01")["status"] == "setup_failed"
 
 
-def test_pre_readback_failure_fails_closed_without_launch(tmp_path, monkeypatch):
+def test_missing_boundary_supervisor_fails_closed_before_model_launch(tmp_path, monkeypatch):
     fake, calls = _fake_omp(tmp_path)
     monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
     credential, contract, targets = _isolation_inputs(tmp_path)
@@ -412,7 +457,6 @@ def test_pre_readback_failure_fails_closed_without_launch(tmp_path, monkeypatch)
     (targets / "A01").mkdir()
     (targets / "A01" / "target.json").write_text(json.dumps(_target()), encoding="utf-8")
     monkeypatch.setattr("evals.timeline.run.validate_isolated_target", lambda *_args: (True, "ok"))
-    monkeypatch.setattr(luna_native, "_connect_readback_adapter", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("stale target")))
     run_attempt(
         SUITE,
         tmp_path / "attempt-preflight-fail",
@@ -429,4 +473,67 @@ def test_pre_readback_failure_fails_closed_without_launch(tmp_path, monkeypatch)
     assert not calls.exists() or not calls.read_text(encoding="utf-8").strip()
     result = json.loads((tmp_path / "attempt-preflight-fail/cases/A01/result.json").read_text(encoding="utf-8"))
     assert result["agent_status"] == "setup_failed"
-    assert "refusing to launch OMP" in result["failure_cause"]["summary"]
+    assert "no typed host boundary requirements" in result["failure_cause"]["summary"]
+
+
+def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "L01")]
+    suite_path = tmp_path / "l01-only-suite.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    credential, contract, targets = _isolation_inputs(tmp_path)
+    targets.mkdir()
+    (targets / "L01").mkdir()
+    target = {
+        "endpoint": "http://127.0.0.1:9001",
+        "project_id": "project-test",
+        "timeline_id": "timeline-test",
+        "head_revision_id": "head-before",
+        "target_locator": {"readback_projection": "exact_closure_navigation.v1"},
+    }
+    (targets / "L01" / "target.json").write_text(json.dumps(target), encoding="utf-8")
+    target_reader = _ReadbackAdapter(_closure())
+    source_reader = _ReadbackAdapter(_closure())
+    monkeypatch.setattr("evals.timeline.run.validate_isolated_target", lambda *_args: (True, "ok"))
+    monkeypatch.setattr(luna_native, "_connect_readback_adapter", lambda **_kwargs: target_reader)
+    boundary_requirements = _install_fake_boundary(
+        monkeypatch, tmp_path, "L01", attempt_name="attempt-nav",
+    )
+    sequence = []
+
+    def prove(_supervisor, requirements):
+        sequence.append(("boundary", requirements.model_boundary_id))
+
+        class Receipt:
+            def as_dict(self):
+                return {"status": "pass", "boundary_id": requirements.model_boundary_id}
+
+        return Receipt()
+
+    def invoke(**kwargs):
+        sequence.append(("invoke", kwargs["model_boundary_id"]))
+        luna_native._write_json(kwargs["case_dir"] / "result.json", {
+            "navigation_performed": True,
+            "tool_calls": 1,
+            "observations": {"head_revision_id": "head-before", "selected_image_media_id": "sha256:unused"},
+        })
+        return "completed", 0, 0.01, [], ""
+
+    monkeypatch.setattr(luna_native, "prove_worker_boundary", prove)
+    monkeypatch.setattr(luna_native, "_invoke", invoke)
+    run_attempt(
+        suite_path, tmp_path / "attempt-nav", fixture_root=FIXTURES, briefs_path=BRIEFS,
+        execute=True, launchable_ids={"L01"}, isolated_endpoint="http://127.0.0.1:9001",
+        isolated_credential=credential, isolation_contract=contract,
+        prepared_targets_root=targets, source_reader=source_reader,
+        boundary_supervisor=object(), boundary_requirements={"L01": boundary_requirements},
+    )
+    assert sequence == [
+        ("boundary", "test-model-boundary"),
+        ("invoke", "test-model-boundary"),
+    ]
+    evidence = json.loads((tmp_path / "attempt-nav/coordinator/cases/L01/readback.json").read_text())
+    assert evidence["readback"]["status"] == "pass"
+    assert evidence["safety"] == {
+        "source_unchanged": True, "read_only_target": True, "test_target_only": True,
+    }

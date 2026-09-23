@@ -40,7 +40,11 @@ def test_runner_emits_complete_case_report(tmp_path: Path) -> None:
     report = grade_case(case, case_dir,
                         {"safety": {"source_unchanged": True, "test_target_only": True},
                          "edit_made": True, "tool_calls": 4, "elapsed_seconds": 12,
-                         "navigation_media_readback_complete": True})
+                         "navigation_media_readback_complete": True},
+                        coordinator_evidence={
+                            "readback": {"status": "pass"},
+                            "safety": {"source_unchanged": True, "test_target_only": True},
+                        })
     assert report["status"] == "passed"
     assert report["score"] == 4
     assert report["safety"] == "pass"
@@ -68,6 +72,10 @@ def test_hidden_checks_can_be_supplied_separately_from_visible_case(tmp_path: Pa
         {"safety": {"source_unchanged": True, "test_target_only": True}, "edit_made": True},
         hidden_checks=[{"id": "selector", "check": "path_equals", "artifact": "after",
                         "path": "selector", "expected": "new"}],
+        coordinator_evidence={
+            "readback": {"status": "pass"},
+            "safety": {"source_unchanged": True, "test_target_only": True},
+        },
     )
     assert report["status"] == "passed"
     assert "success_checks" not in visible_brief(case)
@@ -127,7 +135,12 @@ def test_missing_safety_attestation_is_unknown_not_a_claimed_violation(tmp_path:
     case = {"id": "A02", "required_artifacts": ["candidate.json"],
             "hidden_checks": [{"id": "edit", "check": "path_equals", "artifact": "candidate",
                                "path": "edit", "expected": True}]}
-    report = grade_case(case, tmp_path, {"edit_made": True})
+    report = grade_case(case, tmp_path, {
+        "edit_made": True,
+        "safety": {"source_unchanged": True, "test_target_only": True},
+        "independent_readback": {"status": "pass"},
+        "independent_safety": {"source_unchanged": True, "test_target_only": True},
+    })
     assert report["safety"] == "unknown"
     assert report["status"] == "indeterminate"
 
@@ -183,6 +196,9 @@ def test_navigation_case_can_pass_without_candidate_or_edit(tmp_path: Path) -> N
     report = grade_case(case, tmp_path, {
         "navigation_performed": True, "tool_calls": 1,
         "safety": {"source_unchanged": True, "read_only_target": True},
+    }, coordinator_evidence={
+        "readback": {"status": "pass"},
+        "safety": {"source_unchanged": True, "read_only_target": True, "test_target_only": True},
     })
     assert report["status"] == "passed"
     assert report["score"] == 3

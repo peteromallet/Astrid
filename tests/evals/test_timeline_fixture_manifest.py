@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from evals.timeline.fixture_manifest import build_readiness, validate_case
+from evals.timeline.fixture_manifest import (
+    _fixture_requirement_reasons,
+    build_readiness,
+    validate_case,
+)
 
 
 def _dump(path: Path, value):
@@ -79,7 +83,26 @@ def test_real_fixture_matrix_checks_sidecar_bytes_and_separates_operational_read
     assert rows["L07"].readiness == "blocked"
     assert rows["L09"].readiness == "blocked"
     assert rows["L10"].readiness == "blocked"
+    assert any("historical video alternative" in reason for reason in rows["L05"].reasons)
     assert not any(row.operational_ready for row in rows.values())
+
+
+def test_declared_fixture_requirements_follow_actual_fields_not_case_ids(tmp_path):
+    manifest = {"targets": {"shot": {"alternatives": []}}}
+    requirement = {
+        "id": "probe-any-name",
+        "fixture_requirements": [{
+            "scope": "targets",
+            "path": "shot.alternatives",
+            "predicate": "explicit",
+            "reason": "retained alternatives are unavailable",
+        }],
+    }
+    assert _fixture_requirement_reasons(requirement, manifest, tmp_path / "fixture.json") == [
+        "retained alternatives are unavailable",
+    ]
+    manifest["targets"]["shot"]["alternatives"] = [{"media_id": "sha256:retained"}]
+    assert _fixture_requirement_reasons(requirement, manifest, tmp_path / "fixture.json") == []
 
 
 def test_attempt_evidence_marks_only_fixture_ready_case_operational(tmp_path):

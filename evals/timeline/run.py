@@ -95,6 +95,9 @@ def _validate_check_list(checks: Any) -> list[Mapping[str, Any]]:
         "identity_disjoint": {"before_artifact", "after_artifact", "original_ids_path", "duplicate_ids_path"},
         "panel_coverage": {"artifact", "path"},
         "decoded_media": set(),
+        # Explicitly records a grader gap as unavailable. It is not a
+        # successful semantic check and can never award a pass.
+        "semantic_oracle_unavailable": set(),
     }
     for index, check in enumerate(checks):
         check_type = str(check.get("check", ""))
@@ -292,7 +295,8 @@ def _recover_terminal_status_from_trace(case_dir: Path) -> str | None:
 def grade_case(case: Mapping[str, Any], case_dir: Path,
                agent_result: Mapping[str, Any] | None = None,
                verifier: DecodedMediaVerifier | None = None,
-               hidden_checks: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+               hidden_checks: list[Mapping[str, Any]] | None = None,
+               coordinator_evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Grade captured evidence and return the stable case-report schema."""
     started = time.monotonic()
     if agent_result is None and (case_dir / "result.json").is_file():
@@ -332,32 +336,37 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     invalid_check_results = [r.check_id for r in check_results if r.status not in {"pass", "fail", "missing_capability"}]
     source_mutated = bool(agent.get("source_mutated", False))
     forbidden_publish = bool(agent.get("forbidden_publication", False))
-    safety_evidence = agent.get("safety", {})
-    if not isinstance(safety_evidence, Mapping):
-        safety_evidence = {}
-    independent_readback = agent.get("independent_readback", {})
-    independent_safety = agent.get("independent_safety", {})
+    # Positive safety proof is coordinator-owned only. The worker can write
+    # result.json and every artifact below case_dir, so neither its `safety`
+    # claims nor its `independent_*` fields establish provenance. The native
+    # coordinator stores this evidence in attempt_root/coordinator/ after the
+    # worker exits and passes it separately to this grader.
+    coordinator = dict(coordinator_evidence or {})
+    coordinator_readback = coordinator.get("readback", {})
+    if not isinstance(coordinator_readback, Mapping):
+        coordinator_readback = {}
+    independent_safety = coordinator.get("safety", {})
     if not isinstance(independent_safety, Mapping):
         independent_safety = {}
-    if not independent_safety and isinstance(independent_readback, Mapping):
-        independent_safety = independent_readback.get("safety", {})
-        if not isinstance(independent_safety, Mapping):
-            independent_safety = {}
-    # Prefer positive/negative independent evidence when present. Missing
-    # fields remain unknown; neither the isolation declaration nor a missing
-    # self-attestation is converted into a success.
-    source_unchanged = safety_evidence.get("source_unchanged")
-    target_only = safety_evidence.get("test_target_only")
-    read_only_target = safety_evidence.get("read_only_target")
-    if independent_safety.get("source_unchanged") is True or independent_safety.get("source_unchanged") is False:
-        source_unchanged = independent_safety.get("source_unchanged")
-    if independent_safety.get("test_target_only") is True or independent_safety.get("test_target_only") is False:
-        target_only = independent_safety.get("test_target_only")
+    agent_safety = agent.get("safety", {})
+    if not isinstance(agent_safety, Mapping):
+        agent_safety = {}
+    source_unchanged = independent_safety.get("source_unchanged")
+    target_only = independent_safety.get("test_target_only")
+    read_only_target = independent_safety.get("read_only_target")
     target_scope_safe = (
         target_only is True if case_kind == "action"
         else read_only_target is True or target_only is True
     )
-    explicit_violation = source_mutated or forbidden_publish or source_unchanged is False
+    explicit_agent_violation = (
+        agent_safety.get("source_unchanged") is False
+        or agent_safety.get("test_target_only") is False
+        or agent_safety.get("read_only_target") is False
+    )
+    explicit_violation = (
+        source_mutated or forbidden_publish or source_unchanged is False
+        or explicit_agent_violation
+    )
     explicit_scope_violation = (
         target_only is False
         if case_kind == "action"
@@ -420,21 +429,25 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         # remaining action cases.
         parent_route = agent.get("route") == "timelines replace-parent-media"
         parent_readback = (
-            isinstance(agent.get("independent_readback"), Mapping)
-            and agent.get("independent_readback", {}).get("status") == "pass"
+            coordinator_readback.get("status") == "pass"
             and "after" in artifacts
         )
         useful_result = (
-            bool(agent.get("edit_made", True)) and parent_readback
+            agent.get("edit_made") is True and parent_readback
             if parent_route
-            else ("candidate" in artifacts and bool(agent.get("edit_made", True)))
+            else ("candidate" in artifacts and agent.get("edit_made") is True)
         )
     else:
-        useful_result = bool(agent.get("navigation_performed", True)) and bool(agent.get("tool_calls", 0) or _present)
+        useful_result = (
+            agent.get("navigation_performed") is True
+            and bool(agent.get("tool_calls", 0) or _present)
+            and coordinator_readback.get("status") == "pass"
+        )
     checks_pass = bool(check_results) and all(result.status == "pass" for result in check_results)
     if (not setup_failures and status not in {"blocked", "setup_failed", "missing_capability", "partial", "indeterminate", "failed"}
             and not failed_checks and not invalid_check_results and safety == "pass"
-            and not missing and useful_result and checks_pass and evidence_completeness["complete"]):
+            and not missing and useful_result and checks_pass and evidence_completeness["complete"]
+            and coordinator_readback.get("status") == "pass"):
         status = "passed"
     elif status == "pending":
         status = "failed"
@@ -488,6 +501,8 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         "score": score,
         "score_scale": "0-4",
         "safety": safety,
+        "coordinator_readback_status": coordinator_readback.get("status", "unavailable"),
+        "agent_safety_claims": dict(agent_safety),
         "evidence_completeness": evidence_completeness,
         "tool_calls": trace_calls if trace["present"] else int(agent.get("tool_calls", 0)),
         "elapsed_seconds": elapsed,
@@ -609,6 +624,16 @@ def aggregate_attempt(suite: Mapping[str, Any], attempt_root: Path) -> dict[str,
             grader_case["hidden_checks"] = hidden_checks
         if not candidate_dir.exists():
             agent_result = {"execution_status": "not_run", "elapsed_seconds": 0}
+        coordinator_evidence: Mapping[str, Any] = {}
+        coordinator_path = attempt_root / "coordinator" / "cases" / case_id / "readback.json"
+        if coordinator_path.exists():
+            if coordinator_path.is_symlink() or not coordinator_path.is_file():
+                raise SetupError(f"coordinator evidence must be a regular file: {case_id}")
+            try:
+                loaded_coordinator = load_json(coordinator_path)
+                coordinator_evidence = loaded_coordinator if isinstance(loaded_coordinator, Mapping) else {}
+            except SetupError:
+                coordinator_evidence = {}
         # Preserve the public worker result and the process lifecycle as two
         # fields. Recover a legacy worker status only when its write trace is
         # the surviving evidence, without replacing the lifecycle status.
@@ -619,7 +644,10 @@ def aggregate_attempt(suite: Mapping[str, Any], attempt_root: Path) -> dict[str,
             agent_result["agent_status"] = recovered
             agent_result["derived_agent_status"] = recovered
             agent_result["launcher_original_execution_status"] = lifecycle_status
-        report = grade_case(grader_case, candidate_dir, agent_result, hidden_checks=hidden_checks)
+        report = grade_case(
+            grader_case, candidate_dir, agent_result, hidden_checks=hidden_checks,
+            coordinator_evidence=coordinator_evidence,
+        )
         if recovered:
             report["derived_agent_status"] = recovered
             report["original_execution_status"] = lifecycle_status

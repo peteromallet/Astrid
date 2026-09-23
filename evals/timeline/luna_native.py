@@ -229,6 +229,27 @@ def _load_public_target(case_dir: Path) -> Mapping[str, Any] | None:
     return None
 
 
+def _action_target_block_reason(
+    case_id: str, public_target: Mapping[str, Any] | None,
+) -> str:
+    """Explain why an action case cannot launch without a real target receipt."""
+    if public_target is None:
+        return (
+            f"{case_id} fixture derivative is not materialized: no disposable "
+            "target.json receipt was prepared; model launch is blocked until the "
+            "case-specific target, owned media, and readback projection exist"
+        )
+    edit_capability = _mapping(_mapping(public_target).get("capabilities")).get("edit")
+    if isinstance(edit_capability, Mapping):
+        reason = edit_capability.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    return (
+        f"{case_id} fixture derivative is not launchable: its public target "
+        "does not declare an available case-specific edit route"
+    )
+
+
 def _prepare_public_target(
     prepared_targets_root: Path | None,
     *,
@@ -1193,9 +1214,7 @@ def run_attempt(
         if not fixture_only and case.get("kind") == "action":
             edit_capability = _mapping(_mapping(public_target).get("capabilities")).get("edit")
             if not isinstance(edit_capability, Mapping) or edit_capability.get("status") != "available":
-                reason = str(_mapping(edit_capability).get(
-                    "reason", "no case-specific public edit route is available for this fixture"
-                ))
+                reason = _action_target_block_reason(case_id, public_target)
                 _write_json(case_dir / "attempt.json", {
                     "kind": ATTEMPT_KIND,
                     "attempt_id": attempt_id,

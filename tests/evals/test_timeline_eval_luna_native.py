@@ -155,6 +155,12 @@ def test_prompt_does_not_claim_a_universal_edit_route():
     assert "use the public timelines replace-parent-media route" not in prompt
 
 
+def test_unmaterialized_action_target_has_explicit_launch_block_reason():
+    reason = luna_native._action_target_block_reason("A02", None)
+    assert "A02 fixture derivative is not materialized" in reason
+    assert "model launch is blocked" in reason
+
+
 def test_action_without_case_specific_route_is_blocked_before_model_launch(tmp_path, monkeypatch):
     suite = json.loads(SUITE.read_text())
     suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "A02")]

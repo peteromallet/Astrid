@@ -113,13 +113,15 @@ do not count as case execution. Do not overwrite previous run results.
 
 ## Current scope boundary
 
-Fixture, checker, and artifact-runner contracts now have focused tests. The
-Runtime adapter is a preflight only: it checks an explicit isolated connection,
-then fails closed before seeding because E02's deterministic local project ID
-does not match Runtime's server-allocated project ID, and media byte exports are
-not included in the fixture contract. No action case is claimed as executed.
-See `.otto/runs/timeline-text-inspection-20260922/evals/e04-runtime-integration.md`
-for the E04 boundary and the temporary-realm integration evidence.
+Fixture, checker, artifact-runner, public-target-locator, and independent
+readback contracts have focused tests. A real disposable AgentBox A01 canary
+proved the isolation boundary and then exposed a genuine agent failure: Luna
+published a new head but edited a different shot while reporting success. That
+attempt is retained as failed evidence and its disposable workspace is
+quarantined. The follow-up gate is to rerun A01 with the locator/readback path,
+then proceed to the one-loop suite only if the independent grader catches the
+wrong-shot case and accepts the correct-shot case. No canonical project or
+timeline was mutated.
 
 ## Native Luna attempt launcher
 
@@ -136,6 +138,17 @@ cases still get their own `attempt.json`, `trace.jsonl`, and `result.json`.
 included in its brief. The resulting tree is graded through
 `aggregate_attempt`. `--fixture-only` exists solely for fake-adapter smoke
 tests and must not be used for a model evaluation.
+
+For a live seeded case, the coordinator also places a public `target.json`
+containing the disposable endpoint, server-assigned IDs, and a semantic target
+locator (for example, A01's opening occurrence and `shot_b01`). It never
+contains the replacement answer or hidden checks. The launcher reads that
+locator before the model starts and again after it exits by following the
+current parent head and its pinned shot/internal revisions. It writes private
+`before.json`/`after.json` snapshots only after the model exits, and A01's
+hidden checks grade the exact active media plus protected timing, voice, and
+overlay fields. An agent's `result.json` or publication receipt cannot by
+itself make the case pass.
 
 The real invocation is explicit and bounded:
 

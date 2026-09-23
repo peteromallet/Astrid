@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Collection, Mapping
 
 from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
+from .independent_readback import IndependentReadbackError, read_target_snapshot
 from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
 
 
@@ -65,6 +66,35 @@ def _safe_case_id(value: Any) -> str:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _load_public_target(case_dir: Path) -> Mapping[str, Any] | None:
+    """Load the coordinator-provided disposable target, if one was seeded."""
+    for name in ("target.json", "public-target.json"):
+        path = case_dir / name
+        if not path.is_file():
+            continue
+        value = load_json(path)
+        if not isinstance(value, Mapping):
+            raise NativeLauncherError(f"public target must be a JSON object: {path}")
+        return value
+    return None
+
+
+def _connect_readback_adapter(
+    *,
+    endpoint: str | None,
+    credential: Path | None,
+    contract: Path | None,
+) -> Any:
+    """Create the coordinator-only adapter; never discover ambient Runtime."""
+    from .runtime_adapter import RuntimeFixtureAdapter
+
+    return RuntimeFixtureAdapter.connect(
+        endpoint=endpoint,
+        credential_file=credential,
+        contract_path=contract,
+    )
 
 
 def _public_brief(
@@ -348,6 +378,37 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
         "path": "navigation_performed" if case.get("kind") == "navigation" else "edit_made",
         "expected": True,
     }
+    if case_id == "A01":
+        media = _mapping(fixture_case).get("media", {})
+        expected_digest = media.get("new_image_digest")
+        checks: list[dict[str, Any]] = [generic, {
+            "id": "a01_target_selector",
+            "check": "path_equals",
+            "artifact": "after",
+            "path": "target.selector_clip_id",
+            "expected": targets.get("selector_clip_id", "shot_b01"),
+        }]
+        if isinstance(expected_digest, str) and expected_digest:
+            checks.append({
+                "id": "a01_target_active_media",
+                "check": "path_equals",
+                "artifact": "after",
+                "path": "target.active_media_digest",
+                "expected": expected_digest,
+            })
+        checks.append({
+            "id": "a01_target_timing_and_protected_roles",
+            "check": "paths_unchanged",
+            "paths": [
+                "target.timing.at",
+                "target.timing.hold",
+                "target.timing.occurrence_duration_ms",
+                "target.timing.occurrence_start_ms",
+                "target.voice_clip_id",
+                "target.frame_overlay_clip_id",
+            ],
+        })
+        return checks
     if case_id == "A03":
         original = list(targets.get("four_occurrences_in_order", ()))
         if len(original) == 4:
@@ -555,6 +616,30 @@ def run_attempt(
             "model": model,
             "execution": "native_omp",
         })
+        # A seeded native case may expose a public target.json. Read its exact
+        # current closure before launching the model, but keep the snapshot
+        # coordinator-private until the process exits. The agent's brief and
+        # self-report are never a substitute for this readback.
+        public_target = _load_public_target(case_dir)
+        readback_adapter: Any | None = None
+        before_snapshot: dict[str, Any] | None = None
+        readback_error: str | None = None
+        if public_target is not None and not fixture_only:
+            try:
+                target_endpoint = public_target.get("endpoint")
+                if isolated_endpoint and target_endpoint and target_endpoint != isolated_endpoint:
+                    raise IndependentReadbackError("public target endpoint differs from requested disposable endpoint")
+                readback_adapter = _connect_readback_adapter(
+                    endpoint=isolated_endpoint,
+                    credential=isolated_credential,
+                    contract=isolation_contract,
+                )
+                before_snapshot = read_target_snapshot(readback_adapter, public_target)
+                expected_head = public_target.get("head_revision_id")
+                if expected_head and before_snapshot.get("head_revision_id") != expected_head:
+                    raise IndependentReadbackError("public target head is stale before launch")
+            except Exception as exc:  # adapter failures are a failed gate, not an agent success
+                readback_error = f"{type(exc).__name__}: {exc}"
         status, returncode, elapsed, events, output = _invoke(
             omp_bin=omp_bin,
             model=model,
@@ -566,7 +651,7 @@ def run_attempt(
             fixture_only=fixture_only,
         )
         _trace_lines(case_dir, events=events)
-        _merge_result(
+        merged_result = _merge_result(
             case_dir,
             case=case,
             attempt_id=attempt_id,
@@ -577,6 +662,31 @@ def run_attempt(
             output=output,
             model=model,
         )
+        after_snapshot: dict[str, Any] | None = None
+        if public_target is not None and not fixture_only and readback_error is None:
+            try:
+                if readback_adapter is None:
+                    readback_adapter = _connect_readback_adapter(
+                        endpoint=isolated_endpoint,
+                        credential=isolated_credential,
+                        contract=isolation_contract,
+                    )
+                after_snapshot = read_target_snapshot(readback_adapter, public_target)
+            except Exception as exc:  # noqa: BLE001 - adapter boundary is external
+                readback_error = f"{type(exc).__name__}: {exc}"
+        if public_target is not None and not fixture_only:
+            if before_snapshot is not None:
+                _write_json(case_dir / "before.json", {"target": before_snapshot})
+            if after_snapshot is not None:
+                _write_json(case_dir / "after.json", {"target": after_snapshot})
+            merged_result["independent_readback"] = {
+                "status": "pass" if before_snapshot is not None and after_snapshot is not None else "failed",
+                "before_observed": before_snapshot is not None,
+                "after_observed": after_snapshot is not None,
+                "error": readback_error,
+                "grader": "coordinator_exact_parent_closure",
+            }
+            _write_json(case_dir / "result.json", merged_result)
         # Hidden checks are deliberately installed only after the agent exits.
         _write_json(case_dir / "checks.json", _hidden_checks(case, fixture_root=fixture_root))
 

@@ -25,6 +25,22 @@ EXPECTED_SOURCE_HEAD = (
 )
 ACTION_CASES = tuple(f"A{i:02d}" for i in range(1, 11))
 
+# These are public semantic locators, not answers.  The source IDs are used
+# only while seeding to translate the locator to server-assigned disposable
+# IDs.  The expected replacement digest remains in the private action
+# manifest and is never placed in the agent-visible target package.
+_PUBLIC_TARGETS: Mapping[str, Mapping[str, Any]] = {
+    "A01": {
+        "role": "opening-shot-active-picture",
+        "source_occurrence_id": "shot-ee383f695b10431c",
+        "source_shot_id": "5024db66-8472-5eeb-8fba-bd05bac13337",
+        "selector_clip_id": "shot_b01",
+        "voice_clip_id": "vo_b01",
+        "frame_overlay_clip_id": "canonical_tight_frame_overlay_v1",
+        "preserve_roles": ["timing", "voiceover", "frame-overlay"],
+    },
+}
+
 
 class FixtureError(ValueError):
     """Fixture inputs or Runtime isolation do not satisfy the eval contract."""
@@ -214,7 +230,7 @@ def public_target_receipt(
     endpoint_url = seed.get("endpoint_url")
     if not all(isinstance(value, str) and value for value in (endpoint_url, project_id, timeline_id, head)):
         raise FixtureError("seed receipt must include endpoint_url, project_id, timeline_id, and new_head")
-    return {
+    receipt = {
         "kind": "astrid.timeline-eval.public-target.v1",
         "scope": "selected-case-only",
         "read_only": bool(read_only),
@@ -230,6 +246,51 @@ def public_target_receipt(
         "internal_revision_ids": sorted(identities.internal_revision_ids.values()),
         "owned_media_ids": sorted(str(value) for value in seed.get("owned_media", {}).values()),
     }
+    locator = seed.get("target_locator")
+    if isinstance(locator, Mapping):
+        receipt["target_locator"] = dict(locator)
+    return receipt
+
+
+def _public_target_locator(
+    baseline: Baseline, identities: CaseIdentities,
+) -> dict[str, Any] | None:
+    """Translate a case's semantic target to disposable server IDs.
+
+    A locator is deliberately narrower than a closure export: it tells an
+    agent which committed occurrence and selector to inspect, but not which
+    replacement media or hidden assertion is expected.  Unknown/synthetic
+    baselines simply omit the locator rather than guessing a target.
+    """
+    public = _PUBLIC_TARGETS.get(identities.case_id)
+    if not isinstance(public, Mapping):
+        return None
+    source_occurrence = str(public.get("source_occurrence_id", ""))
+    source_shot = str(public.get("source_shot_id", ""))
+    occurrence_id = identities.occurrence_ids.get(source_occurrence)
+    shot_id = identities.shot_ids.get(source_shot)
+    if not occurrence_id or not shot_id:
+        return None
+    source_revision = None
+    parent_payload = baseline.closure.get("parent_revision", {}).get("payload", {})
+    for row in parent_payload.get("occurrences", []) if isinstance(parent_payload, Mapping) else ():
+        if isinstance(row, Mapping) and str(row.get("occurrence_id")) == source_occurrence:
+            source_revision = str(row.get("shot_revision_id", ""))
+            break
+    shot_revision_id = identities.shot_revision_ids.get(source_revision or "")
+    if not shot_revision_id:
+        return None
+    result: dict[str, Any] = {
+        "role": str(public["role"]),
+        "occurrence_id": occurrence_id,
+        "shot_id": shot_id,
+        "shot_revision_id": shot_revision_id,
+        "selector_clip_id": str(public["selector_clip_id"]),
+        "voice_clip_id": str(public["voice_clip_id"]),
+        "frame_overlay_clip_id": str(public["frame_overlay_clip_id"]),
+        "preserve_roles": [str(value) for value in public.get("preserve_roles", ())],
+    }
+    return result
 
 
 def derive_case_identities(
@@ -397,7 +458,7 @@ def seed_case(
         raise FixtureError("seed receipt does not identify the isolated case target")
     if receipt.get("semantic_digest") != baseline.semantic_digest:
         raise FixtureError("seed readback does not match baseline semantic digest")
-    return {"endpoint_url": endpoint.url, "endpoint_realm_id": endpoint.realm_id, "project_alias": identities.project_alias, "timeline_alias": identities.timeline_alias, "project_id": project_id, "timeline_id": timeline_id, "identities": identities, "owned_media": owned, "project_idempotency_key": project_key, "timeline_idempotency_key": timeline_key, "idempotency_key": key, "receipt": dict(receipt)}
+    return {"endpoint_url": endpoint.url, "endpoint_realm_id": endpoint.realm_id, "project_alias": identities.project_alias, "timeline_alias": identities.timeline_alias, "project_id": project_id, "timeline_id": timeline_id, "identities": identities, "owned_media": owned, "target_locator": _public_target_locator(baseline, identities), "project_idempotency_key": project_key, "timeline_idempotency_key": timeline_key, "idempotency_key": key, "receipt": dict(receipt)}
 
 
 def reset_case(

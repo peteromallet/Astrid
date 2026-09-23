@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from .fixture_contracts import action_target_contract, navigation_fixture_contract
+
 
 FIXTURE_BUILDER_VERSION = "astrid-timeline-fixture-v1"
 SUITE_VERSION = "astrid-timeline-eval-v1"
@@ -284,6 +286,7 @@ def public_target_receipt(
         "internal_timeline_ids": sorted(identities.internal_timeline_ids.values()),
         "internal_revision_ids": sorted(identities.internal_revision_ids.values()),
         "owned_media_ids": sorted(str(value) for value in seed.get("owned_media", {}).values()),
+        "fixture_contract": action_target_contract({"id": identities.case_id}).as_dict(),
     }
     if read_only:
         # A navigation receipt observes the whole exact closure. It does not
@@ -450,6 +453,7 @@ def materialize_public_navigation_entrypoint(
         "targets": selected,
         "related_inputs": related_inputs,
         "media": copied_media,
+        "fixture_contract": navigation_fixture_contract(row).as_dict(),
     }
     if case_id == "L10":
         # The selected voice bytes are already copied and digest-verified

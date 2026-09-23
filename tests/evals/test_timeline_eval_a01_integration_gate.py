@@ -158,4 +158,3 @@ def test_wrong_shot_locator_rejects_shared_or_missing_picture_candidates():
     adapter.read_current_closure = lambda *args, **kwargs: closure
     with pytest.raises(RuntimeError, match="no uniquely pinned sibling picture clip"):
         gate._wrong_shot_locator(adapter, target)
-

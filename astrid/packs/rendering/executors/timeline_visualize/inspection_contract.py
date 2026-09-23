@@ -411,9 +411,25 @@ def project_timeline_document(
                 compact["text_truncated"] = True
         project_ref = document.get("project_slug") or document.get("project_id") or "<project>"
         timeline_ref = document.get("slug") or timeline_id or "<timeline>"
+        scope_args: list[str] = []
+        for flag, value in (("--occurrence", occurrence), ("--shot", shot), ("--asset", asset)):
+            if value:
+                scope_args.extend([flag, str(value)])
+        if tracks:
+            for track_value in tracks:
+                scope_args.extend(["--track", str(track_value)])
+        if range_value is not None:
+            scope_args.extend(["--range", str(range_value)])
         compact["actions"] = {
-            "expand": action_argv("astrid", "timelines", "show", "--project", str(project_ref), str(timeline_ref), "--summary", "--clip", str(identity.get("clip_id") or "<clip>"), "--detail"),
-            "visualize": action_argv("astrid", "timelines", "visualize", "--project", str(project_ref), "--timeline-slug", str(timeline_ref), "--clip", str(identity.get("clip_id") or "<clip>"), "--show", "inputs"),
+            "expand": action_argv(
+                "astrid", "timelines", "show", "--project", str(project_ref), str(timeline_ref),
+                "--summary", "--clip", str(identity.get("clip_id") or "<clip>"), "--detail", *scope_args,
+            ),
+            "visualize": action_argv(
+                "astrid", "timelines", "visualize", "--project", str(project_ref),
+                "--timeline-slug", str(timeline_ref), "--clip", str(identity.get("clip_id") or "<clip>"),
+                "--show", "inputs", *scope_args,
+            ),
         }
         selected.append(compact)
     selected.sort(key=lambda row: (row["at_seconds"] is None,

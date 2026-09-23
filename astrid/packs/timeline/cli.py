@@ -213,7 +213,7 @@ def _cmd_show(parsed: argparse.Namespace) -> int:
         )
         values = {
             name: getattr(parsed, name, None)
-            for name in ("clip", "occurrence", "shot", "track", "asset", "range", "detail")
+            for name in ("clip", "occurrence", "shot", "track", "asset", "range", "detail", "limit", "cursor")
         }
         normalized = inspection_options(values)
         selectors = {
@@ -235,7 +235,8 @@ def _cmd_show(parsed: argparse.Namespace) -> int:
                 clip=normalized["clip"], occurrence=normalized["occurrence"],
                 shot=normalized["shot"], track=normalized["tracks"],
                 asset=normalized.get("asset"), range_value=values.get("range"),
-                detail=normalized["detail"],
+                detail=normalized["detail"], limit=values.get("limit") or 50,
+                cursor=values.get("cursor"),
             )
             if parsed.summary:
                 result = _summary_result(result, projection=projection)
@@ -1071,6 +1072,8 @@ def _configure_show(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--track", action="append", default=None, help="Restrict the inspection projection to one or more tracks.")
     subparser.add_argument("--asset", default=None, help="Restrict the inspection projection to one canonical asset key.")
     subparser.add_argument("--range", dest="range", default=None, help="Half-open START..END seconds window.")
+    subparser.add_argument("--limit", type=int, default=50, help="Maximum bounded inspection rows (1–100).")
+    subparser.add_argument("--cursor", default=None, help="Continue a bounded inspection page from its cursor.")
     subparser.add_argument("--detail", action="store_true", default=False, help="Include full bounded text for selected clips.")
     _add_json_flag(subparser)
     subparser.set_defaults(handler=_cmd_show)

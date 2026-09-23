@@ -16,6 +16,7 @@ import socketserver
 import select
 import socket
 import threading
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -124,15 +125,25 @@ class _BrokerHandler(socketserver.StreamRequestHandler):
     def _tunnel(self, upstream: socket.socket) -> None:
         """Relay a CONNECT stream until either side closes it."""
         client = self.connection
-        while True:
-            readable, _, _ = select.select((client, upstream), (), (), 15)
-            if not readable:
+        broker = self.server.broker
+        deadline = time.monotonic() + min(600.0, broker.tunnel_idle_seconds)
+        while not broker._stopping.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return
+            readable, _, _ = select.select((client, upstream), (), (), min(0.25, remaining))
+            if not readable:
+                continue
             for source in readable:
-                data = source.recv(65536)
+                try:
+                    data = source.recv(65536)
+                    if data:
+                        (upstream if source is client else client).sendall(data)
+                except OSError:
+                    return
                 if not data:
                     return
-                (upstream if source is client else client).sendall(data)
+                deadline = time.monotonic() + min(600.0, broker.tunnel_idle_seconds)
 
     def _response(self, status: HTTPStatus, body: bytes) -> None:
         self.wfile.write(
@@ -170,6 +181,8 @@ class ObservableNetworkBroker:
     evidence_path: Path | None = None
     evidence_key: str = ""
     auth_token: str = ""
+    tunnel_idle_seconds: float = 15.0
+    _stopping: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _strict: bool = field(default=False, init=False, repr=False)
     _admission: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _server: _BrokerServer | None = field(default=None, init=False, repr=False)
@@ -266,6 +279,7 @@ class ObservableNetworkBroker:
     def start(self) -> "ObservableNetworkBroker":
         if self._server is not None:
             return self
+        self._stopping.clear()
         self._server = _BrokerServer(("127.0.0.1", 0), self)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -279,6 +293,7 @@ class ObservableNetworkBroker:
         return f"http://{host}:{port}"
 
     def stop(self) -> None:
+        self._stopping.set()
         if self._server is None:
             return
         self._server.shutdown()

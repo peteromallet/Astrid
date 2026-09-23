@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 
+from .authoring_bundle import (
+    AUTHORING_BUNDLE_SCHEMA_VERSION,
+    AuthoringBundleError,
+    AuthoringCandidateWriter,
+    CandidateCompilation,
+    UnsupportedAuthoringEditError,
+    authoring_contract,
+    authoring_media_inventory,
+    compile_authoring_candidate,
+    diff_authoring_candidate,
+    format_authoring_inspection,
+    inspect_authoring_candidate,
+    open_authoring_bundle,
+    preview_authoring_candidate,
+    publish_authoring_candidate,
+    validate_authoring_candidate,
+)
 from .banodoco_composer import (
     Timeline,
     TimelineClipView,
@@ -109,23 +126,6 @@ from .duration import (
 from .shot_composition import (
     SCHEMA_VERSION as SHOT_COMPOSITION_SCHEMA_VERSION,
 )
-from .shot_composition_migration import (
-    MIGRATION_RECEIPT_TYPE,
-    MIGRATION_SCHEMA_VERSION,
-    MigrationAmbiguityError,
-    MigrationInventory,
-    MigrationInventoryItem,
-    MigrationInterruptedError,
-    MigrationPlan,
-    MigrationRuntimeUnavailableError,
-    MigrationSourceChangedError,
-    RuntimeCompositionMigrationPort,
-    ShotCompositionMigrationError,
-    inventory_legacy_shot_compositions,
-    migrate_shot_compositions,
-    plan_shot_composition_migration,
-    rehearse_shot_composition_migration,
-)
 from .shot_composition import (
     AssetRecord,
     AudioRecord,
@@ -150,6 +150,23 @@ from .shot_composition import (
     stable_output_identity,
     validate_shot_composition,
 )
+from .shot_composition_migration import (
+    MIGRATION_RECEIPT_TYPE,
+    MIGRATION_SCHEMA_VERSION,
+    MigrationAmbiguityError,
+    MigrationInterruptedError,
+    MigrationInventory,
+    MigrationInventoryItem,
+    MigrationPlan,
+    MigrationRuntimeUnavailableError,
+    MigrationSourceChangedError,
+    RuntimeCompositionMigrationPort,
+    ShotCompositionMigrationError,
+    inventory_legacy_shot_compositions,
+    migrate_shot_compositions,
+    plan_shot_composition_migration,
+    rehearse_shot_composition_migration,
+)
 from .shot_composition_projection import (
     ShotCompositionProjection,
     ShotCompositionProjectionError,
@@ -158,6 +175,7 @@ from .shot_composition_projection import (
 )
 
 __all__ = [
+    "AUTHORING_BUNDLE_SCHEMA_VERSION",
     "ARRANGEMENT_VERSION",
     "AnimationReference",
     "AnimationReferenceList",
@@ -176,6 +194,10 @@ __all__ = [
     "AudioBindingSource",
     "AudioBindingValue",
     "AudioRecord",
+    "AuthoringBundleError",
+    "AuthoringCandidateWriter",
+    "authoring_contract",
+    "authoring_media_inventory",
     "BUILTIN_CLIP_TYPES",
     "CARRY_FORWARD_SOURCE_FIELDS",
     "ClipClassifiedKind",
@@ -186,6 +208,7 @@ __all__ = [
     "ClipTransitionReference",
     "ClipType",
     "CompositionOccurrenceRecord",
+    "CandidateCompilation",
     "DependencyRecord",
     "GenerationInputRecord",
     "InternalTimelineRevisionRecord",
@@ -226,6 +249,7 @@ __all__ = [
     "TimelineRenderView",
     "TrackBlendMode",
     "TrackDefinition",
+    "UnsupportedAuthoringEditError",
     "SHOT_COMPOSITION_SCHEMA_VERSION",
     "MIGRATION_RECEIPT_TYPE",
     "MIGRATION_SCHEMA_VERSION",
@@ -271,6 +295,10 @@ __all__ = [
     "_transition_ids",
     "canonical_empty_timeline",
     "canonical_timeline_config",
+    "compile_authoring_candidate",
+    "diff_authoring_candidate",
+    "format_authoring_inspection",
+    "inspect_authoring_candidate",
     "is_all_generative_arrangement",
     "load_arrangement",
     "load_metadata",
@@ -279,6 +307,10 @@ __all__ = [
     "load_timeline",
     "materialize_output",
     "merge_generation",
+    "open_authoring_bundle",
+    "publish_authoring_candidate",
+    "preview_authoring_candidate",
+    "validate_authoring_candidate",
     "save_arrangement",
     "save_metadata",
     "save_pool",

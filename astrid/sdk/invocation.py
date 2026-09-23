@@ -853,12 +853,22 @@ def _prepare_managed_render_inputs(
             "explicit generated runtime client is required for managed render admission"
         )
     try:
+        authoring_preview = values.pop("authoring_preview", None)
         snapshot = resolve_managed_render_snapshot(
             project_ref=str(project),
             timeline_ref=timeline_ref.strip(),
             expected_version=expected_version,
             client=_client,
+            candidate_preview=authoring_preview is not None,
         )
+        if authoring_preview is not None:
+            if not isinstance(authoring_preview, Mapping):
+                raise ValueError("authoring_preview must be a frozen candidate artifact")
+            from .authoring_render_preview import candidate_preview_snapshot
+
+            snapshot = candidate_preview_snapshot(
+                authoring_preview, snapshot=snapshot, client=_client
+            )
         child_records: list[dict[str, Any]] = []
         review_shots: list[dict[str, Any]] = []
         review_phrases: list[dict[str, Any]] = []
@@ -1783,6 +1793,10 @@ def _kernel_invoke(
         "outputs": _json_safe_mapping(dict(outputs or {})),
         "extra_pack_roots": list(extra_pack_roots),
     }
+    if str(capability.id) == "generation.generate_image_codex":
+        # Bounded host profiles consume typed params as their single input
+        # authority, including the ordered CAS descriptors.
+        spec["params"] = spec.pop("inputs")
     if idempotency_context:
         spec["authority_context"] = _json_safe_mapping(dict(idempotency_context))
     if admission_metadata:
@@ -1795,6 +1809,19 @@ def _kernel_invoke(
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
     input_manifest: list[str] = []
+    if str(capability.id) == "generation.generate_image_codex":
+        for name in ("image_ref", "style_ref", "brand_ref"):
+            reference = request_inputs.get(name)
+            if reference is None:
+                continue
+            if not isinstance(reference, Mapping):
+                raise CapabilityValidationError(f"{name} requires a managed image descriptor")
+            digest = str(reference.get("digest") or "").removeprefix("sha256:")
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise CapabilityValidationError(f"{name} requires a managed SHA-256 digest")
+            if "sha256:" + digest in input_manifest:
+                raise CapabilityValidationError("Codex reference roles must use distinct images")
+            input_manifest.append("sha256:" + digest)
     raw_snapshot = request_inputs.get("timeline_snapshot")
     if isinstance(raw_snapshot, Mapping):
         raw_registry = raw_snapshot.get("registry")
@@ -2201,6 +2228,10 @@ def invoke(
         include_missing_roots=include_missing_roots,
         include_elements=include_elements,
     )
+    # Keep the public generation entrypoint while selecting a separately
+    # bounded runtime profile for Codex (the cloud profile remains closed).
+    if capability_id == "generation.generate_image" and (inputs or {}).get("execution") == "codex":
+        capability_id = "generation.generate_image_codex"
     capability = sdk_module.get_capability(
         capability_id,
         kind=kind,
@@ -2271,6 +2302,11 @@ def invoke(
     invocation_authority_context: dict[str, Any] | None = None
     invocation_admission_metadata: dict[str, Any] | None = None
     invocation_storage_estimate: dict[str, int] | None = None
+    if capability.id == "generation.generate_image_codex":
+        count = request_inputs.get("count", 1)
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 4:
+            raise CapabilityValidationError("Codex count must be an integer between 1 and 4")
+        invocation_storage_estimate = {"scratch_bytes": 536870912, "output_bytes": 269484032}
     # These are managed-authority checks, not manifest checks.  A dry-run is
     # intentionally limited to the source ledger and therefore cannot inspect
     # a project tree or materialize a render snapshot.
@@ -2372,6 +2408,7 @@ def invoke(
     # frame) and discovering the problem only after kernel admission.
     modality = {
         "generation.generate_image": "image",
+        "generation.generate_image_codex": "image",
         "generation.generate_video": "video",
         "generation.generate_audio": "audio",
     }.get(str(capability.id))

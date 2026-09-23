@@ -1019,9 +1019,11 @@ def _network_sandbox_argv(argv: list[str], attempt: Path, endpoint: str | None) 
 
     profile = (
         '(version 1) (deny default) '
-        '(allow process*) (allow file-read*) '
+        '(allow process*) (allow file-read*) (allow sysctl-read) '
         f'(allow file-write* (subpath "{quote(str(attempt))}")) '
         '(allow file-write* (subpath "/tmp")) '
+        f'(allow file-write* (subpath "{quote(str(Path("/tmp").resolve()))}")) '
+        '(allow file-write* (literal "/dev/null")) '
         f'(allow network-outbound (remote tcp "localhost:{parsed.port}"))'
     )
     return [sandbox, "-p", profile, *argv]
@@ -3092,6 +3094,8 @@ class GenericPackHost:
         # route evidence cannot be replayed under a different URL input.
         admission["allowed_routes"] = list(routes)
         broker = ObservableNetworkBroker(response_body=None)
+        if record.id == "generation.generate_image_codex":
+            broker.tunnel_idle_seconds = min(600, max(15, int((inputs or {}).get("timeout") or 600)))
         broker.register_admission(
             admission,
             allowed_routes=[str(route) for route in (routes or ())],
@@ -5358,6 +5362,13 @@ class GenericPackHost:
                 self._vibecomfy_warmth_hint = None
                 self._vibecomfy_current_warmth_hint = None
                 self._vibecomfy_requested_warmth_hint = None
+            if capability_id == "generation.generate_image_codex":
+                # A force-killed child cannot run its credential finally.
+                # Scrub before retaining any attempt evidence as well.
+                try:
+                    (root / "codex-home" / "auth.json").unlink(missing_ok=True)
+                except OSError as exc:
+                    cleanup_errors.append(f"Codex credential cleanup: {exc}")
             if keep_attempt:
                 try:
                     retained_exists = _strict_root_exists(root)

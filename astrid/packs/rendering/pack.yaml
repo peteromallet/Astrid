@@ -14,7 +14,7 @@ permissions:
     reason: Reads timeline, asset, and theme files; writes rendered video.
   - id: network
     reason: Sprite sheet executor calls OpenAI GPT Image API.
-description: Render timelines to video, visualize event logs as deterministic evidence packs, generate GPT-Image sprite sheets, and supply render-time animation/transition/effect elements.
+description: Author, inspect, preview, and render runtime-owned timelines; visualize them as deterministic evidence packs; generate GPT-Image sprite sheets; and supply render-time animation/transition/effect elements.
 keywords:
 - render
 - remotion
@@ -32,7 +32,7 @@ capabilities:
 - generate_sprite_sheet
 - scaffold_html_canvas_effect
 agent:
-  purpose: Choose this pack to turn a brief timeline into a finished video (hype.mp4), inspect managed timeline event logs as deterministic evidence, generate/slice GPT Image sprite sheets, or wrap content in a canvas/WebGL post-processing effect.
+  purpose: Choose this pack for runtime-owned timeline authoring and inspection, candidate preview/publication, finished video rendering, deterministic visual evidence, GPT Image sprite sheets, or canvas/WebGL post-processing effects.
   do_not_use_for: Publishing rendered output to external services.
   normal_entrypoints:
   - rendering.render

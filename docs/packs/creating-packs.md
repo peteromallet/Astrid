@@ -518,6 +518,12 @@ Several pack-system capabilities are deferred to future milestones:
 - **Dependency isolation** — Per-pack virtual environments and isolated
   dependency resolution to prevent conflicts between packs.
 
+Pack-hosted app tools and interface extensions are a separate architecture
+proposal, not a currently supported pack feature. See
+[Pack-Hosted Tools and Interface Contributions](../architecture/pack-hosted-interfaces.md)
+for the direction, its fit with pack identity/resources, and current trust
+constraints.
+
 ## Next Steps
 
 After creating and validating your pack:

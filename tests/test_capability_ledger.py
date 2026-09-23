@@ -11,7 +11,7 @@ def test_shipped_ledger_reconciles_historical_capability_sets():
 
     assert sources["counts"]["pack_labels"] == 89
     assert sources["counts"]["historical_pack_labels"] == 94
-    assert sources["counts"]["executor_inventory"] == 85
+    assert sources["counts"]["executor_inventory"] == 86
     assert sources["counts"]["legacy_ids"] == 19
     assert all(section["complete"] for section in sources["coverage"].values())
     assert not sources["coverage"]["source_labels"]["missing"]
@@ -41,7 +41,7 @@ def test_host_consumes_the_reconciled_ledger_before_readiness_matrix():
 
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])
     assert host.ledger["sources"]["counts"]["pack_labels"] == 89
-    assert len(host.matrix) == 79
+    assert len(host.matrix) == 80
 
 
 def test_vibecomfy_readiness_reserves_gpu_for_workflow_execution():

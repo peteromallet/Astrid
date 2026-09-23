@@ -49,6 +49,11 @@ Contributor-facing architecture docs live under
 **[Test Layout](architecture/test-layout.md)** for test organization, and
 **[Decisions](architecture/decisions.md)** for design records.
 
+The proposed direction for local pack-authored app tools and interface
+contributions is in
+**[Pack-hosted tools and interface contributions](architecture/pack-hosted-interfaces.md)**.
+It does not change the current pack or trust contract.
+
 ## Reference
 
 - **[Contracts Index](contracts/README.md)** — Every normative contract: platform, CLI,

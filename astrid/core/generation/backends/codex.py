@@ -7,6 +7,8 @@ read ``OPENAI_API_KEY``; Codex authenticates through ``~/.codex/auth.json``.
 from __future__ import annotations
 
 import logging
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -91,12 +93,19 @@ class CodexBackend(BackendAdapter):
 
         t0 = time.monotonic()
         started_at = time.time()
+        # Managed attempts keep Codex's generated files and credentials inside
+        # the host's measured scratch tree, never in the user's global cache.
+        managed_home = os.environ.get("ASTRID_CODEX_ATTEMPT_HOME")
+        if managed_home:
+            self._generated_images_dir = Path(managed_home) / "generated_images"
         session_id, _raw_output = self._run_codex_once(params)
         source_paths = self._collect_new_images(session_id, started_at)
         if not source_paths:
             raise RuntimeError(
-                f"codex session {session_id} produced no ig_*.png in "
-                f"{self._generated_images_dir / session_id}"
+                f"codex session {session_id} produced no ig_*.png or exec-*.png in "
+                f"{self._generated_images_dir / session_id}\n"
+                "--- Codex tool output tail ---\n"
+                + _diagnostic_tail(_raw_output)
             )
 
         image_paths = [
@@ -120,21 +129,41 @@ class CodexBackend(BackendAdapter):
         prompt = _build_codex_prompt(params)
         timeout = int(params.get("timeout") or 300)
         reasoning = str(params.get("reasoning") or "low")
+        # macOS refuses a second seatbelt application inside the host's
+        # enforced sandbox. Keep that outer FS/network boundary as the sole
+        # owner for managed tasks; standalone CLI use retains read-only.
+        policy = json.loads(os.environ.get("ASTRID_NETWORK_POLICY") or "{}")
+        broker_policy = policy.get("broker", {})
+        host_sandboxed = bool(
+            os.environ.get("ASTRID_CODEX_ATTEMPT_HOME")
+            and os.environ.get("ASTRID_BROKER_PROXY")
+            and policy.get("proxy") == os.environ.get("ASTRID_BROKER_PROXY")
+            and broker_policy.get("host_managed")
+            and broker_policy.get("enforced")
+        )
         cmd = [
             self._codex_bin,
             "exec",
             prompt,
             "--skip-git-repo-check",
             "--sandbox",
-            "read-only",
+            "danger-full-access" if host_sandboxed else "read-only",
             "-c",
             f"model_reasoning_effort={reasoning}",
         ]
-        image_ref = params.get("image_ref")
-        if image_ref:
-            ref_path = Path(str(image_ref)).expanduser()
-            if ref_path.is_file():
-                cmd.append(f"--image={ref_path}")
+        cmd.extend(["--enable", "image_generation", "--disable", "apps", "--disable", "plugins"])
+        for ref_path in _reference_paths(params):
+            cmd.append(f"--image={ref_path}")
+        child_env = dict(os.environ)
+        managed_home = child_env.get("ASTRID_CODEX_ATTEMPT_HOME")
+        if managed_home:
+            child_env["CODEX_HOME"] = managed_home
+            # The OS sandbox cannot consult macOS Keychain trust services.
+            # Use the system-maintained PEM roots; never disable TLS checks.
+            system_roots = Path("/etc/ssl/cert.pem")
+            if system_roots.is_file():
+                child_env.setdefault("SSL_CERT_FILE", str(system_roots))
+                child_env.setdefault("CODEX_CA_CERTIFICATE", str(system_roots))
 
         try:
             proc = self._runner(
@@ -144,6 +173,7 @@ class CodexBackend(BackendAdapter):
                 stderr=subprocess.STDOUT,
                 timeout=timeout,
                 text=True,
+                env=child_env,
             )
         except FileNotFoundError as exc:
             raise RuntimeError("`codex` CLI not found on PATH") from exc
@@ -155,7 +185,7 @@ class CodexBackend(BackendAdapter):
             raise RuntimeError(
                 f"codex exited with return code {proc.returncode}\n"
                 "--- codex output tail ---\n"
-                + output[-1500:]
+                + _diagnostic_tail(output)
             )
         match = SESSION_RE.search(output)
         if not match:
@@ -172,7 +202,8 @@ class CodexBackend(BackendAdapter):
             return []
         found = [
             path
-            for path in session_dir.glob("ig_*.png")
+            for path in session_dir.glob("*.png")
+            if path.name.startswith(("ig_", "exec-"))
             if path.stat().st_size > 0 and path.stat().st_mtime >= since - 1
         ]
         return sorted(found, key=lambda path: path.stat().st_mtime)
@@ -194,7 +225,8 @@ def _build_codex_prompt(params: dict[str, Any]) -> str:
     if not prompt:
         raise RuntimeError("codex backend requires a non-empty prompt")
     parts = [
-        "Use ONLY your built-in image_generation tool to create the image "
+        "Use ONLY your built-in image generation tool (image_generation or "
+        "image_gen.imagegen, as exposed in this session) to create the image "
         "described below. Do NOT run any shell command, script, curl, python, "
         "or external CLI; do NOT use ~/.claude, run.sh, or any saved-image "
         "helper. Just call the image_generation tool directly.",
@@ -206,19 +238,17 @@ def _build_codex_prompt(params: dict[str, Any]) -> str:
     if negative_prompt:
         parts.extend(["", f"Avoid: {negative_prompt}"])
 
-    image_ref = params.get("image_ref")
-    if image_ref:
-        ref_path = Path(str(image_ref)).expanduser()
-        if ref_path.is_file():
-            parts.extend(
-                [
-                    "",
-                    "Reference image(s) are attached; edit or build on them "
-                    "rather than starting from scratch.",
-                ]
-            )
-        else:
-            parts.extend(["", f"Reference image URL: {image_ref}"])
+    references = _reference_paths(params)
+    if references:
+        parts.extend(["", "Reference images are attached in this order: source image, "
+                      "style guide (if provided), brand guide (if provided). "
+                      "Use all attached references; preserve source composition "
+                      "except where the requested changes override it."])
+        parts.append(
+            f"The {len(references)} references are already attached to this conversation. "
+            f"Use num_last_images_to_include={len(references)} when the tool exposes it; "
+            "do not reopen the attachment files through referenced_image_paths."
+        )
 
     hints = [
         SIZE_HINTS.get(str(params.get("size") or "auto"), ""),
@@ -241,3 +271,22 @@ def _build_codex_prompt(params: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(parts)
+
+
+def _reference_paths(params: dict[str, Any]) -> list[Path]:
+    paths = []
+    for name in ("image_ref", "style_ref", "brand_ref"):
+        value = params.get(name)
+        if value:
+            path = Path(str(value)).expanduser()
+            if not path.is_file():
+                raise RuntimeError(f"Codex {name} must be a materialized local image")
+            paths.append(path)
+    return paths
+
+
+def _diagnostic_tail(output: str) -> str:
+    # Signed download URLs may occur in provider/plugin errors. Preserve the
+    # hostname/path and tool error without leaking query credentials.
+    sanitized = re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?<redacted>", output)
+    return sanitized[-6000:]

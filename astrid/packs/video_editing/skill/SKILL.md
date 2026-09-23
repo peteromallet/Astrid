@@ -36,6 +36,13 @@ editorial arrangement (step 9) and rendering (step 12). It consumes
 optional theme, then produces `hype.timeline.json`, `hype.assets.json`,
 and `hype.metadata.json` — the three-file input to rendering.render.
 
+For edits to an existing runtime-owned timeline, route through the
+[`astrid-timeline` workflow](../../rendering/skill/SKILL.md). Its structural
+(`timelines show`) and visual (`timelines visualize`) views share one pinned
+composition, target IDs, filters, and edit/validate/preview/publish/readback
+boundary. The orchestrators and `cut` executor remain for their stated
+creation/assembly workflows; do not invent a second timeline editing path here.
+
 ## When to use
 
 - Use `video_editing.hype` for the full end-to-end hype video pipeline.

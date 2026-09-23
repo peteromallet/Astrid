@@ -277,3 +277,15 @@ M0 deliberately does not implement:
 
 Those are later milestone responsibilities. The contract exists so those
 changes can be implemented without reusing overloaded terminology.
+
+## Future Direction: Pack-Hosted Interfaces (Proposal)
+
+The direction for local pack-authored app tools and interface extensions is
+captured in the non-normative
+[Pack-Hosted Tools and Interface Contributions proposal](../architecture/pack-hosted-interfaces.md).
+It explores extending the pack model to describe app tools and interface-owned
+contributions alongside capabilities. The proposal does not change this
+contract, establish new capability kinds, authorize external code loading, or
+claim UI discovery/activation exists. Any implementation must preserve the
+pack identity and taxonomy here and resolve the trust boundary in
+[DEC-001](../architecture/decisions.md#dec-001-v1-pack-trust-boundary).

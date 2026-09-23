@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "cache": {
+    "mode": "none"
+  },
+  "command": {
+    "argv": [
+      "{python_exec}",
+      "-m",
+      "astrid.packs.generation.executors.generate_image_codex.run",
+      "--model",
+      "{model}",
+      "--mode",
+      "{mode}",
+      "--execution",
+      "{execution}",
+      "--prompt",
+      "{prompt}",
+      "--count",
+      "{count}",
+      "--size",
+      "{size}",
+      "--quality",
+      "{quality}",
+      "--background",
+      "{background}",
+      "--timeout",
+      "{timeout}",
+      "--seed",
+      "{seed}",
+      "--out",
+      "{out}"
+    ],
+    "input_args": [
+      {
+        "input": "image_ref",
+        "flag": "--image-ref",
+        "optional": true
+      },
+      {
+        "input": "style_ref",
+        "flag": "--style-ref",
+        "optional": true
+      },
+      {
+        "input": "brand_ref",
+        "flag": "--brand-ref",
+        "optional": true
+      }
+    ]
+  },
+  "id": "generation.generate_image_codex",
+  "name": "Managed Codex Image Generation",
+  "description": "Generate or edit up to four images using Codex ChatGPT authentication with ordered source, style and brand references.",
+  "inputs": [
+    {
+      "name": "model",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "mode",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "execution",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "prompt",
+      "type": "string",
+      "required": true,
+      "artifact_type": "prompt"
+    },
+    {
+      "name": "image_ref",
+      "type": "file",
+      "required": false,
+      "artifact_type": "image"
+    },
+    {
+      "name": "style_ref",
+      "type": "file",
+      "required": false,
+      "artifact_type": "image"
+    },
+    {
+      "name": "brand_ref",
+      "type": "file",
+      "required": false,
+      "artifact_type": "image"
+    },
+    {
+      "name": "count",
+      "type": "integer",
+      "default": 1,
+      "required": false
+    },
+    {
+      "name": "size",
+      "type": "string",
+      "default": "1536x1024",
+      "required": false
+    },
+    {
+      "name": "quality",
+      "type": "string",
+      "default": "high",
+      "required": false
+    },
+    {
+      "name": "background",
+      "type": "string",
+      "default": "opaque",
+      "required": false
+    },
+    {
+      "name": "timeout",
+      "type": "integer",
+      "default": 600,
+      "required": false
+    },
+    {
+      "name": "seed",
+      "type": "integer",
+      "default": 0,
+      "required": false
+    }
+  ],
+  "isolation": {
+    "mode": "subprocess",
+    "network": true
+  },
+  "kind": "built_in",
+  "metadata": {
+    "output_result_manifest": true,
+    "api_provider": "codex",
+    "env": [],
+    "secrets_required": [],
+    "storage_estimate_required": true,
+    "storage_estimate_exact": true,
+    "fixed_inputs": {
+      "execution": "codex"
+    },
+    "storage_input_max_bytes": {
+      "image_ref": 16777216,
+      "style_ref": 16777216,
+      "brand_ref": 16777216
+    },
+    "estimated_scratch_bytes": 536870912,
+    "estimated_output_bytes": 269484032,
+    "hc04_param_ports": [
+      "model",
+      "mode",
+      "execution",
+      "prompt",
+      "image_ref",
+      "style_ref",
+      "brand_ref",
+      "count",
+      "size",
+      "quality",
+      "background",
+      "timeout",
+      "seed"
+    ],
+    "hc04_cas_param_ports": [
+      "image_ref",
+      "style_ref",
+      "brand_ref"
+    ],
+    "hc04_optional_cas_param_ports": [
+      "image_ref",
+      "style_ref",
+      "brand_ref"
+    ],
+    "network_policy": {
+      "allowed_protocols": [
+        "dns",
+        "tcp"
+      ],
+      "allowed_destinations": [
+        "chatgpt.com:443",
+        "auth.openai.com:443",
+        "api.openai.com:443",
+        "ab.chatgpt.com:443",
+        "cdn.openai.com:443",
+        "files.oaiusercontent.com:443"
+      ],
+      "allow_redirects": false,
+      "broker": {
+        "host_managed": true,
+        "kind": "broker",
+        "enforced": true,
+        "observable": true,
+        "route": "declared-http-routes",
+        "wrapper": "astrid-generic-host"
+      },
+      "descendant_enforcement": {
+        "kind": "broker",
+        "validated": true,
+        "observable": true,
+        "route": "declared-http-routes",
+        "wrapper": "astrid-generic-host"
+      }
+    }
+  },
+  "outputs": [
+    {
+      "name": "generated_images",
+      "type": "file",
+      "artifact_type": "image",
+      "mode": "create_or_replace"
+    },
+    {
+      "name": "image_manifest",
+      "path_template": "{out}/manifest.json",
+      "type": "file",
+      "artifact_type": null,
+      "mode": "create_or_replace"
+    }
+  ],
+  "version": "1.0"
+}

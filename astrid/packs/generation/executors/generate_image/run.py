@@ -99,6 +99,8 @@ _IMAGE_ARGV_FLAG_NAMES: tuple[str, ...] = (
     "image_ref",
     "mask_ref",
     "execution",
+    "style_ref",
+    "brand_ref",
     "count",
     "seed",
     "negative_prompt",
@@ -255,6 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
         dest="image_ref",
         help="Reference image path or URL for i2i/edit modes.",
     )
+    p.add_argument("--style-ref", help="Additional Codex style reference image.")
+    p.add_argument("--brand-ref", help="Additional Codex brand reference image.")
     p.add_argument(
         "--mask-ref",
         dest="mask_ref",
@@ -694,6 +698,9 @@ def generate_core(
             params["loras"] = loras_parsed
         if args.execution == CODEX_BACKEND_ID:
             params["timeout"] = args.timeout
+            for reference_key in ("style_ref", "brand_ref"):
+                if getattr(args, reference_key, None):
+                    params[reference_key] = getattr(args, reference_key)
             if args.quality:
                 params["quality"] = args.quality
             if args.background:

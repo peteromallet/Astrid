@@ -42,7 +42,7 @@ keeping the low-resolution badge readable.
 | Transcribe, detect scenes/shots, arrange clips, review, or validate editorial work | [editorial](../../../editorial/skill/SKILL.md) | `editorial.transcribe`, `editorial.scenes`, `editorial.shots`, `editorial.arrange`, `editorial.validate` |
 | Trim or repair media, or search/download GIFs | [media](../../../media/skill/SKILL.md) | `media.clip_extract`, `media.speech_repair_lavasr`, `media.gif_search` |
 | Assemble a production video, talk, thumbnail, logo grid, or image animation | [video editing](../../../video_editing/skill/SKILL.md) | `video_editing.hype`, `video_editing.event_talks`, `video_editing.thumbnail_maker` |
-| Edit or render a timeline, or visualize timeline events | [rendering](../../../rendering/skill/SKILL.md) | `rendering.render`, `rendering.timeline_visualize` |
+| Author, inspect, edit, preview, or render a runtime timeline | [Astrid timeline authoring and inspection](../../../rendering/skill/SKILL.md) | `rendering.render`, `rendering.timeline_visualize` |
 | Build an iteration video or compare experiment outputs | [iteration](../../../iteration/skill/SKILL.md) | `iteration.assemble`, `iteration.experiment_review` |
 | Add sound to one short video clip | [fal](../../../fal/skill/SKILL.md), then [timeline editing and rendering](../../../rendering/skill/SKILL.md) for a finished video | `fal.fal_foley` produces audio; place it alongside the source video on a timeline and render |
 | Make a spatial soundscape from video tiles | [foley](../../../foley/skill/SKILL.md) | `foley.foley_map` produces per-tile audio and a review viewer |

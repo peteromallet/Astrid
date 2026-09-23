@@ -75,6 +75,7 @@ def test_codex_backend_copies_fresh_png_and_attaches_reference(
     assert any(part == f"--image={reference}" for part in cmd)
     assert seen["kwargs"]["timeout"] == 12  # type: ignore[index]
     assert seen["kwargs"]["stdin"] is subprocess.DEVNULL  # type: ignore[index]
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
 
 
 def test_codex_backend_fails_loud_when_session_has_no_png(tmp_path: Path) -> None:
@@ -89,16 +90,68 @@ def test_codex_backend_fails_loud_when_session_has_no_png(tmp_path: Path) -> Non
             stdout=f"session id: {SESSION_ID}\nGENERATED\n",
         )
 
+
     backend = CodexBackend(runner=fake_runner, generated_images_dir=generated_root)
-
     with pytest.raises(RuntimeError, match="produced no ig_\\*.png"):
-        backend.generate(
-            entry=entry,
-            mode="t2i",
-            params={"prompt": "a red bicycle"},
-            out_dir=tmp_path / "out",
-        )
+        backend.generate(entry=entry, mode="t2i", params={"prompt": "a red bicycle"}, out_dir=tmp_path / "out")
 
+
+def test_codex_attaches_all_reference_roles_in_order(tmp_path: Path) -> None:
+    from astrid.core.generation.backends.codex import _build_codex_prompt
+    paths = [tmp_path / name for name in ("source.png", "style.png", "brand.png")]
+    for path in paths:
+        path.write_bytes(PNG_BYTES)
+    params = dict(zip(("image_ref", "style_ref", "brand_ref"), map(str, paths)))
+    params["prompt"] = "Restyle source using both guides"
+    seen = []
+
+    def runner(cmd, **kwargs):
+        seen.extend(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=f"session id: {SESSION_ID}\nGENERATED")
+
+    CodexBackend(runner=runner)._run_codex_once(params)
+    assert [arg for arg in seen if arg.startswith("--image=")] == [f"--image={p}" for p in paths]
+    assert "brand guide" in _build_codex_prompt(params)
+    assert seen[seen.index("--enable") + 1] == "image_generation"
+
+
+def test_codex_missing_reference_fails_before_launch(tmp_path: Path) -> None:
+    def runner(*args, **kwargs):
+        pytest.fail("must not launch Codex with a missing reference")
+
+    with pytest.raises(RuntimeError, match="style_ref"):
+        CodexBackend(runner=runner)._run_codex_once({
+            "prompt": "edit", "style_ref": str(tmp_path / "missing.png")
+        })
+
+
+def test_managed_codex_uses_verified_outer_sandbox(tmp_path, monkeypatch):
+    seen = []
+    def runner(cmd, **kwargs):
+        seen.extend(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=f"session id: {SESSION_ID}")
+    monkeypatch.setenv("ASTRID_CODEX_ATTEMPT_HOME", str(tmp_path))
+    monkeypatch.setenv("ASTRID_BROKER_PROXY", "http://127.0.0.1:12345")
+    monkeypatch.setenv("ASTRID_NETWORK_POLICY", json.dumps({
+        "proxy": "http://127.0.0.1:12345", "broker": {"host_managed": True, "enforced": True}
+    }))
+    CodexBackend(runner=runner)._run_codex_once({"prompt": "test"})
+    assert seen[seen.index("--sandbox") + 1] == "danger-full-access"
+
+
+def test_codex_diagnostics_redact_signed_urls():
+    from astrid.core.generation.backends.codex import _diagnostic_tail
+    assert _diagnostic_tail("failed https://example.test/image?sig=secret") == "failed https://example.test/image?<redacted>"
+
+
+def test_codex_collects_current_exec_png_names(tmp_path):
+    session = tmp_path / SESSION_ID
+    session.mkdir()
+    output = session / "exec-e483a908-d480-48e1-b94b-8e0ebb2b7c4b.png"
+    output.write_bytes(PNG_BYTES)
+    (session / "reference.png").write_bytes(PNG_BYTES)
+    backend = CodexBackend(generated_images_dir=tmp_path)
+    assert backend._collect_new_images(SESSION_ID, 0) == [output]
 
 def test_generate_image_codex_preflight_falls_back_to_cloud(
     tmp_path: Path,

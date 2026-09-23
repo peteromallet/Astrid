@@ -194,7 +194,7 @@ class RemoteTimelines(_RemoteFamily):
         )
         if match is None:
             return DomainResult.failure(ErrorObject("not_found", "timeline not found", {"project": str(project), "ref": str(ref)}))
-        return self._typed("get_timeline", str(match.get("timeline_id")))
+        return self._typed("get_timeline", str(match.get("timeline_id")), project_id=str(project))
     def save(self, project, ref, *, config: Mapping[str, Any], registry: Mapping[str, Any], expected_version=1, slug=None, name=None, idempotency_key=None):
         key = idempotency_key or uuid.uuid4().hex
         if not project:
@@ -488,6 +488,21 @@ class RemoteTasks(_RemoteFamily):
                 ),
                 idempotency_key=key,
             )
+        if (
+            project_id
+            and isinstance(settlement_effect, Mapping)
+            and settlement_effect.get("effect_type") == "generation.publish_v1"
+            and settlement_effect.get("target_id") == project_id
+        ):
+            resolved = self._typed("get_project", project_id)
+            if not resolved.ok:
+                return resolved
+            project_row = _full_mapping(resolved.data)
+            canonical_id = (project_row or {}).get("project_id") or (project_row or {}).get("id")
+            if not isinstance(canonical_id, str) or not canonical_id:
+                return DomainResult.failure(ErrorObject("protocol_error", "project lookup returned no canonical id", {}))
+            project_id = canonical_id
+            settlement_effect = {**settlement_effect, "target_id": canonical_id}
         admission = {
             "key": key,
             "capability_id": capability,

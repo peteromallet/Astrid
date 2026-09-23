@@ -1,15 +1,18 @@
 ---
 name: astrid-timeline
 description: >
-  Discover, inspect, edit, save, render, and open runtime-owned Astrid
+  Author, inspect, edit, preview, render, and open runtime-owned Astrid
   timelines as one creative workflow. Use when shaping a canonical timeline,
-  reviewing its visual evidence, producing a video, or opening the resulting
-  render.
+  reviewing its textual or visual evidence, producing a video, or opening the
+  resulting render. Text and visual inspection are sister views over one
+  pinned composition, not separate timeline authorities.
 ---
 
-# Astrid timeline workflow
+# Astrid timeline authoring and inspection
 
-This workflow edits and renders timeline content. When the request also needs
+This workflow opens, inspects, edits, previews, renders, and opens timeline
+content. Rendering is one downstream evidence action, not a second timeline
+authority or the name of the editing model. When the request also needs
 new generated media (for example Foley audio), use [creative work](../../_core/skill/creative-work/SKILL.md)
 to find its generation capability, then return here to assemble the result.
 
@@ -22,6 +25,68 @@ or generated run directory. Read current help before using a new option:
 python3 -m astrid --help
 python3 -m astrid timelines --help
 ```
+
+## Agent operating contract
+
+The timeline is one canonical authoring composition. `timelines show` (and the
+typed authoring-bundle opener) is the bounded structural/text view;
+`timelines visualize` is the rendered/input visual view; and offline
+`timelines inspect --manifest` is a bounded read-only view of an already
+published evidence pack. These are sister commands over the same identity and
+time model in the single `timelines` product family. Internally,
+`timelines visualize` delegates to the qualified `rendering.timeline_visualize`
+capability because rendering owns the evidence-producing backend; that
+implementation boundary is not a user-facing pack boundary. Never invent a
+second text-only timeline, treat a filmstrip as a new source of truth, or
+switch to a mutable child document because it is easier to read.
+
+Use this loop for every inspection or edit:
+
+1. **Resolve and pin scope.** Resolve the project and timeline explicitly, then
+   capture one current authoring head, candidate digest, or explicit historical
+   render identity. Label the lifecycle (`current`, `candidate preview`,
+   `historical`, or `unverified legacy`) in the answer.
+2. **Start broad, then narrow.** Get the compact structural overview first.
+   Expand an occurrence, then its clip/track/property, then exact text or
+   source media. Use the visual view to confirm what is on screen at the same
+   target/time; use the text view to explain ownership, roles, bytes, and
+   diagnostics. Do not scan the entire media library when a target can be
+   addressed directly.
+3. **Carry one target between views.** Every result is navigated by the same
+   `occurrence_id` plus optional clip, track, media, text/property path and
+   half-open time window. Shot names and ordinals are display conveniences, not
+   identity. Switching text ↔ visual preserves scope, target, time window,
+   expansion, and filters. A missing frame or source is reported explicitly;
+   never substitute a nearby frame or a different occurrence.
+4. **Choose the smallest supported edit.** Use a public command for a direct,
+   exact primitive (replace media, sequence, reorder layers, quantize, ripple,
+   text binding, or render). For a repeated or data-dependent change, open the
+   same pinned authoring bundle and use ordinary Python/SDK code against its
+   objects. That code is a detached candidate, not a new format or hidden
+   command language. Do not edit Runtime files directly, call undocumented
+   endpoints, or silently rebase a stale candidate.
+5. **Validate, preview, publish once.** Validate the complete candidate, inspect
+   its diff, and preview the frozen candidate when visual confirmation matters.
+   Commit through the existing compare-and-swap/idempotent publication boundary.
+   Re-read the newly published closure by its returned IDs (not a seed map),
+   then use the visual view/render to verify the actual changed media and timing.
+6. **Explain the evidence.** Report what was observed, what was changed, and
+   what remains unavailable separately. A successful command, a semantic
+   readback, a decoded media check, and a browser/render proof are different
+   claims; do not collapse them into one “done”.
+
+The short agent preamble is:
+
+> Open one pinned composition. Find the target in the structural view, carry its
+> exact identity to the visual view, and expand only as needed. Use the smallest
+> supported command; otherwise edit a detached same-schema candidate with
+> ordinary code. Validate, diff, preview, publish once, reopen the published
+> closure, and verify the result in both views. Keep current, candidate, and
+> historical evidence distinct.
+
+This contract deliberately favors simple primitives for common work and code
+for complex batch work. It does not add a DSL, persistent checkout, new media
+store, or automatic merge service.
 
 ## Discover and inspect
 
@@ -134,6 +199,33 @@ inspection) and add `--detail`. `--range START..END` is half-open, so the end
 sample is excluded. `--shot first` and numeric `--shot N` use authored shot
 order; use the exact shot name or a time range when chronological order is
 what matters.
+
+### Structural-to-visual navigation recipe
+
+For an agent-facing investigation, keep the structural and visual calls next
+to one another and reuse the returned target:
+
+```bash
+# 1. structural overview/current head
+python3 -m astrid timelines show --project <project> <timeline> --json
+
+# 2. visual overview on the exact successful render
+python3 -m astrid timelines visualize <timeline> --project <project> \
+  --view filmstrip --render-run <exact-render-run-id> \
+  --show output,inputs,text,audio --every 5 --json
+
+# 3. narrow both views to the same shot/time/clip/asset/track
+python3 -m astrid timelines visualize <timeline> --project <project> \
+  --render-run <exact-render-run-id> --shot <shot-id> \
+  --range <start>..<end> --clip <clip-id> --detail --json
+python3 -m astrid timelines inspect --manifest <manifest-path> \
+  --section cards --limit 20 --json
+```
+
+The exact structural expansion is supplied by the authoring-bundle SDK when
+the CLI `show` payload is not enough; it must return the same occurrence IDs,
+media digests, and intervals that the visualizer uses. A result that cannot be
+mapped back to the pinned scope is incomplete, not a new identity.
 
 ## Create and edit
 

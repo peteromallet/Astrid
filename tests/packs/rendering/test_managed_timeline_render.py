@@ -31,6 +31,9 @@ class _Runtime:
         self.extra_timelines: dict[str, dict] = {}
         self.shot_rows: dict[str, dict] = {}
         self.text_binding_rows: list[dict] = []
+        self.parent_revisions: dict[str, dict] = {}
+        self.exact_shot_revisions: dict[tuple[str, str], dict] = {}
+        self.internal_revisions: dict[str, dict] = {}
         self.project = {"id": "project-demo", "project_id": "project-demo", "slug": "demo"}
         self.timeline = {
             "timeline_id": "timeline-1",
@@ -70,6 +73,21 @@ class _Runtime:
         row = self.shot_rows.get(ref)
         return _result(row, ok=row is not None)
 
+    def get_project_parent_composition_revision(
+        self, _project: str, _timeline: str, revision: str
+    ):
+        return self.parent_revisions[revision]
+
+    def get_project_shot_revision(
+        self, _project: str, shot_id: str, revision: str
+    ):
+        return self.exact_shot_revisions[(shot_id, revision)]
+
+    def get_project_timeline_revision(
+        self, _project: str, _timeline: str, revision: str
+    ):
+        return self.internal_revisions[revision]
+
 
 def _snapshot(runtime: _Runtime, *, expected_version: int | None = None):
     return resolve_managed_render_snapshot(
@@ -86,6 +104,140 @@ def test_resolve_requires_explicit_runtime_client_and_pins_runtime_identity() ->
     assert snapshot.project_id == "project-demo"
     assert snapshot.timeline_id == "timeline-1"
     assert snapshot.registry == {"assets": {}}
+
+
+def test_exact_parent_head_projects_pinned_children_with_unique_local_ids() -> None:
+    digests = [character * 64 for character in ("a", "b", "c")]
+    runtime = _Runtime(
+        media=[
+            {"media_id": digest, "digest": digest, "project_id": "project-demo"}
+            for digest in digests
+        ]
+    )
+    runtime.timeline["head_revision_id"] = "parent-committed"
+    runtime.timeline["config"] = {
+        "tracks": [{"id": "picture", "kind": "visual", "label": "Picture"}],
+        "clips": [{
+            "id": "mutable-shot-placeholder",
+            "at": 0,
+            "hold": 3,
+            "track": "picture",
+            "clipType": "shot",
+            "params": {"shot_id": "mutable", "timeline_document_id": "mutable-child"},
+        }],
+    }
+    runtime.extra_timelines["mutable-child"] = {
+        "timeline_id": "mutable-child",
+        "slug": "mutable-child",
+        "config_version": 9,
+        "config": {"tracks": [], "clips": [{"id": "mutable-only"}]},
+        "registry": {"assets": {}},
+        "archived_at": None,
+    }
+    occurrences = []
+    for index, digest in enumerate(digests):
+        shot_id = f"shot-{index}"
+        shot_revision_id = f"shot-rev-{index}"
+        internal_revision_id = f"internal-rev-{index}"
+        occurrence_id = f"occ-{index}"
+        occurrences.append({
+            "occurrence_id": occurrence_id,
+            "shot_id": shot_id,
+            "shot_revision_id": shot_revision_id,
+            "placement": {"start_ms": index * 1000, "track": "picture"},
+            "duration_ms": 1000,
+            "source_offset": 0,
+            "speed": 1,
+            "gain": 1,
+            "mute": False,
+            "track": "picture",
+            "transform": {},
+            "provenance": {},
+        })
+        runtime.exact_shot_revisions[(shot_id, shot_revision_id)] = {
+            "project_id": "project-demo",
+            "shot_id": shot_id,
+            "revision_id": shot_revision_id,
+            "internal_timeline_revision_id": internal_revision_id,
+            "content_digest": f"sha256:{digest}",
+            "payload": {
+                "metadata": {"name": f"Pinned {index}"},
+                "text_bindings": [],
+            },
+        }
+        runtime.internal_revisions[internal_revision_id] = {
+            "project_id": "project-demo",
+            "timeline_id": "timeline-1",
+            "revision_id": internal_revision_id,
+            "content_digest": f"sha256:{digest}",
+            "payload": {
+                "tracks": [{"id": "picture", "kind": "visual", "label": "Picture"}],
+                "clips": [{
+                    "id": "charcoal-process-preview",
+                    "asset": "preview",
+                    "at": 0,
+                    "hold": 1,
+                    "track": "picture",
+                    "clipType": "image",
+                }],
+                "registry": {"assets": {"preview": {
+                    "media_id": digest,
+                    "content_sha256": digest,
+                    "type": "image",
+                }}},
+            },
+        }
+    runtime.parent_revisions["parent-committed"] = {
+        "project_id": "project-demo",
+        "timeline_id": "timeline-1",
+        "revision_id": "parent-committed",
+        "content_digest": f"sha256:{'d' * 64}",
+        "payload": {
+            "config": {
+                "tracks": [{"id": "picture", "kind": "visual", "label": "Picture"}],
+                "clips": [],
+            },
+            "registry": {"assets": {}},
+            "clips": [],
+            "occurrences": occurrences,
+        },
+    }
+
+    snapshot = _snapshot(runtime)
+
+    clips = snapshot.config["clips"]
+    assert [clip["id"] for clip in clips] == [
+        "occ-0:charcoal-process-preview",
+        "occ-1:charcoal-process-preview",
+        "occ-2:charcoal-process-preview",
+    ]
+    assert len({clip["id"] for clip in clips}) == 3
+    assert [clip["at"] for clip in clips] == [0, 1, 2]
+    assert "mutable-shot-placeholder" not in {clip["id"] for clip in clips}
+    assert [clip["asset"] for clip in clips] == [
+        "occ-0:preview",
+        "occ-1:preview",
+        "occ-2:preview",
+    ]
+    assert [clip["at"] for clip in clips] == [0.0, 1.0, 2.0]
+    assert [row["at_ms"] for row in snapshot.expansion["outputs"]] == [0, 1000, 2000]
+    assert [
+        snapshot.registry["assets"][clip["asset"]]["media_id"] for clip in clips
+    ] == digests
+    assert snapshot.expansion["parent_revision_id"] == "parent-committed"
+    assert snapshot.head_event_id == "parent-committed"
+
+    prepared, authority = _prepare_managed_render_inputs(
+        {"timeline_ref": "main"}, project="demo", _client=runtime
+    )
+    assert [
+        clip["id"] for clip in prepared["timeline_snapshot"]["config"]["clips"]
+    ] == [
+        "occ-0:charcoal-process-preview",
+        "occ-1:charcoal-process-preview",
+        "occ-2:charcoal-process-preview",
+    ]
+    assert authority["head_event_id"] == "parent-committed"
 
 
 def test_materialize_writes_deterministic_private_snapshot(tmp_path: Path) -> None:

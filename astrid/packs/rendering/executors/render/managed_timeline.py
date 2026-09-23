@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import dataclass
@@ -481,6 +482,7 @@ class ManagedRenderSnapshot:
     materialized_registry_hash: str
     expansion: Mapping[str, Any] | None = None
     composition_graph: Mapping[str, Any] | None = None
+    authoring_preview: Mapping[str, Any] | None = None
 
     def authority(self) -> dict[str, Any]:
         result = {
@@ -499,6 +501,9 @@ class ManagedRenderSnapshot:
         }
         if self.expansion is not None:
             result["expansion"] = dict(self.expansion)
+        if self.authoring_preview is not None:
+            result["render_mode"] = "authoring_candidate_preview"
+            result["authoring_preview"] = dict(self.authoring_preview)
         clock = render_clock(self.config, _timeline_fps(self.config))
         if clock is not None:
             result["render_clock"] = dict(clock)
@@ -590,12 +595,153 @@ def validate_managed_render_snapshot(snapshot: ManagedRenderSnapshot) -> None:
         ) from exc
 
 
+def _exact_revision_reader(client: Any) -> Any:
+    """Return the generated Runtime reader behind an Astrid product client."""
+
+    candidates = [client]
+    timelines = getattr(client, "timelines", None)
+    candidates.append(getattr(timelines, "_client", None))
+    remote = getattr(client, "_remote", None)
+    candidates.append(getattr(remote, "_transport", None))
+    required = (
+        "get_project_parent_composition_revision",
+        "get_project_shot_revision",
+        "get_project_timeline_revision",
+    )
+    for candidate in candidates:
+        if candidate is not None and all(callable(getattr(candidate, name, None)) for name in required):
+            return candidate
+    raise ValueError(
+        "canonical timeline has an immutable parent head, but the bound Runtime client "
+        "cannot read exact parent/shot/internal revisions"
+    )
+
+
+def _exact_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
+    """Unwrap either a generated read or a product-domain read result."""
+
+    if hasattr(value, "ok"):
+        if not value.ok or not isinstance(value.data, Mapping):
+            raise ValueError(f"Runtime could not resolve exact {label}")
+        value = value.data
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Runtime exact {label} response is not an object")
+    return value
+
+
+def _project_exact_parent_head(
+    *,
+    client: Any,
+    project_id: str,
+    timeline_id: str,
+    parent_revision_id: str,
+) -> tuple[Mapping[str, Any], Any, dict[str, Any]]:
+    """Read and project the closure pinned by one immutable parent head."""
+
+    reader = _exact_revision_reader(client)
+    parent = _exact_mapping(
+        reader.get_project_parent_composition_revision(
+            project_id, timeline_id, parent_revision_id
+        ),
+        label="parent composition revision",
+    )
+    if parent.get("revision_id") != parent_revision_id:
+        raise ValueError("Runtime returned a different parent composition revision")
+    payload = parent.get("payload")
+    occurrences = payload.get("occurrences") if isinstance(payload, Mapping) else None
+    if not isinstance(occurrences, list):
+        raise ValueError("exact parent composition occurrences are not a list")
+
+    shots: list[Mapping[str, Any]] = []
+    internals: list[Mapping[str, Any]] = []
+    seen_shots: set[tuple[str, str]] = set()
+    seen_internals: set[str] = set()
+    for index, occurrence in enumerate(occurrences):
+        if not isinstance(occurrence, Mapping):
+            raise ValueError(f"exact parent occurrence {index} is not an object")
+        shot_id = occurrence.get("shot_id")
+        shot_revision_id = occurrence.get("shot_revision_id", occurrence.get("revision_id"))
+        if not isinstance(shot_id, str) or not isinstance(shot_revision_id, str):
+            raise ValueError(f"exact parent occurrence {index} does not pin a shot revision")
+        shot_key = (shot_id, shot_revision_id)
+        if shot_key in seen_shots:
+            continue
+        seen_shots.add(shot_key)
+        shot = _exact_mapping(
+            reader.get_project_shot_revision(project_id, shot_id, shot_revision_id),
+            label=f"shot revision {shot_id}/{shot_revision_id}",
+        )
+        if shot.get("shot_id") != shot_id or shot.get("revision_id") != shot_revision_id:
+            raise ValueError("Runtime returned a different pinned shot revision")
+        shots.append(shot)
+        internal_revision_id = shot.get("internal_timeline_revision_id")
+        if not isinstance(internal_revision_id, str) or not internal_revision_id:
+            raise ValueError(f"shot revision {shot_revision_id!r} has no internal timeline pin")
+        if internal_revision_id in seen_internals:
+            continue
+        seen_internals.add(internal_revision_id)
+        internal = _exact_mapping(
+            reader.get_project_timeline_revision(
+                project_id, timeline_id, internal_revision_id
+            ),
+            label=f"internal timeline revision {internal_revision_id}",
+        )
+        if internal.get("revision_id") != internal_revision_id:
+            raise ValueError("Runtime returned a different pinned internal timeline revision")
+        internals.append(internal)
+
+    from astrid.core.timeline.shot_composition_projection import (
+        project_runtime_parent_composition,
+    )
+
+    try:
+        projected = project_runtime_parent_composition(
+            parent,
+            shot_revisions=shots,
+            internal_timeline_revisions=internals,
+        )
+    except ValueError as exc:
+        raise ValueError(f"canonical parent revision closure is not renderable: {exc}") from exc
+
+    shot_rows = []
+    for shot in shots:
+        shot_payload = shot.get("payload") if isinstance(shot.get("payload"), Mapping) else {}
+        metadata = shot_payload.get("metadata") if isinstance(shot_payload.get("metadata"), Mapping) else {}
+        shot_rows.append({
+            "shot_id": shot["shot_id"],
+            "revision_id": shot["revision_id"],
+            "name": str(metadata.get("name") or metadata.get("title") or shot["shot_id"]),
+            "text_bindings": list(shot_payload.get("text_bindings") or [])
+            if isinstance(shot_payload.get("text_bindings"), list)
+            else [],
+        })
+    expansion = {
+        "canonical": True,
+        "parent_revision_id": parent_revision_id,
+        "children": [
+            {
+                "timeline_id": row.get("timeline_id"),
+                "revision_id": row.get("revision_id"),
+                "config_version": 1,
+                "config_hash": row.get("content_digest"),
+            }
+            for row in internals
+        ],
+        "shots": shot_rows,
+        "occurrences": [dict(row) for row in projected.occurrences],
+        "outputs": [dict(row) for row in projected.outputs],
+        "graph": projected.graph,
+    }
+    return parent, projected, expansion
+
+
 def resolve_managed_render_snapshot(
     *,
     project_ref: str,
     timeline_ref: str,
     expected_version: int | None = None,
     client: Any,
+    candidate_preview: bool = False,
 ) -> ManagedRenderSnapshot:
     """Resolve one active timeline through the generated SDK read surface.
 
@@ -630,20 +776,68 @@ def resolve_managed_render_snapshot(
     stored_registry = timeline_data.get("registry")
     if not isinstance(config, dict) or not isinstance(stored_registry, dict):
         raise ValueError("canonical timeline snapshot is not a JSON object")
+    project_id = str(project.get("id") or project["project_id"])
+    exact_parent = None
     composition_graph = None
-    for key in ("shot_composition", "composition_graph", "canonical_graph", "prepared_shot_composition"):
-        candidate = timeline_data.get(key)
-        if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
-            composition_graph = candidate
-            break
-    if composition_graph is None:
-        metadata = timeline_data.get("metadata")
-        if isinstance(metadata, Mapping):
-            candidate = metadata.get("shot_composition") or metadata.get("composition_graph")
+    expansion = None
+    parent_head = timeline_data.get("head_revision_id")
+    if candidate_preview:
+        if not isinstance(parent_head, str) or not parent_head:
+            raise ValueError("authoring preview requires an immutable parent composition head")
+        reader = _exact_revision_reader(client)
+        parent = _exact_mapping(
+            reader.get_project_parent_composition_revision(
+                project_id, str(timeline_data["timeline_id"]), parent_head
+            ),
+            label="parent composition revision",
+        )
+        if (
+            parent.get("revision_id") != parent_head
+            or parent.get("project_id") != project_id
+            or parent.get("timeline_id") != str(timeline_data["timeline_id"])
+        ):
+            raise ValueError("Runtime returned a different preview base parent revision")
+        parent_digest = parent.get("content_digest")
+        if not isinstance(parent_digest, str) or not parent_digest.startswith("sha256:"):
+            raise ValueError("preview base parent has no canonical content digest")
+        return ManagedRenderSnapshot(
+            project_id=project_id,
+            project_slug=str(project["slug"]),
+            timeline_id=str(timeline_data["timeline_id"]),
+            timeline_ulid=str(timeline_data.get("timeline_ulid") or timeline_data["timeline_id"]),
+            timeline_slug=str(timeline_data["slug"]),
+            config_version=version,
+            head_event_id=parent_head,
+            head_hash=parent_digest.removeprefix("sha256:"),
+            config=copy.deepcopy(config),
+            registry=copy.deepcopy(stored_registry),
+            config_hash=_digest(config),
+            registry_hash=_digest(stored_registry),
+            materialized_registry_hash=_digest(stored_registry),
+        )
+    if isinstance(parent_head, str) and parent_head:
+        exact_parent, projected, expansion = _project_exact_parent_head(
+            client=client,
+            project_id=project_id,
+            timeline_id=str(timeline_data["timeline_id"]),
+            parent_revision_id=parent_head,
+        )
+        config = projected.config
+        stored_registry = projected.registry
+        composition_graph = projected.graph
+    else:
+        for key in ("shot_composition", "composition_graph", "canonical_graph", "prepared_shot_composition"):
+            candidate = timeline_data.get(key)
             if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
                 composition_graph = candidate
-    expansion = None
-    if composition_graph is not None:
+                break
+        if composition_graph is None:
+            metadata = timeline_data.get("metadata")
+            if isinstance(metadata, Mapping):
+                candidate = metadata.get("shot_composition") or metadata.get("composition_graph")
+                if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
+                    composition_graph = candidate
+    if composition_graph is not None and expansion is None:
         from astrid.core.timeline.shot_composition_projection import project_shot_composition
 
         try:
@@ -694,25 +888,28 @@ def resolve_managed_render_snapshot(
         project_ref=project_ref,
         client=client,
     )
-    project_id = str(project.get("id") or project["project_id"])
     config_hash = _digest(config)
     registry_hash = _digest(stored_registry)
-    head_event_id = f"timeline:{timeline_data['timeline_id']}:{version}"
-    head_hash = config_hash
-    try:
-        events = client.app.event_log.list_events(project_id=project_id, limit=10000)
-        matching = [
-            event for event in events
-            if event.subject_id == str(timeline_data["timeline_id"])
-            and event.seq == version
-        ]
-        if matching:
-            head_event_id = matching[-1].event_id
-            head_hash = matching[-1].event_hash
-    except (AttributeError, TypeError, ValueError):
-        # Older equivalent clients may not expose ordered event reads. The
-        # content digest remains deterministic evidence for materialization.
-        pass
+    if exact_parent is not None:
+        head_event_id = str(exact_parent["revision_id"])
+        head_hash = str(exact_parent["content_digest"]).removeprefix("sha256:")
+    else:
+        head_event_id = f"timeline:{timeline_data['timeline_id']}:{version}"
+        head_hash = config_hash
+        try:
+            events = client.app.event_log.list_events(project_id=project_id, limit=10000)
+            matching = [
+                event for event in events
+                if event.subject_id == str(timeline_data["timeline_id"])
+                and event.seq == version
+            ]
+            if matching:
+                head_event_id = matching[-1].event_id
+                head_hash = matching[-1].event_hash
+        except (AttributeError, TypeError, ValueError):
+            # Older equivalent clients may not expose ordered event reads. The
+            # content digest remains deterministic evidence for materialization.
+            pass
     return ManagedRenderSnapshot(
         project_id=project_id,
         project_slug=str(project["slug"]),

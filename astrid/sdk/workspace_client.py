@@ -196,10 +196,12 @@ class WorkspaceClient:
                 "create_project", "get_project", "update_project", "list_projects",
                 "select_project", "current_project", "create_timeline",
                 "create_timeline_document", "update_timeline_document", "list_timelines",
-                "get_timeline", "list_timeline_history", "replace_timeline_clip", "diff_timeline", "archive_timeline",
+                "get_timeline", "get_project_timeline", "list_timeline_history", "replace_timeline_clip", "diff_timeline", "archive_timeline",
                 "recover_timeline", "list_project_shots", "create_project_shot",
                 "get_project_shot", "update_project_shot", "archive_project_shot",
                 "recover_project_shot", "add_shot_item", "remove_shot_item",
+                "get_project_shot_revision", "get_project_timeline_revision",
+                "get_project_parent_composition_revision",
                 "promote_project_shot_candidate", "reorder_shot_items",
                 "list_project_references", "create_project_reference",
                 "list_project_shot_text_bindings", "set_project_shot_text_binding",
@@ -346,6 +348,20 @@ class WorkspaceClient:
     def get_project(self, project_id: str) -> Any:
         return self._call_generated("get_project", project_id)
 
+    def get_project_shot_revision(self, project_id: str, shot_id: str, revision: str) -> Any:
+        """Read one immutable shot revision for canonical render expansion."""
+        return self._call_generated("get_project_shot_revision", project_id, shot_id, revision)
+
+    def get_project_timeline_revision(self, project_id: str, timeline_id: str, revision: str) -> Any:
+        """Read one immutable internal timeline revision for canonical render expansion."""
+        return self._call_generated("get_project_timeline_revision", project_id, timeline_id, revision)
+
+    def get_project_parent_composition_revision(self, project_id: str, timeline_id: str, revision: str) -> Any:
+        """Read one immutable parent composition revision for canonical render expansion."""
+        return self._call_generated(
+            "get_project_parent_composition_revision", project_id, timeline_id, revision
+        )
+
     def create_timeline(self, project_id: str, timeline_id: str, *, idempotency_key: str) -> Any:
         return self._call_generated("create_timeline", project_id, timeline_id, idempotency_key=idempotency_key)
 
@@ -358,8 +374,20 @@ class WorkspaceClient:
     def list_timelines(self, project_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_timelines", project_id, cursor=cursor, limit=limit)
 
-    def get_timeline(self, timeline_id: str) -> Any:
-        return self._call_generated("get_timeline", timeline_id)
+    def get_timeline(self, timeline_id: str, *, project_id: str | None = None) -> Any:
+        if hasattr(self._generated, "get_timeline"):
+            return self._call_generated("get_timeline", timeline_id)
+        if project_id is None:
+            projects = paged_rows(self.list_projects, limit=50) or []
+            for project in projects:
+                candidate = str(project.get("project_id") or project.get("id") or "")
+                timelines = paged_rows(self.list_timelines, candidate, limit=50) or []
+                if any(str(row.get("timeline_id")) == timeline_id for row in timelines):
+                    project_id = candidate
+                    break
+        if project_id is None:
+            raise WorkspaceClientError(404, "not_found", "timeline not found", {"timeline_id": timeline_id})
+        return self._call_generated("get_project_timeline", project_id, timeline_id)
 
     def list_timeline_history(self, timeline_id: str, *, cursor: str | None = None, limit: int = 50) -> Any:
         return self._call_generated("list_timeline_history", timeline_id, cursor=cursor, limit=limit)

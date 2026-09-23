@@ -295,6 +295,16 @@
    "required_packages": []
   },
   {
+   "id": "generation.generate_image_codex",
+   "disposition": "required",
+   "evidence_reason": "Bounded canonical Codex image profile with ordered CAS references and ChatGPT CLI authentication.",
+   "adapter_family": "provider",
+   "resource_keys": ["provider"],
+   "required_env": [],
+   "required_binaries": ["codex"],
+   "required_packages": []
+  },
+  {
    "id": "generation.generate_image_cloud_i2i",
    "disposition": "required",
    "evidence_reason": "Narrow z-image cloud i2i capability with an enforced whole-task storage envelope; provider readiness is credential-gated.",

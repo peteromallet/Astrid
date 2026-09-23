@@ -448,6 +448,37 @@ def project_timeline_document(
                                 "digest": (registry.get("assets", {}).get(key, {}) or {}).get("content_sha256") if isinstance(registry.get("assets"), Mapping) and isinstance(registry.get("assets", {}).get(key), Mapping) else None}
                                for key in keys],
         }
+        composition_app = raw.get("app") if isinstance(raw.get("app"), Mapping) else {}
+        composition = (
+            composition_app.get("astrid_shot_composition")
+            if isinstance(composition_app.get("astrid_shot_composition"), Mapping)
+            else None
+        )
+        if composition is not None:
+            compact["composition"] = {
+                key: _small_scalar(composition[key])
+                for key in (
+                    "project_id", "timeline_id", "shot_id", "shot_revision_id",
+                    "internal_timeline_revision_id", "occurrence_id", "source_clip_id",
+                    "output_identity", "stable_deep_link", "source_offset", "speed",
+                    "gain", "muted",
+                )
+                if key in composition
+            }
+        source_time = {
+            key: _small_scalar(raw[key])
+            for key in ("from", "to", "speed", "source_offset")
+            if key in raw
+        }
+        if source_time:
+            compact["source_time"] = source_time
+        geometry = {
+            key: _small_scalar(raw[key])
+            for key in ("x", "y", "width", "height", "rotation", "opacity", "transform")
+            if key in raw and not isinstance(raw[key], (list, Mapping))
+        }
+        if geometry:
+            compact["geometry"] = geometry
         text_value = raw.get("text")
         text = text_value.get("content") if isinstance(text_value, Mapping) else text_value
         if isinstance(text, str):

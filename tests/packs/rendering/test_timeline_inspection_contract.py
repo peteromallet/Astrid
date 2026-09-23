@@ -233,6 +233,26 @@ def test_shared_timeline_document_projection_filters_paginates_and_expands_text(
     assert [row["clip_id"] for row in filtered["clips"]] == ["clip-2"]
 
 
+def test_projection_exposes_bounded_composition_provenance_and_source_time():
+    result = project_timeline_document({
+        "timeline_id": "tl-1", "head_revision_id": "parent-1",
+        "config": {"clips": [{
+            "id": "occ-1:local", "track": "picture", "at": 2, "hold": 1,
+            "from": 4, "to": 5, "speed": 1,
+            "app": {"astrid_shot_composition": {
+                "shot_id": "shot-1", "shot_revision_id": "shot-r1",
+                "internal_timeline_revision_id": "internal-r1",
+                "occurrence_id": "occ-1", "source_clip_id": "local",
+                "stable_deep_link": "astrid://occurrences/occ-1",
+            }},
+        }]},
+    })
+    row = result["clips"][0]
+    assert row["composition"]["occurrence_id"] == "occ-1"
+    assert row["composition"]["source_clip_id"] == "local"
+    assert row["source_time"] == {"from": 4, "to": 5, "speed": 1}
+
+
 def test_inspection_orders_rational_times_and_rejects_invalid_millisecond_input():
     document = {
         "timeline_id": "tl-1", "project_id": "p-1", "head_hash": "head-1",

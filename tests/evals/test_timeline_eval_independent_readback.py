@@ -197,6 +197,7 @@ def _revisions():
 def _publication(after):
     return {
         "new_head": "head-after",
+        "old_head": "head-before",
         "dependency_manifest": {
             "shots": [
                 {"shot_id": row["shot_id"], "revision_id": row["revision_id"]}
@@ -336,3 +337,16 @@ def test_returned_head_must_be_current_after_publication():
     result = verify_case_after(reader, _target(), _contract(), observed, _publication(after_closure), source_reader=source)
     assert result.status == "fail"
     assert result.safety["test_target_only"] is False
+
+
+def test_publication_must_advance_from_captured_parent_head():
+    before_closure, after_closure = _revisions()
+    reader = RevisionReader(before_closure, after_closure, sibling=before_closure)
+    source = _source_reader()
+    observed = observe_case_before(reader, _target(), _contract(), source_reader=source)
+    reader.heads["timeline-test"] = "head-after"
+    receipt = _publication(after_closure)
+    receipt["old_head"] = "other-intervening-head"
+    result = verify_case_after(reader, _target(), _contract(), observed, receipt, source_reader=source)
+    assert result.status == "fail"
+    assert "different parent head" in " ".join(result.reasons)

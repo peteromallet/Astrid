@@ -385,25 +385,29 @@ def _changed_fields(before: Mapping[str, Any], after: Mapping[str, Any]) -> tupl
     return tuple(path for path in paths if value(before, path) != value(after, path))
 
 
-def _publication_identity(publication: Mapping[str, Any]) -> tuple[str | None, set[tuple[str, str]] | None, set[str] | None]:
+def _publication_identity(
+    publication: Mapping[str, Any],
+) -> tuple[str | None, str | None, set[tuple[str, str]] | None, set[str] | None]:
     record = _mapping(publication.get("publication", publication))
     head = record.get("new_head", record.get("parent_revision_id", record.get("revision_id")))
+    old_head = record.get("old_head")
+    old_head = old_head if isinstance(old_head, str) and old_head else None
     if not isinstance(head, str) or not head:
-        return None, None, None
+        return None, old_head, None, None
     manifest = _mapping(record.get("dependency_manifest"))
     shots = manifest.get("shots")
     internals = manifest.get("internal_timelines")
     if not isinstance(shots, list) or not isinstance(internals, list):
-        return head, None, None
+        return head, old_head, None, None
     shot_ids = {(row.get("shot_id"), row.get("revision_id")) for row in _rows(shots)}
     internal_ids = {row.get("revision_id") for row in _rows(internals)}
     if len(shot_ids) != len(shots) or len(internal_ids) != len(internals):
-        return head, None, None
+        return head, old_head, None, None
     if not all(isinstance(a, str) and a and isinstance(b, str) and b for a, b in shot_ids):
-        return head, None, None
+        return head, old_head, None, None
     if not all(isinstance(value, str) and value for value in internal_ids):
-        return head, None, None
-    return head, shot_ids, internal_ids
+        return head, old_head, None, None
+    return head, old_head, shot_ids, internal_ids
 
 
 def observe_case_before(
@@ -448,7 +452,7 @@ def verify_case_after(
         raise ProjectionUnavailable(f"case projection unavailable: {contract.projection}")
     project_id = _required_string(target.get("project_id"), "target project ID")
     timeline_id = _required_string(target.get("timeline_id"), "target timeline ID")
-    returned_head, returned_shots, returned_internals = _publication_identity(publication)
+    returned_head, returned_old_head, returned_shots, returned_internals = _publication_identity(publication)
     if returned_head is None:
         return CaseReadbackResult(
             status="unavailable", before_observed=True, after_observed=False,
@@ -488,6 +492,8 @@ def verify_case_after(
     reasons: list[str] = []
     if current_head != returned_head:
         reasons.append("current target head differs from returned committed head")
+    if returned_old_head is not None and returned_old_head != before.head_revision_id:
+        reasons.append("publication advanced from a different parent head")
     if returned_shots is None or returned_internals is None:
         reasons.append("publication omitted its child revision manifest")
     elif not revision_ids_match:
@@ -504,11 +510,13 @@ def verify_case_after(
         reasons.append("canonical source fingerprint changed")
     if target_scope is False:
         reasons.append("edit escaped the declared target timeline/selector")
-    if reasons and not (
-        returned_shots is None or returned_internals is None or not expected_digest
-    ):
+    known_failure = any(
+        reason not in {"publication omitted its child revision manifest", "case contract omitted its private expected media digest"}
+        for reason in reasons
+    )
+    if known_failure:
         status = "fail"
-    elif returned_shots is None or returned_internals is None or not expected_digest:
+    elif returned_old_head is None or returned_shots is None or returned_internals is None or not expected_digest:
         status = "unavailable"
     elif source_unchanged is None or target_scope is None:
         status = "unavailable"
@@ -518,10 +526,13 @@ def verify_case_after(
         reasons.append("canonical source fingerprint proof is unavailable")
     if target_scope is None:
         reasons.append("sibling timeline inventory proof is unavailable")
+    if returned_old_head is None:
+        reasons.append("publication omitted its previous parent head")
     return CaseReadbackResult(
         status=status, before_observed=True, after_observed=True,
         committed_revisions={
             "returned_parent": returned_head,
+            "returned_old_parent": returned_old_head,
             "observed_parent": closure.get("head_revision_id"),
             "returned_shots": sorted(returned_shots) if returned_shots is not None else None,
             "observed_shots": sorted(actual_shots),

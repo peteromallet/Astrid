@@ -240,6 +240,43 @@ def _clip_asset_keys(clip: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _clip_is_muted(clip: Mapping[str, Any], *, inherited: bool = False) -> bool:
+    """Resolve the small, explicit mute contract used by inspection.
+
+    A muted parent lane must not make a nested selected asset look active.  We
+    deliberately do not infer silence from missing audio or from arbitrary
+    effect fields; those remain unresolved diagnostics rather than invented
+    state.
+    """
+    volume = clip.get("volume")
+    own = clip.get("muted") is True or (
+        isinstance(volume, (int, float)) and not isinstance(volume, bool) and volume <= 0
+    )
+    return inherited or own
+
+
+def _iter_clip_records(
+    clips: Any, *, inherited_muted: bool = False, path: str = "",
+) -> Iterable[tuple[Any, Mapping[str, Any] | None, bool]]:
+    """Walk direct and common nested clip containers without changing them."""
+    if not isinstance(clips, (list, tuple)):
+        return
+    for index, raw in enumerate(clips):
+        location = f"{path}[{index}]" if path else index
+        if not isinstance(raw, Mapping):
+            yield location, None, inherited_muted
+            continue
+        muted = _clip_is_muted(raw, inherited=inherited_muted)
+        yield location, raw, muted
+        for key in ("children", "clips", "elements"):
+            nested = raw.get(key)
+            if isinstance(nested, (list, tuple)):
+                yield from _iter_clip_records(
+                    nested, inherited_muted=muted,
+                    path=f"{location}.{key}",
+                )
+
+
 def semantic_media_inventory(
     clips: Iterable[Mapping[str, Any]], registry: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -256,7 +293,7 @@ def semantic_media_inventory(
         assets = {}
     uses: dict[str, list[dict[str, Any]]] = defaultdict(list)
     diagnostics: list[dict[str, Any]] = []
-    for index, clip in enumerate(clips):
+    for index, clip, inherited_muted in _iter_clip_records(clips):
         if not isinstance(clip, Mapping):
             diagnostics.append({"code": "invalid_clip_record", "clip_index": index, "message": "clip must be an object"})
             continue
@@ -274,10 +311,7 @@ def semantic_media_inventory(
             diagnostics.append({"code": "invalid_clip_timing", "clip_id": clip_id,
                                 "message": "clip has invalid or non-positive timing"})
         track = clip.get("track") or clip.get("track_id")
-        muted = clip.get("muted") is True or (
-            isinstance(clip.get("volume"), (int, float)) and not isinstance(clip.get("volume"), bool)
-            and clip.get("volume") <= 0
-        )
+        muted = _clip_is_muted(clip, inherited=inherited_muted)
         for asset_key in _clip_asset_keys(clip):
             uses[asset_key].append({"clip_id": clip_id, "track_id": track, "state": "muted" if muted else "active"})
             if asset_key not in assets:

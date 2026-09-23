@@ -170,6 +170,22 @@ def test_semantic_media_inventory_separates_selected_alternative_and_invalid_med
     ]
 
 
+def test_semantic_media_inventory_walks_nested_clips_and_inherited_mute():
+    inventory = semantic_media_inventory([
+        {"id": "lane", "muted": True, "children": [
+            {"id": "nested", "asset": "nested-selected", "at": 0, "hold": 1},
+        ]},
+        {"id": "active", "asset": "active-selected", "at": 0, "hold": 1},
+    ], {"assets": {
+        "nested-selected": {"media_id": "nested-media"},
+        "active-selected": {"media_id": "active-media"},
+    }})
+    states = {row["asset_key"]: row["state"] for row in inventory["items"]}
+    assert states == {"active-selected": "active", "nested-selected": "muted"}
+    nested = next(row for row in inventory["items"] if row["asset_key"] == "nested-selected")
+    assert nested["uses"][0]["clip_id"] == "nested"
+
+
 def test_shared_timeline_document_projection_filters_paginates_and_expands_text():
     document = {
         "timeline_id": "tl-1", "project_slug": "astrid-intro", "slug": "intro",

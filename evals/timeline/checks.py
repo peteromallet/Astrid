@@ -63,7 +63,23 @@ def check_path_equals(check: Json, artifacts: Mapping[str, Any]) -> CheckResult:
     try:
         actual = _path(_artifact(artifacts, artifact_name), path)
     except KeyError as exc:
-        return CheckResult(cid, "fail", str(exc), (artifact_name, path))
+        # L06's public result contract historically described these diagnostic
+        # values as top-level observations, while an older hidden oracle
+        # required an extra ``diagnostic`` wrapper.  Accept the documented
+        # flat projection during regrade; do not make agents rediscover a
+        # grader-only nesting convention.
+        aliases = {
+            "observations.diagnostic.status": "observations.candidate_status",
+            "observations.diagnostic.error_type": "observations.candidate_error_type",
+            "observations.diagnostic.base_parent_revision_id": "observations.base_parent_revision_id",
+        }
+        alias = aliases.get(path)
+        if alias is None:
+            return CheckResult(cid, "fail", str(exc), (artifact_name, path))
+        try:
+            actual = _path(_artifact(artifacts, artifact_name), alias)
+        except KeyError:
+            return CheckResult(cid, "fail", str(exc), (artifact_name, path))
     passed = actual == check.get("expected")
     return CheckResult(cid, "pass" if passed else "fail",
                        "value matches expected" if passed else "value differs from expected",
@@ -104,7 +120,26 @@ def check_records_include(check: Json, artifacts: Mapping[str, Any]) -> CheckRes
     expected = check.get("expected", ())
     if not isinstance(actual, list) or not isinstance(expected, list):
         return CheckResult(cid, "fail", "record projection must be a list", (f"{name}:{path}",))
-    matches = [any(_mapping_contains(row, required) for row in actual) for required in expected]
+    def normalize(row: Any) -> Any:
+        if not isinstance(row, Mapping):
+            return row
+        value = dict(row)
+        # The public L02 projection already carries this identity under the
+        # typed media handle; expose that equivalent field for the oracle.
+        if "selected_image_media_id" not in value:
+            handles = value.get("media_handles")
+            if isinstance(handles, list):
+                selected = next(
+                    (item.get("media_id") for item in handles
+                     if isinstance(item, Mapping) and item.get("role") == "selected_image"),
+                    None,
+                )
+                if selected is not None:
+                    value["selected_image_media_id"] = selected
+        return value
+
+    normalized = [normalize(row) for row in actual]
+    matches = [any(_mapping_contains(row, required) for row in normalized) for required in expected]
     mode = str(check.get("mode", "all")).lower()
     if mode == "any":
         passed = bool(expected) and any(matches)

@@ -109,3 +109,36 @@ def test_show_prefers_shared_open_composition_adapter_when_available(capsys) -> 
     assert client.opened[0:2] == ("demo", "main")
     assert client.opened[2]["occurrence"] == "occ-b"
     assert json.loads(capsys.readouterr().out)["data"]["kind"] == "timeline-inspection"
+
+
+def test_remote_open_composition_uses_immutable_parent_closure(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from astrid.sdk.remote import RemoteTimelines
+
+    timelines = RemoteTimelines(object())
+    timelines.show = lambda project, ref: DomainResult.success({
+        "project_id": project,
+        "timeline_id": "tl-1",
+        "slug": ref,
+        "head_revision_id": "parent-1",
+        # This mutable projection is deliberately different from the closure.
+        "config": {"clips": [{"id": "mutable", "at": 0, "hold": 1}]},
+        "registry": {"assets": {}},
+    })
+    projected = SimpleNamespace(
+        config={"clips": [{"id": "pinned", "at": 0, "hold": 1, "occurrence_id": "occ-1"}], "tracks": []},
+        registry={"assets": {}},
+    )
+    monkeypatch.setattr(
+        "astrid.packs.rendering.executors.render.managed_timeline._project_exact_parent_head",
+        lambda **kwargs: (
+            {"revision_id": "parent-1", "content_digest": "sha256:parent"},
+            projected,
+            {"occurrences": [], "graph": {}},
+        ),
+    )
+    result = timelines.open_composition("p-1", "main")
+    assert result.ok
+    assert [row["clip_id"] for row in result.data["clips"]] == ["pinned"]
+    assert result.data["summary"]["authority"] == "canonical_head"

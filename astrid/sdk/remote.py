@@ -224,6 +224,39 @@ class RemoteTimelines(_RemoteFamily):
 
         document = dict(result.data)
         document.setdefault("project_id", str(project))
+        parent_head = document.get("head_revision_id") or document.get("parent_revision_id")
+        if parent_head:
+            # A canonical parent head is an immutable closure authority. Reuse
+            # the same Runtime reader as managed rendering instead of letting a
+            # structural inspection drift onto mutable child documents.
+            try:
+                from astrid.packs.rendering.executors.render.managed_timeline import _project_exact_parent_head
+
+                project_id = str(document.get("project_id") or project)
+                timeline_id = str(document.get("timeline_id") or ref)
+                _parent, projected, expansion = _project_exact_parent_head(
+                    client=self._client,
+                    project_id=project_id,
+                    timeline_id=timeline_id,
+                    parent_revision_id=str(parent_head),
+                )
+            except Exception as exc:
+                return DomainResult.failure(
+                    ErrorObject(
+                        "composition_closure_unavailable",
+                        "the canonical parent composition closure could not be opened",
+                        {"project": str(project), "timeline": str(ref), "parent_revision_id": str(parent_head), "reason": str(exc)},
+                    )
+                )
+            document["config"] = projected.config
+            document["registry"] = projected.registry
+            document["occurrences"] = expansion["occurrences"]
+            document["parent_revision_id"] = str(parent_head)
+            document["head_revision_id"] = str(parent_head)
+            digest = _parent.get("content_digest")
+            if isinstance(digest, str):
+                document["head_hash"] = digest.removeprefix("sha256:")
+            document["composition_graph"] = expansion["graph"]
         projection = project_timeline_document(
             document,
             limit=limit,

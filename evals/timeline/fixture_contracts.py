@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from .a02_projection import A02_PROJECTION
+
 
 CONTRACT_KIND = "astrid.timeline-eval.fixture-contract.v1"
 EXACT_NAVIGATION_PROJECTION = "exact_closure_navigation.v1"
@@ -103,6 +105,20 @@ def action_target_contract(case: Mapping[str, Any]) -> ActionTargetContract:
                 path="target.json", scope="coordinator",
                 reason="prepared disposable A01 target receipt",
             ),),
+        )
+    if case_id == "A02":
+        return ActionTargetContract(
+            case_id=case_id,
+            edit_route=None,
+            readback_projection=A02_PROJECTION,
+            required_inputs=(FixtureInput(
+                path="target.json", scope="coordinator",
+                reason="four-shot derivative target and disposable remove-occurrence route",
+            ),),
+            reason=(
+                "A02 has a typed remove-occurrence projection, but no materialized "
+                "disposable target (four-shot derivative) or edit route"
+            ),
         )
     return ActionTargetContract(
         case_id=case_id,

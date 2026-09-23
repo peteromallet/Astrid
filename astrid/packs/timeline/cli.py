@@ -222,7 +222,13 @@ def _cmd_show(parsed: argparse.Namespace) -> int:
             "asset": normalized["asset"],
             "range": values.get("range"), "detail": normalized["detail"],
         }
-        has_selector = any(value not in (None, "", [], ()) for value in selectors.values())
+        # ``detail`` is a presentation flag, not a scope selector. In
+        # particular, its default False must not turn ordinary ``show`` into
+        # the bounded inspection projection.
+        has_selector = any(
+            selectors[name] not in (None, "", [], ())
+            for name in ("clip", "occurrence", "shot", "track", "asset", "range")
+        ) or selectors["detail"] is True
         if parsed.summary or has_selector:
             projection = project_timeline_document(
                 result.data,

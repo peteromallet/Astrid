@@ -74,6 +74,29 @@ class DirectRenderClient(FakeClient):
         return [[{'timeline_id': DIRECT_TIMELINE, 'slug': 'cut'}], None]
 
 
+class CandidateFirstClient(FakeClient):
+    """A newer unpublished preview must not mask the canonical render."""
+
+    def list_project_runs(self, project, **kwargs):
+        return [[
+            {'id': 'candidate', 'created_at': '2026-09-23T02:00:00Z'},
+            {'id': 'run', 'created_at': '2026-09-23T01:00:00Z'},
+        ], None]
+
+    def get_run(self, ref):
+        return {'id': ref, 'project_id': 'p', 'capability': 'rendering.render',
+                'status': 'succeeded', 'task_ids': [f'{ref}-task']}
+
+    def get_task(self, ref):
+        value = envelope()
+        if ref == 'candidate-task':
+            value['authority_context']['render_mode'] = 'authoring_candidate_preview'
+            value['authority_context']['authoring_preview'] = {'candidate_digest': 'sha256:' + 'b' * 64}
+        return {'state': 'succeeded', 'capability_id': 'rendering.render',
+                'spec': {'spec': value},
+                'result': {'outputs': [{'name': 'video', 'digest': VIDEO}]}}
+
+
 def test_exact_old_render_uses_frozen_script_without_current_binding_reads():
     client = FakeClient(); client.current_version = 9; client.current_head = 7
     value = envelope()
@@ -99,6 +122,11 @@ def test_direct_render_uses_frozen_inputs_authority_and_exact_run():
 
     assert result['render_run_id'] == DIRECT_RENDER_RUN
     assert result['timeline_id'] == DIRECT_TIMELINE
+
+
+def test_latest_selection_skips_newer_unpublished_candidate_preview():
+    result = prepare_filmstrip({}, project='p', client=CandidateFirstClient())
+    assert result['render_run_id'] == 'run'
 
 
 def test_exact_pinned_input_inspection_does_not_fall_back_to_current_timeline():

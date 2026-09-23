@@ -76,3 +76,13 @@ def test_show_and_visualize_preserve_one_normalized_occurrence_target(capsys) ->
     assert _cmd_visualize(visualize_args) == 0
     capsys.readouterr()
     assert client.visualize_inputs["occurrence"] == shown["query"]["occurrence"]
+
+
+def test_plain_show_keeps_the_full_document_shape(capsys) -> None:
+    client = _Client()
+    parser = build_parser(client)
+    args = parser.parse_args(["show", "--project", "demo", "main"])
+    assert _cmd_show(args) == 0
+    shown = json.loads(capsys.readouterr().out)["data"]
+    assert shown["config"]["clips"]
+    assert shown.get("kind") != "timeline-inspection"

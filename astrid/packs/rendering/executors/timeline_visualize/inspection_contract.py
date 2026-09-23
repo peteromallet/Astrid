@@ -88,6 +88,12 @@ def _finite(value: Any, label: str, *, nonnegative: bool = True) -> Fraction:
     return result
 
 
+def _seconds(value: Any, *, milliseconds: bool = False) -> Fraction:
+    """Parse a timeline time without routing through binary floating point."""
+    result = _finite(value, "timeline time")
+    return result / 1000 if milliseconds else result
+
+
 def normalize_input_window(
     *, range_value: Any = None, at: Any = None, context: Any = 2,
 ) -> dict[str, Any] | None:
@@ -358,22 +364,21 @@ def project_timeline_document(
         if asset and asset not in keys:
             continue
         at = raw.get("at", raw.get("at_ms", 0))
-        if "at_ms" in raw and "at" not in raw:
-            at = float(at) / 1000.0
+        at_is_ms = "at_ms" in raw and "at" not in raw
         hold = raw.get("hold", raw.get("duration", raw.get("duration_ms")))
-        if hold is not None and "duration_ms" in raw and "hold" not in raw and "duration" not in raw:
-            hold = float(hold) / 1000.0
+        hold_is_ms = hold is not None and "duration_ms" in raw and "hold" not in raw and "duration" not in raw
         source_to = raw.get("to")
         if hold is None and source_to is not None:
             source_from = raw.get("from", 0)
             speed = raw.get("speed", 1)
             try:
-                hold = max(0, (float(source_to) - float(source_from)) / float(speed))
+                hold = max(Fraction(0), (_finite(source_to, "source end") - _finite(source_from, "source start")) / _finite(speed, "speed", nonnegative=False))
             except (TypeError, ValueError, ZeroDivisionError):
                 hold = None
         try:
-            start_sec = Fraction(str(at))
-            end_sec = start_sec + Fraction(str(hold)) if hold is not None else None
+            start_sec = _seconds(at, milliseconds=at_is_ms)
+            duration_sec = _seconds(hold, milliseconds=hold_is_ms) if hold is not None else None
+            end_sec = start_sec + duration_sec if duration_sec is not None else None
             if start_sec < 0 or (end_sec is not None and end_sec <= start_sec):
                 raise ValueError("clip timing must have non-negative start and positive duration")
         except (TypeError, ValueError, ZeroDivisionError) as exc:
@@ -404,13 +409,19 @@ def project_timeline_document(
                 compact["text"] = text if detail else text[:512]
             if not detail and len(text) > 512:
                 compact["text_truncated"] = True
+        project_ref = document.get("project_slug") or document.get("project_id") or "<project>"
+        timeline_ref = document.get("slug") or timeline_id or "<timeline>"
         compact["actions"] = {
-            "expand": action_argv("astrid", "timelines", "show", "--project", str(document.get("project_slug") or "<project>"), str(document.get("slug") or timeline_id or "<timeline>"), "--summary", "--clip", str(identity.get("clip_id") or "<clip>"), "--detail"),
-            "visualize": action_argv("astrid", "timelines", "visualize", "--project", str(document.get("project_slug") or "<project>"), "--timeline-slug", str(document.get("slug") or timeline_id or "<timeline>"), "--clip", str(identity.get("clip_id") or "<clip>"), "--show", "inputs"),
+            "expand": action_argv("astrid", "timelines", "show", "--project", str(project_ref), str(timeline_ref), "--summary", "--clip", str(identity.get("clip_id") or "<clip>"), "--detail"),
+            "visualize": action_argv("astrid", "timelines", "visualize", "--project", str(project_ref), "--timeline-slug", str(timeline_ref), "--clip", str(identity.get("clip_id") or "<clip>"), "--show", "inputs"),
         }
         selected.append(compact)
-    selected.sort(key=lambda row: (row["at_seconds"] is None, tuple(row["at_seconds"] or ()), str(row.get("track_id") or ""), str(row.get("clip_id") or "")))
-    query = {"clip": clip, "occurrence": occurrence, "shot": shot, "track": list(tracks), "asset": asset, "range": range_value, "detail": detail, "limit": limit}
+    selected.sort(key=lambda row: (row["at_seconds"] is None,
+                                   Fraction(*row["at_seconds"]) if row["at_seconds"] else Fraction(0),
+                                   str(row.get("track_id") or ""), str(row.get("clip_id") or "")))
+    query = {"timeline_id": timeline_id,
+             "head": document.get("head_hash") or document.get("head_event_id") or document.get("config_version"),
+             "clip": clip, "occurrence": occurrence, "shot": shot, "track": list(tracks), "asset": asset, "range": range_value, "detail": detail, "limit": limit}
     binding = hashlib.sha256(json.dumps(query, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:20]
     offset = 0
     if cursor:

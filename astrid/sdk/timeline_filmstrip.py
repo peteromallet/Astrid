@@ -59,6 +59,25 @@ def _authority(envelope: Mapping) -> Mapping:
     return legacy or canonical or {}
 
 
+def _is_candidate_render(envelope: Mapping, authority: Mapping | None = None) -> bool:
+    """Return whether a managed render is an unpublished candidate preview.
+
+    Latest filmstrip selection is canonical-only.  An explicit ``render_run``
+    remains allowed to inspect a candidate, but a candidate must never mask
+    the latest published render merely because it was created later.
+    """
+    values = [authority or {}, envelope]
+    for value in values:
+        if not isinstance(value, Mapping):
+            continue
+        mode = str(value.get("render_mode") or value.get("mode") or "").strip().lower()
+        if mode in {"authoring_candidate_preview", "candidate", "preview", "unpublished"}:
+            return True
+        if isinstance(value.get("authoring_preview"), Mapping):
+            return True
+    return False
+
+
 def _timeline_snapshot(envelope: Mapping) -> Mapping:
     """Resolve the frozen snapshot in legacy and direct-render envelopes."""
     inputs = envelope.get('inputs', {})
@@ -131,6 +150,51 @@ def _expand_input_snapshot(client: Any, config: Mapping[str, Any], registry: Map
     except Exception as exc:
         _fail(f'Input inspection cannot expand child timeline placements: {exc}')
     return deepcopy(dict(expanded)), deepcopy(dict(merged))
+
+
+def _open_current_input_closure(
+    client: Any, *, project_id: str, timeline_row: Mapping[str, Any],
+    config: Mapping[str, Any], registry: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Open the current timeline through its immutable parent head.
+
+    A child shot cannot be expanded from ``get_timeline``: that is a mutable
+    read and can join a newer child revision to an older parent.  The managed
+    render path already owns the exact parent/shot/internal-revision opener;
+    reuse that seam for the render-free inspection lane.  Legacy flat
+    timelines remain supported without a composition closure.
+    """
+    clips = config.get("clips") if isinstance(config, Mapping) else []
+    has_shot_placements = isinstance(clips, list) and any(
+        isinstance(clip, Mapping) and clip.get("clipType") == "shot" for clip in clips
+    )
+    parent_head = timeline_row.get("head_revision_id") or timeline_row.get("parent_revision_id")
+    if not has_shot_placements and not parent_head:
+        return deepcopy(dict(config)), deepcopy(dict(registry)), {}
+    if not isinstance(parent_head, str) or not parent_head:
+        _fail("Input inspection requires an immutable parent composition head for shot placements.")
+    try:
+        from astrid.packs.rendering.executors.render.managed_timeline import _project_exact_parent_head
+
+        _parent, projected, expansion = _project_exact_parent_head(
+            client=client, project_id=project_id,
+            timeline_id=str(_identifier(timeline_row, "timeline_id", "id")),
+            parent_revision_id=parent_head,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        _fail(f"Input inspection cannot open the exact parent composition closure: {exc}")
+    projected_config = getattr(projected, "config", None)
+    projected_registry = getattr(projected, "registry", None)
+    if not isinstance(projected_config, Mapping) or not isinstance(projected_registry, Mapping):
+        _fail("Runtime returned an invalid exact parent composition closure.")
+    authority = {
+        "parent_revision_id": parent_head,
+        "children": deepcopy(list((expansion or {}).get("children") or [])),
+        "shots": deepcopy(list((expansion or {}).get("shots") or [])),
+        "occurrences": deepcopy(list((expansion or {}).get("occurrences") or [])),
+        "canonical": True,
+    }
+    return deepcopy(dict(projected_config)), deepcopy(dict(projected_registry)), authority
 
 
 def _digest(value: Any) -> str:
@@ -381,7 +445,10 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
         registry = timeline_row.get('registry') or timeline_row.get('assets_registry') or {'assets': {}}
         if not isinstance(config, Mapping) or not isinstance(registry, Mapping):
             _fail('Timeline has no immutable canonical input snapshot.')
-        config, registry = _expand_input_snapshot(client, config, registry)
+        config, registry, closure = _open_current_input_closure(
+            client, project_id=project_id, timeline_row=timeline_row,
+            config=config, registry=registry,
+        )
         from astrid.core.timeline.duration import timeline_duration_frames
         from fractions import Fraction
         canvas = config.get('theme_overrides', {}).get('visual', {}).get('canvas', {})
@@ -411,13 +478,18 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
                 'tracks': deepcopy(config.get('tracks') or []),
                 'registry': deepcopy(dict(registry)),
                 'metadata': {
-                    'selection': 'input_only', 'authority': 'canonical_timeline_snapshot',
-                    'input_expansion': {'children': [], 'flattened': any(isinstance(c, Mapping) and c.get('shot_occurrence_id') for c in config.get('clips', []))},
+                    'selection': 'input_only',
+                    'authority': 'canonical_parent_revision_closure' if closure else 'canonical_timeline_snapshot',
+                    'input_expansion': {
+                        'children': deepcopy(closure.get('children') or []),
+                        'flattened': bool(closure) or any(isinstance(c, Mapping) and c.get('shot_occurrence_id') for c in config.get('clips', [])),
+                    },
                     'timeline_identity': {
                         key: timeline_row.get(key)
                         for key in ('timeline_id', 'slug', 'config_version', 'head_event_id', 'head_hash', 'registry_hash')
                         if timeline_row.get(key) is not None
                     },
+                    **({'parent_revision_id': closure['parent_revision_id']} if closure else {}),
                 },
             },
         }
@@ -456,6 +528,10 @@ def prepare_filmstrip(inputs: Mapping, *, project: str, client: Any = None) -> d
                 candidate_authority = _authority(candidate_envelope)
             except CapabilityValidationError:
                 candidate_envelope = None
+        if not exact and _is_candidate_render(candidate_envelope or {}, candidate_authority):
+            # Candidate previews are valid explicit inspection targets, but
+            # never participate in implicit ``latest`` canonical selection.
+            continue
         if timeline_row and candidate_authority is not None and candidate_authority.get('timeline_id') != _identifier(timeline_row, 'timeline_id', 'id'):
             continue
         if lifecycle not in _SUCCESS_STATES or task_state not in _SUCCESS_STATES:

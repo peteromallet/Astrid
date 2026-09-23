@@ -201,3 +201,37 @@ def test_shared_timeline_document_projection_filters_paginates_and_expands_text(
     assert expanded["clips"][0]["actions"]["visualize"]["argv"][-2:] == ["--show", "inputs"]
     filtered = project_timeline_document(document, occurrence="occ-2")
     assert [row["clip_id"] for row in filtered["clips"]] == ["clip-2"]
+
+
+def test_inspection_orders_rational_times_and_rejects_invalid_millisecond_input():
+    document = {
+        "timeline_id": "tl-1", "project_id": "p-1", "head_hash": "head-1",
+        "config": {"clips": [
+            {"id": "half", "track": "picture", "at_ms": 500, "duration_ms": 1000},
+            {"id": "third", "track": "picture", "at_ms": 333, "duration_ms": 1000},
+            {"id": "bad", "track": "picture", "at_ms": "not-a-time", "duration_ms": 1000},
+        ]},
+    }
+    result = project_timeline_document(document)
+    assert [row["clip_id"] for row in result["clips"]] == ["third", "half", "bad"]
+    assert result["clips"][0]["at_seconds"] == [333, 1000]
+    assert any(item["code"] == "invalid_clip_timing" for item in result["diagnostics"])
+    assert result["clips"][0]["actions"]["expand"]["argv"][4] == "p-1"
+
+
+def test_inspection_cursor_is_bound_to_the_document_head():
+    document = {
+        "timeline_id": "tl-1", "head_hash": "head-1",
+        "config": {"clips": [
+            {"id": "clip", "at": 0, "hold": 1},
+            {"id": "clip-2", "at": 1, "hold": 1},
+        ]},
+    }
+    cursor = project_timeline_document(document, limit=1)["pagination"]["next_cursor"]
+    changed = dict(document, head_hash="head-2")
+    try:
+        project_timeline_document(changed, limit=1, cursor=cursor)
+    except ValueError as exc:
+        assert "cursor" in str(exc)
+    else:
+        raise AssertionError("cursor from a different committed head was accepted")

@@ -261,8 +261,9 @@ def _boundary_requirements(
         host_selected_case_path=str(tmp_path / attempt_name / "cases" / case_id),
         selected_case_path=f"/worker/cases/{case_id}",
         disposable_credential_path="/worker/authority/credential.json",
-        skill_path="/worker/public-skill/SKILL.md",
+        skill_path="/opt/astrid-public/astrid/packs/rendering/skill/SKILL.md",
         skill_sha256=skill["sha256"],
+        public_package_path="/opt/astrid-public",
         public_package_digest="sha256:test-public-package",
         disposable_endpoint="http://127.0.0.1:9001",
         disposable_realm_id="test-realm",
@@ -287,6 +288,8 @@ def _install_fake_boundary(
         runtime_receipt_id = "test-container-receipt"
         challenge = "test-boundary-challenge"
         selected_case_path = requirements.selected_case_path
+        public_package_path = requirements.public_package_path
+        public_package_digest = requirements.public_package_digest
 
         def as_dict(self):
             return {
@@ -329,6 +332,7 @@ def _install_fake_boundary(
                 stderr=stderr,
             )
 
+    monkeypatch.setattr(luna_native, "pin_worker_boundary", lambda _supervisor, value: value)
     monkeypatch.setattr(luna_native, "prove_worker_boundary", lambda _supervisor, _requirements: Receipt())
     return requirements, Supervisor()
 
@@ -440,7 +444,7 @@ def test_prepared_target_is_copied_and_preflight_allows_one_launch(tmp_path, mon
     assert json.loads((case_dir / "target.json").read_text(encoding="utf-8"))["project_id"] == "project-test"
     public_brief = json.loads((case_dir / "brief.json").read_text(encoding="utf-8"))
     assert public_brief["fixture_entry_point"]["root"] == "/worker/cases/A01"
-    assert public_brief["skill_reference"]["path"] == "/worker/public-skill/SKILL.md"
+    assert public_brief["skill_reference"]["path"] == "/opt/astrid-public/astrid/packs/rendering/skill/SKILL.md"
     assert str(case_dir) not in json.dumps(public_brief)
     assert (case_dir / "before.json").is_file()
     result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
@@ -618,6 +622,7 @@ def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, mo
         return "completed", 0, 0.01, [], ""
 
     monkeypatch.setattr(luna_native, "prove_worker_boundary", prove)
+    monkeypatch.setattr(luna_native, "pin_worker_boundary", lambda _supervisor, value: value)
     monkeypatch.setattr(luna_native, "_invoke", invoke)
     run_attempt(
         suite_path, tmp_path / "attempt-nav", fixture_root=FIXTURES, briefs_path=BRIEFS,

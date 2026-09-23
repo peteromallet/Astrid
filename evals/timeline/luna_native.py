@@ -53,6 +53,7 @@ from .worker_boundary import (
     BoundaryUnavailable,
     WorkerLaunchRequest,
     launch_in_proven_boundary,
+    pin_worker_boundary,
     prove_worker_boundary,
 )
 
@@ -534,6 +535,8 @@ def _invoke(
                     boundary_id=boundary_receipt.boundary_id,
                     runtime_receipt_id=boundary_receipt.runtime_receipt_id,
                     challenge=boundary_receipt.challenge,
+                    public_package_path=boundary_receipt.public_package_path,
+                    public_package_digest=boundary_receipt.public_package_digest,
                     argv=tuple(command),
                     cwd=worker_case_dir,
                     environment=child_env,
@@ -1223,6 +1226,8 @@ def run_attempt(
                     raise BoundaryUnavailable(
                         "host boundary requirements do not match case path or pinned skill hash"
                     )
+                requirements = pin_worker_boundary(boundary_supervisor, requirements)
+                case_boundary_requirements = requirements
                 boundary_receipt = prove_worker_boundary(boundary_supervisor, requirements)
                 model_boundary_id = boundary_receipt.boundary_id
             except (BoundaryUnavailable, TypeError, ValueError, OSError) as exc:

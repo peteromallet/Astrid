@@ -8,12 +8,10 @@ the coordinator's own container are not isolation evidence.
 
 from __future__ import annotations
 
-import ipaddress
 import secrets
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import PurePosixPath
 from typing import Literal, Mapping, Protocol
-from urllib.parse import urlparse
 
 
 class BoundaryUnavailable(RuntimeError):
@@ -33,16 +31,17 @@ class ProtectedPath:
 class BoundaryRequirements:
     case_id: str
     worker_id: str
-    model_boundary_id: str
+    model_boundary_id: str | None
     host_selected_case_path: str
     selected_case_path: str
     disposable_credential_path: str
     skill_path: str
     skill_sha256: str
-    public_package_digest: str
+    public_package_path: str
+    public_package_digest: str | None
     disposable_endpoint: str
-    disposable_realm_id: str
-    disposable_runtime_receipt_id: str
+    disposable_realm_id: str | None
+    disposable_runtime_receipt_id: str | None
     canonical_endpoint: str
     coordinator_paths: tuple[ProtectedPath, ...]
     source_paths: tuple[ProtectedPath, ...]
@@ -66,14 +65,19 @@ class WorkerAttestation:
     mount_policy_digest: str
     network_policy_digest: str
     selected_case_path: str
+    public_package_path: str
     public_package_digest: str
+    disposable_realm_id: str
     disposable_runtime_receipt_id: str
 
 
 @dataclass(frozen=True)
 class AccessProbe:
     probe_id: str
-    kind: Literal["read_path", "write_path", "sha256_path", "runtime_handshake", "http_get"]
+    kind: Literal[
+        "read_path", "write_path", "sha256_path", "runtime_handshake", "http_get",
+        "python_module_help", "python_import",
+    ]
     target: str
     expected: Literal["allow", "deny"]
     expected_sha256: str | None = None
@@ -92,6 +96,7 @@ class ProbeObservation:
     sha256: str | None = None
     realm_id: str | None = None
     disposable_runtime_receipt_id: str | None = None
+    resolved_path: str | None = None
     denial_source: Literal["filesystem_policy", "not_mounted", "network_policy", "not_routable"] | None = None
 
 
@@ -120,6 +125,7 @@ class BoundaryReceipt:
     policy_digest: str
     mount_policy_digest: str
     network_policy_digest: str
+    public_package_path: str
     public_package_digest: str
     disposable_runtime_receipt_id: str
     protected_paths: tuple[HostPathObservation, ...]
@@ -137,6 +143,8 @@ class WorkerLaunchRequest:
     boundary_id: str
     runtime_receipt_id: str
     challenge: str
+    public_package_path: str
+    public_package_digest: str
     argv: tuple[str, ...]
     cwd: str
     environment: Mapping[str, str]
@@ -172,21 +180,49 @@ class BoundarySupervisor(Protocol):
     def launch_worker(self, request: WorkerLaunchRequest) -> WorkerLaunchObservation: ...
 
 
-def _required(value: str, field: str) -> None:
+def pin_worker_boundary(
+    supervisor: BoundarySupervisor | None, requirements: BoundaryRequirements,
+) -> BoundaryRequirements:
+    """Resolve host-created identities, then require exact values thereafter.
+
+    Container IDs and disposable Runtime receipts do not exist when the static
+    coordinator manifest is authored. The trusted host may supply them once;
+    ``prove_worker_boundary`` then performs only exact comparisons, and the
+    launch request rechecks the resulting receipt.
+    """
+    if supervisor is None:
+        raise BoundaryUnavailable("no host worker supervisor is available; model launch is denied")
+    attestation = supervisor.inspect_worker(requirements.worker_id)
+    if not isinstance(attestation, WorkerAttestation):
+        raise BoundaryUnavailable("host supervisor returned no typed worker attestation")
+    expected = (
+        ("model_boundary_id", requirements.model_boundary_id, attestation.boundary_id),
+        ("public_package_digest", requirements.public_package_digest, attestation.public_package_digest),
+        ("disposable_realm_id", requirements.disposable_realm_id, attestation.disposable_realm_id),
+        (
+            "disposable_runtime_receipt_id",
+            requirements.disposable_runtime_receipt_id,
+            attestation.disposable_runtime_receipt_id,
+        ),
+    )
+    for field, requested, observed in expected:
+        if requested is not None and requested != observed:
+            raise BoundaryUnavailable(f"host worker attestation changed requested {field}")
+        _required(observed, f"host attestation {field}")
+    if attestation.public_package_path != requirements.public_package_path:
+        raise BoundaryUnavailable("host worker attestation changed requested public_package_path")
+    return replace(
+        requirements,
+        model_boundary_id=attestation.boundary_id,
+        public_package_digest=attestation.public_package_digest,
+        disposable_realm_id=attestation.disposable_realm_id,
+        disposable_runtime_receipt_id=attestation.disposable_runtime_receipt_id,
+    )
+
+
+def _required(value: str | None, field: str) -> None:
     if not isinstance(value, str) or not value:
         raise BoundaryUnavailable(f"boundary requirements omitted {field}")
-
-
-def _is_loopback_endpoint(endpoint: str) -> bool:
-    hostname = urlparse(endpoint).hostname
-    if not hostname:
-        return True
-    if hostname.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
 
 
 def _protected_paths(requirements: BoundaryRequirements) -> tuple[tuple[str, ProtectedPath], ...]:
@@ -229,25 +265,33 @@ def _probe_plan(requirements: BoundaryRequirements) -> tuple[tuple[AccessProbe, 
     for field in (
         "case_id", "worker_id", "model_boundary_id", "host_selected_case_path",
         "selected_case_path", "disposable_credential_path", "skill_path", "skill_sha256",
-        "public_package_digest", "disposable_endpoint", "disposable_realm_id",
+        "public_package_path", "public_package_digest", "disposable_endpoint", "disposable_realm_id",
         "disposable_runtime_receipt_id", "canonical_endpoint",
     ):
         _required(getattr(requirements, field), field)
-    if _is_loopback_endpoint(requirements.disposable_endpoint):
-        raise BoundaryUnavailable(
-            "disposable Runtime endpoint is loopback/local; a synthetic same-container health endpoint is not admissible"
-        )
+    # The Runtime SDK and the supported RuntimeDaemon intentionally expose a
+    # loopback URL.  Loopback by itself is not isolation evidence, but it is
+    # valid when the host supervisor has separately proven the Runtime process
+    # and worker network namespace (and the authenticated realm/receipt below).
+    # Same-container synthetic health endpoints are rejected by the attested
+    # worker/runtime identity and handshake probes, not by URL spelling.
     if not requirements.denied_endpoints:
         raise BoundaryUnavailable("boundary requires unrelated endpoint denial targets")
     if requirements.disposable_endpoint == requirements.canonical_endpoint:
         raise BoundaryUnavailable("disposable and canonical endpoints must differ")
     if requirements.canonical_endpoint in requirements.denied_endpoints:
         raise BoundaryUnavailable("canonical endpoint must use its dedicated denial probe")
+    package_root = PurePosixPath(requirements.public_package_path)
+    skill_path = PurePosixPath(requirements.skill_path)
+    if package_root not in skill_path.parents:
+        raise BoundaryUnavailable("rendering skill must come from the bounded public Astrid package")
     probes: list[tuple[AccessProbe, ProtectedPath | None]] = [
         (AccessProbe("selected-case-read", "read_path", requirements.selected_case_path, "allow"), None),
         (AccessProbe("selected-case-write", "write_path", requirements.selected_case_path, "allow"), None),
         (AccessProbe("disposable-credential-read", "read_path", requirements.disposable_credential_path, "allow"), None),
         (AccessProbe("skill-sha256", "sha256_path", requirements.skill_path, "allow", expected_sha256=requirements.skill_sha256), None),
+        (AccessProbe("astrid-cli-help", "python_module_help", "astrid", "allow"), None),
+        (AccessProbe("astrid-sdk-import", "python_import", "astrid.sdk", "allow"), None),
         (AccessProbe(
             "disposable-runtime", "runtime_handshake", requirements.disposable_endpoint, "allow",
             expected_realm_id=requirements.disposable_realm_id,
@@ -294,7 +338,9 @@ def prove_worker_boundary(
         or not attestation.mount_policy_digest
         or not attestation.network_policy_digest
         or attestation.selected_case_path != requirements.selected_case_path
+        or attestation.public_package_path != requirements.public_package_path
         or attestation.public_package_digest != requirements.public_package_digest
+        or attestation.disposable_realm_id != requirements.disposable_realm_id
         or attestation.disposable_runtime_receipt_id != requirements.disposable_runtime_receipt_id
     ):
         raise BoundaryUnavailable("host worker attestation does not match selected case and model boundary")
@@ -344,6 +390,15 @@ def prove_worker_boundary(
             raise BoundaryUnavailable(f"allowed worker probe {probe.probe_id} contains denial evidence")
         if probe.expected_sha256 and observed.sha256 != probe.expected_sha256:
             raise BoundaryUnavailable("worker skill hash differs inside the selected boundary")
+        if probe.kind in {"python_module_help", "python_import"}:
+            if not observed.resolved_path:
+                raise BoundaryUnavailable(f"worker probe {probe.probe_id} did not resolve the public package")
+            resolved = PurePosixPath(observed.resolved_path)
+            public_root = PurePosixPath(attestation.public_package_path)
+            if public_root not in resolved.parents:
+                raise BoundaryUnavailable(
+                    f"worker probe {probe.probe_id} resolved outside the public package"
+                )
         if probe.expected_realm_id and observed.realm_id != probe.expected_realm_id:
             raise BoundaryUnavailable("disposable Runtime handshake has the wrong realm")
         if (
@@ -364,6 +419,7 @@ def prove_worker_boundary(
         policy_digest=attestation.policy_digest,
         mount_policy_digest=attestation.mount_policy_digest,
         network_policy_digest=attestation.network_policy_digest,
+        public_package_path=attestation.public_package_path,
         public_package_digest=attestation.public_package_digest,
         disposable_runtime_receipt_id=attestation.disposable_runtime_receipt_id,
         protected_paths=tuple(host_observations),
@@ -384,10 +440,15 @@ def launch_in_proven_boundary(
         or request.boundary_id != receipt.boundary_id
         or request.runtime_receipt_id != receipt.runtime_receipt_id
         or request.challenge != receipt.challenge
+        or request.public_package_path != receipt.public_package_path
+        or request.public_package_digest != receipt.public_package_digest
         or request.cwd != receipt.selected_case_path
         or not request.argv
     ):
-        raise BoundaryUnavailable("model launch request is not bound to the proven worker boundary")
+        raise BoundaryUnavailable(
+            "model launch request is not bound to the proven worker boundary; "
+            "request does not match the proven receipt"
+        )
     cwd_indices = [index for index, value in enumerate(request.argv) if value == "--cwd"]
     if (
         len(cwd_indices) != 1
@@ -412,5 +473,5 @@ __all__ = [
     "AccessProbe", "BoundaryReceipt", "BoundaryRequirements", "BoundarySupervisor",
     "BoundaryUnavailable", "HostPathObservation", "ProbeObservation", "ProtectedPath",
     "WorkerAttestation", "WorkerLaunchObservation", "WorkerLaunchRequest",
-    "launch_in_proven_boundary", "prove_worker_boundary",
+    "launch_in_proven_boundary", "pin_worker_boundary", "prove_worker_boundary",
 ]

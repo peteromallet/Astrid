@@ -12,6 +12,7 @@ from evals.timeline.worker_boundary import (
     WorkerLaunchObservation,
     WorkerLaunchRequest,
     launch_in_proven_boundary,
+    pin_worker_boundary,
     prove_worker_boundary,
 )
 
@@ -32,8 +33,9 @@ def _requirements() -> BoundaryRequirements:
         host_selected_case_path="/host/attempt/cases/A01",
         selected_case_path="/case/A01",
         disposable_credential_path="/case/A01/runtime-credential.json",
-        skill_path="/case/A01/public-skill/SKILL.md",
+        skill_path="/opt/astrid-public/astrid/packs/rendering/skill/SKILL.md",
         skill_sha256="1" * 64,
+        public_package_path="/opt/astrid-public",
         public_package_digest="sha256:" + "2" * 64,
         disposable_endpoint="https://disposable-runtime.example/v1",
         disposable_realm_id="disposable-realm",
@@ -69,7 +71,9 @@ class Supervisor:
             mount_policy_digest="sha256:" + "4" * 64,
             network_policy_digest="sha256:" + "5" * 64,
             selected_case_path=r.selected_case_path,
+            public_package_path=r.public_package_path,
             public_package_digest=r.public_package_digest,
+            disposable_realm_id=r.disposable_realm_id,
             disposable_runtime_receipt_id=r.disposable_runtime_receipt_id,
         )
 
@@ -98,6 +102,12 @@ class Supervisor:
             sha256=probe.expected_sha256,
             realm_id=probe.expected_realm_id,
             disposable_runtime_receipt_id=probe.expected_runtime_receipt_id,
+            resolved_path=(
+                "/opt/astrid-public/astrid/sdk/__init__.py"
+                if probe.kind == "python_import"
+                else "/opt/astrid-public/astrid/__init__.py"
+                if probe.kind == "python_module_help" else None
+            ),
             denial_source=(
                 "not_mounted" if probe.expected == "deny" and probe.kind == "read_path"
                 else "network_policy" if probe.expected == "deny" else None
@@ -128,7 +138,8 @@ def test_cross_boundary_probes_bind_real_host_paths_runtime_and_model_boundary()
     assert receipt.boundary_id == requirements.model_boundary_id
     assert {probe.probe_id for probe in receipt.probes} == {
         "selected-case-read", "selected-case-write", "disposable-credential-read",
-        "skill-sha256", "disposable-runtime", "canonical-runtime-denied",
+        "skill-sha256", "astrid-cli-help", "astrid-sdk-import",
+        "disposable-runtime", "canonical-runtime-denied",
         "skill-reference-0-read", "coordinator-coordinator-evidence-denied",
         "source-source-checkout-denied", "sibling-sibling-a02-denied",
         "agent-case-prior-attempt-denied", "other-endpoint-0-denied",
@@ -192,10 +203,21 @@ def test_same_container_evidence_is_labelled_non_isolated_and_rejected():
         prove_worker_boundary(SameContainer(requirements), requirements)
 
 
-def test_synthetic_loopback_disposable_runtime_is_rejected_before_probes():
-    requirements = replace(_requirements(), disposable_endpoint="http://127.0.0.1:18787/health")
-    with pytest.raises(BoundaryUnavailable, match="synthetic same-container health endpoint"):
+def test_loopback_runtime_is_admitted_only_with_a_pinned_host_receipt():
+    requirements = replace(
+        _requirements(),
+        disposable_endpoint="http://127.0.0.1:18787",
+        disposable_runtime_receipt_id="",
+    )
+    with pytest.raises(BoundaryUnavailable, match="disposable_runtime_receipt_id"):
         prove_worker_boundary(Supervisor(requirements), requirements)
+
+    requirements = replace(
+        _requirements(),
+        disposable_endpoint="http://127.0.0.1:18787",
+    )
+    receipt = prove_worker_boundary(Supervisor(requirements), requirements)
+    assert receipt.status == "pass"
 
 
 @pytest.mark.parametrize(
@@ -207,6 +229,7 @@ def test_synthetic_loopback_disposable_runtime_is_rejected_before_probes():
         ("disposable-runtime", {"realm_id": "canonical-realm"}, "wrong realm"),
         ("disposable-runtime", {"disposable_runtime_receipt_id": "synthetic"}, "pinned host receipt"),
         ("sibling-sibling-a02-denied", {"boundary_id": "other-container"}, "different boundary"),
+        ("astrid-sdk-import", {"resolved_path": "/case/A01/fake/astrid/sdk/__init__.py"}, "outside the public package"),
     ],
 )
 def test_worker_boundary_rejects_false_denials_wrong_runtime_and_identity(probe_id, change, message):
@@ -226,6 +249,8 @@ def test_model_launch_must_use_same_supervisor_challenge_and_runtime_receipt():
         boundary_id=receipt.boundary_id,
         runtime_receipt_id=receipt.runtime_receipt_id,
         challenge=receipt.challenge,
+        public_package_path=receipt.public_package_path,
+        public_package_digest=receipt.public_package_digest,
         argv=("omp", "--cwd", requirements.selected_case_path, "--no-session"),
         cwd=requirements.selected_case_path,
         environment={},
@@ -246,3 +271,71 @@ def test_attestation_must_name_exact_model_launch_boundary():
 
     with pytest.raises(BoundaryUnavailable, match="does not match selected case and model boundary"):
         prove_worker_boundary(WrongWorker(requirements), requirements)
+
+
+def test_host_created_values_are_pinned_before_proof():
+    requirements = replace(
+        _requirements(),
+        model_boundary_id=None,
+        public_package_digest=None,
+        disposable_realm_id=None,
+        disposable_runtime_receipt_id=None,
+    )
+
+    class HostCreatedSupervisor(Supervisor):
+        def inspect_worker(self, worker_id):
+            return replace(
+                super().inspect_worker(worker_id),
+                boundary_id="docker:actual-worker",
+                public_package_digest="sha256:actual-package",
+                disposable_realm_id="actual-realm",
+                disposable_runtime_receipt_id="runtime:actual-receipt",
+            )
+
+    supervisor = HostCreatedSupervisor(requirements)
+    pinned = pin_worker_boundary(supervisor, requirements)
+    assert pinned.model_boundary_id == "docker:actual-worker"
+    assert pinned.public_package_digest == "sha256:actual-package"
+    assert pinned.disposable_realm_id == "actual-realm"
+    assert pinned.disposable_runtime_receipt_id == "runtime:actual-receipt"
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"public_package_path": "/opt/stale-package"}, "public_package_path"),
+        ({"public_package_digest": "sha256:stale-package"}, "public_package_digest"),
+    ],
+)
+def test_pinning_rejects_stale_public_package_identity(change, message):
+    actual = _requirements()
+    requested = replace(actual, **change)
+    with pytest.raises(BoundaryUnavailable, match=message):
+        pin_worker_boundary(Supervisor(actual), requested)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"public_package_path": "/opt/stale-package"},
+        {"public_package_digest": "sha256:stale-package"},
+    ],
+)
+def test_launch_rejects_stale_public_package_identity(change):
+    requirements = _requirements()
+    supervisor = Supervisor(requirements)
+    receipt = prove_worker_boundary(supervisor, requirements)
+    request = WorkerLaunchRequest(
+        worker_id=requirements.worker_id,
+        boundary_id=receipt.boundary_id,
+        runtime_receipt_id=receipt.runtime_receipt_id,
+        challenge=receipt.challenge,
+        public_package_path=receipt.public_package_path,
+        public_package_digest=receipt.public_package_digest,
+        argv=("omp", "--cwd", requirements.selected_case_path, "--no-session"),
+        cwd=requirements.selected_case_path,
+        environment={},
+        timeout_seconds=10,
+    )
+    with pytest.raises(BoundaryUnavailable, match="does not match the proven receipt"):
+        launch_in_proven_boundary(supervisor, receipt, replace(request, **change))

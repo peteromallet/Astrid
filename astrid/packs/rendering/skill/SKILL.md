@@ -102,6 +102,26 @@ python3 -m astrid timelines history --project <project> <slug-or-id> --json
 python3 -m astrid timelines diff --project <project> <slug-or-id> --json
 ```
 
+For SDK callers that need the same bounded structural result as the CLI,
+`client.timelines.open_composition(project, ref, ...)` is the shared read-only
+adapter. It returns the pinned query, summary, targets, rows, pagination,
+media classifications, diagnostics, and scope-preserving actions used by
+`timelines show`; it does not create a second timeline document. The adapter's
+scope marks source-media actions as metadata-only until Runtime exposes a
+digest-bound source handle, so agents must not claim source playback or exact
+frame access from `media.show` alone:
+
+```python
+opened = client.timelines.open_composition(
+    "<project>", "<timeline>", occurrence="<occurrence-id>",
+    range_value="10..15", limit=20, detail=True,
+)
+```
+
+Keep the returned `head`, parent/revision identity, candidate digest, and
+render identity together. A cursor is valid only for that complete scope;
+reopen the composition after a head change instead of continuing an old page.
+
 For visual continuity review, use the rendered filmstrip. It samples the exact
 successful render into chronological PNG contact sheets, with Markdown and
 a machine-readable frame index. Omit `--out`; Astrid

@@ -86,3 +86,26 @@ def test_plain_show_keeps_the_full_document_shape(capsys) -> None:
     shown = json.loads(capsys.readouterr().out)["data"]
     assert shown["config"]["clips"]
     assert shown.get("kind") != "timeline-inspection"
+
+
+def test_show_prefers_shared_open_composition_adapter_when_available(capsys) -> None:
+    class OpenClient(_Client):
+        def __init__(self) -> None:
+            super().__init__()
+            self.opened = None
+            self.timelines.open_composition = self.open_composition
+
+        def open_composition(self, project, ref, **kwargs):  # noqa: ANN001
+            self.opened = (project, ref, kwargs)
+            return DomainResult.success({
+                "kind": "timeline-inspection", "summary": {"authority": "canonical_head"},
+                "query": {"occurrence": kwargs["occurrence"]}, "targets": [], "clips": [],
+            })
+
+    client = OpenClient()
+    parser = build_parser(client)
+    args = parser.parse_args(["show", "--project", "demo", "main", "--summary", "--occurrence", "occ-b"])
+    assert _cmd_show(args) == 0
+    assert client.opened[0:2] == ("demo", "main")
+    assert client.opened[2]["occurrence"] == "occ-b"
+    assert json.loads(capsys.readouterr().out)["data"]["kind"] == "timeline-inspection"

@@ -201,35 +201,57 @@ def _timeline_summary(item: Any) -> Any:
 
 
 def _cmd_show(parsed: argparse.Namespace) -> int:
-    result = parsed.client.timelines.show(parsed.project, parsed.ref)
+    # Prefer the SDK's single bounded composition adapter when the client has
+    # one.  Test doubles and older clients fall back to the same projection
+    # below, so this remains backwards-compatible without creating a second
+    # storage authority.
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import (
+        inspection_options,
+        project_timeline_document,
+    )
+    values = {
+        name: getattr(parsed, name, None)
+        for name in ("clip", "occurrence", "shot", "track", "asset", "range", "detail", "limit", "cursor")
+    }
+    normalized = inspection_options(values)
+    selectors = {
+        "clip": normalized["clip"], "occurrence": normalized["occurrence"],
+        "shot": normalized["shot"], "track": normalized["tracks"],
+        "asset": normalized["asset"],
+        "range": values.get("range"), "detail": normalized["detail"],
+    }
+    has_selector = any(
+        selectors[name] not in (None, "", [], ())
+        for name in ("clip", "occurrence", "shot", "track", "asset", "range")
+    ) or selectors["detail"] is True
+    opener = getattr(parsed.client.timelines, "open_composition", None)
+    if callable(opener) and (parsed.summary or has_selector):
+        result = opener(
+            parsed.project,
+            parsed.ref,
+            limit=values.get("limit") or 50,
+            cursor=values.get("cursor"),
+            clip=normalized["clip"],
+            occurrence=normalized["occurrence"],
+            shot=normalized["shot"],
+            track=normalized["tracks"],
+            asset=normalized["asset"],
+            range_value=values.get("range"),
+            detail=normalized["detail"],
+        )
+    else:
+        result = parsed.client.timelines.show(parsed.project, parsed.ref)
     if result.ok and isinstance(result.data, Mapping):
         # Keep the legacy bounded summary shape, but derive its inspection
         # metadata through the same shared projection used by visualize. This
         # makes occurrence/selected-media/output identity agree without
         # exposing storage internals or changing the ordinary full show route.
-        from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import (
-            inspection_options,
-            project_timeline_document,
-        )
-        values = {
-            name: getattr(parsed, name, None)
-            for name in ("clip", "occurrence", "shot", "track", "asset", "range", "detail", "limit", "cursor")
-        }
-        normalized = inspection_options(values)
-        selectors = {
-            "clip": normalized["clip"], "occurrence": normalized["occurrence"],
-            "shot": normalized["shot"], "track": normalized["tracks"],
-            "asset": normalized["asset"],
-            "range": values.get("range"), "detail": normalized["detail"],
-        }
         # ``detail`` is a presentation flag, not a scope selector. In
         # particular, its default False must not turn ordinary ``show`` into
         # the bounded inspection projection.
-        has_selector = any(
-            selectors[name] not in (None, "", [], ())
-            for name in ("clip", "occurrence", "shot", "track", "asset", "range")
-        ) or selectors["detail"] is True
         if parsed.summary or has_selector:
+            if result.data.get("kind") == "timeline-inspection":
+                return print_result(result, as_json=parsed.json)
             projection = project_timeline_document(
                 result.data,
                 clip=normalized["clip"], occurrence=normalized["occurrence"],

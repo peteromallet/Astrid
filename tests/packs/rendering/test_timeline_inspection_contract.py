@@ -235,3 +235,33 @@ def test_inspection_cursor_is_bound_to_the_document_head():
         assert "cursor" in str(exc)
     else:
         raise AssertionError("cursor from a different committed head was accepted")
+
+
+def test_inspection_cursor_is_bound_to_parent_candidate_and_render_scope():
+    document = {
+        "timeline_id": "tl-1", "project_id": "p-1", "head_hash": "head-1",
+        "parent_revision_id": "parent-1", "candidate_digest": "sha256:candidate-1",
+        "render_run_id": "run-1", "config": {"clips": [
+            {"id": "clip", "at": 0, "hold": 1},
+            {"id": "clip-2", "at": 1, "hold": 1},
+        ]},
+    }
+    cursor = project_timeline_document(document, limit=1)["pagination"]["next_cursor"]
+    changed = dict(document, parent_revision_id="parent-2")
+    try:
+        project_timeline_document(changed, limit=1, cursor=cursor)
+    except ValueError as exc:
+        assert "cursor" in str(exc)
+    else:
+        raise AssertionError("cursor from a different parent revision was accepted")
+
+
+def test_row_actions_retain_repeated_occurrence_scope():
+    projection = project_timeline_document({
+        "timeline_id": "tl-1", "project_id": "p-1", "head_hash": "h1",
+        "occurrences": [{"clip_id": "clip", "occurrence_id": "occ-7", "shot_id": "shot-7"}],
+        "config": {"clips": [{"id": "clip", "at": 0, "hold": 1}]},
+    })
+    row = projection["clips"][0]
+    assert ["--occurrence", "occ-7"] == row["actions"]["expand"]["argv"][-4:-2]
+    assert "--shot" in row["actions"]["visualize"]["argv"]

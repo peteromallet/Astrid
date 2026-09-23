@@ -195,6 +195,59 @@ class RemoteTimelines(_RemoteFamily):
         if match is None:
             return DomainResult.failure(ErrorObject("not_found", "timeline not found", {"project": str(project), "ref": str(ref)}))
         return self._typed("get_timeline", str(match.get("timeline_id")), project_id=str(project))
+    def open_composition(
+        self,
+        project,
+        ref,
+        *,
+        limit=50,
+        cursor=None,
+        clip=None,
+        occurrence=None,
+        shot=None,
+        track=None,
+        asset=None,
+        range_value=None,
+        detail=False,
+    ):
+        """Open one bounded, read-only composition projection.
+
+        This is intentionally an adapter over the existing immutable timeline
+        read.  It is the shared textual authority for ``show`` and the visual
+        sister command; it does not create a second document or imply that
+        source-media playback is available.
+        """
+        result = self.show(project, ref)
+        if not result.ok or not isinstance(result.data, Mapping):
+            return result
+        from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import project_timeline_document
+
+        document = dict(result.data)
+        document.setdefault("project_id", str(project))
+        projection = project_timeline_document(
+            document,
+            limit=limit,
+            cursor=cursor,
+            clip=clip,
+            occurrence=occurrence,
+            shot=shot,
+            track=track,
+            asset=asset,
+            range_value=range_value,
+            detail=detail,
+        )
+        projection["scope"] = {
+            "authority": projection["summary"]["authority"],
+            "project": str(project),
+            "timeline": str(ref),
+            "read_only": True,
+            "source_media_actions": "metadata_only_until_runtime_source_handle",
+        }
+        return DomainResult.success(
+            projection,
+            receipt=result.receipt,
+            idempotency_key=result.idempotency_key,
+        )
     def save(self, project, ref, *, config: Mapping[str, Any], registry: Mapping[str, Any], expected_version=1, slug=None, name=None, idempotency_key=None):
         key = idempotency_key or uuid.uuid4().hex
         if not project:

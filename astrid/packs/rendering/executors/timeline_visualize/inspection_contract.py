@@ -412,7 +412,12 @@ def project_timeline_document(
         project_ref = document.get("project_slug") or document.get("project_id") or "<project>"
         timeline_ref = document.get("slug") or timeline_id or "<timeline>"
         scope_args: list[str] = []
-        for flag, value in (("--occurrence", occurrence), ("--shot", shot), ("--asset", asset)):
+        # Actions are row-addressable, not merely query-addressable.  If the
+        # caller opened the overview, expanding a repeated occurrence must not
+        # silently fall back to its reusable shot or an ambiguous clip id.
+        row_occurrence = identity.get("occurrence_id") if not occurrence else occurrence
+        row_shot = identity.get("shot_id") if not shot else shot
+        for flag, value in (("--occurrence", row_occurrence), ("--shot", row_shot), ("--asset", asset)):
             if value:
                 scope_args.extend([flag, str(value)])
         if tracks:
@@ -435,8 +440,21 @@ def project_timeline_document(
     selected.sort(key=lambda row: (row["at_seconds"] is None,
                                    Fraction(*row["at_seconds"]) if row["at_seconds"] else Fraction(0),
                                    str(row.get("track_id") or ""), str(row.get("clip_id") or "")))
+    head = document.get("head_hash") or document.get("head_event_id") or document.get("config_version")
+    parent_revision = (
+        document.get("parent_revision_id") or document.get("parent_head_id")
+        or document.get("parent_revision")
+    )
+    head_revision = document.get("head_revision_id") or document.get("revision_id")
+    candidate_digest = document.get("candidate_digest") or document.get("candidate_hash")
+    render_run_id = document.get("render_run_id") or document.get("current_render_run_id")
     query = {"timeline_id": timeline_id,
-             "head": document.get("head_hash") or document.get("head_event_id") or document.get("config_version"),
+             "project_id": document.get("project_id") or document.get("project_slug"),
+             "head": head,
+             "parent_revision_id": parent_revision,
+             "head_revision_id": head_revision,
+             "candidate_digest": candidate_digest,
+             "render_run_id": render_run_id,
              "clip": clip, "occurrence": occurrence, "shot": shot, "track": list(tracks), "asset": asset, "range": range_value, "detail": detail, "limit": limit}
     binding = hashlib.sha256(json.dumps(query, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:20]
     offset = 0
@@ -449,13 +467,33 @@ def project_timeline_document(
     next_cursor = f"{binding}:{offset + limit}" if offset + limit < len(selected) else None
     inventory = semantic_media_inventory(raw_clips, registry)
     diagnostics.extend(inventory["diagnostics"])
-    head = document.get("head_hash") or document.get("head_event_id") or document.get("config_version")
     outputs = document.get("outputs") or document.get("render_outputs") or []
+    config_mapping = config if isinstance(config, Mapping) else {}
+    track_rows = config_mapping.get("tracks", [])
+    duration = config_mapping.get("duration") or config_mapping.get("duration_seconds")
+    if duration is None and selected:
+        ends = [row["end_seconds"] for row in selected if row.get("end_seconds")]
+        if ends:
+            duration = [max(Fraction(*value) for value in ends).numerator,
+                        max(Fraction(*value) for value in ends).denominator]
+    summary = {
+        "fps": [fps.numerator, fps.denominator],
+        "duration_seconds": duration,
+        "clip_count": len(selected),
+        "track_count": len(track_rows) if isinstance(track_rows, (list, tuple, Mapping)) else 0,
+        "diagnostic_count": len(diagnostics),
+        "authority": "canonical_head" if head is not None else "unverified_document",
+        "parent_revision_id": parent_revision,
+        "head_revision_id": head_revision,
+        "candidate_digest": candidate_digest,
+        "render_run_id": render_run_id,
+    }
     return {
         "kind": "timeline-inspection", "timeline_id": timeline_id,
         "project_id": document.get("project_id"), "slug": document.get("slug"),
         "timeline_name": document.get("name"), "head": head,
         "version": document.get("config_version", document.get("version")),
+        "summary": summary,
         "query": query, "targets": [row["target"] for row in page], "clips": page,
         "media": inventory, "outputs": classify_output_records(
             outputs, current_head=head, current_output_id=document.get("current_output_id")),

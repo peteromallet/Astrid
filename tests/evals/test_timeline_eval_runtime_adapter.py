@@ -224,3 +224,39 @@ def test_real_disposable_runtime_handshake_and_project_id_allocation(tmp_path):
         assert callable(adapter.workspace._generated.publish_parent_composition)
     finally:
         daemon.stop()
+
+
+def test_current_closure_follows_post_edit_parent_dependencies_without_seed_map(tmp_path):
+    """Post-edit readback follows the committed parent, including new IDs."""
+    class CurrentWorkspace:
+        _generated = type("Generated", (), {})()
+
+        def get_timeline(self, timeline_id, *, project_id):
+            return {"data": {"head_revision_id": "head-new"}}
+
+        def get_project_parent_composition_revision(self, project_id, timeline_id, revision):
+            assert (project_id, timeline_id, revision) == ("project", "timeline", "head-new")
+            return {"data": {"revision_id": revision, "payload": {"occurrences": [
+                {"occurrence_id": "occ-new", "shot_id": "shot-new", "shot_revision_id": "shot-rev-new"},
+                {"occurrence_id": "occ-duplicate", "shot_id": "shot-new", "shot_revision_id": "shot-rev-new"},
+            ]}}}
+
+        def get_project_shot_revision(self, project_id, shot_id, revision):
+            assert (project_id, shot_id, revision) == ("project", "shot-new", "shot-rev-new")
+            return {"data": {"shot_id": shot_id, "revision_id": revision,
+                              "internal_timeline_revision_id": "internal-new",
+                              "payload": {"items": [{"id": "item-new"}]}}}
+
+        def get_project_timeline_revision(self, project_id, timeline_id, revision):
+            assert (project_id, timeline_id, revision) == ("project", "timeline", "internal-new")
+            return {"data": {"timeline_id": timeline_id, "revision_id": revision,
+                              "payload": {"clips": [{"id": "clip-new"}]}}}
+
+    adapter = RuntimeFixtureAdapter.__new__(RuntimeFixtureAdapter)
+    adapter.workspace = CurrentWorkspace()
+    closure = adapter.read_current_closure("project", "timeline")
+
+    assert closure["head_revision_id"] == "head-new"
+    assert [row["shot_id"] for row in closure["shot_revisions"]] == ["shot-new"]
+    assert [row["revision_id"] for row in closure["internal_timeline_revisions"]] == ["internal-new"]
+    assert adapter.read_current_semantic_digest("project", "timeline").startswith("sha256:")

@@ -194,6 +194,42 @@ class CaseIdentities:
         )
 
 
+def public_target_receipt(
+    seed: Mapping[str, Any], *, read_only: bool = False,
+) -> dict[str, Any]:
+    """Return the minimal case target package safe to expose to an agent.
+
+    The receipt contains only the server-assigned disposable target and its
+    child identities. It intentionally omits the baseline closure, expected
+    answers, hidden checks, sibling cases, and source paths. The coordinator
+    writes this after seeding; agents never discover a target from ambient
+    Runtime configuration.
+    """
+    identities = seed.get("identities")
+    if not isinstance(identities, CaseIdentities):
+        raise FixtureError("seed receipt has no CaseIdentities")
+    project_id = seed.get("project_id")
+    timeline_id = seed.get("timeline_id")
+    head = seed.get("receipt", {}).get("new_head") if isinstance(seed.get("receipt"), Mapping) else None
+    if not all(isinstance(value, str) and value for value in (project_id, timeline_id, head)):
+        raise FixtureError("seed receipt must include project_id, timeline_id, and new_head")
+    return {
+        "kind": "astrid.timeline-eval.public-target.v1",
+        "scope": "selected-case-only",
+        "read_only": bool(read_only),
+        "project_id": project_id,
+        "timeline_id": timeline_id,
+        "head_revision_id": head,
+        "occurrence_ids": sorted(identities.occurrence_ids.values()),
+        "shot_ids": sorted(identities.shot_ids.values()),
+        "shot_revision_ids": sorted(identities.shot_revision_ids.values()),
+        "item_ids": sorted(identities.item_ids.values()),
+        "internal_timeline_ids": sorted(identities.internal_timeline_ids.values()),
+        "internal_revision_ids": sorted(identities.internal_revision_ids.values()),
+        "owned_media_ids": sorted(str(value) for value in seed.get("owned_media", {}).values()),
+    }
+
+
 def derive_case_identities(
     baseline: Baseline, *, attempt_id: str, case_id: str,
     runtime_project_id: str, runtime_timeline_id: str,
@@ -274,6 +310,8 @@ class FixtureRuntime(Protocol):
     def ensure_media_owned(self, project_id: str, requirement: MediaRequirement, media_bytes: bytes) -> Mapping[str, Any]: ...
     def seed_case(self, project_id: str, identities: CaseIdentities, baseline: Baseline, owned_media: Mapping[str, str], *, idempotency_key: str) -> Mapping[str, Any]: ...
     def read_case_semantic_digest(self, project_id: str, timeline_id: str) -> str: ...
+    def read_current_closure(self, project_id: str, timeline_id: str, *, head: str | None = None) -> Mapping[str, Any]: ...
+    def read_current_semantic_digest(self, project_id: str, timeline_id: str) -> str: ...
     def current_head(self, project_id: str, timeline_id: str) -> str: ...
     def publish_baseline(self, project_id: str, timeline_id: str, baseline: Baseline, *, expected_head: str, idempotency_key: str) -> Mapping[str, Any]: ...
 
@@ -390,5 +428,6 @@ def reset_case(
 __all__ = [
     "ACTION_CASES", "Baseline", "CaseIdentities", "DisposableEndpoint", "FIXTURE_BUILDER_VERSION",
     "FixtureError", "FixtureRuntime", "MediaRequirement", "export_baseline", "derive_case_identities",
+    "public_target_receipt",
     "idempotency_key", "require_disposable_endpoint", "reset_case", "seed_case",
 ]

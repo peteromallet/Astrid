@@ -1,11 +1,9 @@
-"""Explicit Runtime connection preflight for isolated timeline evaluations.
+"""Explicit Runtime setup and readback for isolated timeline evaluations.
 
-This adapter is intentionally small. It validates a caller-supplied disposable
-realm and binds its ordinary WorkspaceClient, but it will not seed the current
-E02 fixture contract: that contract invents a deterministic Runtime project ID,
-while Runtime project IDs are allocated by the server. Silently aliasing those
-IDs would make the evaluated agent's target differ from the actual Runtime
-target, so setup must stop until the fixture interface carries the returned ID.
+The adapter binds one caller-supplied disposable realm, seeds targets using
+server-assigned identities, and reads the committed closure back by the actual
+parent head after an edit. It never falls back to the canonical Runtime or to a
+mutable child projection.
 """
 
 from __future__ import annotations
@@ -183,9 +181,8 @@ class RuntimeConnectionProof:
 class RuntimeFixtureAdapter:
     """Explicit connection to one proven disposable Runtime realm.
 
-    This is a connection proof only until E02 changes its target identity model.
-    All mutation methods fail before making a Runtime call, preserving the
-    contract/runtime identity boundary.
+    Project/timeline creation, media ownership, publication, and exact
+    coordinator-side readback all remain scoped to the supplied realm.
     """
 
     def __init__(self, isolation: VerifiedIsolation, workspace: Any, proof: RuntimeConnectionProof):
@@ -524,6 +521,91 @@ class RuntimeFixtureAdapter:
         timeline = self._data(self.workspace.get_timeline(timeline_id, project_id=project_id), "get_timeline")
         head = timeline.get("head_revision_id")
         return str(head) if isinstance(head, str) else ""
+
+    def read_current_closure(
+        self, project_id: str, timeline_id: str, *, head: str | None = None,
+    ) -> dict[str, Any]:
+        """Read the exact committed parent/shot/internal closure at ``head``.
+
+        This is deliberately independent of the seed identity map. Agents may
+        create, duplicate, replace, or remove shots, so post-edit grading must
+        follow the current parent's pinned dependency IDs rather than assume
+        that every returned child still has a seed ID.
+        """
+        parent_revision_id = head or self.current_head(project_id, timeline_id)
+        if not parent_revision_id:
+            raise RuntimeAdapterError("case timeline has no committed parent head")
+        parent = self._data(
+            self.workspace.get_project_parent_composition_revision(
+                project_id, timeline_id, parent_revision_id,
+            ),
+            "get_parent_revision",
+        )
+        if parent.get("revision_id") != parent_revision_id:
+            raise RuntimeAdapterError("Runtime returned a different parent composition revision")
+        payload = parent.get("payload")
+        occurrences = payload.get("occurrences") if isinstance(payload, Mapping) else None
+        if not isinstance(occurrences, list):
+            raise RuntimeAdapterError("current parent payload has no occurrence list")
+
+        shots: list[Mapping[str, Any]] = []
+        shot_by_key: dict[tuple[str, str], Mapping[str, Any]] = {}
+        internals: list[Mapping[str, Any]] = []
+        seen_shots: set[tuple[str, str]] = set()
+        seen_internals: set[str] = set()
+        for index, occurrence in enumerate(occurrences):
+            if not isinstance(occurrence, Mapping):
+                raise RuntimeAdapterError(f"current parent occurrence {index} is not an object")
+            shot_id = occurrence.get("shot_id")
+            shot_revision_id = occurrence.get("shot_revision_id", occurrence.get("revision_id"))
+            if not isinstance(shot_id, str) or not isinstance(shot_revision_id, str):
+                raise RuntimeAdapterError(f"current parent occurrence {index} does not pin a shot revision")
+            shot_key = (shot_id, shot_revision_id)
+            if shot_key not in seen_shots:
+                shot = self._data(
+                    self.workspace.get_project_shot_revision(
+                        project_id, shot_id, shot_revision_id,
+                    ),
+                    f"shot_revision {shot_id}/{shot_revision_id}",
+                )
+                if shot.get("shot_id") != shot_id or shot.get("revision_id") != shot_revision_id:
+                    raise RuntimeAdapterError("Runtime returned a different pinned shot revision")
+                shots.append(shot)
+                shot_by_key[shot_key] = shot
+                seen_shots.add(shot_key)
+            shot = shot_by_key[shot_key]
+            internal_revision_id = shot.get("internal_timeline_revision_id")
+            if not isinstance(internal_revision_id, str) or not internal_revision_id:
+                raise RuntimeAdapterError(f"shot revision {shot_revision_id!r} has no internal timeline pin")
+            if internal_revision_id not in seen_internals:
+                internal = self._data(
+                    self.workspace.get_project_timeline_revision(
+                        project_id, timeline_id, internal_revision_id,
+                    ),
+                    f"internal_timeline_revision {internal_revision_id}",
+                )
+                if internal.get("revision_id") != internal_revision_id:
+                    raise RuntimeAdapterError("Runtime returned a different pinned internal timeline revision")
+                internals.append(internal)
+                seen_internals.add(internal_revision_id)
+        return {
+            "project_id": project_id,
+            "timeline_id": timeline_id,
+            "parent_revision": parent,
+            "shot_revisions": shots,
+            "internal_timeline_revisions": internals,
+            "head_revision_id": parent_revision_id,
+        }
+
+    def read_current_semantic_digest(self, project_id: str, timeline_id: str) -> str:
+        """Digest the exact current closure without assuming seeded identities."""
+        closure = self.read_current_closure(project_id, timeline_id)
+        semantic = {
+            "parent": closure["parent_revision"].get("payload"),
+            "shots": [row.get("payload") for row in closure["shot_revisions"]],
+            "internal_timelines": [row.get("payload") for row in closure["internal_timeline_revisions"]],
+        }
+        return self._digest(semantic)
 
     def read_case_semantic_digest(self, project_id: str, timeline_id: str) -> str:
         state = self._case_state.get((project_id, timeline_id))

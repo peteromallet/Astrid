@@ -24,6 +24,7 @@ from .runtime_adapter import (
     RuntimeFixtureAdapter,
     isolation_contract_template,
 )
+from .resource_cleanup import WORKSPACE_MARKER_NAME, cleanup_attempt_resources, write_resource_manifest
 from .source_export import _canonical, _data
 
 
@@ -408,6 +409,8 @@ def _main() -> int:
     parser.add_argument("--attempt-dir", required=True, type=Path)
     parser.add_argument("--canonical-realm-id", required=True)
     parser.add_argument("--canonical-root", required=True, type=Path)
+    parser.add_argument("--cleanup-resources", action="store_true", help="quarantine this attempt's disposable Runtime after it stops")
+    parser.add_argument("--quarantine-root", type=Path, help="recoverable quarantine root for --cleanup-resources")
     args = parser.parse_args()
 
     from runtime_protocol.daemon import RuntimeDaemon
@@ -439,6 +442,31 @@ def _main() -> int:
             "realm_id": realm_id,
         }
         _write_json(runtime_root / ISOLATION_MARKER_NAME, marker)
+        support_root = attempt_dir / "runtime-support"
+        _write_json(support_root / WORKSPACE_MARKER_NAME, {
+            "kind": "astrid.timeline-eval-resource.v1",
+            "purpose": "timeline-eval-runtime-support",
+            "attempt_id": attempt_dir.name,
+            "realm_id": realm_id,
+        })
+        evidence_root = attempt_dir / "evidence"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        write_resource_manifest(
+            attempt_dir / "resource-manifest.json",
+            attempt_id=attempt_dir.name,
+            realm_id=realm_id,
+            evidence_root=evidence_root,
+            canonical_root=args.canonical_root,
+            canonical_realm_id=args.canonical_realm_id,
+            resources=[
+                {"name": "runtime-realm", "kind": "runtime_realm", "path": runtime_root,
+                 "marker": ISOLATION_MARKER_NAME, "marker_identity": marker, "realm_id": realm_id},
+                {"name": "runtime-support", "kind": "runtime_support", "path": support_root,
+                 "marker": WORKSPACE_MARKER_NAME,
+                 "marker_identity": {"kind": "astrid.timeline-eval-resource.v1", "purpose": "timeline-eval-runtime-support", "attempt_id": attempt_dir.name, "realm_id": realm_id},
+                 "realm_id": realm_id},
+            ],
+        )
         contract_path = attempt_dir / "isolation-contract.json"
         contract = isolation_contract_template(
             endpoint=daemon.endpoint,
@@ -484,6 +512,12 @@ def _main() -> int:
         return 0 if result["status"] == "passed" and result["safety"] == "pass" else 2
     finally:
         daemon.stop()
+        if args.cleanup_resources:
+            if args.quarantine_root is None:
+                raise RuntimeError("--quarantine-root is required with --cleanup-resources")
+            manifest_path = attempt_dir / "resource-manifest.json"
+            if manifest_path.is_file():
+                cleanup_attempt_resources(manifest_path, quarantine_root=args.quarantine_root)
 
 
 if __name__ == "__main__":

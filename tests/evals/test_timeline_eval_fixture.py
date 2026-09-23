@@ -18,6 +18,7 @@ from evals.timeline.fixture import (
     derive_case_identities,
     export_baseline,
     idempotency_key,
+    public_target_receipt,
     reset_case,
     seed_case,
 )
@@ -92,7 +93,8 @@ class FakeRuntime:
         self.seed_requests.append((project_id, identities, dict(owned_media), idempotency_key))
         self.semantic[identities.timeline_id] = baseline.semantic_digest
         self.head[identities.timeline_id] = identities.parent_revision_id
-        return {"project_id": project_id, "timeline_id": identities.timeline_id, "semantic_digest": baseline.semantic_digest}
+        return {"project_id": project_id, "timeline_id": identities.timeline_id,
+                "new_head": identities.parent_revision_id, "semantic_digest": baseline.semantic_digest}
 
     def read_case_semantic_digest(self, project_id, timeline_id):
         return self.semantic[timeline_id]
@@ -167,6 +169,23 @@ def test_seed_uses_server_ids_and_destination_media_ownership(tmp_path):
     assert result["owned_media"][baseline.media[0].digest].startswith("dest-")
     replay = seed_case(runtime, baseline, attempt_id="attempt-1", case_id="A01", media_root=media_root)
     assert replay["idempotency_key"] == result["idempotency_key"]
+
+
+def test_public_target_receipt_contains_only_disposable_ids(tmp_path):
+    baseline = _baseline()
+    runtime = FakeRuntime(baseline)
+    media_root = tmp_path / "attempt-media"
+    (media_root / "media").mkdir(parents=True)
+    (media_root / "media/image.bin").write_bytes(MEDIA_BYTES)
+    seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A01", media_root=media_root)
+    target = public_target_receipt(seed)
+    assert target["kind"] == "astrid.timeline-eval.public-target.v1"
+    assert target["project_id"] == runtime.project_id
+    assert target["timeline_id"] == seed["timeline_id"]
+    assert target["head_revision_id"] == seed["identities"].parent_revision_id
+    assert "closure" not in target
+    assert "semantic_digest" not in target
+    assert target["owned_media_ids"] == ["dest-" + MEDIA_DIGEST[-8:]]
 
 
 def test_cases_share_runtime_project_but_keep_distinct_runtime_timeline_ids(tmp_path):

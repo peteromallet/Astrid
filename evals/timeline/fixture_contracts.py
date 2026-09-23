@@ -23,9 +23,13 @@ class FixtureInput:
     path: str
     scope: str
     reason: str
+    kind: str = "missing_fixture_input"
 
     def as_dict(self) -> dict[str, str]:
-        return {"path": self.path, "scope": self.scope, "reason": self.reason}
+        return {
+            "path": self.path, "scope": self.scope, "reason": self.reason,
+            "kind": self.kind,
+        }
 
 
 @dataclass(frozen=True)
@@ -37,7 +41,19 @@ class NavigationFixtureContract:
 
     @property
     def status(self) -> str:
-        return "ready" if not self.required_inputs else "blocked_or_environmental"
+        if not self.required_inputs:
+            return "ready"
+        if all(item.kind == "environmental_capability" for item in self.required_inputs):
+            return "environment_unavailable"
+        return "blocked"
+
+    @property
+    def diagnostic_code(self) -> str:
+        return (
+            "ready" if self.status == "ready" else
+            "surface_capability_unavailable" if self.status == "environment_unavailable" else
+            "missing_pinned_fixture_input"
+        )
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +61,7 @@ class NavigationFixtureContract:
             "case_id": self.case_id,
             "workflow": "offline_read_only_navigation",
             "status": self.status,
+            "diagnostic_code": self.diagnostic_code,
             "target_aliases": list(self.target_aliases),
             "readback_projection": self.projection,
             "required_inputs": [item.as_dict() for item in self.required_inputs],
@@ -88,6 +105,12 @@ def navigation_fixture_contract(case: Mapping[str, Any]) -> NavigationFixtureCon
             path=str(requirement.get("path", "")),
             scope=str(requirement.get("scope", "manifest")),
             reason=str(requirement.get("reason", "required navigation input is unavailable")),
+            kind=(
+                "environmental_capability"
+                if str(requirement.get("path", "")).startswith("surface_adapters.")
+                or str(requirement.get("reason", "")).endswith("on this host")
+                else "missing_fixture_input"
+            ),
         ))
     return NavigationFixtureContract(case_id=case_id, target_aliases=aliases,
                                      required_inputs=tuple(requirements))

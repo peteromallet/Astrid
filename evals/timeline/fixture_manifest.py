@@ -15,6 +15,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+try:
+    from .fixture_contracts import navigation_fixture_contract
+except ImportError:  # pragma: no cover - direct script invocation
+    from fixture_contracts import navigation_fixture_contract
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SUITE = REPO_ROOT / "Astrid/evals/timeline/suite.json"
@@ -34,6 +39,7 @@ class CaseReadiness:
     manifest: str | None = None
     operational_ready: bool = False
     operational_reasons: list[str] = field(default_factory=list)
+    contract: dict[str, Any] | None = None
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -709,6 +715,8 @@ def build_readiness(
             if not isinstance(target_catalog, dict):
                 target_catalog = {}
             readiness = validate_case(row, kind, path, target_catalog)
+            if kind == "navigation":
+                readiness.contract = navigation_fixture_contract(row).as_dict()
             specific_reasons = []
             specific_reasons.extend(_fixture_requirement_reasons(row, manifest, path, eval_root))
             for problem in group_problems:

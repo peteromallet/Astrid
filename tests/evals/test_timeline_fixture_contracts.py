@@ -17,7 +17,8 @@ def test_missing_navigation_surface_inputs_remain_typed_blockers() -> None:
         ],
     })
     payload = contract.as_dict()
-    assert payload["status"] == "blocked_or_environmental"
+    assert payload["status"] == "environment_unavailable"
+    assert payload["diagnostic_code"] == "surface_capability_unavailable"
     assert payload["readback_projection"] == "exact_closure_navigation.v1"
     assert payload["required_inputs"][0]["path"] == "surface_adapters.text_reader"
 
@@ -38,6 +39,26 @@ def test_materialized_navigation_entrypoint_is_checked_without_inventing_inputs(
     assert "selected target aliases are missing" in " ".join(
         validate_navigation_entrypoint(entrypoint, contract)
     )
+
+
+def test_l05_and_l07_missing_media_and_legacy_inputs_are_fail_closed() -> None:
+    l05 = navigation_fixture_contract({
+        "id": "L05", "targets": ["ideas_b03"],
+        "fixture_requirements": [{
+            "scope": "targets", "path": "ideas_b03.historical_video_alternatives",
+            "reason": "retained historical video alternative is absent from this closure",
+        }],
+    })
+    l07 = navigation_fixture_contract({
+        "id": "L07", "targets": ["intro_b01", "ideas_b03"],
+        "fixture_requirements": [{
+            "scope": "targets", "path": "legacy_clip_type_shot_fixture",
+            "reason": "separate labelled legacy clipType=shot fixture is absent",
+        }],
+    })
+    assert l05.status == l07.status == "blocked"
+    assert l05.diagnostic_code == l07.diagnostic_code == "missing_pinned_fixture_input"
+    assert l05.as_dict()["required_inputs"][0]["kind"] == "missing_fixture_input"
 
 
 def test_action_contract_blocks_unmaterialized_a02_and_rejects_synthetic_receipt() -> None:

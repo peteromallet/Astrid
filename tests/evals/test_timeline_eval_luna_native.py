@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from evals.timeline.luna_native import DEFAULT_MODEL, run_attempt
 
 
@@ -41,6 +43,7 @@ def test_native_launcher_invokes_each_fixture_ready_case_once_in_fresh_contexts(
         briefs_path=BRIEFS,
         omp_bin=str(fake),
         execute=True,
+        fixture_only=True,
     )
 
     rows = {row["id"]: row for row in aggregate["cases"]}
@@ -78,6 +81,7 @@ def test_hidden_checks_are_materialized_only_after_agent_process_exits(tmp_path,
         briefs_path=BRIEFS,
         omp_bin=str(fake),
         execute=True,
+        fixture_only=True,
         launchable_ids={"A03"},
     )
     assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
@@ -102,3 +106,48 @@ def test_dry_run_never_invokes_omp_or_creates_case_records(tmp_path, monkeypatch
     assert not calls.exists()
     assert (tmp_path / "attempt-dry/cases").is_dir()
     assert not any((tmp_path / "attempt-dry/cases").iterdir())
+
+
+def test_native_launcher_requires_explicit_isolated_target_for_real_execution(tmp_path):
+    fake, _calls = _fake_omp(tmp_path)
+    with pytest.raises(Exception, match="explicit disposable Runtime isolation"):
+        run_attempt(
+            SUITE,
+            tmp_path / "attempt-no-isolation",
+            fixture_root=FIXTURES,
+            briefs_path=BRIEFS,
+            omp_bin=str(fake),
+            execute=True,
+        )
+
+
+def test_explicit_agent_blocked_status_survives_successful_omp_exit(tmp_path):
+    script = tmp_path / "blocked-omp.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "from pathlib import Path\n"
+        "Path('result.json').write_text(json.dumps({\n"
+        "  'execution_status': 'blocked',\n"
+        "  'safety': {'source_unchanged': True, 'test_target_only': True},\n"
+        "  'edit_made': False\n"
+        "}))\n"
+        "print(json.dumps({'event': 'agent-finished'}))\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    aggregate = run_attempt(
+        SUITE,
+        tmp_path / "attempt-blocked",
+        fixture_root=FIXTURES,
+        briefs_path=BRIEFS,
+        omp_bin=str(script),
+        execute=True,
+        fixture_only=True,
+        launchable_ids={"A03"},
+    )
+    row = next(case for case in aggregate["cases"] if case["id"] == "A03")
+    result = json.loads((tmp_path / "attempt-blocked/cases/A03/result.json").read_text())
+    assert result["execution_status"] == "blocked"
+    assert result["launcher_process_status"] == "completed"
+    assert row["status"] == "blocked"

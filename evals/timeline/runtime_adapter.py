@@ -616,6 +616,9 @@ def isolation_contract_template(
         "canonical_endpoint": canonical_endpoint,
         "canonical_realm_id": canonical_realm_id,
         "canonical_root": str(Path(canonical_root).expanduser().absolute()),
+        # The launcher admission check requires this explicit negative claim;
+        # it is only a declarative preflight input, not process isolation.
+        "canonical_source_access": False,
         "source_access_available_to_agent": False,
     }
 

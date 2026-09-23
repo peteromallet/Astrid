@@ -2,9 +2,11 @@
 
 This is deliberately a thin adapter around the existing timeline fixture
 readiness and :func:`evals.timeline.run.aggregate_attempt` collector.  It does
-not seed Runtime, select credentials, or implement another grading harness.
-Each fixture-ready case gets one OMP one-shot invocation with ``--no-session``;
-fixture-blocked cases receive an explicit blocked record instead.
+not seed Runtime or implement another grading harness.  A native execution
+must be accompanied by an explicit disposable Runtime isolation contract;
+without one the launcher fails closed.  Each fixture-ready case gets one OMP
+one-shot invocation with ``--no-session``; fixture-blocked cases receive an
+explicit blocked record instead.
 
 The launcher writes only public case briefs before an agent starts.  Grader
 checks are materialized after the process exits, so an evaluated agent cannot
@@ -80,9 +82,14 @@ def _public_brief(
     source.setdefault("id", case.get("id"))
     source.setdefault("version", case.get("version"))
     source["fixture_entry_point"] = {
-        "root": str(fixture_root.resolve()),
+        # Do not disclose the shared fixture repository: it contains private
+        # manifests, answer material (notably the A10 brightness ordering),
+        # grader inputs and other cases.  A real disposable seed places only
+        # the selected case's public entry point under this directory.
+        "root": str(case_dir.resolve()),
         "case_id": str(case["id"]),
         "case_directory": str(case_dir.resolve()),
+        "scope": "selected-case-only",
         "read_only": case.get("kind") == "navigation",
         "instruction": "Use only this supplied fixture entry point and public tools; do not read suite or grader files.",
     }
@@ -105,7 +112,12 @@ def _load_public_briefs(path: Path) -> dict[str, Mapping[str, Any]]:
 
 
 def _clean_child_environment() -> dict[str, str]:
-    """Keep provider auth while excluding ambient Runtime/project credentials."""
+    """Keep provider auth while excluding ambient Runtime/project credentials.
+
+    A clean environment is only hygiene; it is not an isolation boundary.  A
+    native attempt therefore also requires an explicit disposable Runtime
+    contract (unless the caller is using the test-only fixture adapter).
+    """
     blocked_fragments = (
         "ASTRID_RUNTIME", "ASTRID_CANONICAL", "RUNTIME_CREDENTIAL",
         "RUNTIME_TOKEN", "SUPABASE_SERVICE", "SUPABASE_SECRET",
@@ -143,6 +155,10 @@ def _invoke(
     model: str,
     case: Mapping[str, Any],
     case_dir: Path,
+    isolated_endpoint: str | None = None,
+    isolated_credential: Path | None = None,
+    isolation_contract: Path | None = None,
+    fixture_only: bool = False,
 ) -> tuple[str, int | None, float, list[dict[str, Any]], str]:
     """Invoke exactly one fresh OMP context and capture stdout/stderr as trace."""
     timeout_value = _mapping(case.get("timeout")).get("value", 600)
@@ -171,10 +187,20 @@ def _invoke(
         "invocation": command,
     }]
     try:
+        child_env = _clean_child_environment()
+        if isolated_endpoint:
+            child_env.update({
+                "ASTRID_TIMELINE_EVAL_ENDPOINT": isolated_endpoint,
+                "ASTRID_TIMELINE_EVAL_CREDENTIAL": str(isolated_credential),
+                "ASTRID_TIMELINE_EVAL_ISOLATION_CONTRACT": str(isolation_contract),
+                "ASTRID_TIMELINE_EVAL_SOURCE_ACCESS": "false",
+            })
+        if fixture_only:
+            child_env["ASTRID_TIMELINE_EVAL_FIXTURE_ONLY"] = "1"
         process = subprocess.Popen(
             command,
             cwd=case_dir,
-            env=_clean_child_environment(),
+            env=child_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -254,13 +280,28 @@ def _merge_result(
                 agent_result = dict(parsed)
                 break
     result = dict(agent_result)
+    # Keep the agent's terminal declaration distinct from the subprocess
+    # lifecycle.  In particular, an agent can honestly report ``blocked``
+    # after discovering that a requested public capability is unavailable
+    # even though OMP itself exited successfully.
+    reported_status = str(result.get("execution_status", "")).lower()
+    terminal_statuses = {
+        "passed", "failed", "blocked", "missing_capability", "setup_failed",
+        "precondition_failed", "unavailable", "fixture_blocked", "timeout",
+        "timed_out", "not_run",
+    }
+    if reported_status in terminal_statuses:
+        result["agent_execution_status"] = reported_status
+    else:
+        result["agent_execution_status"] = None
     result.update({
         "kind": "astrid.timeline-eval.agent-result.v1",
         "attempt_id": attempt_id,
         "case_id": str(case["id"]),
         "session_id": session_id,
         "fresh_context": True,
-        "execution_status": status,
+        "launcher_process_status": status,
+        "execution_status": reported_status if reported_status in terminal_statuses else status,
         "returncode": returncode,
         "elapsed_seconds": elapsed,
         "launcher": {
@@ -405,6 +446,10 @@ def run_attempt(
     model: str = DEFAULT_MODEL,
     execute: bool = True,
     launchable_ids: Collection[str] | None = None,
+    isolated_endpoint: str | None = None,
+    isolated_credential: Path | None = None,
+    isolation_contract: Path | None = None,
+    fixture_only: bool = False,
 ) -> dict[str, Any]:
     """Run and aggregate one immutable 20-case attempt.
 
@@ -418,6 +463,16 @@ def run_attempt(
         raise NativeLauncherError("suite must contain a non-empty cases array")
     if attempt_root is None:
         raise NativeLauncherError("an explicit fresh attempt root is required")
+    if execute and not fixture_only:
+        from .run import validate_isolated_target
+        allowed, message = validate_isolated_target(
+            isolated_endpoint, isolated_credential, isolation_contract
+        )
+        if not allowed:
+            raise NativeLauncherError(
+                "refusing native agent execution without an explicit disposable "
+                f"Runtime isolation contract: {message}"
+            )
     attempt_root = attempt_root.expanduser().absolute()
     if attempt_root.exists():
         if attempt_root.is_symlink() or not attempt_root.is_dir() or any(attempt_root.iterdir()):
@@ -440,6 +495,12 @@ def run_attempt(
         "started_at": _now(),
         "canonical_fallback_available": False,
         "execution": "native_omp" if execute else "dry_run",
+        "isolation": {
+            "fixture_only": fixture_only,
+            "endpoint": isolated_endpoint,
+            "credential": str(isolated_credential) if isolated_credential else None,
+            "contract": str(isolation_contract) if isolation_contract else None,
+        },
     }
     _write_json(attempt_root / "attempt.json", top_level)
     if not execute:
@@ -495,7 +556,14 @@ def run_attempt(
             "execution": "native_omp",
         })
         status, returncode, elapsed, events, output = _invoke(
-            omp_bin=omp_bin, model=model, case=case, case_dir=case_dir
+            omp_bin=omp_bin,
+            model=model,
+            case=case,
+            case_dir=case_dir,
+            isolated_endpoint=isolated_endpoint,
+            isolated_credential=isolated_credential,
+            isolation_contract=isolation_contract,
+            fixture_only=fixture_only,
         )
         _trace_lines(case_dir, events=events)
         _merge_result(
@@ -528,6 +596,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempt-root", type=Path, required=True)
     parser.add_argument("--omp-bin", default="omp", help="OMP executable (default: omp)")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--isolated-endpoint", help="explicit disposable Runtime endpoint")
+    parser.add_argument("--isolated-credential", type=Path,
+                        help="credential file for the disposable Runtime")
+    parser.add_argument("--isolation-contract", type=Path,
+                        help="JSON proof of the disposable Runtime boundary")
+    parser.add_argument("--fixture-only", action="store_true",
+                        help="test-only fake adapter mode; never use for a native model run")
     parser.add_argument("--dry-run", action="store_true", help="print a plan without launching any agent")
     args = parser.parse_args(argv)
     try:
@@ -539,6 +614,10 @@ def main(argv: list[str] | None = None) -> int:
             omp_bin=args.omp_bin,
             model=args.model,
             execute=not args.dry_run,
+            isolated_endpoint=args.isolated_endpoint,
+            isolated_credential=args.isolated_credential,
+            isolation_contract=args.isolation_contract,
+            fixture_only=args.fixture_only,
         )
     except (NativeLauncherError, OSError, ValueError) as exc:
         print(json.dumps({"status": "setup_failed", "error": str(exc)}, indent=2), file=sys.stderr)

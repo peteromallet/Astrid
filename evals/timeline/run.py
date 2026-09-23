@@ -156,9 +156,36 @@ def _load_check_artifacts(case: Mapping[str, Any], case_dir: Path,
 def _trace_summary(case_dir: Path) -> dict[str, Any]:
     path = case_dir / "trace.jsonl"
     if not path.exists():
-        return {"present": False, "events": 0, "invalid_lines": [], "complete": False}
+        return {"present": False, "events": 0, "tool_calls": 0,
+                "tool_execution_events": 0, "invalid_lines": [], "complete": False}
     events = 0
+    tool_calls = 0
     invalid_lines = []
+    tool_start_events = {
+        "tool_execution_start", "tool_call", "tool_use", "tool_started",
+    }
+
+    def count_tool_event(row: Mapping[str, Any]) -> bool:
+        event_name = str(row.get("event", row.get("type", row.get("name", "")))).lower()
+        if event_name in tool_start_events:
+            return True
+        # Native OMP wraps the model's JSONL in an ``agent_output`` trace
+        # record.  Count only an embedded tool-start event, never every output
+        # line (which can number in the thousands for a long conversation).
+        if event_name != "agent_output":
+            return False
+        text = row.get("text")
+        if not isinstance(text, str):
+            return False
+        try:
+            nested = json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(nested, Mapping):
+            return False
+        nested_name = str(nested.get("event", nested.get("type", nested.get("name", "")))).lower()
+        return nested_name in tool_start_events
+
     try:
         with path.open(encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, 1):
@@ -169,11 +196,14 @@ def _trace_summary(case_dir: Path) -> dict[str, Any]:
                     if not isinstance(row, Mapping):
                         raise ValueError("trace event must be an object")
                     events += 1
+                    if count_tool_event(row):
+                        tool_calls += 1
                 except (json.JSONDecodeError, ValueError):
                     invalid_lines.append(line_number)
     except (OSError, UnicodeDecodeError):
         invalid_lines.append("unreadable")
-    return {"present": True, "events": events, "invalid_lines": invalid_lines,
+    return {"present": True, "events": events, "tool_calls": tool_calls,
+            "tool_execution_events": tool_calls, "invalid_lines": invalid_lines,
             "complete": not invalid_lines}
 
 
@@ -294,7 +324,7 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     else:
         score = 1
 
-    trace_calls = int(trace["events"])
+    trace_calls = int(trace.get("tool_calls", 0))
     elapsed = agent.get("elapsed_seconds", max(0.0, time.monotonic() - started))
     try:
         elapsed = max(0.0, float(elapsed))

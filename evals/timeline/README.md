@@ -126,12 +126,16 @@ for the E04 boundary and the temporary-realm integration evidence.
 `evals.timeline.luna_native` is the thin one-loop OMP adapter. It creates a new
 attempt root, gives each case only its public brief plus the supplied fixture
 entry point, and invokes one bounded fresh context for every `fixture_ready`
-case. A launch uses `--no-session`, the explicit model
-`openai-codex/gpt-5.6-luna`, and `--print`; no Runtime endpoint, credential, or
-canonical fallback is selected by this module. Fixture-blocked cases still get
-their own `attempt.json`, `trace.jsonl`, and `result.json`. `checks.json` is
-written only after that case's OMP process exits and is never included in its
-brief. The resulting tree is graded through `aggregate_attempt`.
+case. A native launch uses `--no-session`, the explicit model
+`openai-codex/gpt-5.6-luna`, and `--print`; it must also receive an explicit
+disposable Runtime endpoint, credential and isolation contract. A case
+directory, clean child environment, or prose prohibition is not an isolation
+boundary. The launcher fails closed when that proof is absent. Fixture-blocked
+cases still get their own `attempt.json`, `trace.jsonl`, and `result.json`.
+`checks.json` is written only after that case's OMP process exits and is never
+included in its brief. The resulting tree is graded through
+`aggregate_attempt`. `--fixture-only` exists solely for fake-adapter smoke
+tests and must not be used for a model evaluation.
 
 The real invocation is explicit and bounded:
 
@@ -143,7 +147,10 @@ PYTHONPATH=. ./.venv/bin/python -m evals.timeline.luna_native \
   --briefs evals/timeline/cases/agent_briefs.json \
   --attempt-root ../.otto/runs/timeline-text-inspection-20260922/attempts/luna-native-<timestamp> \
   --omp-bin omp \
-  --model openai-codex/gpt-5.6-luna
+  --model openai-codex/gpt-5.6-luna \
+  --isolated-endpoint http://127.0.0.1:<disposable-port> \
+  --isolated-credential /path/to/disposable-credential.json \
+  --isolation-contract /path/to/isolation-contract.json
 ```
 
 Use `--dry-run` to materialize only the top-level plan. A fake executable is

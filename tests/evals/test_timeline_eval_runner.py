@@ -162,6 +162,28 @@ def test_navigation_case_can_pass_without_candidate_or_edit(tmp_path: Path) -> N
     assert report["score"] == 3
 
 
+def test_trace_tool_calls_count_only_embedded_tool_starts(tmp_path: Path) -> None:
+    (tmp_path / "trace.jsonl").write_text(
+        '{"event":"agent_output","text":"plain progress"}\n'
+        '{"event":"agent_output","text":"{\\"event\\":\\"tool_execution_start\\"}"}\n'
+        '{"event":"agent_output","text":"{\\"event\\":\\"tool_execution_end\\"}"}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "evidence").mkdir()
+    _dump(tmp_path / "evidence/navigation.json", {"head": "rev-1"})
+    case = {"id": "L01", "kind": "navigation", "required_artifacts": [
+        "trace.jsonl", "evidence/navigation.json"
+    ], "hidden_checks": [{"id": "head", "check": "path_equals", "artifact": "navigation",
+                           "path": "head", "expected": "rev-1"}]}
+    report = grade_case(case, tmp_path, {
+        "navigation_performed": True,
+        "safety": {"source_unchanged": True, "read_only_target": True},
+    })
+    assert report["trace"]["events"] == 3
+    assert report["trace"]["tool_execution_events"] == 1
+    assert report["tool_calls"] == 1
+
+
 def test_aggregate_preserves_partial_and_marks_absent_cases_not_run(tmp_path: Path) -> None:
     attempt = tmp_path / "attempt-1"
     case_dir = attempt / "cases" / "L01"

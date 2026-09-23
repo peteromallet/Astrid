@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-import json
 import inspect
+import json
 from pathlib import Path
 
 import pytest
 
+from evals.timeline.fixture import CaseIdentities
 from evals.timeline.runtime_adapter import (
     ISOLATION_CONTRACT_KIND,
     ISOLATION_MARKER_NAME,
     RuntimeAdapterError,
     RuntimeFixtureAdapter,
+    WorkspaceClosureReader,
     isolation_contract_template,
     verify_isolation_contract,
 )
-from evals.timeline.fixture import CaseIdentities
 
 
 def _write_contract(
@@ -167,6 +168,7 @@ def test_real_disposable_runtime_handshake_and_project_id_allocation(tmp_path):
     """Exercise the generated Runtime transport against a fresh temporary realm."""
     from runtime_protocol.daemon import RuntimeDaemon
     from runtime_protocol.store import RealmStore
+
     from astrid.sdk.workspace_client import WorkspaceClient
 
     runtime_root = tmp_path / "isolated-runtime"
@@ -260,3 +262,26 @@ def test_current_closure_follows_post_edit_parent_dependencies_without_seed_map(
     assert [row["shot_id"] for row in closure["shot_revisions"]] == ["shot-new"]
     assert [row["revision_id"] for row in closure["internal_timeline_revisions"]] == ["internal-new"]
     assert adapter.read_current_semantic_digest("project", "timeline").startswith("sha256:")
+    source_reader = WorkspaceClosureReader(adapter.workspace)
+    assert source_reader.current_head("project", "timeline") == "head-new"
+    assert source_reader.read_current_closure("project", "timeline", head="head-new")["head_revision_id"] == "head-new"
+
+
+def test_project_timeline_inventory_pages_and_rejects_duplicate_ids():
+    class Workspace:
+        def list_timelines(self, project_id, *, cursor=None, limit=100):
+            if cursor is None:
+                return ([{"timeline_id": "target", "head_revision_id": "head-a"}], "next")
+            return ([{"timeline_id": "sibling", "head_revision_id": None}], None)
+
+    adapter = RuntimeFixtureAdapter.__new__(RuntimeFixtureAdapter)
+    adapter.workspace = Workspace()
+    assert adapter.list_project_timeline_heads("project") == {"target": "head-a", "sibling": None}
+
+    class DuplicateWorkspace(Workspace):
+        def list_timelines(self, project_id, *, cursor=None, limit=100):
+            return ([{"timeline_id": "target", "head_revision_id": "head-a"}], "next")
+
+    adapter.workspace = DuplicateWorkspace()
+    with pytest.raises(RuntimeAdapterError, match="duplicate timeline ID"):
+        adapter.list_project_timeline_heads("project")

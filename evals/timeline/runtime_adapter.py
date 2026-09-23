@@ -8,16 +8,15 @@ mutable child projection.
 
 from __future__ import annotations
 
-import json
-import hashlib
 import copy
 import dataclasses
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .fixture import Baseline, CaseIdentities, DisposableEndpoint, FixtureError, MediaRequirement
-
 
 ISOLATION_CONTRACT_KIND = "astrid.timeline-eval-isolation.v1"
 ISOLATION_MARKER_NAME = ".astrid-timeline-eval-isolated.json"
@@ -397,14 +396,11 @@ class RuntimeFixtureAdapter:
         *, expected_head: str | None, parent_revision_id: str | None = None,
         owned_media: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        from astrid.core.timeline.authoring_bundle import _remap_known_item_references
-
         closure = baseline.closure
         source_parent = closure["parent_revision"]["payload"]
         parent_payload = self._remap_parent_payload(source_parent, identities)
         source_shots = list(closure["shot_revisions"])
         source_internal = list(closure["internal_timeline_revisions"])
-        internal_by_source_revision = {str(row["revision_id"]): row for row in source_internal}
         shot_revisions: list[dict[str, Any]] = []
         internal_revisions: list[dict[str, Any]] = []
         shot_manifest: list[dict[str, Any]] = []
@@ -521,6 +517,43 @@ class RuntimeFixtureAdapter:
         timeline = self._data(self.workspace.get_timeline(timeline_id, project_id=project_id), "get_timeline")
         head = timeline.get("head_revision_id")
         return str(head) if isinstance(head, str) else ""
+
+    def list_project_timeline_heads(self, project_id: str) -> dict[str, str | None]:
+        """Inventory every timeline head in the disposable case project.
+
+        The independent grader captures this before and after an agent run so
+        a mutation to a sibling timeline, including a newly created timeline,
+        cannot be hidden by a correct target readback.
+        """
+        heads: dict[str, str | None] = {}
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            page = self._plain(self.workspace.list_timelines(project_id, cursor=cursor, limit=100))
+            if isinstance(page, Mapping):
+                rows, next_cursor = page.get("items", []), page.get("next_cursor")
+            elif isinstance(page, (list, tuple)) and len(page) == 2:
+                rows, next_cursor = page
+            else:
+                raise RuntimeAdapterError("Runtime list_timelines returned an invalid page")
+            if not isinstance(rows, (list, tuple)):
+                raise RuntimeAdapterError("Runtime list_timelines omitted its items")
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    raise RuntimeAdapterError("Runtime list_timelines contains a malformed timeline")
+                timeline_id = row.get("timeline_id", row.get("id"))
+                if not isinstance(timeline_id, str) or not timeline_id or timeline_id in heads:
+                    raise RuntimeAdapterError("Runtime list_timelines contains a missing or duplicate timeline ID")
+                head = row.get("head_revision_id")
+                if head is not None and (not isinstance(head, str) or not head):
+                    raise RuntimeAdapterError("Runtime list_timelines contains an invalid head")
+                heads[timeline_id] = head
+            if not next_cursor:
+                return heads
+            if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
+                raise RuntimeAdapterError("Runtime list_timelines has an invalid pagination cursor")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
 
     def read_current_closure(
         self, project_id: str, timeline_id: str, *, head: str | None = None,
@@ -678,6 +711,37 @@ class RuntimeFixtureAdapter:
         return {"new_head": result.get("new_head", result.get("parent_revision_id", parent_revision_id))}
 
 
+class WorkspaceClosureReader:
+    """Read-only exact-closure view over any coordinator-owned Runtime client.
+
+    This delegates to the fixture adapter's existing resolver. A source client
+    can therefore supply canonical preservation evidence without being bound
+    as the disposable writer or introducing another closure implementation.
+    """
+
+    def __init__(self, workspace: Any):
+        self.workspace = workspace
+
+    @staticmethod
+    def _plain(value: Any) -> Any:
+        return RuntimeFixtureAdapter._plain(value)
+
+    @staticmethod
+    def _data(value: Any, field: str) -> Mapping[str, Any]:
+        return RuntimeFixtureAdapter._data(value, field)
+
+    def current_head(self, project_id: str, timeline_id: str) -> str:
+        return RuntimeFixtureAdapter.current_head(self, project_id, timeline_id)
+
+    def read_current_closure(
+        self, project_id: str, timeline_id: str, *, head: str | None = None,
+    ) -> dict[str, Any]:
+        return RuntimeFixtureAdapter.read_current_closure(self, project_id, timeline_id, head=head)
+
+    def list_project_timeline_heads(self, project_id: str) -> dict[str, str | None]:
+        return RuntimeFixtureAdapter.list_project_timeline_heads(self, project_id)
+
+
 def isolation_contract_template(
     *, endpoint: str, realm_id: str, credential_file: str | Path,
     realm_root: str | Path, canonical_endpoint: str, canonical_realm_id: str,
@@ -708,5 +772,5 @@ def isolation_contract_template(
 __all__ = [
     "ISOLATION_CONTRACT_KIND", "ISOLATION_MARKER_NAME", "REQUIRED_SCOPES",
     "RuntimeAdapterError", "RuntimeConnectionProof", "RuntimeFixtureAdapter",
-    "VerifiedIsolation", "isolation_contract_template", "verify_isolation_contract",
+    "VerifiedIsolation", "WorkspaceClosureReader", "isolation_contract_template", "verify_isolation_contract",
 ]

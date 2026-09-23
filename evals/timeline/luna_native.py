@@ -45,6 +45,7 @@ from .independent_readback import (
     verify_navigation_after,
 )
 from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
+from .result_adapter import public_result_contract
 from .worker_boundary import (
     BoundaryReceipt,
     BoundaryRequirements,
@@ -355,12 +356,18 @@ def _public_brief(
         "L01": ["head_revision_id", "selected_image_media_id"],
         "L02": ["expanded_occurrences"],
         "L03": ["montage_media_ids", "music_cue_times_seconds"],
+        "L06": [
+            "diagnostic.status",
+            "diagnostic.error_type",
+            "diagnostic.base_parent_revision_id",
+        ],
         "L08": ["available_segment_titles", "missing_text_roles"],
     }
     case_id = str(case.get("id", ""))
     if case.get("kind") == "navigation" and case_id in observation_fields:
         source["required_observation_fields"] = observation_fields[case_id]
     source["skill_reference"] = dict(skill_reference)
+    source["result_contract"] = public_result_contract(case)
     return source
 
 
@@ -429,6 +436,8 @@ def _prompt(
         "variables; use those for authenticated public calls and never probe a canonical endpoint.\n"
         "For read-only navigation, write top-level navigation_performed: true and an observations object "
         "with the fields named in brief.json; use exact values from the selected entry point/readback, not guesses. "
+        "Follow the versioned result_contract in brief.json: write result.json and each listed worker-owned artifact "
+        "at its exact path; coordinator-owned paths are not writable by the worker. "
         "Record useful evidence under evidence/ and write a JSON result record to result.json "
         "when you can. For an edit, include top-level edit_made: true, saved_to_test_timeline: true, "
         "and the observed post-save head/receipt; do not put the only terminal flag under a nested "

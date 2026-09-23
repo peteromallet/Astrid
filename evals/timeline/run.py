@@ -20,6 +20,11 @@ try:  # Support both ``python -m`` and direct invocation from the repo root.
 except ImportError:  # pragma: no cover - direct-script path
     from checks import CheckResult, DecodedMediaVerifier, run_checks
 
+try:
+    from .result_adapter import ResultContractError, adapt_worker_result
+except ImportError:  # pragma: no cover - direct-script path
+    from result_adapter import ResultContractError, adapt_worker_result
+
 
 ARTIFACT_FILES = {
     "before": "before.json",
@@ -354,7 +359,8 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     missing = [name for name in required if name not in available]
     setup_failures = [f"malformed artifact: {name}" for name in malformed]
     reported_status = _agent_public_status(agent)
-    if reported_status in {"setup_failed", "setup_failure"}:
+    upstream_setup_reasons: list[str] = []
+    if reported_status in {"setup_failed", "setup_failure", "fixture_blocked"}:
         # Coordinator/native-launcher setup failures are terminal before
         # semantic checks. Preserve their concrete reason instead of running
         # private invariants against artifacts which could not be created.
@@ -362,25 +368,39 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         if isinstance(failure_cause, Mapping):
             raw_setup = failure_cause.get("setup", ())
             if isinstance(raw_setup, list):
-                setup_failures.extend(
+                target = setup_failures if reported_status in {"setup_failed", "setup_failure"} else upstream_setup_reasons
+                target.extend(
                     str(reason) for reason in raw_setup if isinstance(reason, str) and reason
                 )
             summary = failure_cause.get("summary")
-            if isinstance(summary, str) and summary and summary not in setup_failures:
-                setup_failures.append(summary)
-        if not setup_failures:
+            target = setup_failures if reported_status in {"setup_failed", "setup_failure"} else upstream_setup_reasons
+            if isinstance(summary, str) and summary and summary not in target:
+                target.append(summary)
+        if reported_status in {"setup_failed", "setup_failure"} and not setup_failures:
             setup_failures.append("native launcher reported setup failure without a reason")
+        if reported_status == "fixture_blocked" and not upstream_setup_reasons:
+            upstream_setup_reasons.append("fixture was blocked before worker launch")
     if not isinstance(case.get("required_artifacts", []), list) or not case.get("required_artifacts"):
         setup_failures.append("case contract must declare at least one required artifact")
+    result_contract_failures: list[str] = []
+    try:
+        adapted_result = adapt_worker_result(case, agent)
+    except ResultContractError as exc:
+        adapted_result = None
+        result_contract_failures.append(str(exc))
     check_results: list[CheckResult] = []
     try:
         checks = _validate_check_list(hidden_checks) if hidden_checks is not None else _check_dicts(case)
     except SetupError as exc:
         checks = []
         setup_failures.append(str(exc))
-    if not setup_failures:
+    # A coordinator-declared fixture block means the worker never had a valid
+    # semantic surface. Preserve the missing-artifact evidence, but do not run
+    # hidden semantic checks against an unmaterialized derivative.
+    blocked_before_worker = bool(upstream_setup_reasons)
+    if not setup_failures and not blocked_before_worker:
         _load_check_artifacts(case, case_dir, checks, artifacts)
-    if not setup_failures:
+    if not setup_failures and not blocked_before_worker:
         check_results = run_checks(checks, artifacts, verifier)
 
     missing_capability = [r.check_id for r in check_results if r.status == "missing_capability"]
@@ -464,6 +484,8 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         status = "failed"
     elif missing_capability:
         status = "missing_capability"
+    elif result_contract_failures:
+        status = "failed"
     elif missing or failed_checks or invalid_check_results:
         status = "failed"
     elif safety == "fail":
@@ -544,6 +566,28 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         elapsed = max(0.0, float(elapsed))
     except (TypeError, ValueError):
         elapsed = max(0.0, time.monotonic() - started)
+    deficiencies: list[dict[str, Any]] = []
+    for reason in setup_failures:
+        deficiencies.append({"kind": "setup", "message": reason})
+    for reason in upstream_setup_reasons:
+        deficiencies.append({"kind": "fixture_blocked", "message": reason})
+    for name in missing:
+        deficiencies.append({"kind": "missing_artifact", "path": name, "owner": "worker"})
+    for name in malformed:
+        deficiencies.append({"kind": "malformed_artifact", "path": name, "owner": "worker"})
+    for message in result_contract_failures:
+        deficiencies.append({"kind": "result_contract", "message": message})
+    for check_id in missing_capability:
+        deficiencies.append({"kind": "semantic_oracle_unavailable", "check_id": check_id})
+    for check_id in failed_checks:
+        deficiencies.append({"kind": "semantic_failure", "check_id": check_id})
+    if safety == "unknown":
+        deficiencies.append({
+            "kind": "safety_unknown",
+            "message": "coordinator-owned safety evidence is unavailable or incomplete",
+        })
+    if safety == "fail":
+        deficiencies.append({"kind": "safety_failure", "message": "coordinator or explicit violation evidence failed"})
     report = {
         "id": case.get("id", "unknown"),
         "version": case.get("version"),
@@ -575,14 +619,20 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
             "agent_or_invariant" if status in {"failed", "missing_capability"} else None
         ),
         "failure_cause": {
-            "setup": setup_failures,
+            "setup": setup_failures + upstream_setup_reasons,
             "missing_capability": missing_capability,
-            "agent_or_invariant": failed_checks,
-            "summary": ("; ".join(setup_failures) if setup_failures else
+            "agent_or_invariant": failed_checks + result_contract_failures,
+            "summary": ("; ".join(setup_failures + upstream_setup_reasons) if setup_failures or upstream_setup_reasons else
                         "missing capability: " + ", ".join(missing_capability) if missing_capability else
-                        "invariants failed: " + ", ".join(failed_checks) if failed_checks else
+                        "invariants failed: " + ", ".join(failed_checks + result_contract_failures) if failed_checks or result_contract_failures else
                         "safety evidence explicitly failed" if safety == "fail" else
                         "safety evidence is unknown" if safety == "unknown" else None),
+        },
+        "deficiencies": deficiencies,
+        "raw_output": {
+            "result_path": "result.json" if (case_dir / "result.json").is_file() else None,
+            "trace_path": "trace.jsonl" if (case_dir / "trace.jsonl").is_file() else None,
+            "preserved": True,
         },
         "check_results": [
             {"id": result.check_id, "status": result.status,
@@ -724,6 +774,20 @@ def aggregate_attempt(suite: Mapping[str, Any], attempt_root: Path) -> dict[str,
     for report in reports:
         status = str(report.get("status", "unknown"))
         counts[status] = counts.get(status, 0) + 1
+    # Keep every per-case deficiency visible at the suite level.  In
+    # particular, a fixture-blocked case can also have missing artifacts and
+    # unknown coordinator safety; collapsing it to one status loses the
+    # evidence needed to repair the next run.
+    deficiencies: list[dict[str, Any]] = []
+    for report in reports:
+        case_id = report.get("id", report.get("case_id", "unknown"))
+        for item in report.get("deficiencies", ()):
+            if isinstance(item, Mapping):
+                deficiencies.append({"case_id": case_id, **dict(item)})
+    deficiency_counts: dict[str, int] = {}
+    for item in deficiencies:
+        kind = str(item.get("kind", "unknown"))
+        deficiency_counts[kind] = deficiency_counts.get(kind, 0) + 1
     denominator = sum(bool(report.get("counted_in_agent_pass_denominator")) for report in reports)
     numerator = sum(report.get("status") == "passed" for report in reports)
     return {
@@ -746,6 +810,8 @@ def aggregate_attempt(suite: Mapping[str, Any], attempt_root: Path) -> dict[str,
         "agent_pass_numerator": numerator,
         "agent_pass_rate": numerator / denominator if denominator else None,
         "excluded_before_agent": sum(not bool(report.get("counted_in_agent_pass_denominator")) for report in reports),
+        "deficiencies": deficiencies,
+        "deficiency_counts": deficiency_counts,
         "cases": reports,
     }
 

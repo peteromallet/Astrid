@@ -142,7 +142,7 @@ def test_skill_reference_resolves_versioned_checked_in_path():
     path = Path(reference["path"])
     assert path.as_posix().endswith("/astrid/packs/rendering/skill/SKILL.md")
     assert path.is_file()
-    assert reference["version"] == "astrid-timeline-2026.09.23.1"
+    assert reference["version"] == "astrid-timeline-2026.09.24.1"
     assert len(reference["sha256"]) == 64
 
 

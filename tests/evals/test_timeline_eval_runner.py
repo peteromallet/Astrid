@@ -188,6 +188,29 @@ def test_navigation_worker_safety_claim_cannot_replace_coordinator_boundary(tmp_
     assert report["status"] == "indeterminate"
 
 
+def test_fixture_block_reason_and_all_evidence_deficiencies_are_retained(tmp_path: Path) -> None:
+    _dump(tmp_path / "result.json", {
+        "agent_status": "fixture_blocked",
+        "execution_status": "not_started",
+        "failure_cause": {"setup": ["text adapter unavailable"], "summary": "text adapter unavailable"},
+    })
+    (tmp_path / "trace.jsonl").write_text('{"event":"fixture_blocked"}\n', encoding="utf-8")
+    report = grade_case(
+        {"id": "L04", "kind": "navigation", "required_artifacts": [
+            "result.json", "evidence/surface-parity.json",
+        ], "hidden_checks": [{"id": "parity", "check": "path_equals", "artifact": "result",
+                               "path": "observations.parity", "expected": True}]},
+        tmp_path,
+    )
+    assert report["status"] == "blocked"
+    assert report["setup_status"] == "fixture_blocked"
+    kinds = {item["kind"] for item in report["deficiencies"]}
+    assert {"fixture_blocked", "missing_artifact", "safety_unknown"} <= kinds
+    assert "text adapter unavailable" in report["failure_cause"]["setup"]
+    assert report["raw_output"]["preserved"] is True
+    assert report["check_results"] == []
+
+
 def test_public_agent_status_is_not_overwritten_by_completed_launcher(tmp_path: Path) -> None:
     _dump(tmp_path / "candidate.json", {"edit": True})
     case = {"id": "A02", "required_artifacts": ["candidate.json"],
@@ -331,6 +354,9 @@ def test_aggregate_preserves_partial_and_marks_absent_cases_not_run(tmp_path: Pa
     assert report["counts"]["blocked"] == 1
     assert report["cases"][0]["trace"]["invalid_lines"] == [2]
     assert json.loads((case_dir / "graded-result.json").read_text())["execution_outcome"] == "timeout"
+    assert report["deficiency_counts"]["missing_artifact"] >= 1
+    assert any(item["case_id"] == "L01" and item["kind"] == "safety_unknown"
+               for item in report["deficiencies"])
 
 
 def test_aggregate_without_grader_rubrics_is_honestly_blocked(tmp_path: Path) -> None:

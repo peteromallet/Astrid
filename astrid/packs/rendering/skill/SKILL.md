@@ -1,6 +1,6 @@
 ---
 name: astrid-timeline
-version: astrid-timeline-2026.09.23.1
+version: astrid-timeline-2026.09.24.1
 description: >
   Author, inspect, edit, preview, render, and open runtime-owned Astrid
   timelines as one creative workflow. Use when shaping a canonical timeline,
@@ -137,8 +137,10 @@ half-open time axis is shared by cards, placements, audio rails, and the PNG
 and `static_surface.rows` JSON contract.
 Paired pages show one row by default (five columns unless changed with
 `--columns`; `--columns 6` gives six across), while standalone output/input
-pages keep their normal page sizing. Pass `--page-size N` explicitly to opt
-into a denser paired page, capped at two rows / 10 cards. Multi-page paired
+pages keep their normal page sizing. This is an intentional page-size
+inconsistency: `--page-size` changes the paired layout only and does not make
+standalone pages use the same card count. Pass `--page-size N` explicitly to
+opt into a denser paired page, capped at two rows / 10 cards. Multi-page paired
 results are intentional: open the numbered pages in order, then rerun with
 `--range START..END --every 0.25` or `--shot first` / `--shot N` to drill down.
 The frame index records the effective page size, page count, row ranges, and
@@ -253,7 +255,11 @@ mapped back to the pinned scope is incomplete, not a new identity.
 The native timeline-evaluation worker resolves this checked-in skill at
 `astrid/packs/rendering/skill/SKILL.md`. Its public brief pins the absolute path,
 version, and SHA-256 so a worker can verify that it is reading these exact
-instructions; there is no separate installed copy or package-manager step.
+instructions. The skill file is a checked-in worker input, not an installed
+Python package: do not claim that reading it installed Astrid or that a package
+manager made it available. When the runtime package is installed, the public
+SDK import below is the supported API; a checkout-only environment must report
+that import/runtime capability as unavailable rather than inventing it.
 
 ### Canonical edit bundle
 
@@ -265,10 +271,10 @@ receipt declares that route and supplies its required locator. For other
 supported edits, use ordinary Python against the detached same-schema bundle:
 
 ```python
-from astrid.core.timeline.authoring_bundle import (
+from astrid.sdk.authoring_bundle import (
     open_authoring_bundle, validate_authoring_candidate,
     diff_authoring_candidate, preview_authoring_candidate,
-    publish_authoring_candidate,
+    publish_authoring_candidate, render_authoring_candidate_preview,
 )
 
 candidate = open_authoring_bundle(
@@ -278,7 +284,11 @@ candidate = open_authoring_bundle(
 # Make the requested small edit or run a deterministic batch transform here.
 validate_authoring_candidate(candidate)
 diff = diff_authoring_candidate(candidate)
-preview = preview_authoring_candidate(candidate)  # only when visual confirmation is useful
+frozen = preview_authoring_candidate(candidate)  # freezes candidate JSON; no pixels are rendered
+# Rendering is a separate evidence action over that frozen JSON.
+render_receipt = render_authoring_candidate_preview(
+    frozen, client, project="<project>", timeline_ref="<timeline>"
+)
 publication = publish_authoring_candidate(candidate, writer, idempotency_key=run_id)
 # Reopen the returned parent/shot/internal revision closure and verify it.
 ```
@@ -288,6 +298,20 @@ Keep the exact publication response, including its `new_head` and complete
 the candidate, seed map, or an agent-authored snapshot. These operations are
 public where documented; an unsupported case-specific route must be reported
 as unavailable, not inferred from the composition's shape.
+
+`preview_authoring_candidate` and `render_authoring_candidate_preview` are
+deliberately different operations. The former freezes a deterministic JSON
+candidate for validation/diff/publication; it does not render pixels or prove
+that a backend can play the result. The latter consumes that frozen candidate,
+renders pixels through the runtime, and returns a render receipt/evidence
+identity. Use the public `astrid.sdk.authoring_bundle` import shown above; do
+not reach through `astrid.core` as a substitute public API.
+
+Keep authoring-bundle `placements` distinct from parent `occurrences`.
+Placements are candidate rows describing where an item is placed in the
+detached edit; parent occurrences are committed closure identities used for
+readback and navigation. A placement may carry an occurrence reference, but
+it is not a new parent occurrence and must not be substituted for one.
 
 The older `timelines save --config ... --registry ... --expected-version ...`
 command below is a separate legacy whole-document compare-and-swap interface.
@@ -427,8 +451,11 @@ authored canvas under `--scale`, while badge readability is handled separately.
 
 The default waits for completion and propagates terminal failure. A successful
 render records its run and provenance in the runtime. Review the newest
-successful render, or an exact run, through the runs surface (opening video is
-currently supported on macOS):
+successful render, or an exact run, through the runs surface. Opening video is
+currently supported by the native macOS opener; Linux/AgentBox playback does
+not imply that `open` or `afplay` exists. On Linux, use the returned verified
+local media path with an installed player or decode/inspect it headlessly, and
+report interactive playback as unavailable when no player/display is present:
 
 ```bash
 python3 -m astrid runs open --project <project> --timeline <slug-or-id>

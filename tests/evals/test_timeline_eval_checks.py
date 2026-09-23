@@ -14,6 +14,38 @@ def test_wrong_media_selector_fails_independently() -> None:
     assert result.status == "fail"
 
 
+def test_records_include_accepts_extra_projection_fields_and_any_target() -> None:
+    result = run_checks(
+        [{"id": "identity", "check": "records_include", "artifact": "result",
+          "path": "observations.expanded_occurrences", "mode": "any",
+          "expected": [{"occurrence_id": "occ-1", "shot_id": "shot-1",
+                         "shot_revision_id": "shot-rev-1",
+                         "internal_timeline_revision_id": "internal-1",
+                         "selected_image_media_id": "sha256:image-1"},
+                        {"occurrence_id": "occ-2", "shot_id": "shot-2",
+                         "shot_revision_id": "shot-rev-2",
+                         "internal_timeline_revision_id": "internal-2",
+                         "selected_image_media_id": "sha256:image-2"}]}],
+        {"result": {"observations": {"expanded_occurrences": [
+            {"occurrence_id": "occ-1", "shot_id": "shot-1",
+             "shot_revision_id": "shot-rev-1",
+             "internal_timeline_revision_id": "internal-1",
+             "selected_image_media_id": "sha256:image-1",
+             "nested_clips": [{"id": "shot-1"}],
+             "derived": {"local_path": "media/image-1"}},
+        ]}}},
+    )[0]
+    assert result.status == "pass"
+
+
+def test_semantic_oracle_unavailable_is_explicit_missing_capability() -> None:
+    result = run_checks(
+        [{"id": "l04_semantic", "check": "semantic_oracle_unavailable"}], {},
+    )[0]
+    assert result.status == "missing_capability"
+    assert "semantic oracle is unavailable" in result.message
+
+
 def test_moved_audio_timing_fails_independently() -> None:
     result = run_checks(
         [{"id": "audio_stays", "check": "paths_unchanged",

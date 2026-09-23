@@ -70,6 +70,62 @@ def check_path_equals(check: Json, artifacts: Mapping[str, Any]) -> CheckResult:
                        (f"{artifact_name}:{path}",))
 
 
+def _mapping_contains(actual: Any, expected: Any) -> bool:
+    """Return whether ``actual`` contains the explicitly required projection.
+
+    Evaluation projections often add useful derived fields (for example local
+    media paths or nested clips).  Identity checks must therefore compare the
+    required fields, rather than requiring whole-object equality.
+    """
+    if isinstance(expected, Mapping):
+        return isinstance(actual, Mapping) and all(
+            key in actual and _mapping_contains(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return isinstance(actual, list) and actual == expected
+    return actual == expected
+
+
+def check_records_include(check: Json, artifacts: Mapping[str, Any]) -> CheckResult:
+    """Check required record projections while accepting extra fields.
+
+    ``mode=all`` requires every expected record to occur in the actual list;
+    ``mode=any`` is useful where the public brief asks the worker to expand
+    one occurrence from a set of admitted targets.
+    """
+    cid = str(check.get("id", "records_include"))
+    name = str(check.get("artifact", "after"))
+    path = str(check.get("path", ""))
+    try:
+        actual = _path(_artifact(artifacts, name), path)
+    except KeyError as exc:
+        return CheckResult(cid, "fail", str(exc), (name, path))
+    expected = check.get("expected", ())
+    if not isinstance(actual, list) or not isinstance(expected, list):
+        return CheckResult(cid, "fail", "record projection must be a list", (f"{name}:{path}",))
+    matches = [any(_mapping_contains(row, required) for row in actual) for required in expected]
+    mode = str(check.get("mode", "all")).lower()
+    if mode == "any":
+        passed = bool(expected) and any(matches)
+    else:
+        passed = bool(expected) and all(matches)
+    missing = sum(1 for value in matches if not value)
+    return CheckResult(
+        cid,
+        "pass" if passed else "fail",
+        "required record projection is present" if passed
+        else f"required record projection is missing ({missing} expected record(s))",
+        (f"{name}:{path}",),
+    )
+
+
+def check_semantic_oracle_unavailable(check: Json, artifacts: Mapping[str, Any]) -> CheckResult:
+    """Represent an unavailable semantic oracle explicitly, never as a pass."""
+    cid = str(check.get("id", "semantic_oracle_unavailable"))
+    return CheckResult(cid, "missing_capability", "semantic oracle is unavailable; result is not semantically graded")
+
+
 def check_paths_unchanged(check: Json, artifacts: Mapping[str, Any]) -> CheckResult:
     """Assert listed paths have identical values in before and after snapshots."""
     cid = str(check.get("id", "paths_unchanged"))
@@ -192,10 +248,12 @@ def check_decoded_media(check: Json, artifacts: Mapping[str, Any],
 Checker = Callable[[Json, Mapping[str, Any]], CheckResult]
 CHECKS: dict[str, Checker] = {
     "path_equals": check_path_equals,
+    "records_include": check_records_include,
     "paths_unchanged": check_paths_unchanged,
     "order": check_order,
     "identity_disjoint": check_identity_disjoint,
     "panel_coverage": check_panel_coverage,
+    "semantic_oracle_unavailable": check_semantic_oracle_unavailable,
 }
 
 

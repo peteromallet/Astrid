@@ -267,6 +267,19 @@ def test_l06_invalid_candidate_is_rejected_by_real_validator_without_publication
     assert result["publication_performed"] is False
 
 
+def test_l06_offline_entrypoint_projects_invalid_candidate_diagnostic(tmp_path):
+    destination = tmp_path / "case-L06"
+    destination.mkdir()
+    entrypoint = materialize_public_navigation_entrypoint(
+        "L06", fixture_root=DEFAULT_FIXTURE_ROOT, destination=destination,
+    )
+    projected = entrypoint["related_inputs"]["invalid_candidate"]
+    candidate_path = destination / "entrypoint" / projected["path"]
+    assert candidate_path.is_file()
+    assert projected["read_only"] is True
+    assert projected["diagnostic"]["status"] == "invalid"
+
+
 def test_cases_share_runtime_project_but_keep_distinct_runtime_timeline_ids(tmp_path):
     baseline = _baseline()
     runtime = FakeRuntime(baseline)

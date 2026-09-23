@@ -52,9 +52,13 @@ def test_native_launcher_invokes_each_fixture_ready_case_once_in_fresh_contexts(
 
     rows = {row["id"]: row for row in aggregate["cases"]}
     call_rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
-    assert len(call_rows) == 14
+    fixture_ready_ids = {
+        case_id for case_id, row in rows.items()
+        if row["setup_status"] == "ready"
+    }
+    assert len(call_rows) == len(fixture_ready_ids)
     assert {row["case"] for row in call_rows} == {
-        case_id for case_id, row in rows.items() if case_id not in {"L04", "L05", "L06", "L07", "L09", "L10"}
+        case_id for case_id in fixture_ready_ids
     }
     assert all("--no-session" in row["argv"] for row in call_rows)
     assert all(row["argv"][row["argv"].index("--model") + 1] == DEFAULT_MODEL for row in call_rows)
@@ -67,7 +71,7 @@ def test_native_launcher_invokes_each_fixture_ready_case_once_in_fresh_contexts(
         assert (case_dir / "trace.jsonl").is_file()
         assert (case_dir / "result.json").is_file()
         assert (case_dir / "checks.json").is_file()
-        if case_id in {"L04", "L05", "L06", "L07", "L09", "L10"}:
+        if case_id not in fixture_ready_ids:
             result = json.loads((case_dir / "result.json").read_text())
             assert result["agent_status"] == "fixture_blocked"
             assert result["execution_status"] == "not_started"
@@ -113,6 +117,18 @@ def test_a03_order_oracle_moves_closing_immediately_before_middle_and_rejects_wr
     assert run_checks([old_wrong_oracle], {"after": correct_after})[0].status == "fail"
     wrong_after = {"occurrences": [{"occurrence_id": value} for value in [expected[0], expected[2], expected[1], expected[3]]]}
     assert run_checks([order], {"after": wrong_after})[0].status == "fail"
+
+
+def test_l02_identity_oracle_matches_one_publicly_requested_expansion_and_allows_extras():
+    case = next(row for row in json.loads(SUITE.read_text())["cases"] if row["id"] == "L02")
+    checks = luna_native._hidden_checks(case, fixture_root=FIXTURES)
+    identity = next(check for check in checks if check["id"] == "l02_expanded_identities")
+    assert identity["check"] == "records_include"
+    assert identity["mode"] == "any"
+    expected = identity["expected"][0]
+    actual = dict(expected, nested_clips=[], parent_duration_ms=7067,
+                  media_handles=[{"role": "selected_image", "media_id": expected["selected_image_media_id"]}])
+    assert run_checks([identity], {"result": {"observations": {"expanded_occurrences": [actual]}}})[0].status == "pass"
 
 
 def test_skill_reference_resolves_versioned_checked_in_path():
@@ -194,7 +210,7 @@ def test_explicit_agent_blocked_status_survives_successful_omp_exit(tmp_path):
         "import json\n"
         "from pathlib import Path\n"
         "Path('result.json').write_text(json.dumps({\n"
-        "  'execution_status': 'blocked',\n"
+        "  'status': 'blocked',\n"
         "  'safety': {'source_unchanged': True, 'test_target_only': True},\n"
         "  'edit_made': False\n"
         "}))\n"
@@ -447,6 +463,29 @@ def test_missing_prepared_target_fails_closed_without_launch(tmp_path, monkeypat
     assert result["agent_status"] == "setup_failed"
     assert "prepared public target" in result["failure_cause"]["summary"]
     assert next(row for row in aggregate["cases"] if row["id"] == "A01")["status"] == "setup_failed"
+
+
+def test_a01_missing_prepared_targets_root_has_explicit_setup_reason(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "A01")]
+    suite_path = tmp_path / "a01-only-suite.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    credential, contract, _targets = _isolation_inputs(tmp_path)
+    fake, calls = _fake_omp(tmp_path)
+    monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
+    monkeypatch.setattr("evals.timeline.run.validate_isolated_target", lambda *_args: (True, "ok"))
+    aggregate = run_attempt(
+        suite_path, tmp_path / "attempt-no-target-root", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, omp_bin=str(fake), execute=True,
+        isolated_endpoint="http://127.0.0.1:9001", isolated_credential=credential,
+        isolation_contract=contract,
+    )
+    result = json.loads((tmp_path / "attempt-no-target-root/cases/A01/result.json").read_text())
+    assert not calls.exists() or not calls.read_text(encoding="utf-8").strip()
+    assert result["agent_status"] == "setup_failed"
+    assert "prepared_targets_root" in result["failure_cause"]["summary"]
+    assert "disposable target" in result["failure_cause"]["summary"]
+    assert aggregate["cases"][0]["status"] == "setup_failed"
 
 
 def test_missing_boundary_supervisor_fails_closed_before_model_launch(tmp_path, monkeypatch):

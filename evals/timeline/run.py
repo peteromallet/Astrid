@@ -90,6 +90,7 @@ def _validate_check_list(checks: Any) -> list[Mapping[str, Any]]:
         raise SetupError("each hidden check must be a JSON object")
     required = {
         "path_equals": {"artifact", "path", "expected"},
+        "records_include": {"artifact", "path", "expected"},
         "paths_unchanged": {"paths"},
         "order": {"artifact", "path"},
         "identity_disjoint": {"before_artifact", "after_artifact", "original_ids_path", "duplicate_ids_path"},
@@ -110,6 +111,13 @@ def _validate_check_list(checks: Any) -> list[Mapping[str, Any]]:
             raise SetupError(f"hidden check {check['id']!r} is missing fields: {', '.join(missing_fields)}")
         if check_type == "paths_unchanged" and not isinstance(check.get("paths"), list):
             raise SetupError(f"hidden check {check['id']!r} paths must be an array")
+        if check_type == "records_include":
+            if not isinstance(check.get("expected"), list) or not check.get("expected"):
+                raise SetupError(f"hidden check {check['id']!r} expected must be a non-empty array")
+            if any(not isinstance(row, Mapping) for row in check["expected"]):
+                raise SetupError(f"hidden check {check['id']!r} expected records must be objects")
+            if str(check.get("mode", "all")).lower() not in {"all", "any"}:
+                raise SetupError(f"hidden check {check['id']!r} mode must be 'all' or 'any'")
     return checks
 
 
@@ -262,9 +270,39 @@ def _recover_terminal_status_from_trace(case_dir: Path) -> str | None:
         "precondition_failed", "unavailable", "fixture_blocked", "timeout",
         "timed_out", "not_run",
     }
-    # The result content is itself JSON embedded in the outer OMP JSONL, so
-    # quotes may be either literal or backslash-escaped after one decode.
-    pattern = re.compile(r'\\?"(?:execution_status|status)\\?"\s*:\s*\\?"([a-z_]+)\\?"')
+    def _status_from_result_write(value: Any) -> str | None:
+        """Read only top-level terminal fields from a result.json write.
+
+        Do not regex-search the whole payload: result records legitimately
+        contain nested status values (for example an unavailable text role in
+        L08), which are observations rather than the worker's terminal state.
+        """
+        if isinstance(value, Mapping):
+            tool_name = value.get("toolName") or value.get("name")
+            arguments = value.get("arguments", value.get("args"))
+            if tool_name == "write" and isinstance(arguments, Mapping):
+                path_value = arguments.get("path")
+                content = arguments.get("content")
+                if str(path_value) == "result.json" and isinstance(content, str):
+                    try:
+                        result_value = json.loads(content)
+                    except (TypeError, json.JSONDecodeError):
+                        result_value = None
+                    if isinstance(result_value, Mapping):
+                        for key in ("agent_status", "status", "agent_execution_status", "execution_status"):
+                            candidate = str(result_value.get(key, "")).strip().lower()
+                            if candidate in terminal:
+                                return candidate
+            for child in value.values():
+                recovered = _status_from_result_write(child)
+                if recovered:
+                    return recovered
+        elif isinstance(value, list):
+            for child in value:
+                recovered = _status_from_result_write(child)
+                if recovered:
+                    return recovered
+        return None
     try:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -277,16 +315,13 @@ def _recover_terminal_status_from_trace(case_dir: Path) -> str | None:
                 text = row.get("text")
                 if not isinstance(text, str) or "result.json" not in text:
                     continue
-                # Restrict recovery to a tool payload that writes the result
-                # file; ordinary prose mentioning a status is not evidence.
-                if '"toolName"' not in text and '"name"' not in text:
+                try:
+                    outer = json.loads(text)
+                except (TypeError, json.JSONDecodeError):
                     continue
-                if '"write"' not in text:
-                    continue
-                for match in pattern.finditer(text):
-                    candidate = match.group(1).lower()
-                    if candidate in terminal:
-                        return candidate
+                recovered = _status_from_result_write(outer)
+                if recovered:
+                    return recovered
     except (OSError, UnicodeDecodeError):
         return None
     return None
@@ -501,6 +536,15 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         "score": score,
         "score_scale": "0-4",
         "safety": safety,
+        "safety_evidence_source": "coordinator" if independent_safety else "unavailable",
+        "safety_boundary_status": (
+            "available" if independent_safety and all(
+                key in independent_safety for key in (
+                    "source_unchanged",
+                    "read_only_target" if case_kind == "navigation" else "test_target_only",
+                )
+            ) else "unavailable"
+        ),
         "coordinator_readback_status": coordinator_readback.get("status", "unavailable"),
         "agent_safety_claims": dict(agent_safety),
         "evidence_completeness": evidence_completeness,

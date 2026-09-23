@@ -393,6 +393,25 @@ def materialize_public_navigation_entrypoint(
 
     rewrite_handles(selected)
     related_inputs: dict[str, Any] = {}
+    if case_id == "L06":
+        # The detached candidate and validator diagnostic are an explicit
+        # public input for this read-only recovery probe.  Copy only this
+        # selected sidecar; the coordinator keeps the suite/oracle private.
+        candidate_path = fixture_root / "informational" / "L06-stale-invalid-candidate.json"
+        if candidate_path.is_symlink() or not candidate_path.is_file():
+            raise FixtureError("L06 invalid-candidate sidecar is missing or unsafe")
+        candidate_bytes = candidate_path.read_bytes()
+        candidate_copy = entry_root / "L06-stale-invalid-candidate.json"
+        candidate_copy.write_bytes(candidate_bytes)
+        candidate = json.loads(candidate_bytes.decode("utf-8"))
+        if not isinstance(candidate, Mapping) or not isinstance(candidate.get("diagnostic"), Mapping):
+            raise FixtureError("L06 invalid-candidate sidecar has no diagnostic object")
+        related_inputs["invalid_candidate"] = {
+            "path": "L06-stale-invalid-candidate.json",
+            "sha256": hashlib.sha256(candidate_bytes).hexdigest(),
+            "read_only": True,
+            "diagnostic": dict(candidate["diagnostic"]),
+        }
     if case_id == "L03":
         action_root = fixture_root / "action"
         collection = json.loads((action_root / "A09-images.json").read_text(encoding="utf-8"))

@@ -684,9 +684,14 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                     "internal_timeline_revision_id": target.get("internal_timeline_revision_id"),
                     "selected_image_media_id": image,
                 })
-            checks = [{"id": "l02_expanded_identities", "check": "path_equals",
+            # The public task asks the worker to expand *one* occurrence.  The
+            # fixture admits either target, so require one complete identity
+            # projection from the target set.  ``records_include`` compares
+            # only these required identity fields and intentionally accepts
+            # useful derived/nested fields in the worker's projection.
+            checks = [{"id": "l02_expanded_identities", "check": "records_include",
                        "artifact": "result", "path": "observations.expanded_occurrences",
-                       "expected": expected}]
+                       "mode": "any", "expected": expected}]
         elif case_id == "L03":
             collection = load_json(fixture_root / "action" / "A09-images.json")
             expected_ids = [row.get("media_id") for row in collection.get("images", [])
@@ -697,6 +702,19 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                  "path": "observations.montage_media_ids", "expected": expected_ids},
                 {"id": "l03_supplied_cue_times", "check": "path_equals", "artifact": "result",
                  "path": "observations.music_cue_times_seconds", "expected": expected_cues},
+            ]
+        elif case_id == "L06":
+            candidate_path = fixture_root / "informational" / "L06-stale-invalid-candidate.json"
+            candidate = load_json(candidate_path)
+            diagnostic = _mapping(candidate.get("diagnostic"))
+            checks = [
+                {"id": "l06_diagnostic_status", "check": "path_equals", "artifact": "result",
+                 "path": "observations.diagnostic.status", "expected": diagnostic.get("status")},
+                {"id": "l06_diagnostic_error", "check": "path_equals", "artifact": "result",
+                 "path": "observations.diagnostic.error_type", "expected": diagnostic.get("error_type")},
+                {"id": "l06_diagnostic_base", "check": "path_equals", "artifact": "result",
+                 "path": "observations.diagnostic.base_parent_revision_id",
+                 "expected": diagnostic.get("base_parent_revision_id")},
             ]
         elif case_id == "L08":
             target = _mapping(resolve("authored_segment_text"))
@@ -1080,7 +1098,10 @@ def run_attempt(
             _write_json(case_dir / "checks.json", hidden_checks)
             continue
         if not fixture_only and case_id == "A01" and prepared_targets_root is None:
-            reason = "A01 requires an explicit prepared_targets_root; refusing to launch without target.json"
+            reason = (
+                "A01 requires a coordinator-owned prepared_targets_root containing "
+                "A01/target.json; refusing to launch without a disposable target"
+            )
             _write_json(case_dir / "attempt.json", {
                 "kind": ATTEMPT_KIND,
                 "attempt_id": attempt_id,

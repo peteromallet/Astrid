@@ -1,9 +1,9 @@
 """Build the bounded, read-only Astrid package exposed to eval workers.
 
 This is intentionally a source bundle rather than a checkout mount.  Only the
-two installed public Python package roots are admitted; evaluator code,
-repository metadata, tests, caches, local state, virtualenvs, and golden data
-never enter the bundle.
+two installed public Python package roots and minimal canonical version
+metadata are admitted; evaluator code, repository metadata, tests, caches,
+local state, virtualenvs, and golden data never enter the bundle.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import tempfile
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -86,6 +87,28 @@ def _remove_tree(path: Path) -> None:
     shutil.rmtree(path)
 
 
+def _stage_version_metadata(source: Path, destination: Path) -> None:
+    """Write only the canonical name/version fields needed by astrid.version."""
+    metadata_path = source / "pyproject.toml"
+    if metadata_path.is_symlink() or not metadata_path.is_file():
+        raise PublicPackageError(f"Astrid project metadata is missing or unsafe: {metadata_path}")
+    try:
+        with metadata_path.open("rb") as stream:
+            project = tomllib.load(stream).get("project", {})
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise PublicPackageError(f"Astrid project metadata is unreadable: {metadata_path}") from exc
+    name = project.get("name")
+    version = project.get("version")
+    if name != "astrid" or not isinstance(version, str) or not version.strip():
+        raise PublicPackageError("Astrid project metadata has no canonical name/version")
+    destination.write_text(
+        "[project]\n"
+        f"name = {json.dumps(name)}\n"
+        f"version = {json.dumps(version.strip())}\n",
+        encoding="utf-8",
+    )
+
+
 def stage_public_package(source_root: Path, packages_root: Path) -> PublicPackageReceipt:
     """Materialize one content-addressed public package and return its receipt."""
     source = source_root.expanduser().absolute()
@@ -113,7 +136,10 @@ def stage_public_package(source_root: Path, packages_root: Path) -> PublicPackag
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, destination)
 
+        _stage_version_metadata(source, temporary / "pyproject.toml")
+
         required = (
+            Path("pyproject.toml"),
             Path("astrid/__init__.py"),
             Path("astrid/__main__.py"),
             Path("astrid/sdk/__init__.py"),

@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ def test_public_package_is_bounded_content_addressed_and_importable(tmp_path: Pa
     assert Path(receipt.skill_path).is_file()
 
     relative_paths = {row["path"] for row in manifest["files"]}
+    assert "pyproject.toml" in relative_paths
     assert "astrid/__main__.py" in relative_paths
     assert "astrid/sdk/__init__.py" in relative_paths
     assert "astrid/packs/rendering/skill/SKILL.md" in relative_paths
@@ -40,10 +42,32 @@ def test_public_package_is_bounded_content_addressed_and_importable(tmp_path: Pa
     )
     assert not any(path.endswith((".pyc", ".pyo", ".DS_Store")) for path in relative_paths)
     assert not any(path.is_symlink() for path in package_root.rglob("*"))
+    with (package_root / "pyproject.toml").open("rb") as stream:
+        staged_metadata = tomllib.load(stream)
+    with (REPO_ROOT / "pyproject.toml").open("rb") as stream:
+        source_metadata = tomllib.load(stream)
+    assert staged_metadata == {
+        "project": {
+            "name": "astrid",
+            "version": source_metadata["project"]["version"],
+        },
+    }
 
+    bootstrap = tmp_path / "bootstrap"
+    bootstrap.mkdir()
+    (bootstrap / "sitecustomize.py").write_text(
+        "import importlib.metadata as metadata\n"
+        "original_version = metadata.version\n"
+        "def version(name):\n"
+        "    if name == 'astrid':\n"
+        "        raise metadata.PackageNotFoundError(name)\n"
+        "    return original_version(name)\n"
+        "metadata.version = version\n",
+        encoding="utf-8",
+    )
     environment = {
         "PATH": os.environ.get("PATH", ""),
-        "PYTHONPATH": str(package_root),
+        "PYTHONPATH": os.pathsep.join((str(bootstrap), str(package_root))),
         "PYTHONNOUSERSITE": "1",
     }
     help_result = subprocess.run(

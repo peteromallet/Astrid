@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import copy
 from pathlib import Path
 
 import pytest
 
 from evals.timeline import luna_native
+from evals.timeline.checks import run_checks
 from evals.timeline.luna_native import DEFAULT_MODEL, run_attempt
 
 
@@ -65,7 +67,10 @@ def test_native_launcher_invokes_each_fixture_ready_case_once_in_fresh_contexts(
         assert (case_dir / "result.json").is_file()
         assert (case_dir / "checks.json").is_file()
         if case_id in {"L04", "L05", "L06", "L07", "L09", "L10"}:
-            assert json.loads((case_dir / "result.json").read_text())["execution_status"] == "fixture_blocked"
+            result = json.loads((case_dir / "result.json").read_text())
+            assert result["agent_status"] == "fixture_blocked"
+            assert result["execution_status"] == "not_started"
+            assert report["counted_in_agent_pass_denominator"] is False
         else:
             attempt = json.loads((case_dir / "attempt.json").read_text())
             assert attempt["fresh_context"] is True
@@ -90,6 +95,65 @@ def test_hidden_checks_are_materialized_only_after_agent_process_exits(tmp_path,
     assert checks and any(check["check"] == "order" for check in checks)
     public = json.loads((tmp_path / "attempt-2/cases/A03/brief.json").read_text())
     assert not any(key in public for key in ("invariants", "success_checks", "required_artifacts", "hidden_checks"))
+
+
+def test_a03_order_oracle_moves_closing_immediately_before_middle_and_rejects_wrong_orders():
+    case = next(row for row in json.loads(SUITE.read_text())["cases"] if row["id"] == "A03")
+    checks = luna_native._hidden_checks(case, fixture_root=FIXTURES)
+    order = next(check for check in checks if check["id"] == "a03_order")
+    expected = [
+        "shot-ee383f695b10431c", "shot-63979db219fd7599",
+        "shot-closing-v6-sign", "shot-49829dff799aa392",
+    ]
+    assert order["expected_ids"] == expected
+    correct_after = {"occurrences": [{"occurrence_id": value} for value in expected]}
+    old_wrong_oracle = dict(order, expected_ids=[expected[2], expected[0], expected[3], expected[1]])
+    assert run_checks([order], {"after": correct_after})[0].status == "pass"
+    assert run_checks([old_wrong_oracle], {"after": correct_after})[0].status == "fail"
+    wrong_after = {"occurrences": [{"occurrence_id": value} for value in [expected[0], expected[2], expected[1], expected[3]]]}
+    assert run_checks([order], {"after": wrong_after})[0].status == "fail"
+
+
+def test_skill_reference_resolves_versioned_checked_in_path():
+    reference = luna_native._skill_reference()
+    path = Path(reference["path"])
+    assert path.as_posix().endswith("/astrid/packs/rendering/skill/SKILL.md")
+    assert path.is_file()
+    assert reference["version"] == "astrid-timeline-2026.09.23.1"
+    assert len(reference["sha256"]) == 64
+
+
+def test_prompt_does_not_claim_a_universal_edit_route():
+    prompt = luna_native._prompt(
+        {"id": "A02"}, skill_reference={"path": "/skill", "version": "v1", "sha256": "hash"},
+        public_target={"capabilities": {"edit": {"status": "unavailable", "reason": "not seeded"}}},
+    )
+    assert "No case-specific edit route is declared available" in prompt
+    assert "use the public timelines replace-parent-media route" not in prompt
+
+
+def test_action_without_case_specific_route_is_blocked_before_model_launch(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "A02")]
+    suite_path = tmp_path / "a02-only-suite.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    target_root = tmp_path / "targets"
+    target_root.mkdir()
+    credential, contract, _unused_targets = _isolation_inputs(tmp_path)
+    monkeypatch.setattr("evals.timeline.run.validate_isolated_target", lambda *_args: (True, "ok"))
+    fake, calls = _fake_omp(tmp_path)
+    aggregate = run_attempt(
+        suite_path, tmp_path / "attempt-a02-blocked", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, omp_bin=str(fake), execute=True,
+        isolated_endpoint="http://127.0.0.1:9001", isolated_credential=credential,
+        isolation_contract=contract, prepared_targets_root=target_root,
+    )
+    result = json.loads((tmp_path / "attempt-a02-blocked/cases/A02/result.json").read_text())
+    assert not calls.exists()
+    assert result["agent_status"] == "fixture_blocked"
+    assert "case-specific" in result["failure_cause"]["summary"]
+    assert aggregate["cases"][0]["status"] == "blocked"
+    assert aggregate["cases"][0]["counted_in_agent_pass_denominator"] is False
 
 
 def test_dry_run_never_invokes_omp_or_creates_case_records(tmp_path, monkeypatch):
@@ -149,7 +213,8 @@ def test_explicit_agent_blocked_status_survives_successful_omp_exit(tmp_path):
     )
     row = next(case for case in aggregate["cases"] if case["id"] == "A03")
     result = json.loads((tmp_path / "attempt-blocked/cases/A03/result.json").read_text())
-    assert result["execution_status"] == "blocked"
+    assert result["agent_status"] == "blocked"
+    assert result["execution_status"] == "completed"
     assert result["launcher_process_status"] == "completed"
     assert row["status"] == "blocked"
 
@@ -172,9 +237,11 @@ def _target() -> dict[str, object]:
             "occurrence_id": "occ-target",
             "shot_id": "shot-target",
             "selector_clip_id": "shot_b01",
+            "readback_projection": "active_media_replacement.v1",
             "voice_clip_id": "vo_b01",
             "frame_overlay_clip_id": "frame_v1",
         },
+        "capabilities": {"edit": {"status": "available", "route": "timelines replace-parent-media"}},
     }
 
 
@@ -197,7 +264,7 @@ def _closure() -> dict[str, object]:
                     "placement": {"start_ms": 0},
                 }],
                 "clips": [{"id": "frame_v1", "asset": "frame", "at": 0, "hold": 7}],
-                "registry": registry,
+                "registry": copy.deepcopy(registry),
             },
         },
         "shot_revisions": [{
@@ -216,13 +283,20 @@ def _closure() -> dict[str, object]:
 
 class _ReadbackAdapter:
     def __init__(self, closure: dict[str, object]):
-        self.closure = closure
+        self.head = str(closure["head_revision_id"])
+        self.closures = {self.head: closure}
 
     def read_current_closure(self, project_id, timeline_id, *, head=None):
-        return self.closure
+        return self.closures[head or self.head]
+
+    def current_head(self, project_id, timeline_id):
+        return self.head
+
+    def list_project_timeline_heads(self, project_id):
+        return {"timeline-test": self.head}
 
 
-def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | None, adapter) -> tuple[dict, Path]:
+def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | None, adapter, invoke=None) -> tuple[dict, Path]:
     fake, calls = _fake_omp(tmp_path)
     monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
     credential, contract, targets = _isolation_inputs(tmp_path)
@@ -232,6 +306,8 @@ def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | No
         (targets / "A01" / "target.json").write_text(json.dumps(target), encoding="utf-8")
     monkeypatch.setattr("evals.timeline.run.validate_isolated_target", lambda *_args: (True, "ok"))
     monkeypatch.setattr(luna_native, "_connect_readback_adapter", lambda **_kwargs: adapter)
+    if invoke is not None:
+        monkeypatch.setattr(luna_native, "_invoke", invoke)
     aggregate = run_attempt(
         SUITE,
         tmp_path / "attempt-live",
@@ -254,17 +330,76 @@ def test_prepared_target_is_copied_and_preflight_allows_one_launch(tmp_path, mon
     case_dir = tmp_path / "attempt-live/cases/A01"
     assert json.loads((case_dir / "target.json").read_text(encoding="utf-8"))["project_id"] == "project-test"
     assert (case_dir / "before.json").is_file()
-    assert (case_dir / "after.json").is_file()
     result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
-    assert result["independent_readback"]["status"] == "pass"
+    assert not (case_dir / "after.json").exists()
+    assert result["independent_readback"]["status"] == "unavailable"
+    assert result["independent_readback"]["safety"] == {"source_unchanged": None, "test_target_only": None}
+    assert "publication_response" not in result
     assert aggregate["case_count"] == 20
+
+
+def test_exact_publication_response_and_dependency_manifest_feed_contract(tmp_path, monkeypatch):
+    adapter = _ReadbackAdapter(_closure())
+    expected_digest = "sha256:03810afd80e1d43aef0a33dffafac508fcc7ad616deffb9f5d712c35a89f99b7"
+    after = copy.deepcopy(adapter.closures["head-before"])
+    after["head_revision_id"] = "head-after"
+    after["parent_revision"]["revision_id"] = "head-after"
+    after["parent_revision"]["payload"]["occurrences"][0]["shot_revision_id"] = "shot-rev-after"
+    after["shot_revisions"][0]["revision_id"] = "shot-rev-after"
+    after["shot_revisions"][0]["internal_timeline_revision_id"] = "internal-after"
+    after["internal_timeline_revisions"][0]["revision_id"] = "internal-after"
+    after_internal = after["internal_timeline_revisions"][0]["payload"]
+    after_internal["clips"][0]["asset"] = "new-charcoal"
+    after_internal["registry"]["assets"]["new-charcoal"] = {"media_id": expected_digest}
+    publication_response = {
+        "ok": True,
+        "data": {
+            "publication": {
+                "new_head": "head-after",
+                "old_head": "head-before",
+                "dependency_manifest": {
+                    "shots": [{"shot_id": "shot-target", "revision_id": "shot-rev-after"}],
+                    "internal_timelines": [{"revision_id": "internal-after"}],
+                },
+            },
+        },
+        "error": None,
+        "receipt": None,
+        "idempotency_key": "eval-publication-1",
+    }
+
+    def invoke(**kwargs):
+        adapter.closures["head-after"] = after
+        adapter.head = "head-after"
+        luna_native._write_json(kwargs["case_dir"] / "result.json", {
+            "agent_status": "passed",
+            "route": "timelines replace-parent-media",
+            "edit_made": True,
+            "saved_to_test_timeline": True,
+            "publication_response": publication_response,
+        })
+        return "completed", 0, 0.01, [], ""
+
+    aggregate, _calls = _run_live_a01(
+        tmp_path, monkeypatch, target=_target(), adapter=adapter, invoke=invoke,
+    )
+    result = json.loads((tmp_path / "attempt-live/cases/A01/result.json").read_text())
+    readback = result["independent_readback"]
+    assert readback["committed_revisions"]["returned_parent"] == "head-after"
+    assert readback["committed_revisions"]["returned_shots"] == [["shot-target", "shot-rev-after"]]
+    assert readback["media_digest_evidence"]["matched"] is True
+    assert readback["safety"] == {"source_unchanged": None, "test_target_only": True}
+    assert json.loads((tmp_path / "attempt-live/cases/A01/after.json").read_text())["target"]["active_media_digest"] == expected_digest
+    # No source-reader proof means the coordinator may not call the operation
+    # fully safe or award an agent pass.
+    assert next(row for row in aggregate["cases"] if row["id"] == "A01")["status"] != "passed"
 
 
 def test_missing_prepared_target_fails_closed_without_launch(tmp_path, monkeypatch):
     aggregate, calls = _run_live_a01(tmp_path, monkeypatch, target=None, adapter=_ReadbackAdapter(_closure()))
     assert not calls.exists() or not calls.read_text(encoding="utf-8").strip()
     result = json.loads((tmp_path / "attempt-live/cases/A01/result.json").read_text(encoding="utf-8"))
-    assert result["execution_status"] == "setup_failed"
+    assert result["agent_status"] == "setup_failed"
     assert "prepared public target" in result["failure_cause"]["summary"]
     assert next(row for row in aggregate["cases"] if row["id"] == "A01")["status"] == "setup_failed"
 
@@ -293,5 +428,5 @@ def test_pre_readback_failure_fails_closed_without_launch(tmp_path, monkeypatch)
     )
     assert not calls.exists() or not calls.read_text(encoding="utf-8").strip()
     result = json.loads((tmp_path / "attempt-preflight-fail/cases/A01/result.json").read_text(encoding="utf-8"))
-    assert result["execution_status"] == "setup_failed"
+    assert result["agent_status"] == "setup_failed"
     assert "refusing to launch OMP" in result["failure_cause"]["summary"]

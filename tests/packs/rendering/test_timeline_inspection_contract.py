@@ -200,6 +200,18 @@ def test_semantic_media_inventory_walks_nested_clips_and_inherited_mute():
     assert nested["uses"][0]["clip_id"] == "nested"
 
 
+def test_zero_visual_track_gain_does_not_hide_image_but_mutes_its_audio():
+    inventory = semantic_media_inventory([
+        {"id": "video", "track": "picture", "clipType": "media",
+         "asset": "visual", "audio_source": "embedded-audio", "volume": 0,
+         "at": 0, "hold": 2},
+    ], {"assets": {"visual": {"media_id": "media-1", "media_type": "video/mp4"}}})
+    item = inventory["items"][0]
+    assert item["state"] == "active"
+    assert item["uses"][0]["visual_state"] == "active"
+    assert item["uses"][0]["audio_state"] == "muted"
+
+
 def test_shared_timeline_document_projection_filters_paginates_and_expands_text():
     document = {
         "timeline_id": "tl-1", "project_slug": "astrid-intro", "slug": "intro",

@@ -280,7 +280,10 @@ def _iter_clip_records(
         if not isinstance(raw, Mapping):
             yield location, None, inherited_muted
             continue
-        muted = _clip_is_muted(raw, inherited=inherited_muted)
+        # Volume is audio gain, not visual visibility. Propagate only an
+        # explicit mute bit into nested records; semantic inventory resolves
+        # audio gain and visual participation separately below.
+        muted = inherited_muted or raw.get("muted") is True
         yield location, raw, muted
         for key in ("children", "clips", "elements"):
             nested = raw.get(key)
@@ -325,9 +328,34 @@ def semantic_media_inventory(
             diagnostics.append({"code": "invalid_clip_timing", "clip_id": clip_id,
                                 "message": "clip has invalid or non-positive timing"})
         track = clip.get("track") or clip.get("track_id")
-        muted = _clip_is_muted(clip, inherited=inherited_muted)
+        audio_muted = _clip_is_muted(clip, inherited=inherited_muted)
+        explicit_visual_mute = inherited_muted or clip.get("muted") is True
+        track_name = str(track or "").lower()
+        kind_name = str(clip.get("clipType") or clip.get("kind") or "").lower()
+        asset_types = {
+            str(_mapping_type.get("media_type") or _mapping_type.get("type") or "").lower()
+            for asset_key in _clip_asset_keys(clip)
+            for _mapping_type in [assets.get(asset_key) if isinstance(assets.get(asset_key), Mapping) else {}]
+        }
+        visual_use = (
+            track_name in {"picture", "video", "visual", "image", "overlay", "output"}
+            or any(token in kind_name for token in ("image", "video", "picture", "visual"))
+            or bool(asset_types & {"image", "video", "image/png", "image/jpeg", "video/mp4", "video/webm"})
+        )
+        audio_use = (
+            track_name in {"audio", "voice", "voiceover", "vo", "music", "sound", "sfx"}
+            or any(token in kind_name for token in ("audio", "voice", "music", "sound"))
+            or bool(clip.get("audio_source") or clip.get("audio"))
+        )
+        visual_muted = explicit_visual_mute if visual_use else audio_muted
+        state = "muted" if visual_muted else "active"
         for asset_key in _clip_asset_keys(clip):
-            uses[asset_key].append({"clip_id": clip_id, "track_id": track, "state": "muted" if muted else "active"})
+            use = {"clip_id": clip_id, "track_id": track, "state": state}
+            if visual_use:
+                use["visual_state"] = "muted" if explicit_visual_mute else "active"
+            if audio_use:
+                use["audio_state"] = "muted" if audio_muted else "active"
+            uses[asset_key].append(use)
             if asset_key not in assets:
                 diagnostics.append({"code": "selected_media_missing_registry", "clip_id": clip_id,
                                    "asset_key": asset_key, "message": "selected media key is absent from registry"})

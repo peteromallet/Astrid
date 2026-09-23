@@ -1,5 +1,6 @@
 ---
 name: astrid-timeline
+version: astrid-timeline-2026.09.23.1
 description: >
   Author, inspect, edit, preview, render, and open runtime-owned Astrid
   timelines as one creative workflow. Use when shaping a canonical timeline,
@@ -248,6 +249,50 @@ media digests, and intervals that the visualizer uses. A result that cannot be
 mapped back to the pinned scope is incomplete, not a new identity.
 
 ## Create and edit
+
+The native timeline-evaluation worker resolves this checked-in skill at
+`astrid/packs/rendering/skill/SKILL.md`. Its public brief pins the absolute path,
+version, and SHA-256 so a worker can verify that it is reading these exact
+instructions; there is no separate installed copy or package-manager step.
+
+### Canonical edit bundle
+
+Use the same pinned parent composition for direct edits and code-driven batch
+edits. `timelines show` opens a read-only inspection projection; it is not the
+editable bundle. For an exact parent-media replacement, use the supported
+`timelines replace-parent-media` command only when the case-specific target
+receipt declares that route and supplies its required locator. For other
+supported edits, use ordinary Python against the detached same-schema bundle:
+
+```python
+from astrid.core.timeline.authoring_bundle import (
+    open_authoring_bundle, validate_authoring_candidate,
+    diff_authoring_candidate, preview_authoring_candidate,
+    publish_authoring_candidate,
+)
+
+candidate = open_authoring_bundle(
+    pinned_parent, shot_revisions=pinned_shots,
+    internal_timeline_revisions=pinned_internal_timelines,
+)
+# Make the requested small edit or run a deterministic batch transform here.
+validate_authoring_candidate(candidate)
+diff = diff_authoring_candidate(candidate)
+preview = preview_authoring_candidate(candidate)  # only when visual confirmation is useful
+publication = publish_authoring_candidate(candidate, writer, idempotency_key=run_id)
+# Reopen the returned parent/shot/internal revision closure and verify it.
+```
+
+Keep the exact publication response, including its `new_head` and complete
+`dependency_manifest`, then reopen that returned closure rather than trusting
+the candidate, seed map, or an agent-authored snapshot. These operations are
+public where documented; an unsupported case-specific route must be reported
+as unavailable, not inferred from the composition's shape.
+
+The older `timelines save --config ... --registry ... --expected-version ...`
+command below is a separate legacy whole-document compare-and-swap interface.
+It requires the complete document and is not a substitute for the pinned
+parent/shot/internal bundle workflow or the targeted parent-media route.
 
 Create a named runtime timeline once; the returned document starts at
 `config_version: 1`. A save is a whole-document compare-and-swap: `config` and

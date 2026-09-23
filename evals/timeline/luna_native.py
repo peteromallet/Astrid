@@ -16,6 +16,7 @@ read ``checks.json`` as part of its fresh context.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -27,8 +28,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Mapping
 
+from .fixture import SOURCE_PROJECT_ID, SOURCE_TIMELINE_ID
 from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
-from .independent_readback import IndependentReadbackError, read_target_snapshot
+from .independent_readback import (
+    IndependentReadbackError,
+    ReadbackContract,
+    ReadbackObservation,
+    observe_case_before,
+    verify_case_after,
+)
 from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
 
 
@@ -38,6 +46,7 @@ DEFAULT_MODEL = "openai-codex/gpt-5.6-luna"
 ATTEMPT_KIND = "astrid.timeline-eval.case-attempt.v1"
 ATTEMPT_RESULT_KIND = "astrid.timeline-eval.native-attempt.v1"
 CASE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+SKILL_RELATIVE_PATH = "astrid/packs/rendering/skill/SKILL.md"
 
 
 class NativeLauncherError(SetupError):
@@ -66,6 +75,56 @@ def _safe_case_id(value: Any) -> str:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _publication_payload(response: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Unwrap the SDK result envelope without changing its publication data."""
+    data = response.get("data")
+    return data if response.get("ok") is True and isinstance(data, Mapping) else response
+
+
+def _skill_reference() -> dict[str, str]:
+    """Resolve the checked-in workflow skill and pin its exact bytes."""
+    path = Path(__file__).resolve().parents[2] / SKILL_RELATIVE_PATH
+    if path.is_symlink() or not path.is_file():
+        raise NativeLauncherError(f"required rendering skill is missing or unsafe: {path}")
+    content = path.read_bytes()
+    text = content.decode("utf-8")
+    version_match = re.search(r"(?m)^version:\s*([A-Za-z0-9._-]+)\s*$", text[:1024])
+    if not version_match:
+        raise NativeLauncherError(f"rendering skill has no readable version field: {path}")
+    return {
+        "path": str(path),
+        "repository_path": SKILL_RELATIVE_PATH,
+        "version": version_match.group(1),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _readback_contract(
+    case: Mapping[str, Any], target: Mapping[str, Any], fixture_root: Path,
+) -> ReadbackContract:
+    case_id = str(case.get("id", ""))
+    locator = _mapping(target.get("target_locator"))
+    projection = locator.get("readback_projection")
+    if not isinstance(projection, str) or not projection:
+        raise IndependentReadbackError("public target has no declared semantic readback projection")
+    expected_digest: str | None = None
+    if case_id == "A01":
+        manifest = load_json(fixture_root / "action" / "manifest.json")
+        rows = _mapping(manifest).get("cases", [])
+        fixture_case = next((row for row in rows if isinstance(row, Mapping) and row.get("id") == case_id), {})
+        expected = _mapping(_mapping(fixture_case).get("media")).get("new_image_digest")
+        if not isinstance(expected, str) or not expected:
+            raise IndependentReadbackError("A01 private target contract omitted its expected media digest")
+        expected_digest = expected
+    return ReadbackContract(
+        case_id=case_id,
+        projection=projection,
+        expected_media_digest=expected_digest,
+        source_project_id=SOURCE_PROJECT_ID,
+        source_timeline_id=SOURCE_TIMELINE_ID,
+    )
 
 
 def _load_public_target(case_dir: Path) -> Mapping[str, Any] | None:
@@ -131,14 +190,15 @@ def _setup_failed_case(
         "case_id": str(case["id"]),
         "session_id": session_id,
         "fresh_context": False,
-        "execution_status": "setup_failed",
+        "agent_status": "setup_failed",
+        "launcher_process_status": "not_started",
+        "execution_status": "not_started",
         "elapsed_seconds": 0.0,
         "tool_calls": 0,
         "retries": 0,
         "clarification_needed": False,
         "fixture_or_agent_failure": "setup",
         "failure_cause": {"setup": [reason], "summary": reason},
-        "safety": {"source_unchanged": True, "test_target_only": True},
     }
     _write_json(case_dir / "result.json", result)
     _trace_lines(case_dir, events=[{
@@ -180,6 +240,7 @@ def _public_brief(
     *,
     fixture_root: Path,
     case_dir: Path,
+    skill_reference: Mapping[str, str],
 ) -> dict[str, Any]:
     """Build one agent-visible brief without verifier-only fields."""
     source = dict(public_case or visible_brief(case))
@@ -200,6 +261,7 @@ def _public_brief(
         "read_only": case.get("kind") == "navigation",
         "instruction": "Use only this supplied fixture entry point and public tools; do not read suite or grader files.",
     }
+    source["skill_reference"] = dict(skill_reference)
     return source
 
 
@@ -235,17 +297,29 @@ def _clean_child_environment() -> dict[str, str]:
     }
 
 
-def _prompt(case: Mapping[str, Any]) -> str:
+def _prompt(
+    case: Mapping[str, Any], *, skill_reference: Mapping[str, str],
+    public_target: Mapping[str, Any] | None,
+) -> str:
+    capabilities = _mapping(_mapping(public_target).get("capabilities"))
+    edit_capability = _mapping(capabilities.get("edit"))
+    route = edit_capability.get("route") if edit_capability.get("status") == "available" else None
+    route_instructions = (
+        "This case has the exact public edit capability " + str(route) + ". Use it only if its target locator and preconditions match. "
+        "For publication, preserve the exact returned JSON response as top-level publication_response in result.json, including new_head and dependency_manifest.\n"
+        if route else
+        "No case-specific edit route is declared available. Do not claim an edit or substitute another route; report unavailable/blocked if the task requires a change.\n"
+    )
     return (
         "You are the evaluated Luna agent in one fresh, bounded context.\n"
+        f"Read the canonical timeline skill at {skill_reference['path']} (version {skill_reference['version']}, sha256 {skill_reference['sha256']}) and verify the bytes before acting.\n"
         "Read only the selected public brief at brief.json and its supplied fixture entry point.\n"
         "Use normal public tools and documentation, and work only inside this disposable case directory.\n"
         "Do not inspect the versioned suite, grader files, prior attempts, or canonical Runtime.\n"
         "Perform the requested navigation or candidate edit if the fixture supports it. "
         "If a precondition or public capability is unavailable, stop and report that honestly.\n"
-        "For a target.json whose representation is parent_composition, use the public "
-        "timelines replace-parent-media route with its exact expected_head, occurrence_id, "
-        "selector_clip_id, and admitted source object; do not use the legacy replace-clip route. "
+        + route_instructions
+        + "For A01, use the exact expected_head, occurrence_id, selector_clip_id, and admitted source object from target.json; do not use the legacy replace-clip route. "
         "When target_locator.replacement_asset_key is present, resolve that exact semantic "
         "asset key in the disposable registry; do not choose a media object by digest order, "
         "filename guess, or visual similarity.\n"
@@ -276,6 +350,8 @@ def _invoke(
     isolated_endpoint: str | None = None,
     isolated_credential: Path | None = None,
     isolation_contract: Path | None = None,
+    skill_reference: Mapping[str, str],
+    public_target: Mapping[str, Any] | None,
     fixture_only: bool = False,
 ) -> tuple[str, int | None, float, list[dict[str, Any]], str]:
     """Invoke exactly one fresh OMP context and capture stdout/stderr as trace."""
@@ -293,7 +369,7 @@ def _invoke(
         "--max-time", f"{int(timeout_seconds)}s",
         "--cwd", str(case_dir),
         "--print",
-        _prompt(case),
+        _prompt(case, skill_reference=skill_reference, public_target=public_target),
     ]
     started = time.monotonic()
     events: list[dict[str, Any]] = [{
@@ -414,15 +490,17 @@ def _merge_result(
     # lifecycle.  In particular, an agent can honestly report ``blocked``
     # after discovering that a requested public capability is unavailable
     # even though OMP itself exited successfully.
-    reported_status = str(result.get("execution_status", result.get("status", ""))).lower()
+    reported_status = str(result.get("agent_status", result.get("status", result.get("execution_status", "")))).lower()
     terminal_statuses = {
-        "passed", "failed", "blocked", "missing_capability", "setup_failed",
+        "passed", "failed", "blocked", "partial", "indeterminate", "missing_capability", "setup_failed", "setup_failure",
         "precondition_failed", "unavailable", "fixture_blocked", "timeout",
         "timed_out", "not_run",
     }
     if reported_status in terminal_statuses:
+        result["agent_status"] = reported_status
         result["agent_execution_status"] = reported_status
     else:
+        result.setdefault("agent_status", None)
         result["agent_execution_status"] = None
     result.update({
         "kind": "astrid.timeline-eval.agent-result.v1",
@@ -431,7 +509,7 @@ def _merge_result(
         "session_id": session_id,
         "fresh_context": True,
         "launcher_process_status": status,
-        "execution_status": reported_status if reported_status in terminal_statuses else status,
+        "execution_status": status,
         "returncode": returncode,
         "elapsed_seconds": elapsed,
         "launcher": {
@@ -527,7 +605,9 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
         if len(original) == 4:
             closing = targets.get("closing_occurrence")
             middle = targets.get("middle_occurrence")
-            expected = [closing, original[0], middle, original[1]] if closing and middle else []
+            # The fixture order is [opening, second, middle, closing]. Move
+            # closing immediately before middle, preserving every other slot.
+            expected = [original[0], original[1], closing, middle] if closing and middle else []
             if expected:
                 return [{
                     **generic,
@@ -591,14 +671,15 @@ def _fixture_blocked_result(
         "case_id": str(case["id"]),
         "session_id": session_id,
         "fresh_context": False,
-        "execution_status": "fixture_blocked",
+        "agent_status": "fixture_blocked",
+        "launcher_process_status": "not_started",
+        "execution_status": "not_started",
         "elapsed_seconds": 0.0,
         "tool_calls": 0,
         "retries": 0,
         "clarification_needed": False,
         "fixture_or_agent_failure": "fixture",
         "failure_cause": {"setup": [reason], "summary": reason},
-        "safety": {"source_unchanged": True, "test_target_only": True, "read_only_target": True},
     }
     _write_json(case_dir / "result.json", result)
     _trace_lines(case_dir, events=[{
@@ -657,6 +738,12 @@ def run_attempt(
     cases_root.mkdir()
     attempt_id = attempt_root.name
     public_briefs = _load_public_briefs(briefs_path)
+    try:
+        skill_reference: Mapping[str, str] = _skill_reference()
+        skill_setup_error: str | None = None
+    except (NativeLauncherError, OSError, UnicodeError) as exc:
+        skill_reference = {}
+        skill_setup_error = f"{type(exc).__name__}: {exc}"
     readiness = {row.case_id: row for row in build_readiness(suite_path, fixture_root)}
     forced = set(launchable_ids) if launchable_ids is not None else None
     top_level = {
@@ -669,6 +756,7 @@ def run_attempt(
         "case_count": len(suite["cases"]),
         "started_at": _now(),
         "canonical_fallback_available": False,
+        "skill_reference": dict(skill_reference),
         "execution": "native_omp" if execute else "dry_run",
         "isolation": {
             "fixture_only": fixture_only,
@@ -715,7 +803,8 @@ def run_attempt(
             except (NativeLauncherError, SetupError) as exc:
                 target_setup_error = str(exc)
         _write_json(case_dir / "brief.json", _public_brief(
-            case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir
+            case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir,
+            skill_reference=skill_reference,
         ))
         checks_setup_error: str | None = None
         try:
@@ -773,6 +862,21 @@ def run_attempt(
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=checks_setup_error)
             _write_json(case_dir / "checks.json", hidden_checks)
             continue
+        if skill_setup_error is not None:
+            _write_json(case_dir / "attempt.json", {
+                "kind": ATTEMPT_KIND,
+                "attempt_id": attempt_id,
+                "case_id": case_id,
+                "fresh_context": False,
+                "session_id": f"{attempt_id}-{case_id}-not-launched",
+                "started_at": _now(),
+                "model": model,
+                "execution": "setup_failed",
+                "skill_error": skill_setup_error,
+            })
+            _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=skill_setup_error)
+            _write_json(case_dir / "checks.json", hidden_checks)
+            continue
         if not fixture_only and case_id == "A01" and prepared_targets_root is None:
             reason = "A01 requires an explicit prepared_targets_root; refusing to launch without target.json"
             _write_json(case_dir / "attempt.json", {
@@ -788,6 +892,26 @@ def run_attempt(
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
             _write_json(case_dir / "checks.json", hidden_checks)
             continue
+        public_target = prepared_target or _load_public_target(case_dir)
+        if not fixture_only and case.get("kind") == "action":
+            edit_capability = _mapping(_mapping(public_target).get("capabilities")).get("edit")
+            if not isinstance(edit_capability, Mapping) or edit_capability.get("status") != "available":
+                reason = str(_mapping(edit_capability).get(
+                    "reason", "no case-specific public edit route is available for this fixture"
+                ))
+                _write_json(case_dir / "attempt.json", {
+                    "kind": ATTEMPT_KIND,
+                    "attempt_id": attempt_id,
+                    "case_id": case_id,
+                    "fresh_context": False,
+                    "session_id": f"{attempt_id}-{case_id}-not-launched",
+                    "started_at": _now(),
+                    "model": model,
+                    "execution": "fixture_blocked",
+                })
+                _fixture_blocked_result(case, attempt_id=attempt_id, reason=reason, case_dir=case_dir)
+                _write_json(case_dir / "checks.json", hidden_checks)
+                continue
         session_id = f"{attempt_id}-{case_id}-{uuid.uuid4().hex[:12]}"
         started_at = _now()
         _write_json(case_dir / "attempt.json", {
@@ -804,9 +928,9 @@ def run_attempt(
         # current closure before launching the model, but keep the snapshot
         # coordinator-private until the process exits. The agent's brief and
         # self-report are never a substitute for this readback.
-        public_target = prepared_target or _load_public_target(case_dir)
         readback_adapter: Any | None = None
-        before_snapshot: dict[str, Any] | None = None
+        readback_contract: ReadbackContract | None = None
+        before_observation: ReadbackObservation | None = None
         readback_error: str | None = None
         if public_target is not None and not fixture_only:
             try:
@@ -818,11 +942,9 @@ def run_attempt(
                     credential=isolated_credential,
                     contract=isolation_contract,
                 )
-                before_snapshot = read_target_snapshot(readback_adapter, public_target)
-                _require_a01_protected_roles(before_snapshot)
-                expected_head = public_target.get("head_revision_id")
-                if expected_head and before_snapshot.get("head_revision_id") != expected_head:
-                    raise IndependentReadbackError("public target head is stale before launch")
+                readback_contract = _readback_contract(case, public_target, fixture_root)
+                before_observation = observe_case_before(readback_adapter, public_target, readback_contract)
+                _require_a01_protected_roles(before_observation.target)
             except Exception as exc:  # adapter failures are a failed gate, not an agent success
                 readback_error = f"{type(exc).__name__}: {exc}"
         if public_target is not None and not fixture_only and readback_error is not None:
@@ -848,6 +970,8 @@ def run_attempt(
             isolated_endpoint=isolated_endpoint,
             isolated_credential=isolated_credential,
             isolation_contract=isolation_contract,
+            skill_reference=skill_reference,
+            public_target=public_target,
             fixture_only=fixture_only,
         )
         _trace_lines(case_dir, events=events)
@@ -862,7 +986,7 @@ def run_attempt(
             output=output,
             model=model,
         )
-        after_snapshot: dict[str, Any] | None = None
+        readback_result: Mapping[str, Any] | None = None
         if public_target is not None and not fixture_only and readback_error is None:
             try:
                 if readback_adapter is None:
@@ -871,36 +995,47 @@ def run_attempt(
                         credential=isolated_credential,
                         contract=isolation_contract,
                     )
-                after_snapshot = read_target_snapshot(readback_adapter, public_target)
-                _require_a01_protected_roles(after_snapshot)
+                publication_response = merged_result.get("publication_response")
+                if (
+                    isinstance(publication_response, Mapping)
+                    and before_observation is not None
+                    and readback_contract is not None
+                ):
+                    case_readback = verify_case_after(
+                        readback_adapter, public_target, readback_contract,
+                        before_observation, _publication_payload(publication_response),
+                    )
+                    readback_result = case_readback.as_dict()
+                    if isinstance(case_readback.after, Mapping):
+                        _require_a01_protected_roles(case_readback.after)
+                else:
+                    readback_result = {
+                        "status": "unavailable",
+                        "before_observed": before_observation is not None,
+                        "after_observed": False,
+                        "safety": {"source_unchanged": None, "test_target_only": None},
+                        "reasons": ("exact publication response with dependency_manifest is missing",),
+                    }
             except Exception as exc:  # noqa: BLE001 - adapter boundary is external
                 readback_error = f"{type(exc).__name__}: {exc}"
         if public_target is not None and not fixture_only:
-            if before_snapshot is not None:
-                _write_json(case_dir / "before.json", {"target": before_snapshot})
-            if after_snapshot is not None:
-                _write_json(case_dir / "after.json", {"target": after_snapshot})
-            merged_result["independent_readback"] = {
-                "status": "pass" if before_snapshot is not None and after_snapshot is not None else "failed",
-                "before_observed": before_snapshot is not None,
-                "after_observed": after_snapshot is not None,
-                "error": readback_error,
-                "grader": "coordinator_exact_parent_closure",
-            }
-            # The disposable-target contract is an independent scope proof for
-            # the parent-composition route.  If a native agent omitted the
-            # safety envelope, promote that proof into the stable result rather
-            # than making a correctly isolated edit fail on self-report shape.
-            if (
-                not isinstance(merged_result.get("safety"), Mapping)
-                and merged_result.get("route") == "timelines replace-parent-media"
-                and merged_result["independent_readback"]["status"] == "pass"
-            ):
-                merged_result["safety"] = {
-                    "source_unchanged": True,
-                    "test_target_only": True,
-                    "basis": "explicit_disposable_runtime_contract_and_independent_parent_readback",
+            if before_observation is not None:
+                _write_json(case_dir / "before.json", {"target": before_observation.target})
+            if isinstance(readback_result, Mapping) and isinstance(readback_result.get("after"), Mapping):
+                _write_json(case_dir / "after.json", {"target": readback_result["after"]})
+            if readback_result is None:
+                readback_result = {
+                    "status": "unavailable",
+                    "before_observed": before_observation is not None,
+                    "after_observed": False,
+                    "safety": {"source_unchanged": None, "test_target_only": None},
+                    "reasons": (readback_error or "post-publication readback unavailable",),
                 }
+            merged_result["independent_readback"] = dict(readback_result)
+            # Independent proof is retained separately from agent self-report;
+            # unavailable source/sibling evidence remains unknown, not pass.
+            if isinstance(readback_result.get("safety"), Mapping):
+                merged_result["independent_safety"] = dict(readback_result["safety"])
             _write_json(case_dir / "result.json", merged_result)
         # Hidden checks are deliberately installed only after the agent exits.
         _write_json(case_dir / "checks.json", hidden_checks)

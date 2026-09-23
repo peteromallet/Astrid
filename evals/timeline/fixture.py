@@ -32,6 +32,7 @@ ACTION_CASES = tuple(f"A{i:02d}" for i in range(1, 11))
 _PUBLIC_TARGETS: Mapping[str, Mapping[str, Any]] = {
     "A01": {
         "role": "opening-shot-active-picture",
+        "readback_projection": "active_media_replacement.v1",
         "source_occurrence_id": "shot-ee383f695b10431c",
         "source_shot_id": "5024db66-8472-5eeb-8fba-bd05bac13337",
         "selector_clip_id": "shot_b01",
@@ -235,11 +236,34 @@ def public_target_receipt(
     endpoint_url = seed.get("endpoint_url")
     if not all(isinstance(value, str) and value for value in (endpoint_url, project_id, timeline_id, head)):
         raise FixtureError("seed receipt must include endpoint_url, project_id, timeline_id, and new_head")
+    locator = seed.get("target_locator")
+    a01_route_available = (
+        not read_only
+        and identities.case_id == "A01"
+        and isinstance(locator, Mapping)
+        and all(locator.get(key) for key in ("occurrence_id", "selector_clip_id", "replacement_asset_key"))
+    )
+    edit_capability = (
+        {"status": "available", "route": "timelines replace-parent-media"}
+        if a01_route_available
+        else {
+            "status": "unavailable" if not read_only else "not_permitted",
+            "reason": (
+                "This case has no seeded case-specific edit route; report unavailable or blocked."
+                if not read_only
+                else "This navigation case is read-only."
+            ),
+        }
+    )
     receipt = {
         "kind": "astrid.timeline-eval.public-target.v1",
+        "case_id": identities.case_id,
         "scope": "selected-case-only",
         "representation": "parent_composition",
-        "edit_route": "timelines replace-parent-media",
+        "capabilities": {
+            "inspect": {"status": "available", "route": "timelines show / timelines visualize"},
+            "edit": edit_capability,
+        },
         "connection": {
             "endpoint_env": "ASTRID_TIMELINE_EVAL_ENDPOINT",
             "credential_env": "ASTRID_TIMELINE_EVAL_CREDENTIAL",
@@ -258,9 +282,13 @@ def public_target_receipt(
         "internal_revision_ids": sorted(identities.internal_revision_ids.values()),
         "owned_media_ids": sorted(str(value) for value in seed.get("owned_media", {}).values()),
     }
-    locator = seed.get("target_locator")
     if isinstance(locator, Mapping):
         receipt["target_locator"] = dict(locator)
+    if a01_route_available:
+        # Keep the convenient legacy field only when the exact A01 locator is
+        # present. Other seeded parent compositions must not appear writable
+        # through a route whose target contract they do not satisfy.
+        receipt["edit_route"] = "timelines replace-parent-media"
     return receipt
 
 
@@ -294,6 +322,7 @@ def _public_target_locator(
         return None
     result: dict[str, Any] = {
         "role": str(public["role"]),
+        "readback_projection": str(public["readback_projection"]),
         "occurrence_id": occurrence_id,
         "shot_id": shot_id,
         "shot_revision_id": shot_revision_id,

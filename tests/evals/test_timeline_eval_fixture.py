@@ -178,6 +178,11 @@ def test_public_target_receipt_contains_only_disposable_ids(tmp_path):
     (media_root / "media").mkdir(parents=True)
     (media_root / "media/image.bin").write_bytes(MEDIA_BYTES)
     seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A01", media_root=media_root)
+    seed["target_locator"] = {
+        "occurrence_id": "runtime-occurrence",
+        "selector_clip_id": "shot_b01",
+        "replacement_asset_key": "charcoal_20260922_intro",
+    }
     target = public_target_receipt(seed)
     assert target["kind"] == "astrid.timeline-eval.public-target.v1"
     assert target["endpoint"] == runtime.endpoint.url
@@ -187,6 +192,21 @@ def test_public_target_receipt_contains_only_disposable_ids(tmp_path):
     assert "closure" not in target
     assert "semantic_digest" not in target
     assert target["owned_media_ids"] == ["dest-" + MEDIA_DIGEST[-8:]]
+    assert target["capabilities"]["edit"]["status"] == "available"
+    assert target["edit_route"] == "timelines replace-parent-media"
+
+
+def test_public_target_receipt_does_not_advertise_a01_route_for_other_cases(tmp_path):
+    baseline = _baseline()
+    runtime = FakeRuntime(baseline)
+    media_root = tmp_path / "attempt-media"
+    (media_root / "media").mkdir(parents=True)
+    (media_root / "media/image.bin").write_bytes(MEDIA_BYTES)
+    seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A02", media_root=media_root)
+    target = public_target_receipt(seed)
+    assert target["case_id"] == "A02"
+    assert target["capabilities"]["edit"]["status"] == "unavailable"
+    assert "edit_route" not in target
 
 
 def test_cases_share_runtime_project_but_keep_distinct_runtime_timeline_ids(tmp_path):

@@ -39,6 +39,7 @@ from .source_export import _canonical
 
 
 GATE_KIND = "astrid.timeline-eval.a01-integration-gate.v1"
+EXAMPLES_KIND = "astrid.timeline-eval.a01-integration-examples.v1"
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -206,14 +207,14 @@ def _launch_is_fresh(
     )
 
 
-def run_a01_integration_gate(
+def run_a01_gate_examples(
     adapter: RuntimeFixtureAdapter,
     baseline: Baseline,
     *,
     media_root: Path,
     attempt_id: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Exercise A01 deterministically and return (private receipt, launch target)."""
+) -> dict[str, Any]:
+    """Exercise the positive and wrong-shot cases in an examples-only realm."""
     if not attempt_id:
         raise ValueError("A01 integration gate requires a non-empty attempt_id")
     derived, disclosure = derive_a01_old_video_baseline(baseline)
@@ -276,20 +277,11 @@ def run_a01_integration_gate(
             + json.dumps(negative_result.as_dict(), sort_keys=True)
         )
 
-    _launch_seed, launch_target = _seed_target(
-        adapter, derived, media_root=media_root, attempt_id=attempt_id + "-launch",
-    )
-    launch_before = observe_case_before(adapter, launch_target, contract)
-    if not _launch_is_fresh(
-        launch_before, launch_target, old_digest=old_digest, new_digest=new_digest,
-    ):
-        raise RuntimeError("A01 exported launch target is not a fresh OLD-video target")
-
-    receipt = {
-        "kind": GATE_KIND,
+    return {
+        "kind": EXAMPLES_KIND,
         "status": "pass",
         "attempt_id": attempt_id,
-        "realm_id": adapter.proof.realm_id,
+        "examples_realm_id": adapter.proof.realm_id,
         "source_safety": {
             "status": "outside_gate_boundary",
             "reason": (
@@ -314,6 +306,64 @@ def run_a01_integration_gate(
             "readback": negative_result.as_dict(),
             "rejected": True,
         },
+    }
+
+
+def prepare_a01_launch_target(
+    adapter: RuntimeFixtureAdapter,
+    baseline: Baseline,
+    examples_receipt: Mapping[str, Any],
+    *,
+    media_root: Path,
+    attempt_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Seed only an untouched target in a realm that has no solved examples."""
+    if examples_receipt.get("kind") != EXAMPLES_KIND or examples_receipt.get("status") != "pass":
+        raise RuntimeError("A01 launch preparation requires a passed examples receipt")
+    examples_realm_id = examples_receipt.get("examples_realm_id")
+    launch_realm_id = adapter.proof.realm_id
+    if not isinstance(examples_realm_id, str) or not examples_realm_id:
+        raise RuntimeError("A01 examples receipt omitted its server-observed realm ID")
+    if examples_realm_id == launch_realm_id:
+        raise RuntimeError(
+            "A01 solved examples and model launch target must use distinct Runtime realms"
+        )
+    derived, disclosure = derive_a01_old_video_baseline(baseline)
+    if examples_receipt.get("derivative") != disclosure:
+        raise RuntimeError("A01 launch fixture differs from the examples fixture")
+    new_digest = _replacement_digest(disclosure)
+    old_digest = str(disclosure["selected_old_video_digest"])
+    contract = ReadbackContract(
+        case_id="A01", projection=ACTIVE_MEDIA_REPLACEMENT,
+        expected_media_digest=new_digest,
+    )
+    _launch_seed, launch_target = _seed_target(
+        adapter, derived, media_root=media_root, attempt_id=attempt_id + "-launch",
+    )
+    launch_before = observe_case_before(adapter, launch_target, contract)
+    if not _launch_is_fresh(
+        launch_before, launch_target, old_digest=old_digest, new_digest=new_digest,
+    ):
+        raise RuntimeError("A01 exported launch target is not a fresh OLD-video target")
+
+    receipt = {
+        "kind": GATE_KIND,
+        "status": "pass",
+        "attempt_id": attempt_id,
+        # Compatibility identity: all subsequent worker admission binds the
+        # launch realm, never the now-inaccessible examples realm.
+        "realm_id": launch_realm_id,
+        "examples_realm_id": examples_realm_id,
+        "launch_realm_id": launch_realm_id,
+        "realm_separation": {
+            "status": "pass",
+            "distinct": True,
+            "examples_available_to_worker": False,
+        },
+        "source_safety": dict(examples_receipt["source_safety"]),
+        "derivative": disclosure,
+        "positive": dict(examples_receipt["positive"]),
+        "wrong_shot_negative": dict(examples_receipt["wrong_shot_negative"]),
         "launch": {
             "target_identity": {
                 key: launch_target[key]
@@ -326,6 +376,27 @@ def run_a01_integration_gate(
     return receipt, launch_target
 
 
+def run_a01_integration_gate(
+    examples_adapter: RuntimeFixtureAdapter,
+    launch_adapter: RuntimeFixtureAdapter,
+    baseline: Baseline,
+    *,
+    media_root: Path,
+    attempt_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Exercise examples, then prepare launch in a distinct Runtime realm."""
+    if examples_adapter.proof.realm_id == launch_adapter.proof.realm_id:
+        raise RuntimeError(
+            "A01 solved examples and model launch target must use distinct Runtime realms"
+        )
+    examples = run_a01_gate_examples(
+        examples_adapter, baseline, media_root=media_root, attempt_id=attempt_id,
+    )
+    return prepare_a01_launch_target(
+        launch_adapter, baseline, examples, media_root=media_root, attempt_id=attempt_id,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the trusted no-model A01 integration gate")
     parser.add_argument("--endpoint", required=True)
@@ -334,7 +405,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--media-root", type=Path, required=True)
     parser.add_argument("--attempt-id", required=True)
-    parser.add_argument("--target-output", type=Path, required=True)
+    parser.add_argument("--phase", choices=("examples", "launch"), required=True)
+    parser.add_argument("--examples-receipt", type=Path)
+    parser.add_argument("--target-output", type=Path)
     parser.add_argument("--receipt-output", type=Path, required=True)
     return parser
 
@@ -346,18 +419,32 @@ def main(argv: list[str] | None = None) -> int:
         credential_file=args.credential_file,
         contract_path=args.contract,
     )
-    receipt, target = run_a01_integration_gate(
-        adapter,
-        load_baseline(args.baseline),
-        media_root=args.media_root,
-        attempt_id=args.attempt_id,
-    )
+    baseline = load_baseline(args.baseline)
+    if args.phase == "examples":
+        if args.examples_receipt is not None or args.target_output is not None:
+            raise SystemExit("examples phase does not accept launch output/input arguments")
+        receipt = run_a01_gate_examples(
+            adapter, baseline, media_root=args.media_root, attempt_id=args.attempt_id,
+        )
+        target_output = None
+    else:
+        if args.examples_receipt is None or args.target_output is None:
+            raise SystemExit("launch phase requires --examples-receipt and --target-output")
+        raw_examples = json.loads(args.examples_receipt.read_text(encoding="utf-8"))
+        if not isinstance(raw_examples, Mapping):
+            raise SystemExit("examples receipt must be a JSON object")
+        receipt, target = prepare_a01_launch_target(
+            adapter, baseline, raw_examples,
+            media_root=args.media_root, attempt_id=args.attempt_id,
+        )
+        _write_json(args.target_output, target)
+        target_output = str(args.target_output)
     _write_json(args.receipt_output, receipt)
-    _write_json(args.target_output, target)
     print(json.dumps({
         "status": receipt["status"],
-        "realm_id": receipt["realm_id"],
-        "target_output": str(args.target_output),
+        "realm_id": receipt.get("realm_id", receipt.get("examples_realm_id")),
+        "phase": args.phase,
+        "target_output": target_output,
         "receipt_output": str(args.receipt_output),
     }, sort_keys=True))
     return 0

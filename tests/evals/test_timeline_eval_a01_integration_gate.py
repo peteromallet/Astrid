@@ -71,8 +71,8 @@ class _Workspace:
 class _Adapter:
     _plain = staticmethod(gate._plain)
 
-    def __init__(self) -> None:
-        self.proof = SimpleNamespace(realm_id="disposable-realm")
+    def __init__(self, realm_id: str = "disposable-realm") -> None:
+        self.proof = SimpleNamespace(realm_id=realm_id)
         self.workspace = _Workspace()
 
     def read_current_closure(self, project_id, timeline_id, *, head=None):
@@ -123,31 +123,52 @@ def test_gate_uses_supported_edits_rejects_wrong_shot_and_exports_third_untouche
     tmp_path, monkeypatch,
 ):
     seeded = _install_gate_fakes(monkeypatch)
-    adapter = _Adapter()
+    examples_adapter = _Adapter("examples-realm")
+    launch_adapter = _Adapter("launch-realm")
 
     receipt, target = gate.run_a01_integration_gate(
-        adapter, object(), media_root=tmp_path, attempt_id="attempt-7",
+        examples_adapter, launch_adapter, object(),
+        media_root=tmp_path, attempt_id="attempt-7",
     )
 
     assert seeded == ["positive", "negative", "launch"]
     assert receipt["status"] == "pass"
     assert receipt["wrong_shot_negative"]["rejected"] is True
     assert receipt["source_safety"]["status"] == "outside_gate_boundary"
+    assert receipt["examples_realm_id"] == "examples-realm"
+    assert receipt["launch_realm_id"] == "launch-realm"
+    assert receipt["realm_id"] == "launch-realm"
+    assert receipt["realm_separation"] == {
+        "status": "pass", "distinct": True, "examples_available_to_worker": False,
+    }
     assert target == _target("launch")
-    assert [call["occurrence_id"] for call in adapter.workspace.calls] == [
+    assert "positive" not in target and "wrong_shot_negative" not in target
+    assert [call["occurrence_id"] for call in examples_adapter.workspace.calls] == [
         "occ-target", "occ-wrong",
     ]
-    assert [call["clip_id"] for call in adapter.workspace.calls] == [
+    assert [call["clip_id"] for call in examples_adapter.workspace.calls] == [
         "clip-target", "clip-wrong",
     ]
+    assert launch_adapter.workspace.calls == []
 
 
 def test_gate_fails_closed_if_wrong_shot_readback_is_not_rejected(tmp_path, monkeypatch):
     _install_gate_fakes(monkeypatch, reject_wrong_shot=False)
     with pytest.raises(RuntimeError, match="wrong-shot publication was not rejected"):
         gate.run_a01_integration_gate(
-            _Adapter(), object(), media_root=tmp_path, attempt_id="attempt-8",
+            _Adapter("examples-realm"), _Adapter("launch-realm"), object(),
+            media_root=tmp_path, attempt_id="attempt-8",
         )
+
+
+def test_gate_rejects_same_realm_before_seeding_any_solved_example(tmp_path, monkeypatch):
+    seeded = _install_gate_fakes(monkeypatch)
+    with pytest.raises(RuntimeError, match="must use distinct Runtime realms"):
+        gate.run_a01_integration_gate(
+            _Adapter("shared-realm"), _Adapter("shared-realm"), object(),
+            media_root=tmp_path, attempt_id="adversarial-same-realm",
+        )
+    assert seeded == []
 
 
 def test_wrong_shot_locator_rejects_shared_or_missing_picture_candidates():

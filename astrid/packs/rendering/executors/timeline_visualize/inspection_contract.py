@@ -134,13 +134,306 @@ def inspection_options(values: Mapping[str, Any]) -> dict[str, Any]:
     detail = values.get("detail", False)
     if not isinstance(detail, bool):
         raise ValueError("detail must be a boolean")
+    occurrence = values.get("occurrence")
+    if occurrence not in (None, "") and (
+        not isinstance(occurrence, str) or len(occurrence) > 256 or "data:" in occurrence.lower()
+    ):
+        raise ValueError("occurrence must be a bounded occurrence identifier")
     return {
         "components": components,
         "tracks": tracks,
         "clip": values.get("clip") or None,
+        "occurrence": occurrence or None,
         "shot": values.get("shot") or None,
+        "asset": values.get("asset") or None,
         "window": window,
         "detail": detail,
+    }
+
+
+def canonical_clip_identity(
+    clip: Mapping[str, Any], *, timeline_id: str | None = None,
+    occurrence_id: str | None = None, shot_id: str | None = None,
+) -> dict[str, Any]:
+    """Project occurrence, authored clip, and reusable shot identities separately.
+
+    The occurrence is a placement in this timeline.  ``shot_id`` identifies the
+    reusable source, while ``clip_id`` names the authored timeline element.
+    Missing occurrence identity stays missing instead of being guessed from a
+    shot id or a repeated media selector.
+    """
+    clip_id = clip.get("id") or clip.get("clip_id")
+    occurrence = (
+        clip.get("shot_occurrence_id") or clip.get("occurrence_id")
+        or clip.get("occurrenceId") or occurrence_id
+    )
+    shot = clip.get("shot_id") or clip.get("shotId") or shot_id
+    target = {
+        "kind": "clip",
+        "timeline_id": timeline_id,
+        "occurrence_id": occurrence if isinstance(occurrence, str) and occurrence else None,
+        "clip_id": clip_id if isinstance(clip_id, str) and clip_id else None,
+        "shot_id": shot if isinstance(shot, str) and shot else None,
+    }
+    target["addressable"] = bool(target["clip_id"] or target["occurrence_id"])
+    return target
+
+
+def classify_output_records(
+    outputs: Any, *, current_head: Any = None, current_output_id: Any = None,
+) -> list[dict[str, Any]]:
+    """Classify explicit output records without treating a candidate as current.
+
+    A record without a matching head or explicit current pointer remains
+    unverified.  This is intentionally conservative for old outputs lacking
+    provenance.
+    """
+    if not isinstance(outputs, (list, tuple)):
+        return []
+    result = []
+    for raw in outputs:
+        if not isinstance(raw, Mapping):
+            continue
+        row = {key: _small_scalar(raw[key]) for key in (
+            "output_id", "id", "run_id", "digest", "content_hash", "state",
+            "created_at", "source_head", "timeline_head", "config_version",
+        ) if key in raw}
+        output_id = raw.get("output_id") or raw.get("id") or raw.get("run_id")
+        disposition = str(raw.get("disposition") or raw.get("kind") or raw.get("status") or "").lower()
+        if raw.get("is_candidate") is True or raw.get("candidate") is True or disposition in {
+            "candidate", "preview", "unpublished", "draft",
+        }:
+            classification = "candidate"
+        elif output_id is not None and current_output_id is not None and str(output_id) == str(current_output_id):
+            classification = "current" if raw.get("is_candidate") is not True else "candidate"
+        elif current_head is not None and (raw.get("source_head") or raw.get("timeline_head")) == current_head:
+            classification = "current" if raw.get("is_candidate") is not True else "candidate"
+        elif disposition in {"historical", "history", "superseded", "stale"}:
+            classification = "historical"
+        else:
+            classification = "unverified"
+        row["classification"] = classification
+        row["current_for_head"] = classification == "current"
+        result.append(row)
+    return result
+
+
+def _clip_asset_keys(clip: Mapping[str, Any]) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in (clip.get("asset"), clip.get("asset_id")):
+        if isinstance(value, str) and value and value not in result:
+            result.append(value)
+    source = clip.get("source")
+    if isinstance(source, str) and source and source not in result:
+        result.append(source)
+    elif isinstance(source, Mapping):
+        for key in ("asset", "asset_id", "assetKey", "key", "id"):
+            value = source.get(key)
+            if isinstance(value, str) and value and value not in result:
+                result.append(value)
+    return tuple(result)
+
+
+def semantic_media_inventory(
+    clips: Iterable[Mapping[str, Any]], registry: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Describe selected use separately from retained alternatives and history."""
+    raw_assets = registry.get("assets", registry)
+    if isinstance(raw_assets, Mapping):
+        assets = {str(key): value for key, value in raw_assets.items()}
+    elif isinstance(raw_assets, (list, tuple)):
+        assets = {
+            str(item.get("asset_key") or item.get("key") or f"asset-{i}"): item
+            for i, item in enumerate(raw_assets) if isinstance(item, Mapping)
+        }
+    else:
+        assets = {}
+    uses: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    diagnostics: list[dict[str, Any]] = []
+    for index, clip in enumerate(clips):
+        if not isinstance(clip, Mapping):
+            diagnostics.append({"code": "invalid_clip_record", "clip_index": index, "message": "clip must be an object"})
+            continue
+        clip_id = clip.get("id") or clip.get("clip_id") or f"clip-{index}"
+        try:
+            start = Fraction(str(clip.get("at", clip.get("at_ms", 0))))
+            duration = clip.get("hold", clip.get("duration", clip.get("duration_ms")))
+            if "at_ms" in clip and "at" not in clip:
+                start /= 1000
+            if duration is not None and "duration_ms" in clip and "hold" not in clip and "duration" not in clip:
+                duration = Fraction(str(duration)) / 1000
+            if start < 0 or (duration is not None and Fraction(str(duration)) <= 0):
+                raise ValueError
+        except (TypeError, ValueError, ZeroDivisionError):
+            diagnostics.append({"code": "invalid_clip_timing", "clip_id": clip_id,
+                                "message": "clip has invalid or non-positive timing"})
+        track = clip.get("track") or clip.get("track_id")
+        muted = clip.get("muted") is True or (
+            isinstance(clip.get("volume"), (int, float)) and not isinstance(clip.get("volume"), bool)
+            and clip.get("volume") <= 0
+        )
+        for asset_key in _clip_asset_keys(clip):
+            uses[asset_key].append({"clip_id": clip_id, "track_id": track, "state": "muted" if muted else "active"})
+            if asset_key not in assets:
+                diagnostics.append({"code": "selected_media_missing_registry", "clip_id": clip_id,
+                                   "asset_key": asset_key, "message": "selected media key is absent from registry"})
+    rows = []
+    for asset_key, entry in sorted(assets.items()):
+        metadata = entry if isinstance(entry, Mapping) else {}
+        role = str(metadata.get("role") or metadata.get("kind") or "unspecified").lower()
+        references = uses.get(asset_key, [])
+        if references:
+            state = "active" if any(ref["state"] == "active" for ref in references) else "muted"
+        elif role in {"alternative", "candidate", "variant", "option"}:
+            state = "alternative"
+        elif role in {"history", "historical", "previous_output", "superseded_output"}:
+            state = "historical"
+        elif role in {"generation_reference", "generation_output", "thumbnail_only", "rendered_sample"}:
+            state = role
+        else:
+            state = "unplaced"
+        rows.append({
+            "asset_key": asset_key, "state": state, "role": role,
+            "media_id": _small_scalar(metadata.get("media_id") or metadata.get("object_id")),
+            "digest": _small_scalar(metadata.get("content_sha256") or metadata.get("sha256") or metadata.get("digest")),
+            "uses": references,
+        })
+    return {"items": rows, "diagnostics": diagnostics,
+            "counts": {state: sum(row["state"] == state for row in rows)
+                       for state in sorted({row["state"] for row in rows})}}
+
+
+def project_timeline_document(
+    document: Mapping[str, Any], *, limit: int = 50, cursor: str | None = None,
+    clip: str | None = None, occurrence: str | None = None, shot: str | None = None,
+    track: Any = None, asset: str | None = None, range_value: Any = None,
+    detail: bool = False,
+) -> dict[str, Any]:
+    """Return the shared bounded textual scope consumed by show and visualizer."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    config = document.get("config") if isinstance(document.get("config"), Mapping) else document
+    raw_clips = config.get("clips", []) if isinstance(config, Mapping) else []
+    if not isinstance(raw_clips, list):
+        raw_clips = []
+    registry = document.get("registry") if isinstance(document.get("registry"), Mapping) else {}
+    tracks = track if isinstance(track, (list, tuple, set)) else (track,) if track else ()
+    window = normalize_input_window(range_value=range_value) if range_value is not None else None
+    occurrences = document.get("occurrences") or (config.get("occurrences", []) if isinstance(config, Mapping) else [])
+    occurrence_for_clip: dict[str, Mapping[str, Any]] = {}
+    if isinstance(occurrences, list):
+        for row in occurrences:
+            if isinstance(row, Mapping):
+                clip_id = row.get("clip_id") or row.get("clipId")
+                if isinstance(clip_id, str):
+                    occurrence_for_clip.setdefault(clip_id, row)
+    timeline_id = document.get("timeline_id") or document.get("id")
+    fps = document.get("fps") or config.get("theme_overrides", {}).get("visual", {}).get("canvas", {}).get("fps", 30)
+    try:
+        fps = Fraction(str(fps))
+        if fps <= 0:
+            fps = Fraction(30, 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        fps = Fraction(30, 1)
+    selected = []
+    diagnostics: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_clips):
+        if not isinstance(raw, Mapping):
+            diagnostics.append({"code": "invalid_clip_record", "clip_index": index, "message": "clip must be an object"})
+            continue
+        occurrence_row = occurrence_for_clip.get(str(raw.get("id") or ""), {})
+        identity = canonical_clip_identity(raw, timeline_id=str(timeline_id) if timeline_id else None,
+                                           occurrence_id=occurrence_row.get("occurrence_id"),
+                                           shot_id=occurrence_row.get("shot_id"))
+        if clip and identity.get("clip_id") != clip:
+            continue
+        if occurrence and identity.get("occurrence_id") != occurrence:
+            continue
+        if shot and identity.get("shot_id") != shot:
+            continue
+        track_id = raw.get("track") or raw.get("track_id")
+        if tracks and track_id not in tracks:
+            continue
+        keys = _clip_asset_keys(raw)
+        if asset and asset not in keys:
+            continue
+        at = raw.get("at", raw.get("at_ms", 0))
+        if "at_ms" in raw and "at" not in raw:
+            at = float(at) / 1000.0
+        hold = raw.get("hold", raw.get("duration", raw.get("duration_ms")))
+        if hold is not None and "duration_ms" in raw and "hold" not in raw and "duration" not in raw:
+            hold = float(hold) / 1000.0
+        source_to = raw.get("to")
+        if hold is None and source_to is not None:
+            source_from = raw.get("from", 0)
+            speed = raw.get("speed", 1)
+            try:
+                hold = max(0, (float(source_to) - float(source_from)) / float(speed))
+            except (TypeError, ValueError, ZeroDivisionError):
+                hold = None
+        try:
+            start_sec = Fraction(str(at))
+            end_sec = start_sec + Fraction(str(hold)) if hold is not None else None
+            if start_sec < 0 or (end_sec is not None and end_sec <= start_sec):
+                raise ValueError("clip timing must have non-negative start and positive duration")
+        except (TypeError, ValueError, ZeroDivisionError) as exc:
+            diagnostics.append({"code": "invalid_clip_timing", "clip_id": identity.get("clip_id"), "message": str(exc)})
+            start_sec, end_sec = None, None
+        if window is not None:
+            if start_sec is None or end_sec is None:
+                continue
+            if end_sec <= Fraction(*window["start"]) or start_sec >= Fraction(*window["end"]):
+                continue
+        compact = {
+            **identity, "track_id": track_id,
+            "target": identity,
+            "clip_type": raw.get("clipType") or raw.get("clip_type") or raw.get("type"),
+            "at_seconds": [start_sec.numerator, start_sec.denominator] if start_sec is not None else None,
+            "end_seconds": [end_sec.numerator, end_sec.denominator] if end_sec is not None else None,
+            "duration_seconds": [(end_sec - start_sec).numerator, (end_sec - start_sec).denominator] if start_sec is not None and end_sec is not None else None,
+            "selected_media": [{"asset_key": key, "media_id": (registry.get("assets", {}).get(key, {}) or {}).get("media_id") if isinstance(registry.get("assets"), Mapping) and isinstance(registry.get("assets", {}).get(key), Mapping) else None,
+                                "digest": (registry.get("assets", {}).get(key, {}) or {}).get("content_sha256") if isinstance(registry.get("assets"), Mapping) and isinstance(registry.get("assets", {}).get(key), Mapping) else None}
+                               for key in keys],
+        }
+        text_value = raw.get("text")
+        text = text_value.get("content") if isinstance(text_value, Mapping) else text_value
+        if isinstance(text, str):
+            compact["text_role"] = raw.get("text_role") or raw.get("role") or "visible_text"
+            compact["text_length"] = len(text)
+            if detail or len(text) <= 512:
+                compact["text"] = text if detail else text[:512]
+            if not detail and len(text) > 512:
+                compact["text_truncated"] = True
+        compact["actions"] = {
+            "expand": action_argv("astrid", "timelines", "show", "--project", str(document.get("project_slug") or "<project>"), str(document.get("slug") or timeline_id or "<timeline>"), "--summary", "--clip", str(identity.get("clip_id") or "<clip>"), "--detail"),
+            "visualize": action_argv("astrid", "timelines", "visualize", "--project", str(document.get("project_slug") or "<project>"), "--timeline-slug", str(document.get("slug") or timeline_id or "<timeline>"), "--clip", str(identity.get("clip_id") or "<clip>"), "--show", "inputs"),
+        }
+        selected.append(compact)
+    selected.sort(key=lambda row: (row["at_seconds"] is None, tuple(row["at_seconds"] or ()), str(row.get("track_id") or ""), str(row.get("clip_id") or "")))
+    query = {"clip": clip, "occurrence": occurrence, "shot": shot, "track": list(tracks), "asset": asset, "range": range_value, "detail": detail, "limit": limit}
+    binding = hashlib.sha256(json.dumps(query, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:20]
+    offset = 0
+    if cursor:
+        parts = cursor.split(":", 1)
+        if len(parts) != 2 or parts[0] != binding or not parts[1].isdigit():
+            raise ValueError("cursor does not match this query")
+        offset = int(parts[1])
+    page = selected[offset:offset + limit]
+    next_cursor = f"{binding}:{offset + limit}" if offset + limit < len(selected) else None
+    inventory = semantic_media_inventory(raw_clips, registry)
+    diagnostics.extend(inventory["diagnostics"])
+    head = document.get("head_hash") or document.get("head_event_id") or document.get("config_version")
+    outputs = document.get("outputs") or document.get("render_outputs") or []
+    return {
+        "kind": "timeline-inspection", "timeline_id": timeline_id,
+        "project_id": document.get("project_id"), "slug": document.get("slug"),
+        "timeline_name": document.get("name"), "head": head,
+        "version": document.get("config_version", document.get("version")),
+        "query": query, "targets": [row["target"] for row in page], "clips": page,
+        "media": inventory, "outputs": classify_output_records(
+            outputs, current_head=head, current_output_id=document.get("current_output_id")),
+        "diagnostics": diagnostics,
+        "pagination": {"limit": limit, "offset": offset, "total": len(selected), "next_cursor": next_cursor},
     }
 
 
@@ -296,7 +589,8 @@ def _audio_signifier(
 def project_input_window(
     clips: Iterable[Mapping[str, Any]], *, start_frame: int, end_frame: int, fps: Any,
     track_ids: Iterable[str] = (), clip_id: str | None = None,
-    shot_id: str | None = None, asset_id: str | None = None,
+    shot_id: str | None = None, occurrence_id: str | None = None,
+    asset_id: str | None = None,
     integrity: Mapping[str, Mapping[str, Any]] | None = None,
     shot_groups: Iterable[Mapping[str, Any]] = (),
     shot_occurrences: Iterable[Mapping[str, Any]] = (),
@@ -354,6 +648,12 @@ def project_input_window(
             continue
         if clip_id and str(raw.get("id") or raw.get("clip_id") or raw.get("occurrence_id")) != str(clip_id):
             continue
+        raw_occurrence_id = (
+            raw.get("shot_occurrence_id") or raw.get("occurrence_id")
+            or raw.get("occurrenceId")
+        )
+        if occurrence_id and str(raw_occurrence_id) != str(occurrence_id):
+            continue
         raw_clip_id = str(raw.get("id") or raw.get("clip_id") or raw.get("occurrence_id") or f"clip-{index}")
         membership = shot_by_clip.get(raw_clip_id)
         raw_shot_id = str(raw.get("shot_id") or raw.get("shot")) if raw.get("shot_id") or raw.get("shot") else (membership[0] if membership else None)
@@ -384,11 +684,15 @@ def project_input_window(
             subrow += 1
         asset_key = raw.get("asset") or raw.get("source")
         integrity_row = integrity.get(str(asset_key), {}) if integrity else {}
+        raw_occurrence_id = (
+            raw.get("shot_occurrence_id") or raw.get("occurrence_id")
+            or raw.get("occurrenceId")
+        )
         speed = _rational(raw.get("speed", 1))
         trim_start = _rational(raw.get("from", raw.get("from_", 0)))
         source_start = trim_start + max(Fraction(0), Fraction(overlap_start - start, 1) / fps_value) * speed
         source_end = trim_start + max(Fraction(0), Fraction(overlap_end - start, 1) / fps_value) * speed
-        occurrence = raw.get("occurrence_id") or raw.get("occurrenceId") or raw.get("id")
+        occurrence = raw_occurrence_id or raw.get("id")
         row = {
             "clip_id": str(raw.get("id") or f"clip-{index}"), "occurrence_id": str(occurrence),
             "track_id": track, "asset_key": str(asset_key) if asset_key is not None else None,
@@ -481,7 +785,8 @@ def compact_render_receipt(index: Mapping, snapshot: Mapping, root: Path) -> dic
             raise ValueError("compact receipt exceeds sample reason limit")
         card["sample_reasons"] = [_small_scalar(reason, 64) for reason in reasons]
         for target, key in (("clip_ids", "id"), ("shot_ids", "shot_id"), ("occurrence_ids", "occurrence_id")):
-            values = sorted({str(item[key]) for item in raw.get("clips", []) if item.get(key) is not None})
+            values = sorted({str(item.get(key) or item.get("shot_occurrence_id")) for item in raw.get("clips", [])
+                             if item.get(key) is not None or item.get("shot_occurrence_id") is not None})
             if len(values) > 64 or any(len(value) > 256 or "data:" in value.lower() for value in values):
                 raise ValueError("compact receipt identity limit exceeded")
             card[target] = values
@@ -500,6 +805,9 @@ def compact_render_receipt(index: Mapping, snapshot: Mapping, root: Path) -> dic
                "coverage": _projection(index.get("coverage", {}), ("full_duration", "selected_frame_count", "page_count", "page_size", "all_boundaries_sampled")),
                "inspection": {"command": "python3 -m astrid timelines inspect --manifest MANIFEST --section summary",
                               "sections": list(INSPECTION_SECTIONS)}}
+    if isinstance(index.get("inspection"), Mapping):
+        receipt["scope"] = _projection(index["inspection"].get("scope", {}), ("timeline_id", "render_run_id", "occurrence_id"))
+        receipt["target"] = _projection(index["inspection"].get("target", {}), ("kind", "timeline_id", "occurrence_id", "clip_id", "shot_id", "asset_key"))
     for field, filename in (("snapshot_sidecar", "render-snapshot.json"), ("audio_sidecar", "audio-analysis.json")):
         path = root / filename
         if path.is_file():

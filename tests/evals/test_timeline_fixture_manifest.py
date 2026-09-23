@@ -60,7 +60,77 @@ def test_build_readiness_reports_actual_fixture_states_per_case(tmp_path):
 
     rows = {row.case_id: row for row in build_readiness(suite_path, fixture_root)}
 
-    assert rows["L01"].readiness == "ready"
+    assert rows["L01"].readiness == "blocked"
     assert rows["L02"].readiness == "blocked"
-    assert rows["A01"].readiness == "ready"
+    assert rows["A01"].readiness == "blocked"
     assert rows["L02"].reasons == ["case entry is missing from fixture manifest"]
+    assert all(not row.operational_ready for row in rows.values())
+
+
+def test_real_fixture_matrix_checks_sidecar_bytes_and_separates_operational_readiness():
+    rows = {row.case_id: row for row in build_readiness()}
+
+    assert rows["A01"].readiness == "fixture_ready"
+    assert rows["A09"].readiness == "fixture_ready"
+    assert rows["A10"].readiness == "fixture_ready"
+    assert rows["L04"].readiness == "blocked"
+    assert rows["L05"].readiness == "blocked"
+    assert rows["L06"].readiness == "blocked"
+    assert rows["L07"].readiness == "blocked"
+    assert rows["L09"].readiness == "blocked"
+    assert rows["L10"].readiness == "blocked"
+    assert not any(row.operational_ready for row in rows.values())
+
+
+def test_attempt_evidence_marks_only_fixture_ready_case_operational(tmp_path):
+    attempt_root = tmp_path / "attempt-fresh-20260923-01"
+    for case_id in ("A01", "L04"):
+        case_dir = attempt_root / "cases" / case_id
+        case_dir.mkdir(parents=True)
+        identity = {
+            "attempt_id": attempt_root.name,
+            "case_id": case_id,
+        }
+        _dump(case_dir / "attempt.json", {
+            **identity,
+            "kind": "astrid.timeline-eval.case-attempt.v1",
+            "fresh_context": True,
+            "session_id": f"luna-{case_id}-session",
+            "started_at": "2026-09-23T13:00:00Z",
+        })
+        (case_dir / "trace.jsonl").write_text('{"event":"opened_fixture"}\n', encoding="utf-8")
+        _dump(case_dir / "result.json", {**identity, "execution_status": "completed"})
+        _dump(case_dir / "graded-result.json", {**identity, "status": "failed", "setup_status": "ready"})
+
+    rows = {row.case_id: row for row in build_readiness(attempt_root=attempt_root)}
+
+    assert rows["A01"].readiness == "fixture_ready"
+    assert rows["A01"].operational_ready is True
+    assert rows["A01"].operational_reasons == []
+    assert rows["L04"].readiness == "blocked"
+    assert rows["L04"].operational_ready is False
+    assert "fixture prerequisites are blocked" in rows["L04"].operational_reasons[0]
+
+
+def test_blocked_and_setup_failed_attempts_remain_non_operational(tmp_path):
+    attempt_root = tmp_path / "attempt-fresh-20260923-02"
+    case_dir = attempt_root / "cases" / "A02"
+    case_dir.mkdir(parents=True)
+    identity = {"attempt_id": attempt_root.name, "case_id": "A02"}
+    _dump(case_dir / "attempt.json", {
+        **identity,
+        "kind": "astrid.timeline-eval.case-attempt.v1",
+        "fresh_context": True,
+        "session_id": "luna-A02-session",
+        "started_at": "2026-09-23T13:00:00Z",
+    })
+    (case_dir / "trace.jsonl").write_text('{"event":"preflight"}\n', encoding="utf-8")
+    _dump(case_dir / "result.json", {**identity, "execution_status": "blocked"})
+    _dump(case_dir / "graded-result.json", {**identity, "status": "setup_failed", "setup_status": "failed"})
+
+    row = {item.case_id: item for item in build_readiness(attempt_root=attempt_root)}["A02"]
+
+    assert row.readiness == "fixture_ready"
+    assert row.operational_ready is False
+    assert any("agent execution ended in blocked" in reason for reason in row.operational_reasons)
+    assert any("grading ended in setup_failed" in reason for reason in row.operational_reasons)

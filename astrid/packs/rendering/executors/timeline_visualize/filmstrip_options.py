@@ -96,6 +96,9 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
         'track_ids': shared['tracks'],
         'detail': shared['detail'],
         'input_window': shared['window'],
+        # Occurrence is the canonical placement selector. Keep it distinct
+        # from shot/clip aliases so repeated shots remain addressable.
+        'occurrence': shared['occurrence'],
     })
     # Keep omission distinguishable from an explicit page-size override. The
     # paired renderer uses that distinction to make the normal input+output
@@ -131,6 +134,8 @@ def filmstrip_options(values: Mapping[str, Any]) -> dict[str, Any]:
         'density': density,
         'resolution': result['resolution'],
     }
+    if result['occurrence'] is not None:
+        result['request']['occurrence'] = result['occurrence']
     context = values.get('context', 3.0)
     result['context'] = seconds(3.0 if context is None else context)
     if at is not None and result['context'] <= 0:

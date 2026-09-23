@@ -23,7 +23,7 @@ from .audio_analysis import (
     audio_analysis_identity,
     project_waveform,
 )
-from .inspection_contract import compact_render_receipt, project_input_window
+from .inspection_contract import canonical_clip_identity, compact_render_receipt, project_input_window
 from .inspector_navigation import build_inspector_navigation
 
 
@@ -125,7 +125,7 @@ def _attach_input_navigation(index: dict, projection: dict, *, track_meta=None) 
     navigation = index.setdefault('navigation', {})
     provenance = index.get('provenance') if isinstance(index.get('provenance'), dict) else {}
 
-    def input_focus_command(*, track_id=None, clip_id=None, start_frame=None, end_frame=None):
+    def input_focus_command(*, track_id=None, clip_id=None, occurrence_id=None, start_frame=None, end_frame=None):
         argv = ['python3', '-m', 'astrid', 'timelines', 'visualize']
         if provenance.get('project_slug'):
             argv += ['--project', str(provenance['project_slug'])]
@@ -138,6 +138,8 @@ def _attach_input_navigation(index: dict, projection: dict, *, track_meta=None) 
             argv += ['--track', str(track_id)]
         if clip_id:
             argv += ['--clip', str(clip_id)]
+        if occurrence_id:
+            argv += ['--occurrence', str(occurrence_id)]
         if start_frame is not None and end_frame is not None:
             fps = Fraction(*(projection['window'].get('fps') or [30, 1]))
             start = float(Fraction(int(start_frame), 1) / fps)
@@ -187,6 +189,7 @@ def _attach_input_navigation(index: dict, projection: dict, *, track_meta=None) 
                 'continuation': clip.get('continuation'), 'target': target,
                 'actions': {'focus_command': input_focus_command(
                     track_id=track_id, clip_id=clip['clip_id'],
+                    occurrence_id=clip.get('occurrence_id'),
                     start_frame=start_frame, end_frame=end_frame,
                 )},
             })
@@ -198,6 +201,7 @@ def _attach_input_navigation(index: dict, projection: dict, *, track_meta=None) 
                 'audio_signifier': clip.get('audio_signifier'),
                 'actions': {'focus_command': input_focus_command(
                     track_id=track_id, clip_id=clip['clip_id'],
+                    occurrence_id=clip.get('occurrence_id'),
                     start_frame=start_frame, end_frame=end_frame,
                 )},
             }
@@ -435,6 +439,8 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
         component_tokens = [str(components)]
     if component_tokens:
         base += ['--show', ','.join(component_tokens)]
+    if options.get('occurrence') not in (None, ''):
+        base += ['--occurrence', str(options['occurrence'])]
     input_only = [
         'python3', '-m', 'astrid', 'timelines', 'visualize',
         '--project', str(snapshot.get('project_slug') or '<project>'),
@@ -442,6 +448,8 @@ def _navigation_usage(snapshot: Mapping[str, object], options: Mapping[str, obje
         '--render-run', str(snapshot.get('render_run_id') or '<render-run>'),
         '--view', 'filmstrip', '--show', 'inputs', '--hide', 'output',
     ]
+    if options.get('occurrence') not in (None, ''):
+        input_only += ['--occurrence', str(options['occurrence'])]
     paired = 'output' in component_tokens and 'inputs' in component_tokens
     paired_layout = [
         'Paired output+inputs pages show one row (five cards by default); use --columns 6 for six across.',
@@ -688,14 +696,19 @@ def plan_filmstrip(snapshot: dict, options: dict) -> dict:
     clips = snapshot.get('clips', [])
     spans = {id(c): _frame_span(c, fps) for c in clips}
     selected = clips
-    for key in ('clip', 'shot', 'asset'):
+    for key in ('clip', 'occurrence', 'shot', 'asset'):
         value = options.get(key)
         if value is not None:
-            fields = {'clip': ('id',), 'shot': ('shot_id', 'shot_name'), 'asset': ('asset',)}[key]
+            fields = {
+                'clip': ('id',),
+                'occurrence': ('shot_occurrence_id', 'occurrence_id', 'occurrenceId'),
+                'shot': ('shot_id', 'shot_name'),
+                'asset': ('asset',),
+            }[key]
             selected = [c for c in selected if str(value) in [str(c.get(f)) for f in fields]]
             if not selected:
                 raise ValueError(f'No clips match {key}={value!r}.')
-    filtered = any(options.get(k) is not None for k in ('clip', 'shot', 'asset'))
+    filtered = any(options.get(k) is not None for k in ('clip', 'occurrence', 'shot', 'asset'))
     if mode == 'shots' and not snapshot.get('occurrences') and not any(c.get('shot_id') for c in selected):
         raise ValueError('Shot sampling requires shot metadata.')
     first, stop = math.ceil(lo * fps), min(total, math.ceil(hi * fps))
@@ -830,6 +843,7 @@ def plan_filmstrip(snapshot: dict, options: dict) -> dict:
             'sampling': {'mode': 'overview' if is_full_overview else mode, 'overview': is_full_overview,
                          'range': [float(lo), float(hi)], 'effective_range': [float(lo), float(hi)],
                          'requested_range': options.get('range'), 'requested_at': options.get('at'),
+                         'occurrence': options.get('occurrence'),
                          'density': options.get('density'), 'resolution': options.get('resolution'),
                          'step_frames_rational': [step.numerator, step.denominator],
                          'explicit_interval': explicit_interval, 'include_cuts': include_cuts,
@@ -1381,6 +1395,36 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
     # be present in a legacy snapshot.
     index['components'] = list(options.get('components') or ('output', 'text', 'audio'))
     index['component_request'] = options.get('component_request')
+    index['inspection'] = {
+        'scope': {
+            'timeline_id': snapshot.get('timeline_id'),
+            'render_run_id': snapshot.get('render_run_id'),
+            'occurrence_id': options.get('occurrence'),
+        },
+        'target': {
+            'kind': 'occurrence' if options.get('occurrence') else 'timeline',
+            'timeline_id': snapshot.get('timeline_id'),
+            'occurrence_id': options.get('occurrence'),
+        },
+    }
+    if options.get('occurrence') is not None:
+        first_target = next(
+            (
+                clip for card in index.get('cards', [])
+                for clip in (card.get('clips') or [])
+                if isinstance(clip, Mapping)
+                and str(clip.get('shot_occurrence_id') or clip.get('occurrence_id') or clip.get('occurrenceId'))
+                == str(options['occurrence'])
+            ),
+            None,
+        )
+        if first_target is not None:
+            index['inspection']['target'] = canonical_clip_identity(
+                first_target,
+                timeline_id=str(snapshot.get('timeline_id')) if snapshot.get('timeline_id') else None,
+                occurrence_id=str(options['occurrence']),
+                shot_id=options.get('shot'),
+            )
     columns, page_size = int(options.get('columns') or 5), int(options.get('page_size') or 50)
     if not 1 <= columns <= 12 or not 1 <= page_size <= 200:
         raise ValueError('columns must be 1–12 and page_size 1–200.')
@@ -1436,6 +1480,8 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
         'resolution': options.get('resolution'),
         'effective_range': index['sampling']['range'],
     }
+    if options.get('occurrence') is not None:
+        index['request']['occurrence'] = options['occurrence']
     index.setdefault('navigation', {})['usage'] = _navigation_usage(snapshot, options)
     if 'inputs' in (options.get('components') or ()):
         fps = Fraction(*snapshot['fps_rational'])
@@ -1444,9 +1490,27 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
         index['input_projection'] = project_input_window(
             snapshot.get('input_clips') or snapshot.get('clips') or [], start_frame=start_frame,
             end_frame=end_frame, fps=fps, track_ids=options.get('track_ids') or (),
-            clip_id=options.get('clip'), shot_id=options.get('shot'), asset_id=options.get('asset'),
+            clip_id=options.get('clip'), shot_id=options.get('shot'),
+            occurrence_id=options.get('occurrence'), asset_id=options.get('asset'),
             integrity=integrity,
         )
+        if options.get('occurrence') is not None:
+            first_input = next(
+                (
+                    clip for track in index['input_projection'].get('tracks', [])
+                    for clip in (track.get('clips') or [])
+                    if isinstance(clip, Mapping)
+                    and str(clip.get('occurrence_id')) == str(options['occurrence'])
+                ),
+                None,
+            )
+            if first_input is not None:
+                index['inspection']['target'] = canonical_clip_identity(
+                    first_input,
+                    timeline_id=str(snapshot.get('timeline_id')) if snapshot.get('timeline_id') else None,
+                    occurrence_id=str(options['occurrence']),
+                    shot_id=options.get('shot'),
+                )
         attach_input_audio_waveforms(
             index['input_projection'], integrity=integrity, out_root=out_root,
         )

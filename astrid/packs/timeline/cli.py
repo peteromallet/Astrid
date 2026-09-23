@@ -202,8 +202,45 @@ def _timeline_summary(item: Any) -> Any:
 
 def _cmd_show(parsed: argparse.Namespace) -> int:
     result = parsed.client.timelines.show(parsed.project, parsed.ref)
-    if result.ok and parsed.summary:
-        result = _summary_result(result)
+    if result.ok and isinstance(result.data, Mapping):
+        # Keep the legacy bounded summary shape, but derive its inspection
+        # metadata through the same shared projection used by visualize. This
+        # makes occurrence/selected-media/output identity agree without
+        # exposing storage internals or changing the ordinary full show route.
+        from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import (
+            inspection_options,
+            project_timeline_document,
+        )
+        values = {
+            name: getattr(parsed, name, None)
+            for name in ("clip", "occurrence", "shot", "track", "asset", "range", "detail")
+        }
+        normalized = inspection_options(values)
+        selectors = {
+            "clip": normalized["clip"], "occurrence": normalized["occurrence"],
+            "shot": normalized["shot"], "track": normalized["tracks"],
+            "asset": normalized["asset"],
+            "range": values.get("range"), "detail": normalized["detail"],
+        }
+        has_selector = any(value not in (None, "", [], ()) for value in selectors.values())
+        if parsed.summary or has_selector:
+            projection = project_timeline_document(
+                result.data,
+                clip=normalized["clip"], occurrence=normalized["occurrence"],
+                shot=normalized["shot"], track=normalized["tracks"],
+                asset=normalized.get("asset"), range_value=values.get("range"),
+                detail=normalized["detail"],
+            )
+            if parsed.summary:
+                result = _summary_result(result, projection=projection)
+            else:
+                from astrid.sdk.contracts import DomainResult
+
+                result = DomainResult.success(
+                    {"kind": "timeline-inspection", **projection},
+                    receipt=result.receipt,
+                    idempotency_key=result.idempotency_key,
+                )
     return print_result(result, as_json=parsed.json)
 
 
@@ -263,7 +300,7 @@ def _compact_track(track: Any) -> Any:
     return summary or dict(track)
 
 
-def _timeline_document_summary(data: Any) -> Any:
+def _timeline_document_summary(data: Any, *, projection: Mapping[str, Any] | None = None) -> Any:
     """Build the bounded read model used by editor agents.
 
     This intentionally keeps timing and identity, while excluding prompts,
@@ -293,14 +330,25 @@ def _timeline_document_summary(data: Any) -> Any:
             key=lambda clip: (float(clip.get("at", 0)) if isinstance(clip, Mapping) and _numeric(clip.get("at")) else 0.0, str(clip.get("track", "")) if isinstance(clip, Mapping) else ""),
         ),
     }
+    if isinstance(projection, Mapping):
+        # This is deliberately nested so existing consumers of the bounded
+        # summary's track/clip/count fields remain compatible.
+        summary["inspection"] = {
+            key: projection[key]
+            for key in (
+                "query", "targets", "clips", "media", "outputs",
+                "diagnostics", "pagination",
+            )
+            if key in projection
+        }
     return summary
 
 
-def _summary_result(result: Any) -> Any:
+def _summary_result(result: Any, *, projection: Mapping[str, Any] | None = None) -> Any:
     from astrid.sdk.contracts import DomainResult
 
     return DomainResult.success(
-        _timeline_document_summary(result.data),
+        _timeline_document_summary(result.data, projection=projection),
         receipt=result.receipt,
         idempotency_key=result.idempotency_key,
     )
@@ -534,6 +582,7 @@ def _visualization_artifact_summary(outputs: Mapping[str, Any]) -> dict[str, Any
 def _cmd_visualize(parsed: argparse.Namespace) -> int:
     """Run visualization through the public SDK and product output layer."""
     from astrid.sdk.contracts import DomainResult, ErrorObject
+    from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import inspection_options
     human_outputs: Mapping[str, Any] | None = None
 
     # Normalize repeatable and comma-separated spellings before the one
@@ -551,13 +600,19 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
         "shot", "view", "sample", "every", "every_frames", "include_cuts",
         "render_run", "columns", "page_size", "resolution", "include_media",
         "range", "at", "clip", "asset", "context", "neighbors", "show", "hide",
-        "track", "detail",
+        "track", "detail", "occurrence",
     ):
         value = getattr(parsed, name, None)
         if value not in (None, "", []):
             inputs[name] = value
     if timeline_slug not in (None, ""):
         inputs["timeline_slug"] = timeline_slug
+    # The public text and visual routes use the same bounded selector
+    # normalizer. Preserve all existing input spellings, but canonicalize the
+    # occurrence identity before crossing the SDK boundary.
+    inputs["occurrence"] = inspection_options({"occurrence": getattr(parsed, "occurrence", None)})["occurrence"]
+    if inputs["occurrence"] is None:
+        inputs.pop("occurrence")
     result = parsed.client.invoke_result(
         "rendering.timeline_visualize",
         kind="executor",
@@ -648,7 +703,7 @@ def _visualization_navigation_help(
                 argv += ["--hide", ",".join(hidden)]
             for track in tokens(inputs.get("track")):
                 argv += ["--track", track]
-            for key, flag in (("shot", "--shot"), ("clip", "--clip"), ("asset", "--asset")):
+            for key, flag in (("shot", "--shot"), ("clip", "--clip"), ("occurrence", "--occurrence"), ("asset", "--asset")):
                 value = inputs.get(key)
                 if value not in (None, ""):
                     argv += [flag, str(value)]
@@ -1000,6 +1055,17 @@ def _configure_show(subparser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Return a bounded editor summary with tracks, clip timing, and counts.",
     )
+    subparser.add_argument(
+        "--occurrence",
+        default=None,
+        help="Restrict the bounded inspection projection to one exact authored occurrence id.",
+    )
+    subparser.add_argument("--clip", default=None, help="Restrict the inspection projection to one authored clip id.")
+    subparser.add_argument("--shot", default=None, help="Restrict the inspection projection to one authored shot id.")
+    subparser.add_argument("--track", action="append", default=None, help="Restrict the inspection projection to one or more tracks.")
+    subparser.add_argument("--asset", default=None, help="Restrict the inspection projection to one canonical asset key.")
+    subparser.add_argument("--range", dest="range", default=None, help="Half-open START..END seconds window.")
+    subparser.add_argument("--detail", action="store_true", default=False, help="Include full bounded text for selected clips.")
     _add_json_flag(subparser)
     subparser.set_defaults(handler=_cmd_show)
 
@@ -1147,6 +1213,7 @@ def _configure_visualize(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--range", dest="range", default=None, help="Zoom to a closed-open START..END seconds window.")
     subparser.add_argument("--at", default=None, help="Focus a timestamp.")
     subparser.add_argument("--clip", default=None, help="Focus an authored clip id.")
+    subparser.add_argument("--occurrence", default=None, help="Focus an exact authored shot occurrence id.")
     subparser.add_argument("--asset", default=None, help="Focus a canonical asset key.")
     subparser.add_argument(
         "--show", action="append", default=None, metavar="COMPONENT[,COMPONENT...]",

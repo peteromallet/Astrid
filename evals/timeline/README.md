@@ -20,7 +20,16 @@ The suite is a manifest only. No case is claimed to have been executed.
 - Fixture readiness inputs are recorded in `.otto/runs/timeline-text-inspection-20260922/evals/fixtures/{informational/fixture.json,action/manifest.json}`.
   Run `PYTHONPATH=. ./.venv/bin/python -m evals.timeline.fixture_manifest` from
   `Astrid/` to validate explicit targets, media, units, and lifecycle fields and
-  refresh the 20-case readiness matrix beside those manifests.
+  refresh the 20-case readiness matrix beside those manifests. Pass
+  `--attempt-root <attempt-dir>` to verify per-case fresh `attempt.json`, valid
+  `trace.jsonl`, terminal `result.json`, and `graded-result.json` evidence.
+- `evals.timeline.run --aggregate --suite ... --attempt-root ...` is the future
+  collector seam: it grades each isolated `cases/<case-id>/` directory, writes
+  `graded-result.json`, preserves partial trace/artifact evidence, and emits one
+  aggregate. It does not launch Luna or select Runtime credentials. Every case
+  must provide grader-only `checks.json`; an absent or empty rubric is a setup
+  failure, never a pass. Navigation cases are graded from read-only evidence and
+  do not need a candidate edit.
 
 The original L question objects are copied unchanged from
 `.otto/runs/timeline-text-inspection-20260922/evidence/luna-benchmark-brief-20260923.json`.
@@ -111,3 +120,32 @@ does not match Runtime's server-allocated project ID, and media byte exports are
 not included in the fixture contract. No action case is claimed as executed.
 See `.otto/runs/timeline-text-inspection-20260922/evals/e04-runtime-integration.md`
 for the E04 boundary and the temporary-realm integration evidence.
+
+## Native Luna attempt launcher
+
+`evals.timeline.luna_native` is the thin one-loop OMP adapter. It creates a new
+attempt root, gives each case only its public brief plus the supplied fixture
+entry point, and invokes one bounded fresh context for every `fixture_ready`
+case. A launch uses `--no-session`, the explicit model
+`openai-codex/gpt-5.6-luna`, and `--print`; no Runtime endpoint, credential, or
+canonical fallback is selected by this module. Fixture-blocked cases still get
+their own `attempt.json`, `trace.jsonl`, and `result.json`. `checks.json` is
+written only after that case's OMP process exits and is never included in its
+brief. The resulting tree is graded through `aggregate_attempt`.
+
+The real invocation is explicit and bounded:
+
+```text
+cd Astrid
+PYTHONPATH=. ./.venv/bin/python -m evals.timeline.luna_native \
+  --suite evals/timeline/suite.json \
+  --fixture-root ../.otto/runs/timeline-text-inspection-20260922/evals/fixtures \
+  --briefs evals/timeline/cases/agent_briefs.json \
+  --attempt-root ../.otto/runs/timeline-text-inspection-20260922/attempts/luna-native-<timestamp> \
+  --omp-bin omp \
+  --model openai-codex/gpt-5.6-luna
+```
+
+Use `--dry-run` to materialize only the top-level plan. A fake executable is
+supported with `--omp-bin` for smoke tests; it must not be mistaken for a
+model-evaluation result.

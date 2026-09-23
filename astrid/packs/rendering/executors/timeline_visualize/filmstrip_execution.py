@@ -23,7 +23,7 @@ from .filmstrip_cards import (
     build_filmstrip_pack,
 )
 from .filmstrip_options import filmstrip_options
-from .inspection_contract import compact_render_receipt, project_input_window
+from .inspection_contract import canonical_clip_identity, compact_render_receipt, project_input_window
 from .shot_selector import resolve_shot_selector
 
 
@@ -183,17 +183,46 @@ def execute_input_only(args, authority):
     projection = project_input_window(
         snapshot.get("clips") or [], start_frame=start_frame, end_frame=end_frame,
         fps=fps, track_ids=options.get("track_ids") or (), clip_id=options.get("clip"),
-        shot_id=options.get("shot"), asset_id=options.get("asset"), integrity=integrity,
+        shot_id=options.get("shot"), occurrence_id=options.get("occurrence"),
+        asset_id=options.get("asset"), integrity=integrity,
         shot_groups=snapshot.get("pinned_shots") or snapshot.get("pinnedShotGroups") or (),
         shot_occurrences=snapshot.get("shot_occurrences") or (),
     )
+    if options.get("occurrence") is not None:
+        first_input = next(
+            (
+                clip for track in projection.get("tracks", [])
+                for clip in (track.get("clips") or [])
+                if isinstance(clip, Mapping)
+                and str(clip.get("occurrence_id")) == str(options["occurrence"])
+            ),
+            None,
+        )
+        if first_input is not None:
+            index_target = canonical_clip_identity(
+                first_input,
+                timeline_id=str(snapshot.get("timeline_id")) if snapshot.get("timeline_id") else None,
+                occurrence_id=str(options["occurrence"]),
+                shot_id=options.get("shot"),
+            )
+        else:
+            index_target = None
+    else:
+        index_target = None
     index = {
         "schema": "astrid.timeline-input-inspection.v1",
         "provenance": {key: snapshot.get(key) for key in ("project_slug", "timeline_id", "timeline_name", "render_run_id", "fps_rational", "duration_frames", "metadata")},
         "sampling": {"mode": "input_only", "window": projection["window"], "shared_window": [float(Fraction(start_frame, 1) / fps), float(Fraction(end_frame, 1) / fps)], "range": [float(Fraction(start_frame, 1) / fps), float(Fraction(end_frame, 1) / fps)], "step_frames_rational": [1, 1], "include_cuts": False, "explicit_interval": False, "options": options},
         "input_projection": projection, "cards": [], "navigation": {"frames": [], "tracks": [], "clips": [], "shots": [], "phrases": [], "gaps": [], "waveforms": [], "targets": {}},
         "components": options.get("components"), "render": {"status": "not_requested", "auto_render": False},
+        "inspection": {
+            "scope": {"timeline_id": snapshot.get("timeline_id"), "occurrence_id": options.get("occurrence")},
+            "target": {"kind": "occurrence" if options.get("occurrence") else "timeline",
+                       "timeline_id": snapshot.get("timeline_id"), "occurrence_id": options.get("occurrence")},
+        },
     }
+    if index_target is not None:
+        index["inspection"]["target"] = index_target
     index["navigation"]["usage"] = _navigation_usage(snapshot, options)
     out_root = args.out.expanduser().resolve()
     # Keep input-only packs under the same runtime-approved namespace as the

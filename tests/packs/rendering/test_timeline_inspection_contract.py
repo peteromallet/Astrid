@@ -1,8 +1,12 @@
 from astrid.packs.rendering.executors.timeline_visualize.inspection_contract import (
+    canonical_clip_identity,
+    classify_output_records,
     normalize_components,
     normalize_input_window,
+    project_timeline_document,
     project_input_window,
     render_status,
+    semantic_media_inventory,
 )
 
 
@@ -120,3 +124,80 @@ def test_source_preview_requires_admitted_digest_and_managed_identity(tmp_path):
     assert _asset_integrity_from_registry({"assets": {"plain": {"file": str(source)}}})["plain"]["state"] == "unavailable"
     verified = _asset_integrity_from_registry({"assets": {"managed": {"file": str(source), "media_id": "m1", "content_sha256": digest}}})
     assert verified["managed"]["state"] == "verified_original"
+
+
+def test_canonical_identity_keeps_occurrence_clip_and_reusable_shot_distinct():
+    target = canonical_clip_identity(
+        {"id": "clip-1", "shot_id": "shot-A"}, timeline_id="tl-1",
+        occurrence_id="occ-2",
+    )
+    assert target == {
+        "kind": "clip", "timeline_id": "tl-1", "occurrence_id": "occ-2",
+        "clip_id": "clip-1", "shot_id": "shot-A", "addressable": True,
+    }
+    unplaced = canonical_clip_identity({"shot_id": "shot-A"}, timeline_id="tl-1")
+    assert unplaced["occurrence_id"] is None and not unplaced["addressable"]
+
+
+def test_output_classification_never_promotes_candidate_and_marks_old_head():
+    rows = classify_output_records([
+        {"id": "c", "disposition": "candidate", "source_head": "h2"},
+        {"id": "now", "source_head": "h2"},
+        {"id": "old", "disposition": "historical", "source_head": "h1"},
+        {"id": "legacy"},
+    ], current_head="h2", current_output_id="now")
+    assert [row["classification"] for row in rows] == ["candidate", "current", "historical", "unverified"]
+    assert rows[1]["current_for_head"] is True
+
+
+def test_semantic_media_inventory_separates_selected_alternative_and_invalid_media():
+    inventory = semantic_media_inventory([
+        {"id": "picture-1", "track": "picture", "asset": "selected", "at": 0, "hold": 2},
+        {"id": "bad", "track": "picture", "asset": "missing", "at": -1, "hold": 0},
+        None,
+    ], {"assets": {
+        "selected": {"media_id": "media-1", "sha256": "abc"},
+        "option": {"role": "alternative"},
+        "old": {"role": "historical"},
+    }})
+    states = {row["asset_key"]: row["state"] for row in inventory["items"]}
+    assert states == {"old": "historical", "option": "alternative", "selected": "active"}
+    assert inventory["diagnostics"] == [
+        {"code": "invalid_clip_timing", "clip_id": "bad", "message": "clip has invalid or non-positive timing"},
+        {"code": "selected_media_missing_registry", "clip_id": "bad", "asset_key": "missing",
+         "message": "selected media key is absent from registry"},
+        {"code": "invalid_clip_record", "clip_index": 2, "message": "clip must be an object"},
+    ]
+
+
+def test_shared_timeline_document_projection_filters_paginates_and_expands_text():
+    document = {
+        "timeline_id": "tl-1", "project_slug": "astrid-intro", "slug": "intro",
+        "head_hash": "h2", "current_output_id": "out-current",
+        "occurrences": [{"clip_id": "clip-2", "occurrence_id": "occ-2", "shot_id": "shot-A"}],
+        "config": {"clips": [
+            {"id": "clip-1", "track": "picture", "at": 0, "hold": 2, "text": "A" * 600,
+             "asset": "img-1"},
+            {"id": "clip-2", "track": "picture", "at": 2, "hold": 2, "shot_id": "shot-A",
+             "asset": "img-2"},
+            {"id": "clip-3", "track": "audio", "at": 4, "hold": 2, "asset": "music"},
+        ]},
+        "registry": {"assets": {"img-1": {"media_id": "m1"}, "img-2": {"media_id": "m2"},
+                                  "music": {"role": "music"}}},
+        "outputs": [{"id": "out-current", "source_head": "h2"},
+                    {"id": "draft", "disposition": "candidate"}],
+    }
+    first = project_timeline_document(document, limit=1, track="picture")
+    assert first["clips"][0]["clip_id"] == "clip-1"
+    assert first["targets"][0]["clip_id"] == "clip-1"
+    assert first["clips"][0]["text_truncated"] is True
+    assert first["pagination"]["total"] == 2 and first["pagination"]["next_cursor"]
+    second = project_timeline_document(document, limit=1, cursor=first["pagination"]["next_cursor"], track="picture")
+    assert second["clips"][0]["occurrence_id"] == "occ-2"
+    assert second["clips"][0]["target"] == second["targets"][0]
+    assert [output["classification"] for output in first["outputs"]] == ["current", "candidate"]
+    expanded = project_timeline_document(document, clip="clip-1", detail=True)
+    assert expanded["clips"][0]["text"] == "A" * 600
+    assert expanded["clips"][0]["actions"]["visualize"]["argv"][-2:] == ["--show", "inputs"]
+    filtered = project_timeline_document(document, occurrence="occ-2")
+    assert [row["clip_id"] for row in filtered["clips"]] == ["clip-2"]

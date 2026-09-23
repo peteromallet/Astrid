@@ -266,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--range", dest="range_value")
     parser.add_argument("--at")
     parser.add_argument("--clip")
+    parser.add_argument("--occurrence", help="Focus an exact authored shot occurrence id.")
     parser.add_argument("--asset")
     parser.add_argument("--context", type=float, default=3.0)
     parser.add_argument("--neighbors", type=int, default=0)

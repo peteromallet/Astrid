@@ -54,7 +54,7 @@ def _parent_payload(closure: Mapping[str, Any]) -> Mapping[str, Any]:
     return payload
 
 
-def _shot_voice_ids(closure: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+def _shot_voice_records(closure: Mapping[str, Any]) -> dict[str, tuple[dict[str, Any], ...]]:
     shot_revisions = {
         str(row.get("revision_id")): row
         for row in _rows(closure.get("shot_revisions"))
@@ -69,11 +69,15 @@ def _shot_voice_ids(closure: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     for revision_id, shot in shot_revisions.items():
         internal_id = shot.get("internal_timeline_revision_id")
         internal = internals.get(str(internal_id))
-        voice_ids = tuple(
-            str(clip.get("id")) for clip in _rows(_mapping(internal).get("payload", {}).get("clips"))
-            if str(clip.get("track", "")).lower() in _VOICE_TRACKS and clip.get("id")
-        )
-        result[revision_id] = voice_ids
+        voice_rows = []
+        for clip in _rows(_mapping(internal).get("payload", {}).get("clips")):
+            if str(clip.get("track", "")).lower() in _VOICE_TRACKS and clip.get("id"):
+                voice_rows.append({
+                    key: copy.deepcopy(clip[key])
+                    for key in ("id", "asset", "media_id", "source_media_id", "from", "to", "muted")
+                    if key in clip
+                })
+        result[revision_id] = tuple(voice_rows)
     return result
 
 
@@ -91,6 +95,9 @@ def _music_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             "at_ms": at * 1000 if at_key == "at" else at,
             "duration_ms": hold * 1000 if hold_key == "hold" else hold,
             "source_from": copy.deepcopy(clip.get("from", clip.get("source_from"))),
+            "media_identity": copy.deepcopy({
+                key: clip[key] for key in ("asset", "media_id", "source_media_id") if key in clip
+            }),
         })
     return rows
 
@@ -115,6 +122,9 @@ def _snapshot(closure: Mapping[str, Any]) -> dict[str, Any]:
     parent_duration = payload.get("duration_ms")
     if parent_duration is None:
         parent_duration = max((row["end_ms"] for row in records), default=0)
+    voice_records = _shot_voice_records(closure)
+    for record in records:
+        record["voice_clips"] = list(voice_records.get(str(record.get("shot_revision_id")), ()))
     return {
         "occurrences": records,
         "parent_duration_ms": _number(parent_duration, "parent duration"),
@@ -142,9 +152,9 @@ def materialize_a02_derivative(
     music_end = max(row["at_ms"] + row["duration_ms"] for row in snapshot["music_clips"])
     if music_end < snapshot["parent_duration_ms"]:
         raise A02FixtureUnavailable("A02 parent music must reach the composition end")
-    voice_ids = _shot_voice_ids(closure)
-    target_voice_ids = voice_ids.get(str(target.get("shot_revision_id")), ())
-    if not target_voice_ids:
+    target_voice_records = tuple(target.get("voice_clips", ()))
+    target_voice_ids = tuple(str(row["id"]) for row in target_voice_records if row.get("id"))
+    if not target_voice_records:
         raise A02FixtureUnavailable("A02 target shot has no own voice clip")
     source_head = _mapping(closure.get("parent_revision")).get("revision_id")
     if not isinstance(source_head, str) or not source_head:
@@ -183,6 +193,8 @@ def validate_a02_readback(
     removed_duration = target["duration_ms"]
     remaining = [row for row in before["occurrences"] if row["occurrence_id"] != target_occurrence_id]
     actual_by_id = {row["occurrence_id"]: row for row in after["occurrences"]}
+    if len(after["occurrences"]) != len(actual_by_id):
+        errors.append("remaining occurrences contain duplicate occurrence IDs")
     if target_occurrence_id in actual_by_id:
         errors.append("removed occurrence remains active")
     if set(actual_by_id) != {row["occurrence_id"] for row in remaining}:
@@ -198,6 +210,23 @@ def validate_a02_readback(
             errors.append(f"occurrence {row['occurrence_id']} duration changed")
         if actual["shot_id"] != row["shot_id"]:
             errors.append(f"occurrence {row['occurrence_id']} shot identity changed")
+        before_voice = {str(item.get("id")): item for item in row.get("voice_clips", ())}
+        actual_voice = {str(item.get("id")): item for item in actual.get("voice_clips", ())}
+        if set(before_voice) != set(actual_voice):
+            errors.append(f"occurrence {row['occurrence_id']} voice clip identity changed")
+        for voice_id, voice in before_voice.items():
+            observed_voice = actual_voice.get(voice_id)
+            if observed_voice is None:
+                continue
+            for key in ("asset", "media_id", "source_media_id", "from", "to"):
+                if observed_voice.get(key) != voice.get(key):
+                    errors.append(f"voice clip {voice_id} {key} changed")
+            if (
+                observed_voice.get("muted") is True and voice.get("muted") is not True
+            ) or (
+                voice.get("muted") is not None and observed_voice.get("muted") != voice.get("muted")
+            ):
+                errors.append(f"voice clip {voice_id} muted state changed")
     expected_parent_duration = before["parent_duration_ms"] - removed_duration
     if after["parent_duration_ms"] != expected_parent_duration:
         errors.append("parent duration did not shrink by the removed occurrence duration")
@@ -211,6 +240,8 @@ def validate_a02_readback(
             continue
         if actual["at_ms"] != row["at_ms"] or actual["source_from"] != row["source_from"]:
             errors.append(f"music clip {clip_id} source start changed")
+        if actual.get("media_identity") != row.get("media_identity"):
+            errors.append(f"music clip {clip_id} media identity changed")
         expected_duration = expected_parent_duration - row["at_ms"]
         if actual["duration_ms"] != expected_duration:
             errors.append(f"music clip {clip_id} was not trimmed to the new parent end")

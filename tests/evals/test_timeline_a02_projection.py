@@ -86,6 +86,23 @@ def test_a02_negative_oracle_rejects_duration_or_music_drift() -> None:
     assert any("music clip music was not trimmed" in error for error in errors)
 
 
+def test_a02_negative_oracle_rejects_duplicate_remaining_occurrence() -> None:
+    before, after = _removed_closure()
+    duplicate = copy.deepcopy(after["parent_revision"]["payload"]["occurrences"][1])
+    after["parent_revision"]["payload"]["occurrences"].append(duplicate)
+    errors = validate_a02_readback(before, after, target_occurrence_id="occ-1")
+    assert "remaining occurrences contain duplicate occurrence IDs" in errors
+
+
+def test_a02_negative_oracle_rejects_muted_voice_and_music_identity_drift() -> None:
+    before, after = _removed_closure()
+    after["internal_timeline_revisions"][2]["payload"]["clips"][1]["muted"] = True
+    after["parent_revision"]["payload"]["clips"][0]["asset"] = "different-music"
+    errors = validate_a02_readback(before, after, target_occurrence_id="occ-1")
+    assert any("voice clip voice-2 muted state changed" in error for error in errors)
+    assert "music clip music media identity changed" in errors
+
+
 def test_a02_contract_exposes_projection_but_remains_blocked_without_route() -> None:
     contract = action_target_contract({"id": "A02"})
     assert contract.readback_projection == A02_PROJECTION

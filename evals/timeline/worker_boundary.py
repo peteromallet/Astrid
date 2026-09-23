@@ -162,6 +162,8 @@ class WorkerLaunchObservation:
     elapsed_seconds: float
     stdout: str = ""
     stderr: str = ""
+    worker_stopped: bool = False
+    descendants_stopped: bool = False
 
 
 class BoundarySupervisor(Protocol):
@@ -466,6 +468,10 @@ def launch_in_proven_boundary(
         or observed.challenge != receipt.challenge
     ):
         raise BoundaryUnavailable("model launch ran outside the proven worker boundary")
+    if not observed.worker_stopped or not observed.descendants_stopped:
+        raise BoundaryUnavailable(
+            "model worker and its descendants were not stopped before private grading"
+        )
     return observed
 
 

@@ -125,6 +125,8 @@ class Supervisor:
             returncode=0,
             elapsed_seconds=0.2,
             stdout='{"event":"done"}\n',
+            worker_stopped=True,
+            descendants_stopped=True,
         )
         return self.launch_override(request, value) if self.launch_override else value
 
@@ -185,6 +187,17 @@ def test_refused_connection_without_network_policy_witness_is_not_a_denial():
         value, denial_source="not_routable",
     ) if probe.probe_id == "canonical-runtime-denied" else value
     with pytest.raises(BoundaryUnavailable, match="policy-backed denial"):
+        prove_worker_boundary(supervisor, requirements)
+
+
+@pytest.mark.parametrize("failure", ["connection_error", "timeout"])
+def test_connection_errors_and_timeouts_are_errors_not_denial_evidence(failure):
+    requirements = _requirements()
+    supervisor = Supervisor(requirements)
+    supervisor.override = lambda probe, value: replace(
+        value, observed="error", denial_source=None,
+    ) if probe.probe_id == "canonical-runtime-denied" else value
+    with pytest.raises(BoundaryUnavailable, match="observed error, expected deny"):
         prove_worker_boundary(supervisor, requirements)
 
 
@@ -259,6 +272,29 @@ def test_model_launch_must_use_same_supervisor_challenge_and_runtime_receipt():
     assert launch_in_proven_boundary(supervisor, receipt, request).status == "completed"
     supervisor.launch_override = lambda _request, value: replace(value, challenge="stale")
     with pytest.raises(BoundaryUnavailable, match="outside the proven worker boundary"):
+        launch_in_proven_boundary(supervisor, receipt, request)
+
+
+def test_private_grading_requires_worker_and_descendants_stopped():
+    requirements = _requirements()
+    supervisor = Supervisor(requirements)
+    receipt = prove_worker_boundary(supervisor, requirements)
+    request = WorkerLaunchRequest(
+        worker_id=requirements.worker_id,
+        boundary_id=receipt.boundary_id,
+        runtime_receipt_id=receipt.runtime_receipt_id,
+        challenge=receipt.challenge,
+        public_package_path=receipt.public_package_path,
+        public_package_digest=receipt.public_package_digest,
+        argv=("omp", "--cwd", requirements.selected_case_path, "--no-session"),
+        cwd=requirements.selected_case_path,
+        environment={},
+        timeout_seconds=10,
+    )
+    supervisor.launch_override = lambda _request, value: replace(
+        value, worker_stopped=False, descendants_stopped=False,
+    )
+    with pytest.raises(BoundaryUnavailable, match="descendants were not stopped"):
         launch_in_proven_boundary(supervisor, receipt, request)
 
 

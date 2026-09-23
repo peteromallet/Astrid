@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Mapping
@@ -38,6 +39,7 @@ from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
 from .independent_readback import (
     EXACT_CLOSURE_NAVIGATION,
     IndependentReadbackError,
+    ProjectionUnavailable,
     ReadbackContract,
     ReadbackObservation,
     observe_case_before,
@@ -70,6 +72,41 @@ SKILL_RELATIVE_PATH = "astrid/packs/rendering/skill/SKILL.md"
 
 class NativeLauncherError(SetupError):
     """The attempt cannot be started without inventing fixture/runtime state."""
+
+
+@dataclass(frozen=True)
+class CaseRuntimeContract:
+    """Coordinator-only Runtime/readback authority for one selected case."""
+
+    endpoint: str
+    credential: Path
+    isolation_contract: Path
+    source_reader: Any | None = None
+
+
+def _verify_projected_readback(
+    *,
+    reader: Any,
+    target: Mapping[str, Any],
+    contract: ReadbackContract,
+    before: ReadbackObservation,
+    publication: Mapping[str, Any] | None,
+    source_reader: Any | None,
+) -> Any:
+    """Dispatch only named, implemented projections; never infer a grader."""
+    if contract.projection == EXACT_CLOSURE_NAVIGATION:
+        return verify_navigation_after(
+            reader, target, contract, before, source_reader=source_reader,
+        )
+    if contract.projection == "active_media_replacement.v1":
+        if publication is None:
+            raise ProjectionUnavailable(
+                "active_media_replacement.v1 requires an exact publication receipt"
+            )
+        return verify_case_after(
+            reader, target, contract, before, publication, source_reader=source_reader,
+        )
+    raise ProjectionUnavailable(f"case projection unavailable: {contract.projection}")
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -974,6 +1011,7 @@ def run_attempt(
     prepared_targets_root: Path | None = None,
     fixture_only: bool = False,
     source_reader: Any | None = None,
+    runtime_contracts: Mapping[str, CaseRuntimeContract] | None = None,
     boundary_supervisor: BoundarySupervisor | None = None,
     boundary_requirements: Mapping[str, BoundaryRequirements] | None = None,
 ) -> dict[str, Any]:
@@ -991,7 +1029,7 @@ def run_attempt(
         raise NativeLauncherError("an explicit fresh attempt root is required")
     if thinking not in {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}:
         raise NativeLauncherError(f"unsupported OMP thinking level: {thinking}")
-    if execute and not fixture_only:
+    if execute and not fixture_only and runtime_contracts is None:
         from .run import validate_isolated_target
         allowed, message = validate_isolated_target(
             isolated_endpoint, isolated_credential, isolation_contract
@@ -1065,6 +1103,13 @@ def run_attempt(
             raise NativeLauncherError("every suite case must be an object with an id")
         case = dict(raw_case)
         case_id = _safe_case_id(case["id"])
+        selected_runtime = (runtime_contracts or {}).get(case_id)
+        case_endpoint = selected_runtime.endpoint if selected_runtime else isolated_endpoint
+        case_credential = selected_runtime.credential if selected_runtime else isolated_credential
+        case_isolation_contract = (
+            selected_runtime.isolation_contract if selected_runtime else isolation_contract
+        )
+        case_source_reader = selected_runtime.source_reader if selected_runtime else source_reader
         case_dir = cases_root / case_id
         case_dir.mkdir()
         case_boundary_requirements = (boundary_requirements or {}).get(case_id)
@@ -1241,6 +1286,7 @@ def run_attempt(
                     requirements.case_id != case_id
                     or Path(requirements.host_selected_case_path).resolve() != case_dir.resolve()
                     or requirements.skill_sha256 != skill_reference.get("sha256")
+                    or requirements.disposable_endpoint != case_endpoint
                 ):
                     raise BoundaryUnavailable(
                         "host boundary requirements do not match case path or pinned skill hash"
@@ -1297,17 +1343,17 @@ def run_attempt(
         if public_target is not None and not fixture_only:
             try:
                 target_endpoint = public_target.get("endpoint")
-                if isolated_endpoint and target_endpoint and target_endpoint != isolated_endpoint:
+                if case_endpoint and target_endpoint and target_endpoint != case_endpoint:
                     raise IndependentReadbackError("public target endpoint differs from requested disposable endpoint")
                 readback_adapter = _connect_readback_adapter(
-                    endpoint=isolated_endpoint,
-                    credential=isolated_credential,
-                    contract=isolation_contract,
+                    endpoint=case_endpoint,
+                    credential=case_credential,
+                    contract=case_isolation_contract,
                 )
                 readback_contract = _readback_contract(case, public_target, fixture_root)
                 before_observation = observe_case_before(
                     readback_adapter, public_target, readback_contract,
-                    source_reader=source_reader,
+                    source_reader=case_source_reader,
                 )
                 if case.get("kind") == "action" and case_id == "A01":
                     _require_a01_protected_roles(before_observation.target)
@@ -1335,9 +1381,9 @@ def run_attempt(
             model_boundary_id=model_boundary_id,
             case=case,
             case_dir=case_dir,
-            isolated_endpoint=isolated_endpoint,
-            isolated_credential=isolated_credential,
-            isolation_contract=isolation_contract,
+            isolated_endpoint=case_endpoint,
+            isolated_credential=case_credential,
+            isolation_contract=case_isolation_contract,
             skill_reference=case_skill_reference,
             public_target=public_target,
             fixture_only=fixture_only,
@@ -1367,48 +1413,42 @@ def run_attempt(
             try:
                 if readback_adapter is None:
                     readback_adapter = _connect_readback_adapter(
-                        endpoint=isolated_endpoint,
-                        credential=isolated_credential,
-                        contract=isolation_contract,
+                        endpoint=case_endpoint,
+                        credential=case_credential,
+                        contract=case_isolation_contract,
                     )
-                if case.get("kind") == "navigation" and before_observation is not None and readback_contract is not None:
-                    case_readback = verify_navigation_after(
-                        readback_adapter, public_target, readback_contract,
-                        before_observation, source_reader=source_reader,
-                    )
-                    readback_result = case_readback.as_dict()
-                else:
-                    publication_response = merged_result.get("publication_response")
-                    if (
-                        isinstance(publication_response, Mapping)
-                        and before_observation is not None
-                        and readback_contract is not None
-                    ):
-                        case_readback = verify_case_after(
-                            readback_adapter, public_target, readback_contract,
-                            before_observation, _publication_payload(publication_response),
-                            source_reader=source_reader,
-                        )
-                        readback_result = case_readback.as_dict()
-                        if case_id == "A01" and isinstance(case_readback.after, Mapping):
-                            _require_a01_protected_roles(case_readback.after)
-                    else:
-                        readback_result = {
-                            "status": "unavailable",
-                            "before_observed": before_observation is not None,
-                            "after_observed": False,
-                            "safety": {"source_unchanged": None, "test_target_only": None},
-                            "reasons": ("exact publication response with dependency_manifest is missing",),
-                        }
+                publication_response = merged_result.get("publication_response")
+                publication = (
+                    _publication_payload(publication_response)
+                    if isinstance(publication_response, Mapping) else None
+                )
+                if before_observation is None or readback_contract is None:
+                    raise ProjectionUnavailable("before observation or readback contract is unavailable")
+                case_readback = _verify_projected_readback(
+                    reader=readback_adapter,
+                    target=public_target,
+                    contract=readback_contract,
+                    before=before_observation,
+                    publication=publication,
+                    source_reader=case_source_reader,
+                )
+                readback_result = case_readback.as_dict()
+                if case_id == "A01" and isinstance(case_readback.after, Mapping):
+                    _require_a01_protected_roles(case_readback.after)
             except Exception as exc:  # noqa: BLE001 - adapter boundary is external
                 readback_error = f"{type(exc).__name__}: {exc}"
         if readback_result is None:
+            unavailable_safety = {
+                "source_unchanged": None,
+                "test_target_only": None,
+            }
+            if case.get("kind") == "navigation":
+                unavailable_safety["read_only_target"] = None
             readback_result = {
                 "status": "unavailable",
                 "before_observed": before_observation is not None,
                 "after_observed": False,
-                "safety": {"source_unchanged": None, "test_target_only": None,
-                           "read_only_target": None},
+                "safety": unavailable_safety,
                 "reasons": (readback_error or "independent readback unavailable",),
             }
         if before_observation is not None:

@@ -336,6 +336,8 @@ def _install_fake_boundary(
                 elapsed_seconds=time.monotonic() - started,
                 stdout=stdout,
                 stderr=stderr,
+                worker_stopped=True,
+                descendants_stopped=True,
             )
 
     monkeypatch.setattr(luna_native, "pin_worker_boundary", lambda _supervisor, value: value)

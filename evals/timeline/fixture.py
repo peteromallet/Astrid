@@ -250,7 +250,9 @@ def public_target_receipt(
         else {
             "status": "unavailable" if not read_only else "not_permitted",
             "reason": (
-                "This case has no seeded case-specific edit route; report unavailable or blocked."
+                f"No case-specific publication route is admitted for {identities.case_id}. "
+                "Only the A01 receipt can currently declare timelines replace-parent-media; "
+                "do not infer an action route from the general authoring-bundle helpers."
                 if not read_only
                 else "This navigation case is read-only."
             ),
@@ -430,10 +432,77 @@ def materialize_public_navigation_entrypoint(
         "related_inputs": related_inputs,
         "media": copied_media,
     }
+    if case_id == "L10":
+        # The selected voice bytes are already copied and digest-verified
+        # above. On macOS, afplay is the existing local playback adapter; do
+        # not claim playback support on hosts where it is absent.
+        player = shutil.which("afplay")
+        entrypoint["surface_adapters"] = {
+            "voice_player": {
+                "status": "available" if player else "unavailable",
+                "command": "afplay",
+                "resolved_executable": player,
+                "input_role": "voice_source",
+                "scope": "local_audio_output",
+            }
+        }
     (entry_root / "entrypoint.json").write_text(
         json.dumps(entrypoint, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     return entrypoint
+
+
+def derive_invalid_authoring_candidate(baseline: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive a real, detached L06 invalid-candidate diagnostic.
+
+    The candidate is opened from the exact pinned closure and then deliberately
+    writes the derived parent ``occurrences`` projection. The product validator
+    must reject it. This does not publish, mutate, or rebase any source record.
+    """
+    from astrid.core.timeline.authoring_bundle import (
+        UnsupportedAuthoringEditError,
+        open_authoring_bundle,
+        validate_authoring_candidate,
+    )
+
+    source = baseline.get("source")
+    closure = baseline.get("closure")
+    if not isinstance(source, Mapping) or not isinstance(closure, Mapping):
+        raise FixtureError("L06 requires the complete pinned baseline source and closure")
+    parent = closure.get("parent_revision")
+    shots = closure.get("shot_revisions")
+    internals = closure.get("internal_timeline_revisions")
+    if not isinstance(parent, Mapping) or not isinstance(shots, list) or not isinstance(internals, list):
+        raise FixtureError("L06 baseline is missing exact parent/shot/internal revisions")
+    candidate = open_authoring_bundle(
+        parent, shot_revisions=shots, internal_timeline_revisions=internals,
+    )
+    candidate["parent"] = dict(candidate["parent"])
+    candidate["parent"]["occurrences"] = []
+    try:
+        validate_authoring_candidate(candidate)
+    except UnsupportedAuthoringEditError as exc:
+        diagnostic = {
+            "status": "invalid",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "base_parent_revision_id": candidate["base_parent"]["revision_id"],
+            "recovery": "Edit candidate.placements; parent occurrences are derived from those placements.",
+        }
+    else:
+        raise FixtureError("authoring validator unexpectedly accepted the derived-field mutation")
+    if diagnostic["base_parent_revision_id"] != source.get("head"):
+        raise FixtureError("L06 invalid candidate does not use the exact pinned parent head")
+    return {
+        "kind": "astrid.timeline-eval.invalid-authoring-candidate.v1",
+        "case_id": "L06",
+        "source_head": source.get("head"),
+        "source_closure_digest": baseline.get("closure_digest"),
+        "candidate": candidate,
+        "diagnostic": diagnostic,
+        "publication_performed": False,
+        "reset": "discard this detached candidate; canonical source was never mutated",
+    }
 
 
 def _public_target_locator(

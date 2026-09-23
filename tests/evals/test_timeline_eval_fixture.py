@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from hashlib import sha256
+import json
 
 import pytest
 
@@ -16,6 +17,7 @@ from evals.timeline.fixture import (
     FixtureError,
     MediaRequirement,
     derive_case_identities,
+    derive_invalid_authoring_candidate,
     export_baseline,
     idempotency_key,
     materialize_public_navigation_entrypoint,
@@ -208,6 +210,7 @@ def test_public_target_receipt_does_not_advertise_a01_route_for_other_cases(tmp_
     target = public_target_receipt(seed)
     assert target["case_id"] == "A02"
     assert target["capabilities"]["edit"]["status"] == "unavailable"
+    assert "case-specific" in target["capabilities"]["edit"]["reason"]
     assert "edit_route" not in target
 
 
@@ -232,6 +235,36 @@ def test_offline_navigation_entrypoint_materializes_only_selected_case_and_recei
         materialize_public_navigation_entrypoint(
             "L03", fixture_root=DEFAULT_FIXTURE_ROOT, destination=destination,
         )
+
+
+def test_l10_entrypoint_exposes_verified_voice_bytes_and_existing_player_adapter(tmp_path):
+    destination = tmp_path / "case-L10"
+    destination.mkdir()
+    entrypoint = materialize_public_navigation_entrypoint(
+        "L10", fixture_root=DEFAULT_FIXTURE_ROOT, destination=destination,
+    )
+
+    player = entrypoint["surface_adapters"]["voice_player"]
+    assert player["command"] == "afplay"
+    assert player["input_role"] == "voice_source"
+    voice = next(row for row in entrypoint["targets"]["intro_b01"]["media_handles"]
+                 if row["role"] == "voice_source")
+    assert (destination / "entrypoint" / voice["local_path"]).is_file()
+    assert player["resolved_executable"]
+
+
+def test_l06_invalid_candidate_is_rejected_by_real_validator_without_publication():
+    manifest_path = DEFAULT_FIXTURE_ROOT / "informational" / "fixture.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    baseline_path = (manifest_path.parent / manifest["source"]["baseline"]).resolve()
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    result = derive_invalid_authoring_candidate(baseline)
+
+    assert result["kind"] == "astrid.timeline-eval.invalid-authoring-candidate.v1"
+    assert result["source_head"] == baseline["source"]["head"]
+    assert result["diagnostic"]["status"] == "invalid"
+    assert "occurrences is derived" in result["diagnostic"]["message"]
+    assert result["publication_performed"] is False
 
 
 def test_cases_share_runtime_project_but_keep_distinct_runtime_timeline_ids(tmp_path):

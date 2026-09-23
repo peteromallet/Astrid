@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -545,6 +546,8 @@ def _fixture_requirement_reasons(
                 if candidate and candidate.is_file() and not candidate.is_symlink():
                     expected_digest = requirement.get("sha256")
                     available = expected_digest is None or _file_digest(candidate) == expected_digest
+        elif predicate == "executable":
+            available = isinstance(value, str) and bool(shutil.which(value))
         else:
             reasons.append(f"fixture requirement {index} has unsupported predicate {predicate!r}")
             continue

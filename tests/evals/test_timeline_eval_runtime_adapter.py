@@ -164,6 +164,40 @@ def test_seed_rejects_mismatched_runtime_assigned_identity_before_mutation(tmp_p
                    for name, _ in client.calls)
 
 
+def test_fixture_item_remap_fallback_changes_only_schema_known_references(monkeypatch):
+    """The minimal prep image can seed without importing optional core deps."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def without_authoring_bundle(name, *args, **kwargs):
+        if name == "astrid.core.timeline.authoring_bundle":
+            raise ModuleNotFoundError("optional authoring dependencies are absent")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_authoring_bundle)
+    payload = {
+        "items": [{
+            "item_id": "old-item",
+            "source_item_id": "old-item",
+            "nested": {"selected_item_id": "old-item", "related_item_ids": ["old-item", 7]},
+            "opaque": "old-item",
+        }],
+        "metadata": {"parent_item_id": "old-item", "description": "old-item"},
+    }
+
+    remapped = RuntimeFixtureAdapter._remap_item_payload(payload, {"old-item": "new-item"})
+
+    assert remapped["items"][0]["item_id"] == "new-item"
+    assert remapped["items"][0]["source_item_id"] == "new-item"
+    assert remapped["items"][0]["nested"]["selected_item_id"] == "new-item"
+    assert remapped["items"][0]["nested"]["related_item_ids"] == ["new-item", 7]
+    assert remapped["metadata"]["parent_item_id"] == "new-item"
+    assert remapped["items"][0]["opaque"] == "old-item"
+    assert remapped["metadata"]["description"] == "old-item"
+    assert payload["items"][0]["item_id"] == "old-item"
+
+
 def test_real_disposable_runtime_handshake_and_project_id_allocation(tmp_path):
     """Exercise the generated Runtime transport against a fresh temporary realm."""
     from runtime_protocol.daemon import RuntimeDaemon

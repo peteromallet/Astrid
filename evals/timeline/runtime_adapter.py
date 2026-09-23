@@ -23,6 +23,39 @@ ISOLATION_MARKER_NAME = ".astrid-timeline-eval-isolated.json"
 REQUIRED_SCOPES = frozenset({"projects:read", "projects:write", "objects:read", "objects:write"})
 
 
+def _remap_known_item_references_fallback(
+    value: Any, item_ids: Mapping[str, str], *, key: str | None = None,
+) -> Any:
+    """Remap schema-known item references without importing the full core stack.
+
+    Trusted fixture-preparation containers intentionally carry only the public
+    Astrid source and runtime client.  The core authoring module also imports
+    optional validation dependencies (for example ``jsonschema``), so keep the
+    narrow identity rewrite available when those dependencies are absent.
+    """
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for child_key, child in value.items():
+            if not isinstance(child_key, str):
+                result[child_key] = copy.deepcopy(child)
+            elif isinstance(child, str) and (
+                child_key in {"item_id", "source_item_id", "selected_item_id", "parent_item_id"}
+                or child_key.endswith("_item_id")
+            ):
+                result[child_key] = item_ids.get(child, child)
+            elif isinstance(child, list) and child_key.endswith("_item_ids"):
+                result[child_key] = [
+                    item_ids.get(item, item) if isinstance(item, str) else copy.deepcopy(item)
+                    for item in child
+                ]
+            else:
+                result[child_key] = _remap_known_item_references_fallback(child, item_ids, key=child_key)
+        return result
+    if isinstance(value, list):
+        return [_remap_known_item_references_fallback(item, item_ids, key=key) for item in value]
+    return copy.deepcopy(value)
+
+
 class RuntimeAdapterError(FixtureError):
     """Runtime preflight or adapter contract failure."""
 
@@ -271,7 +304,13 @@ class RuntimeFixtureAdapter:
     def _remap_item_payload(payload: Mapping[str, Any], item_ids: Mapping[str, str]) -> dict[str, Any]:
         # Reuse the author's schema-aware item-reference walker. `id` is
         # changed only on direct records in the known `items` array.
-        from astrid.core.timeline.authoring_bundle import _remap_known_item_references
+        try:
+            from astrid.core.timeline.authoring_bundle import _remap_known_item_references
+        except (ImportError, ModuleNotFoundError):
+            # The trusted prep image does not need the full authoring validator;
+            # preserve the exact narrow remapping semantics when optional core
+            # dependencies are unavailable.
+            _remap_known_item_references = _remap_known_item_references_fallback
 
         result = _remap_known_item_references(dict(payload), item_ids)
         items = result.get("items")

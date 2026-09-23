@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from evals.timeline.independent_readback import read_target_snapshot
+from evals.timeline.checks import run_checks
 
 
 class FakeAdapter:
@@ -92,3 +93,17 @@ def test_readback_rejects_occurrence_pointing_at_different_shot():
         assert "different shot identity" in str(exc)
     else:  # pragma: no cover - assertion makes failure explicit
         raise AssertionError("readback accepted a locator pointing at the wrong shot")
+
+
+def test_protected_role_content_change_is_not_hidden_by_same_clip_id():
+    before = read_target_snapshot(FakeAdapter(_closure()), _target())
+    closure = _closure()
+    closure["internal_timeline_revisions"][0]["payload"]["clips"][1]["asset"] = "changed-voice"
+    after = read_target_snapshot(FakeAdapter(closure), _target())
+    results = run_checks([{
+        "id": "protected-voice",
+        "check": "paths_unchanged",
+        "paths": ["target.voice.asset", "target.voice.media_digest"],
+    }], {"before": {"target": before}, "after": {"target": after}})
+    assert results[0].status == "fail"
+    assert "target.voice.asset" in results[0].message

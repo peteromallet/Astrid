@@ -81,6 +81,83 @@ def _load_public_target(case_dir: Path) -> Mapping[str, Any] | None:
     return None
 
 
+def _prepare_public_target(
+    prepared_targets_root: Path | None,
+    *,
+    case_id: str,
+    case_dir: Path,
+) -> Mapping[str, Any] | None:
+    """Copy one coordinator-prepared target into the fresh case directory.
+
+    The preparation root is coordinator-owned and must be separate from the
+    worker mount. Only the selected case's public target is copied; no suite,
+    baseline, or hidden checks cross the boundary.
+    """
+    if prepared_targets_root is None:
+        return None
+    root = prepared_targets_root.expanduser().absolute()
+    cursor = root
+    while True:
+        if cursor.is_symlink():
+            raise NativeLauncherError(f"prepared target root traverses a symlink: {cursor}")
+        if cursor == cursor.parent:
+            break
+        cursor = cursor.parent
+    if not root.is_dir():
+        raise NativeLauncherError(f"prepared target root is missing or unsafe: {root}")
+    case_root = root / case_id
+    if case_root.is_symlink() or not case_root.is_dir():
+        raise NativeLauncherError(f"prepared public target directory is missing or unsafe for {case_id}: {case_root}")
+    source = case_root / "target.json"
+    if source.is_symlink() or not source.is_file():
+        raise NativeLauncherError(f"prepared public target is missing for {case_id}: {source}")
+    # Read and rewrite JSON rather than copying arbitrary bytes or links into
+    # the worker directory.
+    value = load_json(source)
+    if not isinstance(value, Mapping):
+        raise NativeLauncherError(f"prepared public target must be an object: {source}")
+    _write_json(case_dir / "target.json", value)
+    return value
+
+
+def _setup_failed_case(
+    case: Mapping[str, Any], *, attempt_id: str, case_dir: Path, reason: str,
+) -> dict[str, Any]:
+    """Persist a terminal setup failure without starting OMP."""
+    session_id = f"{attempt_id}-{case['id']}-not-launched"
+    result = {
+        "kind": "astrid.timeline-eval.agent-result.v1",
+        "attempt_id": attempt_id,
+        "case_id": str(case["id"]),
+        "session_id": session_id,
+        "fresh_context": False,
+        "execution_status": "setup_failed",
+        "elapsed_seconds": 0.0,
+        "tool_calls": 0,
+        "retries": 0,
+        "clarification_needed": False,
+        "fixture_or_agent_failure": "setup",
+        "failure_cause": {"setup": [reason], "summary": reason},
+        "safety": {"source_unchanged": True, "test_target_only": True},
+    }
+    _write_json(case_dir / "result.json", result)
+    _trace_lines(case_dir, events=[{
+        "event": "setup_failed",
+        "at": _now(),
+        "case_id": str(case["id"]),
+        "reason": reason,
+    }])
+    return result
+
+
+def _require_a01_protected_roles(snapshot: Mapping[str, Any]) -> None:
+    target = _mapping(snapshot)
+    for name in ("voice", "frame_overlay"):
+        role = target.get(name)
+        if not isinstance(role, Mapping) or not role.get("id"):
+            raise IndependentReadbackError(f"A01 target is missing its protected {name} clip")
+
+
 def _connect_readback_adapter(
     *,
     endpoint: str | None,
@@ -381,6 +458,8 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
     if case_id == "A01":
         media = _mapping(fixture_case).get("media", {})
         expected_digest = media.get("new_image_digest")
+        if not isinstance(expected_digest, str) or not expected_digest:
+            raise SetupError("A01 private manifest must provide media.new_image_digest")
         checks: list[dict[str, Any]] = [generic, {
             "id": "a01_target_selector",
             "check": "path_equals",
@@ -388,14 +467,13 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
             "path": "target.selector_clip_id",
             "expected": targets.get("selector_clip_id", "shot_b01"),
         }]
-        if isinstance(expected_digest, str) and expected_digest:
-            checks.append({
-                "id": "a01_target_active_media",
-                "check": "path_equals",
-                "artifact": "after",
-                "path": "target.active_media_digest",
-                "expected": expected_digest,
-            })
+        checks.append({
+            "id": "a01_target_active_media",
+            "check": "path_equals",
+            "artifact": "after",
+            "path": "target.active_media_digest",
+            "expected": expected_digest,
+        })
         checks.append({
             "id": "a01_target_timing_and_protected_roles",
             "check": "paths_unchanged",
@@ -406,6 +484,16 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                 "target.timing.occurrence_start_ms",
                 "target.voice_clip_id",
                 "target.frame_overlay_clip_id",
+                "target.voice.asset",
+                "target.voice.media_digest",
+                "target.voice.at",
+                "target.voice.hold",
+                "target.voice.track",
+                "target.frame_overlay.asset",
+                "target.frame_overlay.media_digest",
+                "target.frame_overlay.at",
+                "target.frame_overlay.hold",
+                "target.frame_overlay.track",
             ],
         })
         return checks
@@ -510,6 +598,7 @@ def run_attempt(
     isolated_endpoint: str | None = None,
     isolated_credential: Path | None = None,
     isolation_contract: Path | None = None,
+    prepared_targets_root: Path | None = None,
     fixture_only: bool = False,
 ) -> dict[str, Any]:
     """Run and aggregate one immutable 20-case attempt.
@@ -581,9 +670,36 @@ def run_attempt(
         case_id = _safe_case_id(case["id"])
         case_dir = cases_root / case_id
         case_dir.mkdir()
+        target_setup_error: str | None = None
+        prepared_target: Mapping[str, Any] | None = None
+        should_prepare_target = prepared_targets_root is not None and (
+            case_id == "A01"
+            or (
+                not prepared_targets_root.expanduser().absolute().is_symlink()
+                and prepared_targets_root.expanduser().absolute().is_dir()
+                and not (prepared_targets_root.expanduser().absolute() / case_id).is_symlink()
+                and (prepared_targets_root.expanduser().absolute() / case_id / "target.json").is_file()
+                and not (prepared_targets_root.expanduser().absolute() / case_id / "target.json").is_symlink()
+            )
+        )
+        if should_prepare_target:
+            try:
+                prepared_target = _prepare_public_target(
+                    prepared_targets_root, case_id=case_id, case_dir=case_dir,
+                )
+            except (NativeLauncherError, SetupError) as exc:
+                target_setup_error = str(exc)
         _write_json(case_dir / "brief.json", _public_brief(
             case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir
         ))
+        checks_setup_error: str | None = None
+        try:
+            hidden_checks = _hidden_checks(case, fixture_root=fixture_root)
+        except SetupError as exc:
+            # A malformed private manifest is coordinator setup failure.  It
+            # must never turn into a model launch or an agent failure.
+            hidden_checks = []
+            checks_setup_error = str(exc)
         row = readiness.get(case_id)
         is_ready = bool(row and row.readiness == "fixture_ready")
         if forced is not None:
@@ -602,7 +718,50 @@ def run_attempt(
                 "execution": "fixture_blocked",
             })
             _fixture_blocked_result(case, attempt_id=attempt_id, reason=reason, case_dir=case_dir)
-            _write_json(case_dir / "checks.json", _hidden_checks(case, fixture_root=fixture_root))
+            _write_json(case_dir / "checks.json", hidden_checks)
+            continue
+        if target_setup_error is not None:
+            _write_json(case_dir / "attempt.json", {
+                "kind": ATTEMPT_KIND,
+                "attempt_id": attempt_id,
+                "case_id": case_id,
+                "fresh_context": False,
+                "session_id": f"{attempt_id}-{case_id}-not-launched",
+                "started_at": _now(),
+                "model": model,
+                "execution": "setup_failed",
+            })
+            _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=target_setup_error)
+            _write_json(case_dir / "checks.json", hidden_checks)
+            continue
+        if checks_setup_error is not None:
+            _write_json(case_dir / "attempt.json", {
+                "kind": ATTEMPT_KIND,
+                "attempt_id": attempt_id,
+                "case_id": case_id,
+                "fresh_context": False,
+                "session_id": f"{attempt_id}-{case_id}-not-launched",
+                "started_at": _now(),
+                "model": model,
+                "execution": "setup_failed",
+            })
+            _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=checks_setup_error)
+            _write_json(case_dir / "checks.json", hidden_checks)
+            continue
+        if not fixture_only and case_id == "A01" and prepared_targets_root is None:
+            reason = "A01 requires an explicit prepared_targets_root; refusing to launch without target.json"
+            _write_json(case_dir / "attempt.json", {
+                "kind": ATTEMPT_KIND,
+                "attempt_id": attempt_id,
+                "case_id": case_id,
+                "fresh_context": False,
+                "session_id": f"{attempt_id}-{case_id}-not-launched",
+                "started_at": _now(),
+                "model": model,
+                "execution": "setup_failed",
+            })
+            _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
+            _write_json(case_dir / "checks.json", hidden_checks)
             continue
         session_id = f"{attempt_id}-{case_id}-{uuid.uuid4().hex[:12]}"
         started_at = _now()
@@ -620,7 +779,7 @@ def run_attempt(
         # current closure before launching the model, but keep the snapshot
         # coordinator-private until the process exits. The agent's brief and
         # self-report are never a substitute for this readback.
-        public_target = _load_public_target(case_dir)
+        public_target = prepared_target or _load_public_target(case_dir)
         readback_adapter: Any | None = None
         before_snapshot: dict[str, Any] | None = None
         readback_error: str | None = None
@@ -635,11 +794,27 @@ def run_attempt(
                     contract=isolation_contract,
                 )
                 before_snapshot = read_target_snapshot(readback_adapter, public_target)
+                _require_a01_protected_roles(before_snapshot)
                 expected_head = public_target.get("head_revision_id")
                 if expected_head and before_snapshot.get("head_revision_id") != expected_head:
                     raise IndependentReadbackError("public target head is stale before launch")
             except Exception as exc:  # adapter failures are a failed gate, not an agent success
                 readback_error = f"{type(exc).__name__}: {exc}"
+        if public_target is not None and not fixture_only and readback_error is not None:
+            reason = f"independent pre-readback failed; refusing to launch OMP: {readback_error}"
+            _write_json(case_dir / "attempt.json", {
+                "kind": ATTEMPT_KIND,
+                "attempt_id": attempt_id,
+                "case_id": case_id,
+                "fresh_context": False,
+                "session_id": f"{attempt_id}-{case_id}-not-launched",
+                "started_at": started_at,
+                "model": model,
+                "execution": "setup_failed",
+            })
+            _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
+            _write_json(case_dir / "checks.json", hidden_checks)
+            continue
         status, returncode, elapsed, events, output = _invoke(
             omp_bin=omp_bin,
             model=model,
@@ -672,6 +847,7 @@ def run_attempt(
                         contract=isolation_contract,
                     )
                 after_snapshot = read_target_snapshot(readback_adapter, public_target)
+                _require_a01_protected_roles(after_snapshot)
             except Exception as exc:  # noqa: BLE001 - adapter boundary is external
                 readback_error = f"{type(exc).__name__}: {exc}"
         if public_target is not None and not fixture_only:
@@ -688,7 +864,7 @@ def run_attempt(
             }
             _write_json(case_dir / "result.json", merged_result)
         # Hidden checks are deliberately installed only after the agent exits.
-        _write_json(case_dir / "checks.json", _hidden_checks(case, fixture_root=fixture_root))
+        _write_json(case_dir / "checks.json", hidden_checks)
 
     aggregate = aggregate_attempt(suite, attempt_root)
     _write_json(attempt_root / "aggregate.json", aggregate)
@@ -711,6 +887,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="credential file for the disposable Runtime")
     parser.add_argument("--isolation-contract", type=Path,
                         help="JSON proof of the disposable Runtime boundary")
+    parser.add_argument("--prepared-targets-root", type=Path,
+                        help="coordinator-owned root containing <case-id>/target.json public receipts")
     parser.add_argument("--fixture-only", action="store_true",
                         help="test-only fake adapter mode; never use for a native model run")
     parser.add_argument("--dry-run", action="store_true", help="print a plan without launching any agent")
@@ -727,6 +905,7 @@ def main(argv: list[str] | None = None) -> int:
             isolated_endpoint=args.isolated_endpoint,
             isolated_credential=args.isolated_credential,
             isolation_contract=args.isolation_contract,
+            prepared_targets_root=args.prepared_targets_root,
             fixture_only=args.fixture_only,
         )
     except (NativeLauncherError, OSError, ValueError) as exc:

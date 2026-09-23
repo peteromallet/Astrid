@@ -150,6 +150,15 @@ hidden checks grade the exact active media plus protected timing, voice, and
 overlay fields. An agent's `result.json` or publication receipt cannot by
 itself make the case pass.
 
+The target is supplied through a coordinator-owned preparation root, passed as
+`--prepared-targets-root`. The launcher copies only
+`<root>/<case-id>/target.json` into the fresh case directory after validating
+that the root, case directory, and file are regular non-symlink paths. A live
+A01 run without this explicit target is recorded as `setup_failed` and does
+not start OMP. Independent pre-readback failures (including stale heads,
+missing protected roles, or an unreadable disposable realm) are also
+fail-closed; the model is never launched against an unverified target.
+
 The real invocation is explicit and bounded:
 
 ```text
@@ -163,7 +172,8 @@ PYTHONPATH=. ./.venv/bin/python -m evals.timeline.luna_native \
   --model openai-codex/gpt-5.6-luna \
   --isolated-endpoint http://127.0.0.1:<disposable-port> \
   --isolated-credential /path/to/disposable-credential.json \
-  --isolation-contract /path/to/isolation-contract.json
+  --isolation-contract /path/to/isolation-contract.json \
+  --prepared-targets-root /path/to/coordinator-prepared-targets
 ```
 
 Use `--dry-run` to materialize only the top-level plan. A fake executable is

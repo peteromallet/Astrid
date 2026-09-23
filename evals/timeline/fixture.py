@@ -211,12 +211,14 @@ def public_target_receipt(
     project_id = seed.get("project_id")
     timeline_id = seed.get("timeline_id")
     head = seed.get("receipt", {}).get("new_head") if isinstance(seed.get("receipt"), Mapping) else None
-    if not all(isinstance(value, str) and value for value in (project_id, timeline_id, head)):
-        raise FixtureError("seed receipt must include project_id, timeline_id, and new_head")
+    endpoint_url = seed.get("endpoint_url")
+    if not all(isinstance(value, str) and value for value in (endpoint_url, project_id, timeline_id, head)):
+        raise FixtureError("seed receipt must include endpoint_url, project_id, timeline_id, and new_head")
     return {
         "kind": "astrid.timeline-eval.public-target.v1",
         "scope": "selected-case-only",
         "read_only": bool(read_only),
+        "endpoint": endpoint_url,
         "project_id": project_id,
         "timeline_id": timeline_id,
         "head_revision_id": head,
@@ -395,7 +397,7 @@ def seed_case(
         raise FixtureError("seed receipt does not identify the isolated case target")
     if receipt.get("semantic_digest") != baseline.semantic_digest:
         raise FixtureError("seed readback does not match baseline semantic digest")
-    return {"endpoint_realm_id": endpoint.realm_id, "project_alias": identities.project_alias, "timeline_alias": identities.timeline_alias, "project_id": project_id, "timeline_id": timeline_id, "identities": identities, "owned_media": owned, "project_idempotency_key": project_key, "timeline_idempotency_key": timeline_key, "idempotency_key": key, "receipt": dict(receipt)}
+    return {"endpoint_url": endpoint.url, "endpoint_realm_id": endpoint.realm_id, "project_alias": identities.project_alias, "timeline_alias": identities.timeline_alias, "project_id": project_id, "timeline_id": timeline_id, "identities": identities, "owned_media": owned, "project_idempotency_key": project_key, "timeline_idempotency_key": timeline_key, "idempotency_key": key, "receipt": dict(receipt)}
 
 
 def reset_case(

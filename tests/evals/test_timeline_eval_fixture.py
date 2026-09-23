@@ -180,6 +180,7 @@ def test_public_target_receipt_contains_only_disposable_ids(tmp_path):
     seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A01", media_root=media_root)
     target = public_target_receipt(seed)
     assert target["kind"] == "astrid.timeline-eval.public-target.v1"
+    assert target["endpoint"] == runtime.endpoint.url
     assert target["project_id"] == runtime.project_id
     assert target["timeline_id"] == seed["timeline_id"]
     assert target["head_revision_id"] == seed["identities"].parent_revision_id

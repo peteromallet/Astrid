@@ -7,12 +7,15 @@ import pytest
 from evals.timeline.checks import run_checks
 from evals.timeline.independent_readback import (
     ACTIVE_MEDIA_REPLACEMENT,
+    EXACT_CLOSURE_NAVIGATION,
     IndependentReadbackError,
     ProjectionUnavailable,
     ReadbackContract,
+    capture_source_observation,
     observe_case_before,
     read_target_snapshot,
     verify_case_after,
+    verify_navigation_after,
 )
 
 
@@ -350,3 +353,61 @@ def test_publication_must_advance_from_captured_parent_head():
     result = verify_case_after(reader, _target(), _contract(), observed, receipt, source_reader=source)
     assert result.status == "fail"
     assert "different parent head" in " ".join(result.reasons)
+
+
+def _navigation_target():
+    return {key: value for key, value in _target().items() if key != "target_locator"}
+
+
+def _navigation_contract():
+    return ReadbackContract(
+        case_id="L01", projection=EXACT_CLOSURE_NAVIGATION,
+        source_project_id="source-project", source_timeline_id="source-timeline",
+    )
+
+
+def test_navigation_observes_exact_closure_without_a01_selector_or_roles():
+    before_closure, after_closure = _revisions()
+    reader = RevisionReader(before_closure, after_closure, sibling=before_closure)
+    source = _source_reader()
+    before = observe_case_before(reader, _navigation_target(), _navigation_contract(), source_reader=source)
+    assert before.target["occurrence_count"] == 2
+    assert "selector_clip_id" not in before.target
+    result = verify_navigation_after(reader, _navigation_target(), _navigation_contract(), before, source_reader=source)
+    assert result.status == "pass"
+    assert result.safety == {"source_unchanged": True, "read_only_target": True, "test_target_only": True}
+    assert result.semantic_changed_fields == ()
+
+
+def test_navigation_missing_source_is_unknown_and_changed_target_fails():
+    before_closure, after_closure = _revisions()
+    reader = RevisionReader(before_closure, after_closure, sibling=before_closure)
+    before = observe_case_before(reader, _navigation_target(), _navigation_contract())
+    unknown = verify_navigation_after(reader, _navigation_target(), _navigation_contract(), before)
+    assert unknown.status == "unavailable"
+    assert unknown.safety["source_unchanged"] is None
+    reader.heads["timeline-test"] = "head-after"
+    changed = verify_navigation_after(reader, _navigation_target(), _navigation_contract(), before)
+    assert changed.status == "fail"
+    assert changed.safety["read_only_target"] is False
+
+
+def test_coordinator_source_fingerprint_detects_new_head():
+    source = _source_reader()
+    before = capture_source_observation(source, "source-project", "source-timeline")
+    assert before.head_revision_id == "source-head"
+    changed_source = copy.deepcopy(source.closures[("source-timeline", "source-head")])
+    changed_source["head_revision_id"] = "source-head-2"
+    changed_source["parent_revision"]["revision_id"] = "source-head-2"
+    source.closures[("source-timeline", "source-head-2")] = changed_source
+    source.heads["source-timeline"] = "source-head-2"
+    after = capture_source_observation(source, "source-project", "source-timeline")
+    assert after.head_revision_id != before.head_revision_id
+    assert after.closure_fingerprint == before.closure_fingerprint
+
+
+def test_source_reader_cannot_be_the_disposable_target_reader():
+    before_closure, after_closure = _revisions()
+    reader = RevisionReader(before_closure, after_closure, sibling=before_closure)
+    with pytest.raises(IndependentReadbackError, match="separate coordinator readers"):
+        observe_case_before(reader, _target(), _contract(), source_reader=reader)

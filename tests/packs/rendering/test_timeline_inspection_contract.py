@@ -51,6 +51,17 @@ def test_projection_selection_filters_clip_shot_and_asset_without_rekeying_occur
     assert [clip["occurrence_id"] for clip in projection["tracks"][0]["clips"]] == ["occ-1"]
 
 
+def test_input_projection_prefers_canonical_occurrence_id_in_pinned_groups():
+    projection = project_input_window(
+        [{"id": "clip-1", "track": "picture", "at": 0, "duration": 2,
+          "occurrence_id": "occ-canonical", "shot_id": "shot-a"}],
+        start_frame=0, end_frame=60, fps=30,
+        occurrence_id="occ-canonical",
+        shot_occurrences=[{"occurrence_id": "occ-canonical", "shot_id": "shot-a"}],
+    )
+    assert projection["tracks"][0]["clips"][0]["occurrence_id"] == "occ-canonical"
+
+
 def test_projection_exposes_canonical_asset_key_for_preview_provenance():
     projection = project_input_window(
         [{"id": "picture-1", "track": "picture", "asset": "anchor-v3", "at": 0, "duration": 2}],

@@ -113,6 +113,17 @@ def test_filters_and_bounds_are_enforced():
         plan_filmstrip(snapshot(), {'every_frames': 1.5})
 
 
+def test_canonical_occurrence_filter_wins_over_legacy_alias():
+    snap = snapshot(clips=[dict(
+        id='canonical', kind='video', asset='one', at=0, duration=2,
+        occurrence_id='canonical-occ', shot_occurrence_id='legacy-occ',
+    )])
+    cards = plan_filmstrip(snap, {'occurrence': 'canonical-occ', 'every_frames': 12})['cards']
+    assert cards and cards[0]['clips'][0]['id'] == 'canonical'
+    with pytest.raises(ValueError, match='No clips match'):
+        plan_filmstrip(snap, {'occurrence': 'legacy-occ', 'every_frames': 12})
+
+
 def test_friendly_shot_aliases_resolve_in_authored_order():
     base = snapshot(
         duration_frames=144,

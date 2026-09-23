@@ -169,10 +169,7 @@ def canonical_clip_identity(
     shot id or a repeated media selector.
     """
     clip_id = clip.get("id") or clip.get("clip_id")
-    occurrence = (
-        clip.get("shot_occurrence_id") or clip.get("occurrence_id")
-        or clip.get("occurrenceId") or occurrence_id
-    )
+    occurrence = _clip_occurrence_id(clip) or occurrence_id
     shot = clip.get("shot_id") or clip.get("shotId") or shot_id
     target = {
         "kind": "clip",
@@ -183,6 +180,11 @@ def canonical_clip_identity(
     }
     target["addressable"] = bool(target["clip_id"] or target["occurrence_id"])
     return target
+
+
+def _clip_occurrence_id(clip: Mapping[str, Any]) -> Any:
+    """Read the canonical occurrence spelling before legacy aliases."""
+    return clip.get("occurrence_id") or clip.get("shot_occurrence_id") or clip.get("occurrenceId")
 
 
 def classify_output_records(
@@ -734,7 +736,7 @@ def project_input_window(
         name = occurrence.get("name") or occurrence.get("shot_name")
         name = name if isinstance(name, str) and name else None
         for raw in clips:
-            if isinstance(raw, Mapping) and raw.get("shot_occurrence_id") == occurrence_id:
+            if isinstance(raw, Mapping) and _clip_occurrence_id(raw) == occurrence_id:
                 raw_id = raw.get("id")
                 if isinstance(raw_id, str):
                     shot_by_clip.setdefault(raw_id, (shot_value, name))
@@ -747,10 +749,7 @@ def project_input_window(
             continue
         if clip_id and str(raw.get("id") or raw.get("clip_id") or raw.get("occurrence_id")) != str(clip_id):
             continue
-        raw_occurrence_id = (
-            raw.get("shot_occurrence_id") or raw.get("occurrence_id")
-            or raw.get("occurrenceId")
-        )
+        raw_occurrence_id = _clip_occurrence_id(raw)
         if occurrence_id and str(raw_occurrence_id) != str(occurrence_id):
             continue
         raw_clip_id = str(raw.get("id") or raw.get("clip_id") or raw.get("occurrence_id") or f"clip-{index}")
@@ -783,10 +782,7 @@ def project_input_window(
             subrow += 1
         asset_key = raw.get("asset") or raw.get("source")
         integrity_row = integrity.get(str(asset_key), {}) if integrity else {}
-        raw_occurrence_id = (
-            raw.get("shot_occurrence_id") or raw.get("occurrence_id")
-            or raw.get("occurrenceId")
-        )
+        raw_occurrence_id = _clip_occurrence_id(raw)
         speed = _rational(raw.get("speed", 1))
         trim_start = _rational(raw.get("from", raw.get("from_", 0)))
         source_start = trim_start + max(Fraction(0), Fraction(overlap_start - start, 1) / fps_value) * speed

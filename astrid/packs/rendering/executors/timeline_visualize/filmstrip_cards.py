@@ -701,11 +701,21 @@ def plan_filmstrip(snapshot: dict, options: dict) -> dict:
         if value is not None:
             fields = {
                 'clip': ('id',),
-                'occurrence': ('shot_occurrence_id', 'occurrence_id', 'occurrenceId'),
+                # `occurrence_id` is canonical; the other spellings are
+                # legacy input adapters and must not win when both exist.
+                'occurrence': ('occurrence_id', 'shot_occurrence_id', 'occurrenceId'),
                 'shot': ('shot_id', 'shot_name'),
                 'asset': ('asset',),
             }[key]
-            selected = [c for c in selected if str(value) in [str(c.get(f)) for f in fields]]
+            def matches(candidate):
+                # A canonical occurrence explicitly present on a record is
+                # authoritative. Legacy aliases are consulted only when the
+                # canonical field is absent, so conflicting IDs cannot make
+                # one clip addressable as two different occurrences.
+                if key == 'occurrence' and candidate.get('occurrence_id') is not None:
+                    return str(candidate.get('occurrence_id')) == str(value)
+                return str(value) in [str(candidate.get(f)) for f in fields]
+            selected = [c for c in selected if isinstance(c, Mapping) and matches(c)]
             if not selected:
                 raise ValueError(f'No clips match {key}={value!r}.')
     filtered = any(options.get(k) is not None for k in ('clip', 'occurrence', 'shot', 'asset'))
@@ -1413,7 +1423,7 @@ def build_filmstrip_pack(*, out_root: Path, video_path: Path, snapshot: dict, op
                 clip for card in index.get('cards', [])
                 for clip in (card.get('clips') or [])
                 if isinstance(clip, Mapping)
-                and str(clip.get('shot_occurrence_id') or clip.get('occurrence_id') or clip.get('occurrenceId'))
+                and str(clip.get('occurrence_id') or clip.get('shot_occurrence_id') or clip.get('occurrenceId'))
                 == str(options['occurrence'])
             ),
             None,

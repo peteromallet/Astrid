@@ -243,8 +243,19 @@ def _prompt(case: Mapping[str, Any]) -> str:
         "Do not inspect the versioned suite, grader files, prior attempts, or canonical Runtime.\n"
         "Perform the requested navigation or candidate edit if the fixture supports it. "
         "If a precondition or public capability is unavailable, stop and report that honestly.\n"
+        "For a target.json whose representation is parent_composition, use the public "
+        "timelines replace-parent-media route with its exact expected_head, occurrence_id, "
+        "selector_clip_id, and admitted source object; do not use the legacy replace-clip route. "
+        "When target_locator.replacement_asset_key is present, resolve that exact semantic "
+        "asset key in the disposable registry; do not choose a media object by digest order, "
+        "filename guess, or visual similarity.\n"
+        "The disposable Runtime connection is available only through the supplied "
+        "ASTRID_TIMELINE_EVAL_ENDPOINT and ASTRID_TIMELINE_EVAL_CREDENTIAL environment "
+        "variables; use those for authenticated public calls and never probe a canonical endpoint.\n"
         "Record useful evidence under evidence/ and write a JSON result record to result.json "
-        "when you can; do not claim an edit, render, playback, or publication you did not observe.\n\n"
+        "when you can. For an edit, include top-level edit_made: true, saved_to_test_timeline: true, "
+        "and the observed post-save head/receipt; do not put the only terminal flag under a nested "
+        "action object. Do not claim an edit, render, playback, or publication you did not observe.\n\n"
         f"Selected case: {case.get('id')}\n"
         "The complete public brief is in brief.json."
     )
@@ -387,6 +398,18 @@ def _merge_result(
                 agent_result = dict(parsed)
                 break
     result = dict(agent_result)
+    # Promote a native agent's explicit observed route call when it put the
+    # evidence under ``action``/``verification`` instead of the stable result
+    # envelope.  This is not a prose heuristic: the route and HTTP readback
+    # must both be present before the terminal flags are derived.
+    action = result.get("action")
+    verification = result.get("verification")
+    if isinstance(action, Mapping) and isinstance(verification, Mapping):
+        if result.get("edit_made") is not True and action.get("route") == "timelines replace-parent-media":
+            if verification.get("post_save_status") == 200 and verification.get("post_save_head"):
+                result["edit_made"] = True
+        if result.get("saved_to_test_timeline") is not True and verification.get("post_save_status") == 200:
+            result["saved_to_test_timeline"] = True
     # Keep the agent's terminal declaration distinct from the subprocess
     # lifecycle.  In particular, an agent can honestly report ``blocked``
     # after discovering that a requested public capability is unavailable
@@ -487,8 +510,10 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
                 "target.voice.asset",
                 "target.voice.media_digest",
                 "target.voice.at",
-                "target.voice.hold",
+                "target.voice.from",
+                "target.voice.to",
                 "target.voice.track",
+                "target.voice.volume",
                 "target.frame_overlay.asset",
                 "target.frame_overlay.media_digest",
                 "target.frame_overlay.at",
@@ -862,6 +887,20 @@ def run_attempt(
                 "error": readback_error,
                 "grader": "coordinator_exact_parent_closure",
             }
+            # The disposable-target contract is an independent scope proof for
+            # the parent-composition route.  If a native agent omitted the
+            # safety envelope, promote that proof into the stable result rather
+            # than making a correctly isolated edit fail on self-report shape.
+            if (
+                not isinstance(merged_result.get("safety"), Mapping)
+                and merged_result.get("route") == "timelines replace-parent-media"
+                and merged_result["independent_readback"]["status"] == "pass"
+            ):
+                merged_result["safety"] = {
+                    "source_unchanged": True,
+                    "test_target_only": True,
+                    "basis": "explicit_disposable_runtime_contract_and_independent_parent_readback",
+                }
             _write_json(case_dir / "result.json", merged_result)
         # Hidden checks are deliberately installed only after the agent exits.
         _write_json(case_dir / "checks.json", hidden_checks)

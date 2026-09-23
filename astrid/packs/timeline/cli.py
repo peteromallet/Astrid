@@ -36,6 +36,8 @@ read/CAS-save convenience operation):
 - ``replace-clip`` — atomically replace one explicit managed-media clip through
   ``client.timelines.replace_clip`` with ``--expected-version`` and
   ``preserve-duration`` timing;
+- ``replace-parent-media`` — replace one selected clip in the canonical
+  parent-composition closure through ``client.timelines.replace_parent_media``;
 - ``archive`` — reversible event-backed ``client.timelines.archive``;
 - ``recover`` — idempotent recovery through ``client.timelines.recover``;
 - ``history`` — ordered lifecycle events (read);
@@ -515,6 +517,19 @@ def _cmd_replace_clip(parsed: argparse.Namespace) -> int:
         source_object_id=parsed.source_object_id,
         expected_version=parsed.expected_version,
         timing=parsed.timing,
+        idempotency_key=parsed.idempotency_key,
+    )
+    return print_result(result, as_json=parsed.json)
+
+
+def _cmd_replace_parent_media(parsed: argparse.Namespace) -> int:
+    result = parsed.client.timelines.replace_parent_media(
+        parsed.project,
+        parsed.ref,
+        occurrence_id=parsed.occurrence_id,
+        clip_id=parsed.clip_id,
+        source_object_id=parsed.source_object_id,
+        expected_head=parsed.expected_head,
         idempotency_key=parsed.idempotency_key,
     )
     return print_result(result, as_json=parsed.json)
@@ -1190,6 +1205,22 @@ def _configure_replace_clip(subparser: argparse.ArgumentParser) -> None:
     subparser.set_defaults(handler=_cmd_replace_clip)
 
 
+def _configure_replace_parent_media(subparser: argparse.ArgumentParser) -> None:
+    _add_project_arg(subparser)
+    subparser.add_argument("ref", help="Timeline UUID, ULID, or slug.")
+    subparser.add_argument("--occurrence-id", required=True, help="Exact parent-composition occurrence to edit.")
+    subparser.add_argument("--clip-id", required=True, help="Exact internal-timeline clip id to replace.")
+    subparser.add_argument("--source-object-id", required=True, help="Admitted project-owned media digest/object id.")
+    subparser.add_argument(
+        "--expected-head",
+        required=True,
+        help="Exact parent-composition revision id read from the target; stale heads fail closed.",
+    )
+    _add_idempotency_key(subparser)
+    _add_json_flag(subparser)
+    subparser.set_defaults(handler=_cmd_replace_parent_media)
+
+
 def _configure_archive(subparser: argparse.ArgumentParser) -> None:
     _add_project_arg(subparser)
     subparser.add_argument("ref", help="Timeline UUID, ULID, or slug.")
@@ -1420,6 +1451,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "replace-clip",
         help="Atomically replace one managed-media clip while preserving duration.",
         configure=_configure_replace_clip,
+    ),
+    CommandSpec(
+        "replace-parent-media",
+        help="Atomically replace one clip in an exact canonical parent-composition closure.",
+        configure=_configure_replace_parent_media,
     ),
     CommandSpec(
         "archive",

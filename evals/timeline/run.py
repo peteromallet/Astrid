@@ -347,11 +347,25 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         status = "failed"
     elif reported_status in {"timeout", "timed_out"}:
         status = "failed"
-    useful_result = (
-        ("candidate" in artifacts and bool(agent.get("edit_made", True)))
-        if case_kind == "action"
-        else (bool(agent.get("navigation_performed", True)) and bool(agent.get("tool_calls", 0) or _present))
-    )
+    if case_kind == "action":
+        # Parent-composition replacement is an immediate, immutable Runtime
+        # publication route; it has no legacy detached ``candidate`` artifact.
+        # Its useful-result proof is the explicit edit flag plus an independent
+        # post-save readback.  Keep the older candidate requirement for the
+        # remaining action cases.
+        parent_route = agent.get("route") == "timelines replace-parent-media"
+        parent_readback = (
+            isinstance(agent.get("independent_readback"), Mapping)
+            and agent.get("independent_readback", {}).get("status") == "pass"
+            and "after" in artifacts
+        )
+        useful_result = (
+            bool(agent.get("edit_made", True)) and parent_readback
+            if parent_route
+            else ("candidate" in artifacts and bool(agent.get("edit_made", True)))
+        )
+    else:
+        useful_result = bool(agent.get("navigation_performed", True)) and bool(agent.get("tool_calls", 0) or _present)
     checks_pass = bool(check_results) and all(result.status == "pass" for result in check_results)
     if (not setup_failures and status not in {"blocked", "setup_failed", "missing_capability"}
             and not failed_checks and not invalid_check_results and safety == "pass"

@@ -202,6 +202,8 @@ class WorkspaceClient:
                 "recover_project_shot", "add_shot_item", "remove_shot_item",
                 "get_project_shot_revision", "get_project_timeline_revision",
                 "get_project_parent_composition_revision",
+                "publish_parent_composition",
+                "replace_parent_composition_media",
                 "promote_project_shot_candidate", "reorder_shot_items",
                 "list_project_references", "create_project_reference",
                 "list_project_shot_text_bindings", "set_project_shot_text_binding",
@@ -360,6 +362,47 @@ class WorkspaceClient:
         """Read one immutable parent composition revision for canonical render expansion."""
         return self._call_generated(
             "get_project_parent_composition_revision", project_id, timeline_id, revision
+        )
+
+    def publish_parent_composition(
+        self,
+        project_id: str,
+        timeline_id: str,
+        publication: Mapping[str, Any],
+        *,
+        idempotency_key: str,
+    ) -> Any:
+        """Publish one validated parent-composition closure through Runtime."""
+        return self._call_generated(
+            "publish_parent_composition",
+            project_id,
+            timeline_id,
+            publication,
+            idempotency_key=idempotency_key,
+        )
+
+    def replace_parent_composition_media(
+        self,
+        project_id: str,
+        timeline_id: str,
+        *,
+        occurrence_id: str,
+        clip_id: str,
+        source_object_id: str,
+        expected_head: str,
+        idempotency_key: str,
+        timing: str = "preserve-duration",
+    ) -> Any:
+        return self._call_generated(
+            "replace_parent_composition_media",
+            project_id,
+            timeline_id,
+            occurrence_id=occurrence_id,
+            clip_id=clip_id,
+            source_object_id=source_object_id,
+            expected_head=expected_head,
+            idempotency_key=idempotency_key,
+            timing=timing,
         )
 
     def create_timeline(self, project_id: str, timeline_id: str, *, idempotency_key: str) -> Any:

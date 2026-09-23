@@ -35,6 +35,11 @@ _PUBLIC_TARGETS: Mapping[str, Mapping[str, Any]] = {
         "source_occurrence_id": "shot-ee383f695b10431c",
         "source_shot_id": "5024db66-8472-5eeb-8fba-bd05bac13337",
         "selector_clip_id": "shot_b01",
+        # Public semantic handle for the admitted replacement.  The hidden
+        # expected digest remains private; the agent must resolve this key via
+        # the disposable Runtime before calling the edit route.
+        "replacement_asset_key": "charcoal_20260922_intro",
+        "replacement_role": "charcoal-pixel-mink-image",
         "voice_clip_id": "vo_b01",
         "frame_overlay_clip_id": "canonical_tight_frame_overlay_v1",
         "preserve_roles": ["timing", "voiceover", "frame-overlay"],
@@ -233,6 +238,13 @@ def public_target_receipt(
     receipt = {
         "kind": "astrid.timeline-eval.public-target.v1",
         "scope": "selected-case-only",
+        "representation": "parent_composition",
+        "edit_route": "timelines replace-parent-media",
+        "connection": {
+            "endpoint_env": "ASTRID_TIMELINE_EVAL_ENDPOINT",
+            "credential_env": "ASTRID_TIMELINE_EVAL_CREDENTIAL",
+            "source_access": "false",
+        },
         "read_only": bool(read_only),
         "endpoint": endpoint_url,
         "project_id": project_id,
@@ -286,6 +298,8 @@ def _public_target_locator(
         "shot_id": shot_id,
         "shot_revision_id": shot_revision_id,
         "selector_clip_id": str(public["selector_clip_id"]),
+        "replacement_asset_key": str(public["replacement_asset_key"]),
+        "replacement_role": str(public["replacement_role"]),
         "voice_clip_id": str(public["voice_clip_id"]),
         "frame_overlay_clip_id": str(public["frame_overlay_clip_id"]),
         "preserve_roles": [str(value) for value in public.get("preserve_roles", ())],

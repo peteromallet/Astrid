@@ -718,6 +718,16 @@ class WorkspaceClient:
         payload["timeline_id"] = timeline_id
         return self._mutation_json(self._request("POST", f"/v1/projects/{_path_part(project_id)}/timelines/{_path_part(timeline_id)}/composition-revisions", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})[2])
 
+    def replace_parent_composition_media(self, project_id: str, timeline_id: str, *, occurrence_id: str, clip_id: str, source_object_id: str, expected_head: str, idempotency_key: str, timing: str = "preserve-duration") -> MutationResult:
+        payload = {
+            "occurrence_id": occurrence_id,
+            "clip_id": clip_id,
+            "source_object_id": source_object_id,
+            "expected_head": expected_head,
+            "timing": timing,
+        }
+        return self._mutation_json(self._request("POST", f"/v1/projects/{_path_part(project_id)}/timelines/{_path_part(timeline_id)}/replace-parent-media", body=json.dumps(payload, separators=(",", ":")).encode(), headers={"Content-Type": "application/json", "Idempotency-Key": idempotency_key})[2])
+
     def get_project_shot_revision(self, project_id: str, shot_id: str, revision: str) -> Mapping[str, Any]:
         return self._json(self._request("GET", f"/v1/projects/{_path_part(project_id)}/shots/{_path_part(shot_id)}/revisions/{_path_part(revision)}")[2])
 

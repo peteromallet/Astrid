@@ -415,6 +415,29 @@ def materialize_public_navigation_entrypoint(
             "read_only": True,
             "diagnostic": dict(candidate["diagnostic"]),
         }
+    if case_id == "L07":
+        # This is a source-owned legacy composition snapshot, not a synthetic
+        # canonical record.  Copy only the selected comparison sidecar so the
+        # agent can distinguish the old clipType=shot envelope from the
+        # canonical pinned authoring closure.
+        legacy_path = fixture_root / "informational" / "L07-legacy-compare.json"
+        if legacy_path.is_symlink() or not legacy_path.is_file():
+            raise FixtureError("L07 legacy clipType=shot sidecar is missing or unsafe")
+        legacy_bytes = legacy_path.read_bytes()
+        legacy_copy = entry_root / "L07-legacy-compare.json"
+        legacy_copy.write_bytes(legacy_bytes)
+        legacy = json.loads(legacy_bytes.decode("utf-8"))
+        if not isinstance(legacy, Mapping) or legacy.get("kind") != "astrid.timeline-eval.legacy-canonical-compare.v1":
+            raise FixtureError("L07 legacy sidecar has no supported comparison envelope")
+        if legacy.get("case_id") != case_id or legacy.get("read_only") is not True:
+            raise FixtureError("L07 legacy sidecar is not bound to this read-only case")
+        related_inputs["legacy_canonical_compare"] = {
+            "path": "L07-legacy-compare.json",
+            "sha256": hashlib.sha256(legacy_bytes).hexdigest(),
+            "read_only": True,
+            "legacy_clip_count": len(legacy.get("legacy_clips", [])),
+            "canonical_target_aliases": list(legacy.get("canonical_fixture", {}).get("target_aliases", [])),
+        }
     if case_id == "L03":
         action_root = fixture_root / "action"
         collection = json.loads((action_root / "A09-images.json").read_text(encoding="utf-8"))

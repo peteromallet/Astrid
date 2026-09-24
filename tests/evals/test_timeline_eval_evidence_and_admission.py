@@ -210,4 +210,7 @@ def test_admission_rehearsal_has_twenty_explicit_no_model_rows():
     l10 = next(row for row in result["rows"] if row["case_id"] == "L10")
     assert l10["classification"] in {"executable", "diagnostic-only"}
     assert l10["tool_paths"].get("interactive_playback") in {"available", "unavailable"}
+    assert next(row for row in result["rows"] if row["case_id"] == "L07")["classification"] == "executable"
+    for case_id in ("L04", "L05", "L09"):
+        assert next(row for row in result["rows"] if row["case_id"] == case_id)["classification"] == "blocked-essential-input"
     assert all(row["classification"] in {"executable", "blocked-essential-input", "diagnostic-only"} for row in result["rows"])

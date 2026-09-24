@@ -80,7 +80,7 @@ def test_real_fixture_matrix_checks_sidecar_bytes_and_separates_operational_read
     assert rows["L04"].readiness == "blocked"
     assert rows["L05"].readiness == "blocked"
     assert rows["L06"].readiness == "fixture_ready"
-    assert rows["L07"].readiness == "blocked"
+    assert rows["L07"].readiness == "fixture_ready"
     assert rows["L09"].readiness == "blocked"
     assert rows["L10"].readiness == "fixture_ready"
     assert any("historical video alternative" in reason for reason in rows["L05"].reasons)

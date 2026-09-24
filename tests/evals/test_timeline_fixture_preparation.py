@@ -102,3 +102,19 @@ def test_prepare_public_navigation_case_materializes_selected_entrypoint(tmp_pat
     entrypoint = json.loads((tmp_path / "L01/entrypoint/entrypoint.json").read_text())
     assert entrypoint["read_only"] is True
     assert entrypoint["case_id"] == "L01"
+
+
+def test_prepare_public_legacy_case_copies_only_labelled_comparison_sidecar(tmp_path: Path) -> None:
+    result = prepare_public_case(
+        {"id": "L07", "kind": "navigation"}, fixture_root=FIXTURES,
+        destination=tmp_path / "L07",
+    )
+    assert result["status"] == "prepared"
+    entrypoint = json.loads((tmp_path / "L07/entrypoint/entrypoint.json").read_text())
+    assert entrypoint["read_only"] is True
+    assert entrypoint["case_id"] == "L07"
+    related = entrypoint["related_inputs"]["legacy_canonical_compare"]
+    assert related["path"] == "L07-legacy-compare.json"
+    sidecar = json.loads((tmp_path / "L07/entrypoint/L07-legacy-compare.json").read_text())
+    assert sidecar["legacy_clips"][0]["clipType"] == "shot"
+    assert sidecar["canonical_fixture"]["canonical_clip_type"] == "media"

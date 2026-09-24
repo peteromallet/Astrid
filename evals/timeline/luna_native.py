@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -73,6 +74,7 @@ ATTEMPT_KIND = "astrid.timeline-eval.case-attempt.v1"
 ATTEMPT_RESULT_KIND = "astrid.timeline-eval.native-attempt.v1"
 CASE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 SKILL_RELATIVE_PATH = "astrid/packs/rendering/skill/SKILL.md"
+LOCAL_RUNTIME_PROJECT_PREFIX = "local-disposable"
 
 
 class NativeLauncherError(SetupError):
@@ -164,6 +166,12 @@ def _safe_case_id(value: Any) -> str:
     if not CASE_ID.fullmatch(case_id) or case_id in {".", ".."}:
         raise NativeLauncherError(f"invalid suite case id: {case_id!r}")
     return case_id
+
+
+def _local_runtime_project_id(attempt_id: str, case_id: str) -> str:
+    """Create an explicit project identity for a local disposable case."""
+    digest = hashlib.sha256(f"{attempt_id}:{case_id}".encode("utf-8")).hexdigest()[:20]
+    return f"{LOCAL_RUNTIME_PROJECT_PREFIX}-{digest}"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -425,6 +433,7 @@ def _public_brief(
     fixture_root: Path,
     case_dir: Path,
     skill_reference: Mapping[str, str],
+    runtime_project_id: str | None = None,
     worker_case_path: str | None = None,
 ) -> dict[str, Any]:
     """Build one agent-visible brief without verifier-only fields."""
@@ -435,6 +444,13 @@ def _public_brief(
     source.setdefault("id", case.get("id"))
     source.setdefault("version", case.get("version"))
     visible_case_path = worker_case_path or str(case_dir.resolve())
+    explicit_project_id = runtime_project_id or source.get("runtime_project_id")
+    if not isinstance(explicit_project_id, str) or not explicit_project_id:
+        raise NativeLauncherError("local disposable brief is missing its Runtime project ID")
+    # The agent receives both values explicitly; it must not infer either from
+    # cwd, environment, or repository layout.
+    source["case_folder"] = visible_case_path
+    source["runtime_project_id"] = explicit_project_id
     source["fixture_entry_point"] = {
         # Do not disclose the shared fixture repository: it contains private
         # manifests, answer material (notably the A10 brightness ordering),
@@ -443,6 +459,8 @@ def _public_brief(
         "root": visible_case_path,
         "case_id": str(case["id"]),
         "case_directory": visible_case_path,
+        "case_folder": visible_case_path,
+        "runtime_project_id": explicit_project_id,
         "scope": "selected-case-only",
         "read_only": case.get("kind") == "navigation",
         "entrypoint_path": "entrypoint/entrypoint.json" if case.get("kind") == "navigation" else "target.json",
@@ -502,6 +520,7 @@ def _clean_child_environment() -> dict[str, str]:
 def _prompt(
     case: Mapping[str, Any], *, skill_reference: Mapping[str, str],
     public_target: Mapping[str, Any] | None,
+    local_disposable: bool = True,
 ) -> str:
     capabilities = _mapping(_mapping(public_target).get("capabilities"))
     edit_capability = _mapping(capabilities.get("edit"))
@@ -519,6 +538,14 @@ def _prompt(
         if route else
         "No case-specific edit capability is declared available. Check the supplied canonical skill for another documented route admitted by this receipt; if none applies, report unavailable/blocked instead of guessing or claiming success.\n"
         )
+    runtime_instructions = (
+        "Use the explicit runtime_project_id and case_folder from brief.json. "
+        "This is a local disposable case: do not discover or contact a canonical, network, or ambient Runtime, and do not require credentials.\n"
+        if local_disposable else
+        "The disposable Runtime connection is available only through the supplied "
+        "ASTRID_TIMELINE_EVAL_ENDPOINT and ASTRID_TIMELINE_EVAL_CREDENTIAL environment "
+        "variables; use those for authenticated public calls and never probe a canonical endpoint.\n"
+    )
     return (
         "You are the evaluated Luna agent in one fresh, bounded context.\n"
         f"Read the canonical timeline skill at {skill_reference['path']} (version {skill_reference['version']}, sha256 {skill_reference['sha256']}) and verify the bytes before acting.\n"
@@ -531,10 +558,8 @@ def _prompt(
         + "Follow the selected target receipt's locator, preconditions, and case-specific advertised capabilities. "
         "A documented same-schema authoring-bundle route is acceptable only when the receipt admits it; "
         "do not assume it is available when the receipt does not. The legacy whole-config save is a separate route.\n"
-        "The disposable Runtime connection is available only through the supplied "
-        "ASTRID_TIMELINE_EVAL_ENDPOINT and ASTRID_TIMELINE_EVAL_CREDENTIAL environment "
-        "variables; use those for authenticated public calls and never probe a canonical endpoint.\n"
-        "For read-only navigation, write top-level navigation_performed: true and an observations object "
+        + runtime_instructions
+        + "For read-only navigation, write top-level navigation_performed: true and an observations object "
         "with the fields named in brief.json; use exact values from the selected entry point/readback, not guesses. "
         "Follow the versioned result_contract in brief.json: write result.json and each listed worker-owned artifact "
         "at its exact path; coordinator-owned paths are not writable by the worker. "
@@ -553,6 +578,27 @@ def _trace_lines(case_dir: Path, *, events: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Stop the bounded local worker and any children it left behind."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        try:
+            process.terminate()
+        except OSError:
+            return
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+
 def _invoke(
     *,
     omp_bin: str,
@@ -567,6 +613,7 @@ def _invoke(
     skill_reference: Mapping[str, str],
     public_target: Mapping[str, Any] | None,
     fixture_only: bool = False,
+    local_disposable: bool = True,
     boundary_supervisor: BoundarySupervisor | None = None,
     boundary_receipt: BoundaryReceipt | None = None,
     boundary_requirements: BoundaryRequirements | None = None,
@@ -596,7 +643,10 @@ def _invoke(
         "--max-time", f"{int(timeout_seconds)}s",
         "--cwd", worker_case_dir,
         "--print",
-        _prompt(case, skill_reference=skill_reference, public_target=public_target),
+        _prompt(
+            case, skill_reference=skill_reference, public_target=public_target,
+            local_disposable=local_disposable,
+        ),
     ]
     started = time.monotonic()
     events: list[dict[str, Any]] = [{
@@ -610,7 +660,7 @@ def _invoke(
         "invocation": command,
     }]
     child_env = _clean_child_environment()
-    if isolated_endpoint and public_target is not None:
+    if not local_disposable and isolated_endpoint and public_target is not None:
         credential_path = (
             boundary_requirements.disposable_credential_path
             if boundary_requirements is not None else str(isolated_credential)
@@ -622,7 +672,11 @@ def _invoke(
         })
     if fixture_only:
         child_env["ASTRID_TIMELINE_EVAL_FIXTURE_ONLY"] = "1"
-    if not fixture_only:
+    use_proven_boundary = (
+        not fixture_only and not local_disposable
+        and boundary_receipt is not None and boundary_requirements is not None
+    )
+    if use_proven_boundary:
         try:
             if boundary_receipt is None or boundary_requirements is None:
                 raise BoundaryUnavailable("live launch has no proven worker boundary receipt")
@@ -672,6 +726,7 @@ def _invoke(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                start_new_session=True,
             )
         except OSError as exc:
             elapsed = max(0.0, time.monotonic() - started)
@@ -682,7 +737,7 @@ def _invoke(
             stdout, stderr = process.communicate(timeout=timeout_seconds)
             status = "completed" if process.returncode == 0 else "failed"
         except subprocess.TimeoutExpired:
-            process.kill()
+            _terminate_process_group(process)
             stdout, stderr = process.communicate()
             status = "timeout"
         elapsed = max(0.0, time.monotonic() - started)
@@ -1070,6 +1125,7 @@ def run_attempt(
     isolation_contract: Path | None = None,
     prepared_targets_root: Path | None = None,
     fixture_only: bool = False,
+    local_disposable: bool | None = None,
     admission_mode: str = "scored",
     source_reader: Any | None = None,
     runtime_contracts: Mapping[str, CaseRuntimeContract] | None = None,
@@ -1114,16 +1170,15 @@ def run_attempt(
         raise NativeLauncherError(f"unsupported OMP thinking level: {thinking}")
     if admission_mode not in {"scored", "diagnostic"}:
         raise NativeLauncherError(f"unsupported admission mode: {admission_mode}")
-    if execute and not fixture_only and runtime_contracts is None:
-        from .run import validate_isolated_target
-        allowed, message = validate_isolated_target(
-            isolated_endpoint, isolated_credential, isolation_contract
-        )
-        if not allowed:
-            raise NativeLauncherError(
-                "refusing native agent execution without an explicit disposable "
-                f"Runtime isolation contract: {message}"
-            )
+    # Local disposable execution is the normal authority.  The typed host
+    # boundary remains available only when a caller explicitly supplies both
+    # its supervisor and per-case requirements.
+    host_boundary_mode = (
+        execute and not fixture_only
+        and local_disposable is not True
+        and boundary_supervisor is not None
+        and boundary_requirements is not None
+    )
     attempt_root = attempt_root.expanduser().absolute()
     if attempt_root.exists():
         if attempt_root.is_symlink() or not attempt_root.is_dir() or any(attempt_root.iterdir()):
@@ -1166,6 +1221,7 @@ def run_attempt(
             "reasoning": thinking,
         },
         "fresh_context_per_case": True,
+        "execution_order": "sequential",
         "case_count": len(suite["cases"]),
         "suite_case_count": len(source_cases),
         "selection": {
@@ -1182,10 +1238,11 @@ def run_attempt(
         "execution": "native_omp" if execute else "dry_run",
         "admission_mode": admission_mode,
         "isolation": {
+            "mode": "host_boundary" if host_boundary_mode else "local_disposable",
             "fixture_only": fixture_only,
-            "endpoint": isolated_endpoint,
-            "credential": str(isolated_credential) if isolated_credential else None,
-            "contract": str(isolation_contract) if isolation_contract else None,
+            "endpoint": isolated_endpoint if host_boundary_mode else None,
+            "credential": str(isolated_credential) if host_boundary_mode and isolated_credential else None,
+            "contract": str(isolation_contract) if host_boundary_mode else None,
         },
     }
     _write_json(attempt_root / "attempt.json", top_level)
@@ -1242,6 +1299,12 @@ def run_attempt(
                 )
             except (NativeLauncherError, SetupError) as exc:
                 target_setup_error = str(exc)
+        runtime_project_id = str(
+            _mapping(prepared_target).get("project_id")
+            if isinstance(prepared_target, Mapping) and _mapping(prepared_target).get("project_id")
+            else _mapping(public_briefs.get(case_id)).get("runtime_project_id")
+            or _local_runtime_project_id(attempt_id, case_id)
+        )
         entrypoint_error: str | None = None
         if case.get("kind") == "navigation":
             try:
@@ -1255,6 +1318,7 @@ def run_attempt(
         _write_json(case_dir / "brief.json", _public_brief(
             case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir,
             skill_reference=case_skill_reference,
+            runtime_project_id=runtime_project_id,
             worker_case_path=(
                 case_boundary_requirements.selected_case_path
                 if not fixture_only and isinstance(case_boundary_requirements, BoundaryRequirements)
@@ -1344,7 +1408,7 @@ def run_attempt(
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=skill_setup_error)
             _write_json(case_dir / "checks.json", hidden_checks)
             continue
-        if not fixture_only and case_id == "A01" and prepared_targets_root is None:
+        if host_boundary_mode and case_id == "A01" and prepared_targets_root is None:
             reason = (
                 "A01 setup failed: prepared_targets_root is missing; "
                 "disposable target A01/target.json was not prepared"
@@ -1366,7 +1430,7 @@ def run_attempt(
             _write_json(case_dir / "checks.json", hidden_checks)
             continue
         public_target = prepared_target or _load_public_target(case_dir)
-        if not fixture_only and case.get("kind") == "action":
+        if host_boundary_mode and case.get("kind") == "action":
             edit_capability = _mapping(_mapping(public_target).get("capabilities")).get("edit")
             if not isinstance(edit_capability, Mapping) or edit_capability.get("status") != "available":
                 reason = _action_target_block_reason(case_id, public_target)
@@ -1385,7 +1449,7 @@ def run_attempt(
                 continue
         boundary_receipt: BoundaryReceipt | None = None
         model_boundary_id: str | None = None
-        if not fixture_only:
+        if host_boundary_mode:
             requirements = case_boundary_requirements
             try:
                 if not isinstance(requirements, BoundaryRequirements):
@@ -1459,7 +1523,7 @@ def run_attempt(
         readback_contract: ReadbackContract | None = None
         before_observation: ReadbackObservation | None = None
         readback_error: str | None = None
-        if public_target is not None and not fixture_only:
+        if public_target is not None and host_boundary_mode:
             try:
                 target_endpoint = public_target.get("endpoint")
                 if case_endpoint and target_endpoint and target_endpoint != case_endpoint:
@@ -1478,7 +1542,7 @@ def run_attempt(
                     _require_a01_protected_roles(before_observation.target)
             except Exception as exc:  # adapter failures are a failed gate, not an agent success
                 readback_error = f"{type(exc).__name__}: {exc}"
-        if public_target is not None and not fixture_only and readback_error is not None:
+        if public_target is not None and host_boundary_mode and readback_error is not None:
             reason = f"independent pre-readback failed; refusing to launch OMP: {readback_error}"
             _write_json(case_dir / "attempt.json", {
                 "kind": ATTEMPT_KIND,
@@ -1506,6 +1570,7 @@ def run_attempt(
             skill_reference=case_skill_reference,
             public_target=public_target,
             fixture_only=fixture_only,
+            local_disposable=not host_boundary_mode,
             boundary_supervisor=boundary_supervisor,
             boundary_receipt=boundary_receipt,
             boundary_requirements=(
@@ -1531,13 +1596,13 @@ def run_attempt(
         merged_result["admission_mode"] = admission_mode
         readback_result: Mapping[str, Any] | None = None
         final_capture: Mapping[str, Any] | None = None
-        if not fixture_only:
+        if host_boundary_mode:
             capture_path = attempt_root / "coordinator" / "cases" / case_id / "host-final-capture.json"
             try:
                 final_capture = load_json(capture_path)
             except SetupError as exc:
                 readback_error = readback_error or f"host final capture unavailable: {exc}"
-        if public_target is not None and not fixture_only and readback_error is None:
+        if public_target is not None and host_boundary_mode and readback_error is None:
             try:
                 if not isinstance(final_capture, Mapping):
                     raise IndependentReadbackError("host final capture is unavailable")
@@ -1580,7 +1645,7 @@ def run_attempt(
         # evidence pack. The capture is already post-teardown; no worker
         # result or self-authored after-state is used as Runtime authority.
         coordinator_evidence_error: str | None = None
-        if not fixture_only and isinstance(final_capture, Mapping) and boundary_receipt is not None:
+        if host_boundary_mode and isinstance(final_capture, Mapping) and boundary_receipt is not None:
             try:
                 capture_teardown = teardown_receipt_from_host_capture(final_capture)
                 capture_reader = _CapturedClosureReader(final_capture)
@@ -1620,7 +1685,7 @@ def run_attempt(
             _write_json(case_dir / "before.json", {"target": before_observation.target})
         if isinstance(readback_result.get("after"), Mapping):
             _write_json(case_dir / "after.json", {"target": readback_result["after"]})
-        if not fixture_only:
+        if host_boundary_mode:
             coordinator_path = attempt_root / "coordinator" / "cases" / case_id / "readback.json"
             _write_json(coordinator_path, {
                 "kind": "astrid.timeline-eval.coordinator-evidence.v1",
@@ -1669,6 +1734,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="coordinator-owned root containing <case-id>/target.json public receipts")
     parser.add_argument("--fixture-only", action="store_true",
                         help="test-only fake adapter mode; never use for a native model run")
+    parser.add_argument(
+        "--execution-mode", choices=("local-disposable", "host-boundary"),
+        default="local-disposable",
+        help="authoritative worker launch mode (default: local-disposable)",
+    )
     parser.add_argument("--admission-mode", choices=("scored", "diagnostic"), default="scored",
                         help="diagnostic permits launch without a semantic oracle; scored does not")
     parser.add_argument("--dry-run", action="store_true", help="print a plan without launching any agent")
@@ -1689,6 +1759,7 @@ def main(argv: list[str] | None = None) -> int:
             isolation_contract=args.isolation_contract,
             prepared_targets_root=args.prepared_targets_root,
             fixture_only=args.fixture_only,
+            local_disposable=(args.execution_mode == "local-disposable"),
             admission_mode=args.admission_mode,
         )
     except (NativeLauncherError, OSError, ValueError) as exc:

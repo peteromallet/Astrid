@@ -146,12 +146,15 @@ retirement happens only after `after.json` is written. Worker-authored
 `evals.timeline.luna_native` is the thin one-loop OMP adapter. It creates a new
 attempt root, gives each case only its public brief plus the supplied fixture
 entry point, and invokes one bounded fresh context for every `fixture_ready`
-case. A native launch uses `--no-session`, the explicit model
-`openai-codex/gpt-5.6-luna`, and `--print`; it must also receive an explicit
-disposable Runtime endpoint, credential and isolation contract. A case
-directory, clean child environment, or prose prohibition is not an isolation
-boundary. The launcher fails closed when that proof is absent. Fixture-blocked
-cases still get their own `attempt.json`, `trace.jsonl`, and `result.json`.
+case, sequentially. The authoritative mode is local-disposable: each brief
+contains an explicit `case_folder` and `runtime_project_id`, and the launcher
+uses a local subprocess with no AgentBox/X1/container/network/credential or
+host-teardown prerequisite. A native launch uses `--no-session`, the explicit
+model `openai-codex/gpt-5.6-luna`, and `--print`; timeout cleanup kills the
+worker process group and stdout/stderr are retained in `trace.jsonl`. The old
+typed host-boundary path remains available only as an explicit compatibility
+mode (`--execution-mode host-boundary`). Fixture-blocked cases still get their
+own `attempt.json`, `trace.jsonl`, and `result.json`.
 `checks.json` is written only after that case's OMP process exits and is never
 included in its brief. The resulting tree is graded through
 `aggregate_attempt`. `--fixture-only` exists solely for fake-adapter smoke
@@ -188,12 +191,11 @@ PYTHONPATH=. ./.venv/bin/python -m evals.timeline.luna_native \
   --attempt-root ../.otto/runs/timeline-text-inspection-20260922/attempts/luna-native-<timestamp> \
   --omp-bin omp \
   --model openai-codex/gpt-5.6-luna \
-  --isolated-endpoint http://127.0.0.1:<disposable-port> \
-  --isolated-credential /path/to/disposable-credential.json \
-  --isolation-contract /path/to/isolation-contract.json \
-  --prepared-targets-root /path/to/coordinator-prepared-targets
+  --execution-mode local-disposable
 ```
 
 Use `--dry-run` to materialize only the top-level plan. A fake executable is
-supported with `--omp-bin` for smoke tests; it must not be mistaken for a
-model-evaluation result.
+supported with `--omp-bin` for fixture-only smoke tests; it must not be
+mistaken for a model-evaluation result. Host-boundary compatibility runs may
+add the endpoint, credential, isolation contract, prepared targets, and typed
+boundary supervisor inputs; those are not local-mode prerequisites.

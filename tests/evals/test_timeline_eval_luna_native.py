@@ -208,7 +208,7 @@ def test_unmaterialized_action_target_has_explicit_launch_block_reason():
     assert "model launch is blocked" in reason
 
 
-def test_action_without_case_specific_route_is_blocked_before_model_launch(tmp_path, monkeypatch):
+def test_local_disposable_action_does_not_require_prepared_target_or_route(tmp_path, monkeypatch):
     suite = json.loads(SUITE.read_text())
     suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "A02")]
     suite_path = tmp_path / "a02-only-suite.json"
@@ -225,11 +225,14 @@ def test_action_without_case_specific_route_is_blocked_before_model_launch(tmp_p
         isolation_contract=contract, prepared_targets_root=target_root,
     )
     result = json.loads((tmp_path / "attempt-a02-blocked/cases/A02/result.json").read_text())
-    assert not calls.exists()
-    assert result["agent_status"] == "fixture_blocked"
-    assert "case-specific" in result["failure_cause"]["summary"]
-    assert aggregate["cases"][0]["status"] == "blocked"
-    assert aggregate["cases"][0]["counted_in_agent_pass_denominator"] is False
+    # A02's pinned action fixture may fail the fake adapter's intentionally
+    # strict contract, but local mode still reaches the process without a
+    # target/credential/boundary prerequisite.
+    assert result["fresh_context"] is True
+    assert result["execution_status"] in {"completed", "failed"}
+    brief = json.loads((tmp_path / "attempt-a02-blocked/cases/A02/brief.json").read_text())
+    assert brief["case_folder"].endswith("/cases/A02")
+    assert brief["runtime_project_id"].startswith("local-disposable-")
 
 
 def test_dry_run_never_invokes_omp_or_creates_case_records(tmp_path, monkeypatch):
@@ -318,17 +321,17 @@ def test_cli_case_selector_emits_one_case_dry_run(tmp_path):
     assert metadata["plan"][0]["case_id"] == "L01"
 
 
-def test_native_launcher_requires_explicit_isolated_target_for_real_execution(tmp_path):
-    fake, _calls = _fake_omp(tmp_path)
-    with pytest.raises(Exception, match="explicit disposable Runtime isolation"):
-        run_attempt(
-            SUITE,
-            tmp_path / "attempt-no-isolation",
-            fixture_root=FIXTURES,
-            briefs_path=BRIEFS,
-            omp_bin=str(fake),
-            execute=True,
-        )
+def test_native_launcher_defaults_to_local_disposable_execution(tmp_path, monkeypatch):
+    fake, calls = _fake_omp(tmp_path)
+    monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
+    run_attempt(
+        SUITE, tmp_path / "attempt-no-isolation", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, omp_bin=str(fake), execute=True, case_id="L01",
+    )
+    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+    attempt = json.loads((tmp_path / "attempt-no-isolation/attempt.json").read_text())
+    assert attempt["isolation"]["mode"] == "local_disposable"
+    assert attempt["execution_order"] == "sequential"
 
 
 def test_explicit_agent_blocked_status_survives_successful_omp_exit(tmp_path):
@@ -711,7 +714,7 @@ def test_missing_prepared_target_fails_closed_without_launch(tmp_path, monkeypat
     assert next(row for row in aggregate["cases"] if row["id"] == "A01")["status"] == "setup_failed"
 
 
-def test_a01_missing_prepared_targets_root_has_explicit_setup_reason(tmp_path, monkeypatch):
+def test_local_disposable_a01_does_not_require_prepared_targets_root(tmp_path, monkeypatch):
     suite = json.loads(SUITE.read_text())
     suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "A01")]
     suite_path = tmp_path / "a01-only-suite.json"
@@ -727,14 +730,12 @@ def test_a01_missing_prepared_targets_root_has_explicit_setup_reason(tmp_path, m
         isolation_contract=contract,
     )
     result = json.loads((tmp_path / "attempt-no-target-root/cases/A01/result.json").read_text())
-    assert not calls.exists() or not calls.read_text(encoding="utf-8").strip()
-    assert result["agent_status"] == "setup_failed"
-    assert "prepared_targets_root" in result["failure_cause"]["summary"]
-    assert "disposable target" in result["failure_cause"]["summary"]
-    assert aggregate["cases"][0]["status"] == "setup_failed"
+    assert calls.exists() and calls.read_text(encoding="utf-8").strip()
+    assert result["execution_status"] == "completed"
+    assert aggregate["case_count"] == 1
 
 
-def test_missing_boundary_supervisor_fails_closed_before_model_launch(tmp_path, monkeypatch):
+def test_local_disposable_ignores_missing_boundary_supervisor(tmp_path, monkeypatch):
     fake, calls = _fake_omp(tmp_path)
     monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
     credential, contract, targets = _isolation_inputs(tmp_path)
@@ -755,10 +756,9 @@ def test_missing_boundary_supervisor_fails_closed_before_model_launch(tmp_path, 
         isolation_contract=contract,
         prepared_targets_root=targets,
     )
-    assert not calls.exists() or not calls.read_text(encoding="utf-8").strip()
+    assert calls.exists() and calls.read_text(encoding="utf-8").strip()
     result = json.loads((tmp_path / "attempt-preflight-fail/cases/A01/result.json").read_text(encoding="utf-8"))
-    assert result["agent_status"] == "setup_failed"
-    assert "no typed host boundary requirements" in result["failure_cause"]["summary"]
+    assert result["execution_status"] == "completed"
 
 
 def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, monkeypatch):

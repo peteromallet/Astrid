@@ -183,6 +183,10 @@ class HostFinalCapture:
     case_tree_digest: str | None
     capture_sha256: str
     realm_retired: bool | None
+    # Explicit host probe result.  A stopped process is not enough: private
+    # grading/readback is admitted only when the host also proves that the
+    # worker can no longer write to the selected case/Runtime target.
+    write_denied: bool = False
 
 
 @dataclass(frozen=True)
@@ -572,6 +576,10 @@ def launch_in_proven_boundary(
         or capture.capture_sha256 != host_final_capture_digest(capture)
     ):
         raise BoundaryUnavailable("host final capture does not match the proven launch receipt")
+    if capture.write_denied is not True:
+        raise BoundaryUnavailable(
+            "host final capture omitted an explicit write-denial witness"
+        )
     if receipt.execution_mode == "runtime_edit":
         target = request.final_capture_target
         if not isinstance(target, Mapping):

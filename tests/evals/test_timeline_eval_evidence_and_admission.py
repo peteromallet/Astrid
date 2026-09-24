@@ -11,6 +11,7 @@ from evals.timeline.evidence_collector import (
     TeardownReceipt,
     collect_case_evidence,
     perform_teardown,
+    teardown_receipt_from_host_capture,
 )
 from evals.timeline.independent_readback import ReadbackObservation
 
@@ -176,6 +177,24 @@ def test_collector_rejects_wrong_realm_before_readback(tmp_path):
             teardown=TeardownReceipt("worker", "realm-case", True, True, True),
             expected_realm_id="realm-case",
         )
+
+
+def test_host_capture_adapter_requires_explicit_write_denial_and_preserves_retirement_order():
+    capture = {
+        "case_id": "A01",
+        "worker_id": "worker",
+        "worker_stopped": True,
+        "descendants_stopped": True,
+        "write_denied": True,
+        "disposable_realm_id": "realm-case",
+        "realm_retired": True,
+    }
+    receipt = teardown_receipt_from_host_capture(capture)
+    assert receipt.write_denied is True
+    assert receipt.retirement_requested is True
+    assert receipt.retirement_status == "retired"
+    with pytest.raises(EvidenceCollectionError, match="write-denial witness"):
+        teardown_receipt_from_host_capture({**capture, "write_denied": False})
 
 
 def test_admission_rehearsal_has_twenty_explicit_no_model_rows():

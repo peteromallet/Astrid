@@ -383,6 +383,7 @@ def _install_fake_boundary(
                 case_tree_digest=None,
                 capture_sha256="",
                 realm_retired=True,
+                write_denied=True,
             )
             capture = replace(
                 capture, capture_sha256=host_final_capture_digest(capture),

@@ -143,6 +143,7 @@ class Supervisor:
             case_tree_digest=None,
             capture_sha256="",
             realm_retired=True,
+            write_denied=True,
         )
         capture = replace(capture, capture_sha256=host_final_capture_digest(capture))
         value = WorkerLaunchObservation(
@@ -387,6 +388,7 @@ def test_private_grading_requires_worker_and_descendants_stopped():
         ({"disposable_realm_id": "wrong-realm"}, "selected Runtime realm"),
         ({"target_timeline_id": "wrong-target"}, "selected Runtime realm"),
         ({"realm_retired": False}, "selected Runtime realm"),
+        ({"write_denied": False}, "write-denial witness"),
     ],
 )
 def test_runtime_final_capture_must_match_target_realm_and_retirement(change, message):

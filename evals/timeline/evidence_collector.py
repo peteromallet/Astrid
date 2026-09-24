@@ -275,6 +275,45 @@ def _retire_after_readback(
     )
 
 
+def teardown_receipt_from_host_capture(capture: Mapping[str, Any] | Any) -> TeardownReceipt:
+    """Adapt X1's host-final-capture envelope to the generic collector.
+
+    The adapter is intentionally strict: a capture without an explicit
+    ``write_denied: true`` witness is not a teardown receipt, even when its
+    stopped flags are true. Runtime captures must also prove realm retirement;
+    offline captures must carry no Runtime retirement claim.
+    """
+    value = capture if isinstance(capture, Mapping) else {
+        key: getattr(capture, key, None)
+        for key in (
+            "case_id", "worker_id", "worker_stopped", "descendants_stopped",
+            "write_denied", "disposable_realm_id", "realm_retired", "status",
+        )
+    }
+    if value.get("write_denied") is not True:
+        raise EvidenceCollectionError("host final capture omitted an explicit write-denial witness")
+    worker_id = value.get("worker_id")
+    if not isinstance(worker_id, str) or not worker_id:
+        raise EvidenceCollectionError("host final capture omitted worker identity")
+    realm_id = value.get("disposable_realm_id")
+    if realm_id is not None and value.get("realm_retired") is not True:
+        raise EvidenceCollectionError("Runtime host final capture did not prove realm retirement")
+    if realm_id is None and value.get("realm_retired") is not None:
+        raise EvidenceCollectionError("offline host final capture carried Runtime retirement state")
+    receipt = TeardownReceipt(
+        worker_id=worker_id,
+        realm_id=realm_id if isinstance(realm_id, str) else None,
+        worker_stopped=value.get("worker_stopped") is True,
+        descendants_stopped=value.get("descendants_stopped") is True,
+        write_denied=True,
+        retirement_requested=realm_id is not None,
+        retirement_status="retired" if realm_id is not None else "not_requested",
+        details={"source": "host-final-capture", "case_id": value.get("case_id")},
+    )
+    receipt.require_safe_readback()
+    return receipt
+
+
 def collect_case_evidence(
     *,
     case_id: str,
@@ -402,4 +441,5 @@ def collect_case_evidence(
 __all__ = [
     "ClosureReader", "EvidenceCollection", "EvidenceCollectionError", "MediaEvidence",
     "TeardownReceipt", "WorkerLifecycle", "collect_case_evidence", "perform_teardown",
+    "teardown_receipt_from_host_capture",
 ]

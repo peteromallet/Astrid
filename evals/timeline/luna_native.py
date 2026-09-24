@@ -36,6 +36,11 @@ from .fixture import (
     materialize_public_navigation_entrypoint,
 )
 from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
+from .evidence_collector import (
+    EvidenceCollectionError,
+    collect_case_evidence,
+    teardown_receipt_from_host_capture,
+)
 from .independent_readback import (
     EXACT_CLOSURE_NAVIGATION,
     IndependentReadbackError,
@@ -1518,6 +1523,46 @@ def run_attempt(
                 "safety": unavailable_safety,
                 "reasons": (readback_error or "independent readback unavailable",),
             }
+        # Convert the sealed host capture into the generic coordinator
+        # evidence pack. The capture is already post-teardown; no worker
+        # result or self-authored after-state is used as Runtime authority.
+        coordinator_evidence_error: str | None = None
+        if not fixture_only and isinstance(final_capture, Mapping) and boundary_receipt is not None:
+            try:
+                capture_teardown = teardown_receipt_from_host_capture(final_capture)
+                capture_reader = _CapturedClosureReader(final_capture)
+                brief_value: Mapping[str, Any] | None = None
+                try:
+                    candidate_brief = load_json(case_dir / "brief.json")
+                    if isinstance(candidate_brief, Mapping):
+                        brief_value = candidate_brief
+                except SetupError:
+                    brief_value = None
+                publication_response = merged_result.get("publication_response")
+                publication = (
+                    _publication_payload(publication_response)
+                    if isinstance(publication_response, Mapping) else None
+                )
+                collect_case_evidence(
+                    case_id=case_id,
+                    case_dir=case_dir,
+                    evidence_root=attempt_root / "coordinator" / "cases" / case_id / "evidence",
+                    brief=brief_value,
+                    fingerprints=fingerprints,
+                    transcript=output,
+                    final_response=output,
+                    worker_result=merged_result,
+                    target=public_target if isinstance(public_target, Mapping) else None,
+                    reader=capture_reader if isinstance(public_target, Mapping) else None,
+                    before=before_observation,
+                    publication=publication,
+                    teardown=capture_teardown,
+                    expected_realm_id=boundary_receipt.disposable_realm_id,
+                    media_root=case_dir / "media",
+                    worker_state=merged_result,
+                )
+            except (EvidenceCollectionError, OSError, TypeError, ValueError) as exc:
+                coordinator_evidence_error = f"{type(exc).__name__}: {exc}"
         if before_observation is not None:
             _write_json(case_dir / "before.json", {"target": before_observation.target})
         if isinstance(readback_result.get("after"), Mapping):
@@ -1531,6 +1576,7 @@ def run_attempt(
                 "safety": dict(_mapping(readback_result.get("safety"))),
                 "boundary": boundary_receipt.as_dict() if boundary_receipt else None,
                 "host_final_capture": dict(final_capture) if final_capture else None,
+                "generic_evidence_error": coordinator_evidence_error,
             })
         # Only worker-authored fields remain in result.json. The coordinator's
         # exact readback/safety sidecar is written outside the worker result

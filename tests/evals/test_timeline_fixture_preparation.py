@@ -5,6 +5,7 @@ from pathlib import Path
 
 from evals.timeline.fixture_preparation import (
     build_preparation_table,
+    inspect_action_sidecars,
     materialize_action_target_receipts,
     prepare_public_case,
     write_preparation_table,
@@ -82,6 +83,49 @@ def test_action_receipt_preparation_rejects_blocked_contract_even_with_json(tmp_
     assert rows["A02"]["status"] == "blocked-essential-input"
     assert "no materialized disposable target" in rows["A02"]["reason"]
     assert not (tmp_path / "prepared/A02/target.json").exists()
+
+
+def test_action_sidecar_inventory_verifies_pinned_image_bytes(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixtures"
+    action = fixture / "action"
+    image = action / "A09-images" / "one.bin"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"pinned image")
+    import hashlib
+    digest = hashlib.sha256(b"pinned image").hexdigest()
+    (action / "A09-images.json").write_text(json.dumps({
+        "case_id": "A09", "images": [{
+            "path": "A09-images/one.bin", "sha256": digest,
+            "media_id": "sha256:" + digest,
+        }],
+    }), encoding="utf-8")
+    checked = inspect_action_sidecars(fixture_root=fixture, case_id="A09")
+    assert checked["status"] == "verified-inputs"
+    assert checked["media"] == [{"path": "A09-images/one.bin", "media_id": "sha256:" + digest}]
+
+    image.write_bytes(b"changed")
+    rejected = inspect_action_sidecars(fixture_root=fixture, case_id="A09")
+    assert rejected["status"] == "blocked"
+    assert any("digest mismatch" in error for error in rejected["errors"])
+
+
+def test_action_sidecar_inventory_does_not_turn_non_media_sidecar_into_target(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixtures"
+    action = fixture / "action"
+    action.mkdir(parents=True)
+    (action / "A06-text-roles.json").write_text(json.dumps({
+        "case_id": "A06", "bindings": [{"role": "visible_title"}],
+    }), encoding="utf-8")
+    checked = inspect_action_sidecars(fixture_root=fixture, case_id="A06")
+    assert checked["status"] == "verified-inputs"
+    assert checked["media"] == []
+    assert "target" not in checked
+
+
+def test_action_sidecar_inventory_preserves_missing_case_input(tmp_path: Path) -> None:
+    checked = inspect_action_sidecars(fixture_root=tmp_path, case_id="A07")
+    assert checked["status"] == "blocked"
+    assert checked["missing"] == ["no pinned case sidecar"]
 
 
 def test_prepare_public_action_case_fails_closed_without_target(tmp_path: Path) -> None:

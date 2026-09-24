@@ -33,6 +33,84 @@ _ACTION_SIDECARS: dict[str, tuple[str, ...]] = {
 }
 
 
+def inspect_action_sidecars(*, fixture_root: Path, case_id: str) -> dict[str, Any]:
+    """Verify coordinator-owned action sidecars without making a target.
+
+    A sidecar is input evidence only: it never makes an action case launchable
+    and this function intentionally does not rewrite it into a target receipt.
+    Image collections are checked byte-for-byte against their declared SHA-256
+    values so a later disposable preparation can ingest only verified bytes.
+    """
+    fixture_root = fixture_root.expanduser().absolute()
+    paths = _ACTION_SIDECARS.get(case_id, ())
+    result: dict[str, Any] = {
+        "kind": "astrid.timeline-eval.action-sidecar-inventory.v1",
+        "case_id": case_id,
+        "status": "blocked",
+        "sidecars": [],
+        "media": [],
+        "missing": [],
+        "errors": [],
+    }
+    if not paths:
+        result["missing"].append("no pinned case sidecar")
+        return result
+    for relative in paths:
+        path = fixture_root / relative
+        if path.is_symlink() or not path.is_file():
+            result["missing"].append(relative)
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            result["errors"].append(f"{relative}: unreadable JSON: {exc}")
+            continue
+        if not isinstance(value, Mapping):
+            result["errors"].append(f"{relative}: sidecar is not an object")
+            continue
+        declared_case = value.get("case_id")
+        if declared_case is not None and declared_case != case_id:
+            result["errors"].append(f"{relative}: case_id is {declared_case!r}, expected {case_id!r}")
+        result["sidecars"].append(relative)
+        images = value.get("images")
+        if not isinstance(images, list):
+            continue
+        for index, image in enumerate(images):
+            if not isinstance(image, Mapping):
+                result["errors"].append(f"{relative}: images[{index}] is not an object")
+                continue
+            digest = image.get("sha256") or image.get("media_id")
+            media_id = image.get("media_id")
+            image_path = image.get("path")
+            if not isinstance(digest, str) or not digest.removeprefix("sha256:"):
+                result["errors"].append(f"{relative}: images[{index}] has no digest")
+                continue
+            digest = digest.removeprefix("sha256:")
+            if not isinstance(image_path, str) or not image_path:
+                result["errors"].append(f"{relative}: images[{index}] has no relative path")
+                continue
+            source = (fixture_root / "action" / image_path).resolve()
+            try:
+                source.relative_to((fixture_root / "action").resolve())
+            except ValueError:
+                result["errors"].append(f"{relative}: images[{index}] path escapes action fixture")
+                continue
+            if source.is_symlink() or not source.is_file():
+                result["missing"].append(image_path)
+                continue
+            actual = hashlib.sha256(source.read_bytes()).hexdigest()
+            if actual != digest:
+                result["errors"].append(f"{relative}: {image_path} digest mismatch")
+                continue
+            if isinstance(media_id, str) and media_id.removeprefix("sha256:") != digest:
+                result["errors"].append(f"{relative}: {image_path} media_id disagrees with sha256")
+                continue
+            result["media"].append({"path": image_path, "media_id": "sha256:" + digest})
+    if result["sidecars"] and not result["missing"] and not result["errors"]:
+        result["status"] = "verified-inputs"
+    return result
+
+
 @dataclass(frozen=True)
 class PreparationRow:
     case_id: str

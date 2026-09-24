@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,6 +17,39 @@ from evals.timeline.runtime_adapter import (
     isolation_contract_template,
     verify_isolation_contract,
 )
+
+
+def _authoring_route_candidate() -> dict:
+    from astrid.core.timeline.authoring_bundle import open_authoring_bundle
+
+    def digest(value):
+        return "sha256:" + hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode()).hexdigest()
+
+    parent = {
+        "config": {"tracks": [], "clips": []},
+        "registry": {"assets": {}},
+        "clips": [],
+        "occurrences": [{
+            "occurrence_id": "occ-1", "shot_id": "shot-1", "shot_revision_id": "shot-rev-1",
+            "placement": {"start_ms": 0}, "source_offset": {"start": 0, "end": 0},
+            "duration_ms": 1, "speed": {"numerator": 1, "denominator": 1},
+            "track": "picture", "transform": {}, "gain": 1, "muted": False, "provenance": {},
+        }],
+    }
+    shot = {"items": [], "internal_timeline_revision_id": "internal-1"}
+    internal = {"tracks": [], "clips": []}
+    return open_authoring_bundle(
+        {"project_id": "project", "timeline_id": "timeline", "revision_id": "head-before",
+         "content_digest": digest(parent), "payload": parent},
+        shot_revisions=[{"project_id": "project", "shot_id": "shot-1", "revision_id": "shot-rev-1",
+                         "internal_timeline_revision_id": "internal-1", "content_digest": digest(shot),
+                         "payload": shot}],
+        internal_timeline_revisions=[{"project_id": "project", "timeline_id": "timeline",
+                                      "revision_id": "internal-1", "content_digest": digest(internal),
+                                      "payload": internal}],
+    )
 
 
 def _write_contract(
@@ -327,3 +361,58 @@ def test_project_timeline_inventory_pages_and_rejects_duplicate_ids():
     adapter.workspace = DuplicateWorkspace()
     with pytest.raises(RuntimeAdapterError, match="duplicate timeline ID"):
         adapter.list_project_timeline_heads("project")
+
+
+def test_authoring_candidate_route_guards_disposable_expected_head_before_compile():
+    class Workspace:
+        def get_timeline(self, timeline_id, *, project_id):
+            return {"data": {"head_revision_id": "head-new"}}
+
+    adapter = RuntimeFixtureAdapter.__new__(RuntimeFixtureAdapter)
+    adapter.endpoint = "http://127.0.0.1:63212"
+    adapter.workspace = Workspace()
+    target = {
+        "kind": "astrid.timeline-eval.public-target.v1", "case_id": "A03", "scope": "selected-case-only", "read_only": False,
+        "endpoint": adapter.endpoint, "project_id": "project", "timeline_id": "timeline",
+        "head_revision_id": "head-before", "target_locator": {"readback_projection": "move_occurrence_group.v1"},
+        "capabilities": {"edit": {"status": "available", "route": "authoring-bundle validate/commit"}},
+    }
+    with pytest.raises(RuntimeAdapterError, match="expected head is stale"):
+        adapter.publish_authoring_candidate_route(
+            target, _authoring_route_candidate(), idempotency_key="candidate-1",
+        )
+
+
+def test_authoring_candidate_route_publishes_one_valid_candidate_through_shared_writer():
+    class Generated:
+        def __init__(self):
+            self.publication = None
+
+        def publish_parent_composition(self, project_id, timeline_id, publication, *, idempotency_key):
+            self.publication = (project_id, timeline_id, publication, idempotency_key)
+            return {"data": {"new_head": "head-after"}}
+
+    class Workspace:
+        def __init__(self):
+            self._generated = Generated()
+
+        def get_timeline(self, timeline_id, *, project_id):
+            return {"data": {"head_revision_id": "head-before"}}
+
+    adapter = RuntimeFixtureAdapter.__new__(RuntimeFixtureAdapter)
+    adapter.endpoint = "http://127.0.0.1:63212"
+    adapter.workspace = Workspace()
+    target = {
+        "kind": "astrid.timeline-eval.public-target.v1", "case_id": "A03", "scope": "selected-case-only", "read_only": False,
+        "endpoint": adapter.endpoint, "project_id": "project", "timeline_id": "timeline",
+        "head_revision_id": "head-before", "target_locator": {"readback_projection": "move_occurrence_group.v1"},
+        "capabilities": {"edit": {"status": "available", "route": "authoring-bundle validate/commit"}},
+    }
+    result = adapter.publish_authoring_candidate_route(
+        target, _authoring_route_candidate(), idempotency_key="candidate-1",
+    )
+    assert result["route"] == "authoring-bundle validate/commit"
+    assert result["expected_head"] == "head-before"
+    assert result["candidate_digest"].startswith("sha256:")
+    assert adapter.workspace._generated.publication[0:2] == ("project", "timeline")
+    assert adapter.workspace._generated.publication[3] == "candidate-1"

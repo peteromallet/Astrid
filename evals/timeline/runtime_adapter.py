@@ -530,6 +530,102 @@ class RuntimeFixtureAdapter:
         value = publish(project_id, timeline_id, dict(publication), idempotency_key=idempotency_key)
         return self._plain(value)
 
+    def publish_authoring_candidate_route(
+        self,
+        target: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+        *,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Validate and commit one host-built candidate in the disposable target.
+
+        This is the shared case-scoped edit route for future action fixtures.
+        It intentionally accepts a complete authoring-bundle candidate rather
+        than inventing per-case request shapes.  The candidate is bound to the
+        public target's server-assigned project/timeline and exact expected
+        head; every selected dependency is checked as destination-owned before
+        the existing atomic Runtime publication port is called.
+        """
+        if not isinstance(target, Mapping) or not isinstance(candidate, Mapping):
+            raise RuntimeAdapterError("authoring candidate route requires target and candidate objects")
+        if target.get("kind") != "astrid.timeline-eval.public-target.v1":
+            raise RuntimeAdapterError("authoring candidate route requires a versioned public target receipt")
+        if target.get("scope") != "selected-case-only":
+            raise RuntimeAdapterError("authoring candidate route requires a selected-case-only target scope")
+        if target.get("read_only") is True:
+            raise RuntimeAdapterError("authoring candidate route cannot edit a read-only target")
+        target_endpoint = target.get("endpoint")
+        if target_endpoint != self.endpoint:
+            raise RuntimeAdapterError("public target endpoint is not the connected disposable endpoint")
+        project_id = target.get("project_id")
+        timeline_id = target.get("timeline_id")
+        expected_head = target.get("head_revision_id")
+        if not all(isinstance(value, str) and value for value in (project_id, timeline_id, expected_head)):
+            raise RuntimeAdapterError("public target is missing disposable project, timeline, or expected head")
+        locator = target.get("target_locator")
+        if not isinstance(locator, Mapping):
+            raise RuntimeAdapterError("public target has no case-scoped target locator")
+        capabilities = target.get("capabilities")
+        edit = capabilities.get("edit") if isinstance(capabilities, Mapping) else None
+        if not isinstance(edit, Mapping) or edit.get("status") != "available":
+            raise RuntimeAdapterError("public target does not expose an available edit capability")
+        route = edit.get("route")
+        if route != "authoring-bundle validate/commit":
+            raise RuntimeAdapterError(f"unsupported public edit route: {route!r}")
+        if candidate.get("project_id") != project_id or candidate.get("timeline_id") != timeline_id:
+            raise RuntimeAdapterError("authoring candidate project/timeline differs from public target")
+        base_parent = candidate.get("base_parent")
+        if not isinstance(base_parent, Mapping) or base_parent.get("revision_id") != expected_head:
+            raise RuntimeAdapterError("authoring candidate base parent is not the public target expected head")
+        if self.current_head(project_id, timeline_id) != expected_head:
+            raise RuntimeAdapterError("public target expected head is stale before candidate commit")
+        try:
+            from astrid.core.timeline.authoring_bundle import compile_authoring_candidate, publish_authoring_candidate
+            compilation = compile_authoring_candidate(candidate)
+        except Exception as exc:  # adapter boundary converts compiler details to one typed error
+            raise RuntimeAdapterError(f"authoring candidate validation failed: {exc}") from exc
+        publication = compilation.publication
+        dependency_manifest = publication.get("dependency_manifest", {})
+        if not isinstance(dependency_manifest, Mapping):
+            raise RuntimeAdapterError("compiled candidate dependency manifest is malformed")
+        dependencies = dependency_manifest.get("media", [])
+        if not isinstance(dependencies, list):
+            raise RuntimeAdapterError("compiled candidate dependency manifest has no media list")
+        for index, dependency in enumerate(dependencies):
+            if not isinstance(dependency, Mapping):
+                raise RuntimeAdapterError(f"compiled candidate media dependency {index} is malformed")
+            media_id = dependency.get("media_id", dependency.get("content_digest"))
+            if not isinstance(media_id, str) or not media_id:
+                raise RuntimeAdapterError(f"compiled candidate media dependency {index} has no media ID")
+            location = self._data(
+                self.workspace.get_project_object_location(
+                    project_id, media_id.removeprefix("sha256:"),
+                ),
+                "get_project_object_location",
+            )
+            if location.get("verified") is not True:
+                raise RuntimeAdapterError(f"candidate media is not destination-owned: {media_id}")
+            observed = location.get("digest", media_id)
+            if isinstance(observed, str) and observed.removeprefix("sha256:") != media_id.removeprefix("sha256:"):
+                raise RuntimeAdapterError(f"destination-owned media digest differs for {media_id}")
+        try:
+            result = publish_authoring_candidate(
+                candidate, self, idempotency_key=idempotency_key,
+            )
+        except Exception as exc:
+            raise RuntimeAdapterError(f"authoring candidate commit failed: {exc}") from exc
+        return {
+            "kind": "astrid.timeline-eval.disposable-authoring-publication.v1",
+            "route": "authoring-bundle validate/commit",
+            "case_id": target.get("case_id"),
+            "project_id": project_id,
+            "timeline_id": timeline_id,
+            "expected_head": expected_head,
+            "candidate_digest": compilation.candidate_digest,
+            "identity_mapping": result.get("identity_mapping"),
+            "publication": result.get("publication"),
+        }
+
     def seed_case(self, project_id: str, identities: CaseIdentities, baseline: Baseline, owned_media: Mapping[str, str], *, idempotency_key: str) -> Mapping[str, Any]:
         if project_id != identities.project_id:
             raise RuntimeAdapterError("seed project does not match Runtime-assigned CaseIdentities.project_id")

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.timeline.admission_rehearsal import rehearse_admission
+from evals.timeline.admission_rehearsal import _safe_target, rehearse_admission
 from evals.timeline.evidence_collector import (
     EvidenceCollectionError,
     TeardownReceipt,
@@ -214,3 +214,36 @@ def test_admission_rehearsal_has_twenty_explicit_no_model_rows():
     for case_id in ("L04", "L05", "L09"):
         assert next(row for row in result["rows"] if row["case_id"] == case_id)["classification"] == "blocked-essential-input"
     assert all(row["classification"] in {"executable", "blocked-essential-input", "diagnostic-only"} for row in result["rows"])
+
+
+def test_admission_reads_nested_target_receipt_not_n2c_preparation_envelope(tmp_path: Path) -> None:
+    target_root = tmp_path / "targets" / "A01"
+    target_root.mkdir(parents=True)
+    receipt = {
+        "kind": "astrid.timeline-eval.public-target.v1",
+        "case_id": "A01",
+        "capabilities": {"edit": {"status": "unavailable"}},
+    }
+    (target_root / "target.json").write_text(json.dumps({
+        "case_id": "A01", "status": "blocked-essential-input",
+        "target_receipt": receipt,
+    }), encoding="utf-8")
+    assert _safe_target(target_root.parent, "A01") == receipt
+    result = rehearse_admission(SUITE, FIXTURES, prepared_targets_root=target_root.parent)
+    row = next(item for item in result["rows"] if item["case_id"] == "A01")
+    assert row["essential_inputs"]["target_receipt"] == "available"
+    assert any("does not admit a case-specific edit route" in reason for reason in row["reasons"])
+
+
+def test_admission_distinguishes_blocked_envelope_from_missing_target_receipt(tmp_path: Path) -> None:
+    target_root = tmp_path / "targets" / "A01"
+    target_root.mkdir(parents=True)
+    (target_root / "target.json").write_text(json.dumps({
+        "case_id": "A01", "status": "blocked-essential-input",
+        "reason": "no initial condition",
+    }), encoding="utf-8")
+    result = rehearse_admission(SUITE, FIXTURES, prepared_targets_root=target_root.parent)
+    row = next(item for item in result["rows"] if item["case_id"] == "A01")
+    assert row["essential_inputs"]["target_receipt"] == "blocked-envelope"
+    assert any("explicitly blocked/ignored" in reason for reason in row["reasons"])
+    assert not any("fresh coordinator-prepared target.json is missing" in reason for reason in row["reasons"])

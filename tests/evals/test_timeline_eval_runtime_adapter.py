@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.timeline.fixture import CaseIdentities
+from evals.timeline.fixture import CaseIdentities, DisposableEndpoint
 from evals.timeline.runtime_adapter import (
     ISOLATION_CONTRACT_KIND,
     ISOLATION_MARKER_NAME,
@@ -369,11 +369,14 @@ def test_authoring_candidate_route_guards_disposable_expected_head_before_compil
             return {"data": {"head_revision_id": "head-new"}}
 
     adapter = RuntimeFixtureAdapter.__new__(RuntimeFixtureAdapter)
-    adapter.endpoint = "http://127.0.0.1:63212"
+    adapter.endpoint = DisposableEndpoint(
+        url="http://127.0.0.1:63212", realm_id="timeline-eval-realm",
+        credential_ref="credential", purpose="timeline-eval-disposable-realm",
+    )
     adapter.workspace = Workspace()
     target = {
         "kind": "astrid.timeline-eval.public-target.v1", "case_id": "A03", "scope": "selected-case-only", "read_only": False,
-        "endpoint": adapter.endpoint, "project_id": "project", "timeline_id": "timeline",
+        "endpoint": adapter.endpoint.url, "project_id": "project", "timeline_id": "timeline",
         "head_revision_id": "head-before", "target_locator": {"readback_projection": "move_occurrence_group.v1"},
         "capabilities": {"edit": {"status": "available", "route": "authoring-bundle validate/commit"}},
     }
@@ -400,11 +403,14 @@ def test_authoring_candidate_route_publishes_one_valid_candidate_through_shared_
             return {"data": {"head_revision_id": "head-before"}}
 
     adapter = RuntimeFixtureAdapter.__new__(RuntimeFixtureAdapter)
-    adapter.endpoint = "http://127.0.0.1:63212"
+    adapter.endpoint = DisposableEndpoint(
+        url="http://127.0.0.1:63212", realm_id="timeline-eval-realm",
+        credential_ref="credential", purpose="timeline-eval-disposable-realm",
+    )
     adapter.workspace = Workspace()
     target = {
         "kind": "astrid.timeline-eval.public-target.v1", "case_id": "A03", "scope": "selected-case-only", "read_only": False,
-        "endpoint": adapter.endpoint, "project_id": "project", "timeline_id": "timeline",
+        "endpoint": adapter.endpoint.url, "project_id": "project", "timeline_id": "timeline",
         "head_revision_id": "head-before", "target_locator": {"readback_projection": "move_occurrence_group.v1"},
         "capabilities": {"edit": {"status": "available", "route": "authoring-bundle validate/commit"}},
     }

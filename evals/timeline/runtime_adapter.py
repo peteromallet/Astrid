@@ -555,7 +555,9 @@ class RuntimeFixtureAdapter:
         if target.get("read_only") is True:
             raise RuntimeAdapterError("authoring candidate route cannot edit a read-only target")
         target_endpoint = target.get("endpoint")
-        if target_endpoint != self.endpoint:
+        # ``self.endpoint`` is the verified DisposableEndpoint descriptor;
+        # compare the pinned URL, never the descriptor object itself.
+        if not isinstance(target_endpoint, str) or target_endpoint != self.endpoint.url:
             raise RuntimeAdapterError("public target endpoint is not the connected disposable endpoint")
         project_id = target.get("project_id")
         timeline_id = target.get("timeline_id")

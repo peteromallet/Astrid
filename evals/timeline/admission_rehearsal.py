@@ -69,6 +69,7 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _safe_target(target_root: Path, case_id: str) -> Mapping[str, Any] | None:
+    """Return only the nested versioned receipt, never its preparation envelope."""
     if target_root.is_symlink() or not target_root.is_dir():
         return None
     case_root = target_root / case_id
@@ -76,7 +77,34 @@ def _safe_target(target_root: Path, case_id: str) -> Mapping[str, Any] | None:
     if case_root.is_symlink() or target.is_symlink() or not target.is_file():
         return None
     value = load_json(target)
-    return value if isinstance(value, Mapping) else None
+    if not isinstance(value, Mapping):
+        return None
+    if value.get("kind") == "astrid.timeline-eval.public-target.v1":
+        return value
+    receipt = value.get("target_receipt")
+    return receipt if isinstance(receipt, Mapping) else None
+
+
+def _target_preparation_state(target_root: Path, case_id: str) -> tuple[str, Mapping[str, Any] | None]:
+    """Classify a target file without mistaking a blocked envelope for a receipt."""
+    if target_root.is_symlink() or not target_root.is_dir():
+        return "missing", None
+    case_root = target_root / case_id
+    target = case_root / "target.json"
+    if case_root.is_symlink() or target.is_symlink() or not target.is_file():
+        return "missing", None
+    value = load_json(target)
+    if not isinstance(value, Mapping):
+        return "invalid", None
+    if value.get("kind") == "astrid.timeline-eval.public-target.v1":
+        return "receipt", value
+    receipt = value.get("target_receipt")
+    if isinstance(receipt, Mapping):
+        return "receipt", receipt
+    status = value.get("status")
+    if status in {"blocked", "blocked-essential-input", "ignored", "unavailable"}:
+        return "blocked-envelope", value
+    return "envelope-without-receipt", value
 
 
 def _playback_available() -> tuple[bool, str]:
@@ -152,17 +180,26 @@ def _navigation_row(case: Mapping[str, Any], readiness: CaseReadiness, *, fixtur
 
 def _action_row(case: Mapping[str, Any], readiness: CaseReadiness, *, target_root: Path | None) -> AdmissionRow:
     case_id = str(case["id"])
-    target = _safe_target(target_root, case_id) if target_root is not None else None
+    target_state, target = (
+        _target_preparation_state(target_root, case_id)
+        if target_root is not None else ("missing", None)
+    )
     capabilities = _mapping(_mapping(target).get("capabilities"))
     edit = _mapping(capabilities.get("edit"))
     reasons = list(readiness.reasons)
     if readiness.readiness != "fixture_ready":
         reasons.extend(readiness.reasons or ["fixture manifest is not ready"])
-    if target is None:
+    if target_state == "missing":
         reasons.append("fresh coordinator-prepared target.json is missing; case is setup-blocked and must not launch")
+    elif target_state == "blocked-envelope":
+        reasons.append("coordinator target preparation is explicitly blocked/ignored; nested target_receipt is unavailable")
+    elif target_state == "envelope-without-receipt":
+        reasons.append("coordinator target preparation envelope has no nested target_receipt; case is setup-blocked")
+    elif target_state == "invalid":
+        reasons.append("coordinator target.json is not a readable target receipt or preparation envelope")
     elif edit.get("status") != "available":
         reasons.append("target receipt does not admit a case-specific edit route")
-    classification = "executable" if readiness.readiness == "fixture_ready" and target is not None and edit.get("status") == "available" else "blocked-essential-input"
+    classification = "executable" if readiness.readiness == "fixture_ready" and target_state == "receipt" and edit.get("status") == "available" else "blocked-essential-input"
     return AdmissionRow(
         case_id=case_id,
         kind="action",
@@ -171,7 +208,7 @@ def _action_row(case: Mapping[str, Any], readiness: CaseReadiness, *, target_roo
         essential_inputs={
             "brief": "available" if readiness.readiness == "fixture_ready" else "blocked",
             "owned_media": "available" if readiness.readiness == "fixture_ready" else "blocked",
-            "target_receipt": "available" if target is not None else "missing",
+            "target_receipt": "available" if target_state == "receipt" else target_state,
             "edit_route": edit.get("route") if edit.get("status") == "available" else "missing",
         },
         tool_paths={

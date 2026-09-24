@@ -187,6 +187,21 @@ def test_prompt_does_not_claim_a_universal_edit_route():
     assert "use the public timelines replace-parent-media route" not in prompt
 
 
+def test_prompt_documents_bound_authoring_bundle_route_without_unbound_write():
+    prompt = luna_native._prompt(
+        {"id": "A03"},
+        skill_reference={"path": "/skill", "version": "v1", "sha256": "hash"},
+        public_target={
+            "capabilities": {
+                "edit": {"status": "available", "route": "authoring-bundle validate/commit"},
+            },
+        },
+    )
+    assert "astrid.sdk.authoring_bundle" in prompt
+    assert "target-bound helper" in prompt
+    assert "publish_parent_composition" in prompt
+
+
 def test_unmaterialized_action_target_has_explicit_launch_block_reason():
     reason = luna_native._action_target_block_reason("A02", None)
     assert "A02 fixture derivative is not materialized" in reason
@@ -232,6 +247,75 @@ def test_dry_run_never_invokes_omp_or_creates_case_records(tmp_path, monkeypatch
     assert not calls.exists()
     assert (tmp_path / "attempt-dry/cases").is_dir()
     assert not any((tmp_path / "attempt-dry/cases").iterdir())
+
+
+def test_production_case_selector_preserves_suite_identity_and_selected_fingerprint(tmp_path):
+    result = run_attempt(
+        SUITE,
+        tmp_path / "attempt-l01",
+        fixture_root=FIXTURES,
+        briefs_path=BRIEFS,
+        execute=False,
+        case_id="L01",
+    )
+    assert result["suite_id"] == "astrid-timeline-navigation-and-actions"
+    assert result["suite_version"] == "2.0.0"
+    assert result["suite_case_count"] == 20
+    assert result["case_count"] == 1
+    assert result["selection"]["case_id"] == "L01"
+    assert result["selection"]["selected_case_ids"] == ["L01"]
+    fingerprint = result["selection"]["selected_case_fingerprints"]["L01"]
+    assert len(fingerprint) == 64
+    assert result["fingerprints"]["selected_cases"]["L01"] == fingerprint
+    assert result["plan"] == [{
+        "case_id": "L01",
+        "fixture_ready": True,
+        "case_fingerprint_sha256": fingerprint,
+    }]
+    assert list((tmp_path / "attempt-l01" / "cases").iterdir()) == []
+
+
+def test_production_selector_rejects_launchable_ids_readiness_bypass(tmp_path):
+    fake, _calls = _fake_omp(tmp_path)
+    with pytest.raises(luna_native.NativeLauncherError, match="launchable_ids is test-only"):
+        run_attempt(
+            SUITE,
+            tmp_path / "attempt-unsafe",
+            fixture_root=FIXTURES,
+            briefs_path=BRIEFS,
+            omp_bin=str(fake),
+            execute=True,
+            launchable_ids={"L01"},
+            case_id="L01",
+        )
+
+
+def test_production_selector_rejects_unknown_case(tmp_path):
+    with pytest.raises(luna_native.NativeLauncherError, match="not present exactly once"):
+        run_attempt(
+            SUITE,
+            tmp_path / "attempt-unknown",
+            fixture_root=FIXTURES,
+            briefs_path=BRIEFS,
+            execute=False,
+            case_id="L99",
+        )
+
+
+def test_cli_case_selector_emits_one_case_dry_run(tmp_path):
+    attempt = tmp_path / "attempt-cli-l01"
+    assert luna_native.main([
+        "--suite", str(SUITE),
+        "--fixture-root", str(FIXTURES),
+        "--briefs", str(BRIEFS),
+        "--attempt-root", str(attempt),
+        "--case", "L01",
+        "--dry-run",
+    ]) == 0
+    metadata = json.loads((attempt / "attempt.json").read_text(encoding="utf-8"))
+    assert metadata["suite_version"] == "2.0.0"
+    assert metadata["selection"]["selected_case_ids"] == ["L01"]
+    assert metadata["plan"][0]["case_id"] == "L01"
 
 
 def test_native_launcher_requires_explicit_isolated_target_for_real_execution(tmp_path):
@@ -523,7 +607,7 @@ def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | No
         briefs_path=BRIEFS,
         omp_bin=str(fake),
         execute=True,
-        launchable_ids={"A01"},
+        case_id="A01",
         isolated_endpoint="http://127.0.0.1:9001",
         isolated_credential=credential,
         isolation_contract=contract,
@@ -551,7 +635,7 @@ def test_prepared_target_is_copied_and_preflight_allows_one_launch(tmp_path, mon
     assert evidence["readback"]["status"] == "unavailable"
     assert evidence["safety"] == {"source_unchanged": None, "test_target_only": None}
     assert "publication_response" not in result
-    assert aggregate["case_count"] == 20
+    assert aggregate["case_count"] == 1
 
 
 def test_exact_publication_response_and_dependency_manifest_feed_contract(tmp_path, monkeypatch):
@@ -665,7 +749,7 @@ def test_missing_boundary_supervisor_fails_closed_before_model_launch(tmp_path, 
         briefs_path=BRIEFS,
         omp_bin=str(fake),
         execute=True,
-        launchable_ids={"A01"},
+        case_id="A01",
         isolated_endpoint="http://127.0.0.1:9001",
         isolated_credential=credential,
         isolation_contract=contract,
@@ -728,7 +812,7 @@ def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, mo
     monkeypatch.setattr(luna_native, "_invoke", invoke)
     run_attempt(
         suite_path, tmp_path / "attempt-nav", fixture_root=FIXTURES, briefs_path=BRIEFS,
-        execute=True, launchable_ids={"L01"}, isolated_endpoint="http://127.0.0.1:9001",
+        execute=True, case_id="L01", isolated_endpoint="http://127.0.0.1:9001",
         isolated_credential=credential, isolation_contract=contract,
         prepared_targets_root=targets, source_reader=source_reader,
         boundary_supervisor=boundary_supervisor, boundary_requirements={"L01": boundary_requirements},

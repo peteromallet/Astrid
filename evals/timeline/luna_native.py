@@ -511,7 +511,11 @@ def _prompt(
     else:
         route_instructions = (
         "This case has the exact public edit capability " + str(route) + ". Use it only if its target locator and preconditions match. "
-        "For publication, preserve the exact returned JSON response as top-level publication_response in result.json, including new_head and dependency_manifest.\n"
+        + (
+            "Use the documented astrid.sdk.authoring_bundle path (open, edit the detached same-schema candidate, validate, diff, preview, then publish) and preserve the exact returned JSON response as top-level publication_response in result.json, including new_head and dependency_manifest. Do not call a low-level publish_parent_composition operation directly, alter target.json, or publish outside the target-bound helper; if that bound helper is not actually available, report the route unavailable.\n"
+            if route == "authoring-bundle validate/commit" else
+            "For publication, preserve the exact returned JSON response as top-level publication_response in result.json, including new_head and dependency_manifest.\n"
+        )
         if route else
         "No case-specific edit capability is declared available. Check the supplied canonical skill for another documented route admitted by this receipt; if none applies, report unavailable/blocked instead of guessing or claiming success.\n"
         )
@@ -1060,6 +1064,7 @@ def run_attempt(
     thinking: str = DEFAULT_THINKING,
     execute: bool = True,
     launchable_ids: Collection[str] | None = None,
+    case_id: str | None = None,
     isolated_endpoint: str | None = None,
     isolated_credential: Path | None = None,
     isolation_contract: Path | None = None,
@@ -1071,16 +1076,38 @@ def run_attempt(
     boundary_supervisor: BoundarySupervisor | None = None,
     boundary_requirements: Mapping[str, BoundaryRequirements] | None = None,
 ) -> dict[str, Any]:
-    """Run and aggregate one immutable 20-case attempt.
+    """Run and aggregate one immutable suite attempt.
 
     ``launchable_ids`` is an explicit test seam for fake adapters; normal
     callers leave it unset and use the fixture manifest's readiness result.
-    Regardless of readiness, every suite case receives exactly one case
-    directory and one terminal record.
+    It is rejected for production execution because it bypasses readiness.
+    ``case_id`` is the production selector: when supplied, the original suite
+    metadata remains pinned but only that case is prepared/launched. Selection
+    never changes the fixture-readiness decision.
     """
-    suite = load_json(suite_path)
-    if not isinstance(suite, Mapping) or not isinstance(suite.get("cases"), list) or not suite["cases"]:
+    source_suite = load_json(suite_path)
+    if not isinstance(source_suite, Mapping) or not isinstance(source_suite.get("cases"), list) or not source_suite["cases"]:
         raise NativeLauncherError("suite must contain a non-empty cases array")
+    suite = dict(source_suite)
+    source_cases = list(source_suite["cases"])
+    selected_case_id: str | None = None
+    if case_id is not None:
+        selected_case_id = _safe_case_id(case_id)
+        selected = [
+            row for row in source_cases
+            if isinstance(row, Mapping) and str(row.get("id")) == selected_case_id
+        ]
+        if len(selected) != 1:
+            raise NativeLauncherError(
+                f"selected case is not present exactly once in suite: {selected_case_id}"
+            )
+        suite["cases"] = selected
+    else:
+        suite["cases"] = source_cases
+    if launchable_ids is not None and not fixture_only:
+        raise NativeLauncherError(
+            "launchable_ids is test-only and cannot bypass production fixture readiness"
+        )
     if attempt_root is None:
         raise NativeLauncherError("an explicit fresh attempt root is required")
     if thinking not in {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}:
@@ -1115,6 +1142,14 @@ def run_attempt(
     readiness = {row.case_id: row for row in build_readiness(suite_path, fixture_root)}
     forced = set(launchable_ids) if launchable_ids is not None else None
     fingerprints = _attempt_fingerprints(fixture_root, suite_path, briefs_path, skill_reference)
+    selected_fingerprints = {
+        str(row["id"]): hashlib.sha256(json.dumps(
+            row, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        for row in suite["cases"]
+        if isinstance(row, Mapping) and row.get("id")
+    }
+    fingerprints["selected_cases"] = selected_fingerprints
     fingerprint_sha256 = hashlib.sha256(json.dumps(
         fingerprints, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
@@ -1132,6 +1167,13 @@ def run_attempt(
         },
         "fresh_context_per_case": True,
         "case_count": len(suite["cases"]),
+        "suite_case_count": len(source_cases),
+        "selection": {
+            "case_id": selected_case_id,
+            "selected_case_ids": sorted(selected_fingerprints),
+            "selected_case_fingerprints": dict(selected_fingerprints),
+            "readiness_source": str(suite_path),
+        },
         "started_at": _now(),
         "canonical_fallback_available": False,
         "skill_reference": dict(skill_reference),
@@ -1152,7 +1194,11 @@ def run_attempt(
         for case in suite["cases"]:
             case_id = _safe_case_id(_mapping(case).get("id"))
             row = readiness.get(case_id)
-            plan.append({"case_id": case_id, "fixture_ready": bool(row and row.readiness == "fixture_ready")})
+            plan.append({
+                "case_id": case_id,
+                "fixture_ready": bool(row and row.readiness == "fixture_ready"),
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
+            })
         top_level["plan"] = plan
         _write_json(attempt_root / "attempt.json", top_level)
         return top_level
@@ -1240,6 +1286,7 @@ def run_attempt(
                 "model": model,
                 "thinking": thinking,
                 "fingerprint_sha256": fingerprint_sha256,
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
                 "execution": "fixture_blocked",
             })
             _fixture_blocked_result(case, attempt_id=attempt_id, reason=reason, case_dir=case_dir)
@@ -1256,6 +1303,7 @@ def run_attempt(
                 "model": model,
                 "thinking": thinking,
                 "fingerprint_sha256": fingerprint_sha256,
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
                 "execution": "setup_failed",
             })
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=target_setup_error)
@@ -1272,6 +1320,7 @@ def run_attempt(
                 "model": model,
                 "thinking": thinking,
                 "fingerprint_sha256": fingerprint_sha256,
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
                 "execution": "setup_failed",
             })
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=checks_setup_error)
@@ -1288,6 +1337,7 @@ def run_attempt(
                 "model": model,
                 "thinking": thinking,
                 "fingerprint_sha256": fingerprint_sha256,
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
                 "execution": "setup_failed",
                 "skill_error": skill_setup_error,
             })
@@ -1309,6 +1359,7 @@ def run_attempt(
                 "model": model,
                 "thinking": thinking,
                 "fingerprint_sha256": fingerprint_sha256,
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
                 "execution": "setup_failed",
             })
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
@@ -1373,6 +1424,7 @@ def run_attempt(
                     "model": model,
                     "thinking": thinking,
                     "fingerprint_sha256": fingerprint_sha256,
+                    "case_fingerprint_sha256": selected_fingerprints.get(case_id),
                     "execution": "setup_failed",
                     "boundary_error": reason,
                 })
@@ -1392,6 +1444,7 @@ def run_attempt(
             "thinking": thinking,
             "model_boundary_id": model_boundary_id,
             "fingerprint_sha256": fingerprint_sha256,
+            "case_fingerprint_sha256": selected_fingerprints.get(case_id),
             "target_receipt_sha256": hashlib.sha256(json.dumps(
                 public_target, sort_keys=True, separators=(",", ":"),
             ).encode("utf-8")).hexdigest() if public_target is not None else None,
@@ -1599,6 +1652,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fixture-root", type=Path, default=DEFAULT_FIXTURE_ROOT)
     parser.add_argument("--briefs", type=Path, default=DEFAULT_BRIEFS)
     parser.add_argument("--attempt-root", type=Path, required=True)
+    parser.add_argument(
+        "--case", dest="case_id",
+        help="run exactly one suite case while retaining the original suite/version metadata",
+    )
     parser.add_argument("--omp-bin", default="omp", help="OMP executable (default: omp)")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--thinking", default=DEFAULT_THINKING,
@@ -1626,6 +1683,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             thinking=args.thinking,
             execute=not args.dry_run,
+            case_id=args.case_id,
             isolated_endpoint=args.isolated_endpoint,
             isolated_credential=args.isolated_credential,
             isolation_contract=args.isolation_contract,

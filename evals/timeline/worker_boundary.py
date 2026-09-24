@@ -8,6 +8,8 @@ the coordinator's own container are not isolation evidence.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import secrets
 from dataclasses import asdict, dataclass, replace
 from pathlib import PurePosixPath
@@ -31,15 +33,16 @@ class ProtectedPath:
 class BoundaryRequirements:
     case_id: str
     worker_id: str
+    execution_mode: Literal["offline", "runtime_edit"]
     model_boundary_id: str | None
     host_selected_case_path: str
     selected_case_path: str
-    disposable_credential_path: str
+    disposable_credential_path: str | None
     skill_path: str
     skill_sha256: str
     public_package_path: str
     public_package_digest: str | None
-    disposable_endpoint: str
+    disposable_endpoint: str | None
     disposable_realm_id: str | None
     disposable_runtime_receipt_id: str | None
     canonical_endpoint: str
@@ -56,6 +59,7 @@ class WorkerAttestation:
     """Observation issued by a host supervisor outside the worker runtime."""
 
     worker_id: str
+    execution_mode: Literal["offline", "runtime_edit"]
     boundary_id: str
     supervisor_boundary_id: str
     isolation_scope: Literal["cross_boundary", "same_container", "same_process"]
@@ -67,8 +71,8 @@ class WorkerAttestation:
     selected_case_path: str
     public_package_path: str
     public_package_digest: str
-    disposable_realm_id: str
-    disposable_runtime_receipt_id: str
+    disposable_realm_id: str | None
+    disposable_runtime_receipt_id: str | None
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ class HostPathObservation:
 class BoundaryReceipt:
     case_id: str
     worker_id: str
+    execution_mode: Literal["offline", "runtime_edit"]
     boundary_id: str
     supervisor_boundary_id: str
     isolation_scope: Literal["cross_boundary"]
@@ -127,7 +132,8 @@ class BoundaryReceipt:
     network_policy_digest: str
     public_package_path: str
     public_package_digest: str
-    disposable_runtime_receipt_id: str
+    disposable_realm_id: str | None
+    disposable_runtime_receipt_id: str | None
     protected_paths: tuple[HostPathObservation, ...]
     probes: tuple[ProbeObservation, ...]
     status: Literal["pass"] = "pass"
@@ -139,7 +145,9 @@ class BoundaryReceipt:
 
 @dataclass(frozen=True)
 class WorkerLaunchRequest:
+    case_id: str
     worker_id: str
+    execution_mode: Literal["offline", "runtime_edit"]
     boundary_id: str
     runtime_receipt_id: str
     challenge: str
@@ -149,6 +157,32 @@ class WorkerLaunchRequest:
     cwd: str
     environment: Mapping[str, str]
     timeout_seconds: float
+    final_capture_target: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class HostFinalCapture:
+    """Host-owned evidence captured only after the evaluated worker stopped."""
+
+    case_id: str
+    worker_id: str
+    execution_mode: Literal["offline", "runtime_edit"]
+    boundary_id: str
+    runtime_receipt_id: str
+    challenge: str
+    status: Literal["captured", "offline_captured"]
+    worker_stopped: bool
+    descendants_stopped: bool
+    disposable_realm_id: str | None
+    disposable_runtime_receipt_id: str | None
+    target_project_id: str | None
+    target_timeline_id: str | None
+    head_revision_id: str | None
+    timeline_heads: Mapping[str, str | None]
+    closures: Mapping[str, Mapping[str, object]]
+    case_tree_digest: str | None
+    capture_sha256: str
+    realm_retired: bool | None
 
 
 @dataclass(frozen=True)
@@ -164,6 +198,14 @@ class WorkerLaunchObservation:
     stderr: str = ""
     worker_stopped: bool = False
     descendants_stopped: bool = False
+    final_capture: HostFinalCapture | None = None
+
+
+def host_final_capture_digest(capture: HostFinalCapture) -> str:
+    value = asdict(capture)
+    value.pop("capture_sha256", None)
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 class BoundarySupervisor(Protocol):
@@ -197,20 +239,38 @@ def pin_worker_boundary(
     attestation = supervisor.inspect_worker(requirements.worker_id)
     if not isinstance(attestation, WorkerAttestation):
         raise BoundaryUnavailable("host supervisor returned no typed worker attestation")
+    if attestation.execution_mode != requirements.execution_mode:
+        raise BoundaryUnavailable("host worker attestation changed requested execution_mode")
     expected = (
         ("model_boundary_id", requirements.model_boundary_id, attestation.boundary_id),
         ("public_package_digest", requirements.public_package_digest, attestation.public_package_digest),
-        ("disposable_realm_id", requirements.disposable_realm_id, attestation.disposable_realm_id),
-        (
-            "disposable_runtime_receipt_id",
-            requirements.disposable_runtime_receipt_id,
-            attestation.disposable_runtime_receipt_id,
-        ),
     )
     for field, requested, observed in expected:
         if requested is not None and requested != observed:
             raise BoundaryUnavailable(f"host worker attestation changed requested {field}")
         _required(observed, f"host attestation {field}")
+    if requirements.execution_mode == "runtime_edit":
+        runtime_expected = (
+            ("disposable_realm_id", requirements.disposable_realm_id, attestation.disposable_realm_id),
+            (
+                "disposable_runtime_receipt_id",
+                requirements.disposable_runtime_receipt_id,
+                attestation.disposable_runtime_receipt_id,
+            ),
+        )
+        for field, requested, observed in runtime_expected:
+            if requested is not None and requested != observed:
+                raise BoundaryUnavailable(f"host worker attestation changed requested {field}")
+            _required(observed, f"host attestation {field}")
+    elif any((
+        requirements.disposable_credential_path,
+        requirements.disposable_endpoint,
+        requirements.disposable_realm_id,
+        requirements.disposable_runtime_receipt_id,
+        attestation.disposable_realm_id,
+        attestation.disposable_runtime_receipt_id,
+    )):
+        raise BoundaryUnavailable("offline worker must not carry disposable Runtime authority")
     if attestation.public_package_path != requirements.public_package_path:
         raise BoundaryUnavailable("host worker attestation changed requested public_package_path")
     return replace(
@@ -265,12 +325,13 @@ def _protected_paths(requirements: BoundaryRequirements) -> tuple[tuple[str, Pro
 
 def _probe_plan(requirements: BoundaryRequirements) -> tuple[tuple[AccessProbe, ProtectedPath | None], ...]:
     for field in (
-        "case_id", "worker_id", "model_boundary_id", "host_selected_case_path",
-        "selected_case_path", "disposable_credential_path", "skill_path", "skill_sha256",
-        "public_package_path", "public_package_digest", "disposable_endpoint", "disposable_realm_id",
-        "disposable_runtime_receipt_id", "canonical_endpoint",
+        "case_id", "worker_id", "execution_mode", "model_boundary_id", "host_selected_case_path",
+        "selected_case_path", "skill_path", "skill_sha256", "public_package_path",
+        "public_package_digest", "canonical_endpoint",
     ):
         _required(getattr(requirements, field), field)
+    if requirements.execution_mode not in {"offline", "runtime_edit"}:
+        raise BoundaryUnavailable("boundary execution_mode must be offline or runtime_edit")
     # The Runtime SDK and the supported RuntimeDaemon intentionally expose a
     # loopback URL.  Loopback by itself is not isolation evidence, but it is
     # valid when the host supervisor has separately proven the Runtime process
@@ -279,8 +340,21 @@ def _probe_plan(requirements: BoundaryRequirements) -> tuple[tuple[AccessProbe, 
     # worker/runtime identity and handshake probes, not by URL spelling.
     if not requirements.denied_endpoints:
         raise BoundaryUnavailable("boundary requires unrelated endpoint denial targets")
-    if requirements.disposable_endpoint == requirements.canonical_endpoint:
-        raise BoundaryUnavailable("disposable and canonical endpoints must differ")
+    if requirements.execution_mode == "runtime_edit":
+        for field in (
+            "disposable_credential_path", "disposable_endpoint", "disposable_realm_id",
+            "disposable_runtime_receipt_id",
+        ):
+            _required(getattr(requirements, field), field)
+        if requirements.disposable_endpoint == requirements.canonical_endpoint:
+            raise BoundaryUnavailable("disposable and canonical endpoints must differ")
+    elif any((
+        requirements.disposable_credential_path,
+        requirements.disposable_endpoint,
+        requirements.disposable_realm_id,
+        requirements.disposable_runtime_receipt_id,
+    )):
+        raise BoundaryUnavailable("offline boundary must omit Runtime endpoint, credential, realm, and receipt")
     if requirements.canonical_endpoint in requirements.denied_endpoints:
         raise BoundaryUnavailable("canonical endpoint must use its dedicated denial probe")
     package_root = PurePosixPath(requirements.public_package_path)
@@ -290,17 +364,23 @@ def _probe_plan(requirements: BoundaryRequirements) -> tuple[tuple[AccessProbe, 
     probes: list[tuple[AccessProbe, ProtectedPath | None]] = [
         (AccessProbe("selected-case-read", "read_path", requirements.selected_case_path, "allow"), None),
         (AccessProbe("selected-case-write", "write_path", requirements.selected_case_path, "allow"), None),
-        (AccessProbe("disposable-credential-read", "read_path", requirements.disposable_credential_path, "allow"), None),
         (AccessProbe("skill-sha256", "sha256_path", requirements.skill_path, "allow", expected_sha256=requirements.skill_sha256), None),
         (AccessProbe("astrid-cli-help", "python_module_help", "astrid", "allow"), None),
         (AccessProbe("astrid-sdk-import", "python_import", "astrid.sdk", "allow"), None),
-        (AccessProbe(
-            "disposable-runtime", "runtime_handshake", requirements.disposable_endpoint, "allow",
-            expected_realm_id=requirements.disposable_realm_id,
-            expected_runtime_receipt_id=requirements.disposable_runtime_receipt_id,
-        ), None),
         (AccessProbe("canonical-runtime-denied", "http_get", requirements.canonical_endpoint, "deny"), None),
     ]
+    if requirements.execution_mode == "runtime_edit":
+        probes[2:2] = [
+            (AccessProbe(
+                "disposable-credential-read", "read_path",
+                str(requirements.disposable_credential_path), "allow",
+            ), None),
+            (AccessProbe(
+                "disposable-runtime", "runtime_handshake", str(requirements.disposable_endpoint), "allow",
+                expected_realm_id=requirements.disposable_realm_id,
+                expected_runtime_receipt_id=requirements.disposable_runtime_receipt_id,
+            ), None),
+        ]
     for index, path in enumerate(requirements.skill_reference_paths):
         _required(path, f"skill_reference_paths[{index}]")
         probes.append((AccessProbe(f"skill-reference-{index}-read", "read_path", path, "allow"), None))
@@ -308,7 +388,7 @@ def _probe_plan(requirements: BoundaryRequirements) -> tuple[tuple[AccessProbe, 
         probes.append((AccessProbe(f"{label}-{path.path_id}-denied", "read_path", path.worker_path, "deny"), path))
     for index, endpoint in enumerate(requirements.denied_endpoints):
         _required(endpoint, f"denied_endpoints[{index}]")
-        if endpoint == requirements.disposable_endpoint:
+        if requirements.disposable_endpoint and endpoint == requirements.disposable_endpoint:
             raise BoundaryUnavailable("disposable endpoint cannot also be a denied endpoint")
         probes.append((AccessProbe(f"other-endpoint-{index}-denied", "http_get", endpoint, "deny"), None))
     return tuple(probes)
@@ -332,6 +412,7 @@ def prove_worker_boundary(
         raise BoundaryUnavailable("host supervisor and worker report the same boundary identity")
     if (
         attestation.worker_id != requirements.worker_id
+        or attestation.execution_mode != requirements.execution_mode
         or attestation.boundary_id != requirements.model_boundary_id
         or attestation.enforcement not in {"container", "vm", "os_sandbox"}
         or not attestation.supervisor_boundary_id
@@ -412,6 +493,7 @@ def prove_worker_boundary(
     return BoundaryReceipt(
         case_id=requirements.case_id,
         worker_id=requirements.worker_id,
+        execution_mode=requirements.execution_mode,
         boundary_id=attestation.boundary_id,
         supervisor_boundary_id=attestation.supervisor_boundary_id,
         isolation_scope="cross_boundary",
@@ -423,6 +505,7 @@ def prove_worker_boundary(
         network_policy_digest=attestation.network_policy_digest,
         public_package_path=attestation.public_package_path,
         public_package_digest=attestation.public_package_digest,
+        disposable_realm_id=attestation.disposable_realm_id,
         disposable_runtime_receipt_id=attestation.disposable_runtime_receipt_id,
         protected_paths=tuple(host_observations),
         probes=tuple(observations),
@@ -438,7 +521,9 @@ def launch_in_proven_boundary(
     if supervisor is None:
         raise BoundaryUnavailable("no host worker supervisor is available for model launch")
     if (
-        request.worker_id != receipt.worker_id
+        request.case_id != receipt.case_id
+        or request.execution_mode != receipt.execution_mode
+        or request.worker_id != receipt.worker_id
         or request.boundary_id != receipt.boundary_id
         or request.runtime_receipt_id != receipt.runtime_receipt_id
         or request.challenge != receipt.challenge
@@ -472,12 +557,57 @@ def launch_in_proven_boundary(
         raise BoundaryUnavailable(
             "model worker and its descendants were not stopped before private grading"
         )
+    capture = observed.final_capture
+    if not isinstance(capture, HostFinalCapture):
+        raise BoundaryUnavailable("host supervisor omitted the post-teardown final capture")
+    if (
+        capture.case_id != receipt.case_id
+        or capture.worker_id != receipt.worker_id
+        or capture.execution_mode != receipt.execution_mode
+        or capture.boundary_id != receipt.boundary_id
+        or capture.runtime_receipt_id != receipt.runtime_receipt_id
+        or capture.challenge != receipt.challenge
+        or not capture.worker_stopped
+        or not capture.descendants_stopped
+        or capture.capture_sha256 != host_final_capture_digest(capture)
+    ):
+        raise BoundaryUnavailable("host final capture does not match the proven launch receipt")
+    if receipt.execution_mode == "runtime_edit":
+        target = request.final_capture_target
+        if not isinstance(target, Mapping):
+            raise BoundaryUnavailable("Runtime-edit launch omitted its host final-capture target")
+        target_timeline_id = str(target.get("timeline_id"))
+        captured_closure = capture.closures.get(target_timeline_id)
+        if (
+            capture.status != "captured"
+            or capture.disposable_realm_id != receipt.disposable_realm_id
+            or capture.disposable_runtime_receipt_id != receipt.disposable_runtime_receipt_id
+            or capture.target_project_id != target.get("project_id")
+            or capture.target_timeline_id != target.get("timeline_id")
+            or not capture.head_revision_id
+            or capture.timeline_heads.get(target_timeline_id) != capture.head_revision_id
+            or not isinstance(captured_closure, Mapping)
+            or captured_closure.get("head_revision_id") != capture.head_revision_id
+            or capture.realm_retired is not True
+        ):
+            raise BoundaryUnavailable(
+                "host final capture did not prove the selected Runtime realm, target, and retirement"
+            )
+    elif (
+        capture.status != "offline_captured"
+        or capture.disposable_realm_id is not None
+        or capture.disposable_runtime_receipt_id is not None
+        or capture.realm_retired is not None
+        or not capture.case_tree_digest
+    ):
+        raise BoundaryUnavailable("offline final capture carried Runtime authority or lacked its case digest")
     return observed
 
 
 __all__ = [
     "AccessProbe", "BoundaryReceipt", "BoundaryRequirements", "BoundarySupervisor",
     "BoundaryUnavailable", "HostPathObservation", "ProbeObservation", "ProtectedPath",
-    "WorkerAttestation", "WorkerLaunchObservation", "WorkerLaunchRequest",
-    "launch_in_proven_boundary", "pin_worker_boundary", "prove_worker_boundary",
+    "HostFinalCapture", "WorkerAttestation", "WorkerLaunchObservation", "WorkerLaunchRequest",
+    "host_final_capture_digest", "launch_in_proven_boundary", "pin_worker_boundary",
+    "prove_worker_boundary",
 ]

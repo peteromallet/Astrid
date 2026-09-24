@@ -5,6 +5,7 @@ import os
 import copy
 import subprocess
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,10 @@ from evals.timeline.checks import run_checks
 from evals.timeline.luna_native import DEFAULT_MODEL, run_attempt
 from evals.timeline.worker_boundary import (
     BoundaryRequirements,
+    HostFinalCapture,
     ProtectedPath,
     WorkerLaunchObservation,
+    host_final_capture_digest,
 )
 
 
@@ -292,6 +295,7 @@ def _boundary_requirements(
     return BoundaryRequirements(
         case_id=case_id,
         worker_id="test-worker",
+        execution_mode="runtime_edit",
         model_boundary_id="test-model-boundary",
         host_selected_case_path=str(tmp_path / attempt_name / "cases" / case_id),
         selected_case_path=f"/worker/cases/{case_id}",
@@ -318,13 +322,17 @@ def _install_fake_boundary(
     requirements = _boundary_requirements(tmp_path, case_id, attempt_name)
 
     class Receipt:
+        case_id = requirements.case_id
         worker_id = requirements.worker_id
+        execution_mode = requirements.execution_mode
         boundary_id = requirements.model_boundary_id
         runtime_receipt_id = "test-container-receipt"
         challenge = "test-boundary-challenge"
         selected_case_path = requirements.selected_case_path
         public_package_path = requirements.public_package_path
         public_package_digest = requirements.public_package_digest
+        disposable_realm_id = requirements.disposable_realm_id
+        disposable_runtime_receipt_id = requirements.disposable_runtime_receipt_id
 
         def as_dict(self):
             return {
@@ -355,6 +363,30 @@ def _install_fake_boundary(
             except subprocess.TimeoutExpired as exc:
                 status, returncode = "timeout", None
                 stdout, stderr = exc.stdout or "", exc.stderr or ""
+            capture = HostFinalCapture(
+                case_id=request.case_id,
+                worker_id=request.worker_id,
+                execution_mode=request.execution_mode,
+                boundary_id=request.boundary_id,
+                runtime_receipt_id=request.runtime_receipt_id,
+                challenge=request.challenge,
+                status="captured",
+                worker_stopped=True,
+                descendants_stopped=True,
+                disposable_realm_id=requirements.disposable_realm_id,
+                disposable_runtime_receipt_id=requirements.disposable_runtime_receipt_id,
+                target_project_id=(request.final_capture_target or {}).get("project_id"),
+                target_timeline_id=(request.final_capture_target or {}).get("timeline_id"),
+                head_revision_id="head-before",
+                timeline_heads={"timeline-test": "head-before"},
+                closures={"timeline-test": _closure()},
+                case_tree_digest=None,
+                capture_sha256="",
+                realm_retired=True,
+            )
+            capture = replace(
+                capture, capture_sha256=host_final_capture_digest(capture),
+            )
             return WorkerLaunchObservation(
                 worker_id=request.worker_id,
                 boundary_id=request.boundary_id,
@@ -367,6 +399,7 @@ def _install_fake_boundary(
                 stderr=stderr,
                 worker_stopped=True,
                 descendants_stopped=True,
+                final_capture=capture,
             )
 
     monkeypatch.setattr(luna_native, "pin_worker_boundary", lambda _supervisor, value: value)
@@ -441,6 +474,31 @@ class _ReadbackAdapter:
 
     def list_project_timeline_heads(self, project_id):
         return {"timeline-test": self.head}
+
+
+def _write_host_capture(case_dir: Path, adapter: _ReadbackAdapter, case_id: str) -> None:
+    path = case_dir.parents[1] / "coordinator" / "cases" / case_id / "host-final-capture.json"
+    luna_native._write_json(path, {
+        "case_id": case_id,
+        "worker_id": "test-worker",
+        "execution_mode": "runtime_edit",
+        "boundary_id": "test-model-boundary",
+        "runtime_receipt_id": "test-container-receipt",
+        "challenge": "test-boundary-challenge",
+        "status": "captured",
+        "worker_stopped": True,
+        "descendants_stopped": True,
+        "disposable_realm_id": "test-realm",
+        "disposable_runtime_receipt_id": "test-runtime-receipt",
+        "target_project_id": "project-test",
+        "target_timeline_id": "timeline-test",
+        "head_revision_id": adapter.head,
+        "timeline_heads": {"timeline-test": adapter.head},
+        "closures": {"timeline-test": adapter.closures[adapter.head]},
+        "case_tree_digest": None,
+        "capture_sha256": "sha256:test-capture",
+        "realm_retired": True,
+    })
 
 
 def _run_live_a01(tmp_path: Path, monkeypatch, *, target: dict[str, object] | None, adapter, invoke=None) -> tuple[dict, Path]:
@@ -535,6 +593,7 @@ def test_exact_publication_response_and_dependency_manifest_feed_contract(tmp_pa
             "saved_to_test_timeline": True,
             "publication_response": publication_response,
         })
+        _write_host_capture(kwargs["case_dir"], adapter, "A01")
         return "completed", 0, 0.01, [], ""
 
     aggregate, _calls = _run_live_a01(
@@ -656,6 +715,7 @@ def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, mo
             "tool_calls": 1,
             "observations": {"head_revision_id": "head-before", "selected_image_media_id": "sha256:unused"},
         })
+        _write_host_capture(kwargs["case_dir"], target_reader, "L01")
         return "completed", 0, 0.01, [], ""
 
     monkeypatch.setattr(luna_native, "prove_worker_boundary", prove)

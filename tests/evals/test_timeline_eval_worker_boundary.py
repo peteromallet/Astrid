@@ -5,12 +5,14 @@ import pytest
 from evals.timeline.worker_boundary import (
     BoundaryRequirements,
     BoundaryUnavailable,
+    HostFinalCapture,
     HostPathObservation,
     ProbeObservation,
     ProtectedPath,
     WorkerAttestation,
     WorkerLaunchObservation,
     WorkerLaunchRequest,
+    host_final_capture_digest,
     launch_in_proven_boundary,
     pin_worker_boundary,
     prove_worker_boundary,
@@ -29,6 +31,7 @@ def _requirements() -> BoundaryRequirements:
     return BoundaryRequirements(
         case_id="A01",
         worker_id="worker-a01",
+        execution_mode="runtime_edit",
         model_boundary_id="container-immutable-identity",
         host_selected_case_path="/host/attempt/cases/A01",
         selected_case_path="/case/A01",
@@ -62,6 +65,7 @@ class Supervisor:
         r = self.requirements
         return WorkerAttestation(
             worker_id=worker_id,
+            execution_mode=r.execution_mode,
             boundary_id=r.model_boundary_id,
             supervisor_boundary_id="agentbox-host-supervisor",
             isolation_scope="cross_boundary",
@@ -116,6 +120,31 @@ class Supervisor:
         return self.override(probe, value) if self.override else value
 
     def launch_worker(self, request):
+        target = request.final_capture_target or {}
+        timeline_id = str(target.get("timeline_id", "timeline-test"))
+        head = "head-after"
+        capture = HostFinalCapture(
+            case_id=request.case_id,
+            worker_id=request.worker_id,
+            execution_mode=request.execution_mode,
+            boundary_id=request.boundary_id,
+            runtime_receipt_id=request.runtime_receipt_id,
+            challenge=request.challenge,
+            status="captured",
+            worker_stopped=True,
+            descendants_stopped=True,
+            disposable_realm_id=self.requirements.disposable_realm_id,
+            disposable_runtime_receipt_id=self.requirements.disposable_runtime_receipt_id,
+            target_project_id=target.get("project_id", "project-test"),
+            target_timeline_id=timeline_id,
+            head_revision_id=head,
+            timeline_heads={timeline_id: head},
+            closures={timeline_id: {"head_revision_id": head}},
+            case_tree_digest=None,
+            capture_sha256="",
+            realm_retired=True,
+        )
+        capture = replace(capture, capture_sha256=host_final_capture_digest(capture))
         value = WorkerLaunchObservation(
             worker_id=request.worker_id,
             boundary_id=request.boundary_id,
@@ -127,6 +156,7 @@ class Supervisor:
             stdout='{"event":"done"}\n',
             worker_stopped=True,
             descendants_stopped=True,
+            final_capture=capture,
         )
         return self.launch_override(request, value) if self.launch_override else value
 
@@ -150,6 +180,53 @@ def test_cross_boundary_probes_bind_real_host_paths_runtime_and_model_boundary()
         "coordinator-evidence", "source-checkout", "sibling-a02", "prior-attempt",
     }
     assert "secret-credential-bytes" not in str(receipt.as_dict())
+
+
+def test_offline_boundary_has_no_runtime_credential_or_handshake_and_captures_after_stop():
+    requirements = replace(
+        _requirements(), case_id="L01", execution_mode="offline",
+        disposable_credential_path=None, disposable_endpoint=None,
+        disposable_realm_id=None, disposable_runtime_receipt_id=None,
+    )
+    supervisor = Supervisor(requirements)
+    receipt = prove_worker_boundary(supervisor, requirements)
+    probe_ids = {probe.probe_id for probe in receipt.probes}
+    assert "disposable-credential-read" not in probe_ids
+    assert "disposable-runtime" not in probe_ids
+    assert "canonical-runtime-denied" in probe_ids
+    request = WorkerLaunchRequest(
+        case_id="L01", worker_id=requirements.worker_id, execution_mode="offline",
+        boundary_id=receipt.boundary_id, runtime_receipt_id=receipt.runtime_receipt_id,
+        challenge=receipt.challenge, public_package_path=receipt.public_package_path,
+        public_package_digest=receipt.public_package_digest,
+        argv=("omp", "--cwd", requirements.selected_case_path, "--no-session"),
+        cwd=requirements.selected_case_path, environment={}, timeout_seconds=10,
+    )
+    def offline_capture(_request, value):
+        capture = replace(
+            value.final_capture,
+            case_id="L01", execution_mode="offline", status="offline_captured",
+            disposable_realm_id=None, disposable_runtime_receipt_id=None,
+            target_project_id=None, target_timeline_id=None, head_revision_id=None,
+            timeline_heads={}, closures={}, case_tree_digest="sha256:case-tree",
+            realm_retired=None, capture_sha256="",
+        )
+        return replace(value, final_capture=replace(
+            capture, capture_sha256=host_final_capture_digest(capture),
+        ))
+
+    supervisor.launch_override = offline_capture
+    observed = launch_in_proven_boundary(supervisor, receipt, request)
+    assert observed.final_capture.status == "offline_captured"
+
+
+def test_offline_boundary_rejects_any_runtime_authority():
+    requirements = replace(
+        _requirements(), execution_mode="offline", disposable_endpoint=None,
+        disposable_realm_id=None, disposable_runtime_receipt_id=None,
+    )
+    with pytest.raises(BoundaryUnavailable, match="offline boundary must omit Runtime"):
+        prove_worker_boundary(Supervisor(requirements), requirements)
 
 
 def test_no_host_supervisor_or_incomplete_protected_targets_fail_closed():
@@ -258,7 +335,9 @@ def test_model_launch_must_use_same_supervisor_challenge_and_runtime_receipt():
     supervisor = Supervisor(requirements)
     receipt = prove_worker_boundary(supervisor, requirements)
     request = WorkerLaunchRequest(
+        case_id=requirements.case_id,
         worker_id=requirements.worker_id,
+        execution_mode=requirements.execution_mode,
         boundary_id=receipt.boundary_id,
         runtime_receipt_id=receipt.runtime_receipt_id,
         challenge=receipt.challenge,
@@ -268,6 +347,7 @@ def test_model_launch_must_use_same_supervisor_challenge_and_runtime_receipt():
         cwd=requirements.selected_case_path,
         environment={},
         timeout_seconds=10,
+        final_capture_target={"project_id": "project-test", "timeline_id": "timeline-test"},
     )
     assert launch_in_proven_boundary(supervisor, receipt, request).status == "completed"
     supervisor.launch_override = lambda _request, value: replace(value, challenge="stale")
@@ -280,7 +360,9 @@ def test_private_grading_requires_worker_and_descendants_stopped():
     supervisor = Supervisor(requirements)
     receipt = prove_worker_boundary(supervisor, requirements)
     request = WorkerLaunchRequest(
+        case_id=requirements.case_id,
         worker_id=requirements.worker_id,
+        execution_mode=requirements.execution_mode,
         boundary_id=receipt.boundary_id,
         runtime_receipt_id=receipt.runtime_receipt_id,
         challenge=receipt.challenge,
@@ -290,11 +372,45 @@ def test_private_grading_requires_worker_and_descendants_stopped():
         cwd=requirements.selected_case_path,
         environment={},
         timeout_seconds=10,
+        final_capture_target={"project_id": "project-test", "timeline_id": "timeline-test"},
     )
     supervisor.launch_override = lambda _request, value: replace(
         value, worker_stopped=False, descendants_stopped=False,
     )
     with pytest.raises(BoundaryUnavailable, match="descendants were not stopped"):
+        launch_in_proven_boundary(supervisor, receipt, request)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"disposable_realm_id": "wrong-realm"}, "selected Runtime realm"),
+        ({"target_timeline_id": "wrong-target"}, "selected Runtime realm"),
+        ({"realm_retired": False}, "selected Runtime realm"),
+    ],
+)
+def test_runtime_final_capture_must_match_target_realm_and_retirement(change, message):
+    requirements = _requirements()
+    supervisor = Supervisor(requirements)
+    receipt = prove_worker_boundary(supervisor, requirements)
+    request = WorkerLaunchRequest(
+        case_id=requirements.case_id, worker_id=requirements.worker_id,
+        execution_mode=requirements.execution_mode, boundary_id=receipt.boundary_id,
+        runtime_receipt_id=receipt.runtime_receipt_id, challenge=receipt.challenge,
+        public_package_path=receipt.public_package_path,
+        public_package_digest=receipt.public_package_digest,
+        argv=("omp", "--cwd", requirements.selected_case_path, "--no-session"),
+        cwd=requirements.selected_case_path, environment={}, timeout_seconds=10,
+        final_capture_target={"project_id": "project-test", "timeline_id": "timeline-test"},
+    )
+    def wrong_capture(_request, value):
+        capture = replace(value.final_capture, **change, capture_sha256="")
+        return replace(value, final_capture=replace(
+            capture, capture_sha256=host_final_capture_digest(capture),
+        ))
+
+    supervisor.launch_override = wrong_capture
+    with pytest.raises(BoundaryUnavailable, match=message):
         launch_in_proven_boundary(supervisor, receipt, request)
 
 
@@ -362,7 +478,9 @@ def test_launch_rejects_stale_public_package_identity(change):
     supervisor = Supervisor(requirements)
     receipt = prove_worker_boundary(supervisor, requirements)
     request = WorkerLaunchRequest(
+        case_id=requirements.case_id,
         worker_id=requirements.worker_id,
+        execution_mode=requirements.execution_mode,
         boundary_id=receipt.boundary_id,
         runtime_receipt_id=receipt.runtime_receipt_id,
         challenge=receipt.challenge,
@@ -372,6 +490,7 @@ def test_launch_rejects_stale_public_package_identity(change):
         cwd=requirements.selected_case_path,
         environment={},
         timeout_seconds=10,
+        final_capture_target={"project_id": "project-test", "timeline_id": "timeline-test"},
     )
     with pytest.raises(BoundaryUnavailable, match="does not match the proven receipt"):
         launch_in_proven_boundary(supervisor, receipt, replace(request, **change))

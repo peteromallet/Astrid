@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Mapping
@@ -82,6 +82,38 @@ class CaseRuntimeContract:
     credential: Path
     isolation_contract: Path
     source_reader: Any | None = None
+
+
+class _CapturedClosureReader:
+    """Read-only view of the host capture made after worker teardown."""
+
+    def __init__(self, capture: Mapping[str, Any]):
+        heads = capture.get("timeline_heads")
+        closures = capture.get("closures")
+        if not isinstance(heads, Mapping) or not isinstance(closures, Mapping):
+            raise IndependentReadbackError("host final capture omitted timeline heads or closures")
+        self._heads = dict(heads)
+        self._closures = dict(closures)
+
+    def current_head(self, project_id: str, timeline_id: str) -> str:
+        value = self._heads.get(timeline_id)
+        if not isinstance(value, str) or not value:
+            raise IndependentReadbackError("captured timeline has no current head")
+        return value
+
+    def read_current_closure(
+        self, project_id: str, timeline_id: str, *, head: str | None = None,
+    ) -> Mapping[str, Any]:
+        closure = self._closures.get(timeline_id)
+        if not isinstance(closure, Mapping):
+            raise IndependentReadbackError("captured timeline closure is unavailable")
+        expected = head or self.current_head(project_id, timeline_id)
+        if closure.get("head_revision_id") != expected:
+            raise IndependentReadbackError("captured closure differs from requested exact head")
+        return closure
+
+    def list_project_timeline_heads(self, project_id: str) -> Mapping[str, str | None]:
+        return self._heads
 
 
 def _verify_projected_readback(
@@ -589,7 +621,9 @@ def _invoke(
                 boundary_supervisor,
                 boundary_receipt,
                 WorkerLaunchRequest(
+                    case_id=str(case["id"]),
                     worker_id=boundary_requirements.worker_id,
+                    execution_mode=boundary_requirements.execution_mode,
                     boundary_id=boundary_receipt.boundary_id,
                     runtime_receipt_id=boundary_receipt.runtime_receipt_id,
                     challenge=boundary_receipt.challenge,
@@ -599,8 +633,16 @@ def _invoke(
                     cwd=worker_case_dir,
                     environment=child_env,
                     timeout_seconds=timeout_seconds,
+                    final_capture_target=public_target,
                 ),
             )
+            if observed.final_capture is None:
+                raise BoundaryUnavailable("host launch omitted final capture evidence")
+            capture_path = (
+                case_dir.parents[1] / "coordinator" / "cases" / str(case["id"])
+                / "host-final-capture.json"
+            )
+            _write_json(capture_path, asdict(observed.final_capture))
         except (BoundaryUnavailable, OSError, TypeError, ValueError) as exc:
             elapsed = max(0.0, time.monotonic() - started)
             events.append({"event": "launcher_error", "at": _now(), "error": f"{type(exc).__name__}: {exc}"})
@@ -1298,7 +1340,14 @@ def run_attempt(
                     requirements.case_id != case_id
                     or Path(requirements.host_selected_case_path).resolve() != case_dir.resolve()
                     or requirements.skill_sha256 != skill_reference.get("sha256")
-                    or requirements.disposable_endpoint != case_endpoint
+                    or (
+                        requirements.execution_mode == "runtime_edit"
+                        and requirements.disposable_endpoint != case_endpoint
+                    )
+                    or (
+                        requirements.execution_mode == "offline"
+                        and any((case_endpoint, case_credential, case_isolation_contract))
+                    )
                 ):
                     raise BoundaryUnavailable(
                         "host boundary requirements do not match case path or pinned skill hash"
@@ -1420,15 +1469,21 @@ def run_attempt(
             thinking=thinking,
             model_boundary_id=model_boundary_id,
         )
+        # Coordinator metadata, never a worker-authored semantic claim.
+        merged_result["admission_mode"] = admission_mode
         readback_result: Mapping[str, Any] | None = None
+        final_capture: Mapping[str, Any] | None = None
+        if not fixture_only:
+            capture_path = attempt_root / "coordinator" / "cases" / case_id / "host-final-capture.json"
+            try:
+                final_capture = load_json(capture_path)
+            except SetupError as exc:
+                readback_error = readback_error or f"host final capture unavailable: {exc}"
         if public_target is not None and not fixture_only and readback_error is None:
             try:
-                if readback_adapter is None:
-                    readback_adapter = _connect_readback_adapter(
-                        endpoint=case_endpoint,
-                        credential=case_credential,
-                        contract=case_isolation_contract,
-                    )
+                if not isinstance(final_capture, Mapping):
+                    raise IndependentReadbackError("host final capture is unavailable")
+                readback_adapter = _CapturedClosureReader(final_capture)
                 publication_response = merged_result.get("publication_response")
                 publication = (
                     _publication_payload(publication_response)
@@ -1475,6 +1530,7 @@ def run_attempt(
                 "readback": dict(readback_result),
                 "safety": dict(_mapping(readback_result.get("safety"))),
                 "boundary": boundary_receipt.as_dict() if boundary_receipt else None,
+                "host_final_capture": dict(final_capture) if final_capture else None,
             })
         # Only worker-authored fields remain in result.json. The coordinator's
         # exact readback/safety sidecar is written outside the worker result

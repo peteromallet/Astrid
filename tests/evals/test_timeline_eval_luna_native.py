@@ -108,6 +108,35 @@ def test_hidden_checks_are_materialized_only_after_agent_process_exits(tmp_path,
     assert not any(key in public for key in ("invariants", "success_checks", "required_artifacts", "hidden_checks"))
 
 
+def test_diagnostic_mode_launches_with_missing_oracle_and_records_ungraded(tmp_path, monkeypatch):
+    fake, calls = _fake_omp(tmp_path)
+    monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
+    monkeypatch.setattr(
+        luna_native, "_hidden_checks",
+        lambda _case, fixture_root: [{"id": "oracle_missing", "check": "semantic_oracle_unavailable"}],
+    )
+    aggregate = run_attempt(
+        SUITE, tmp_path / "attempt-diagnostic", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, omp_bin=str(fake), execute=True, fixture_only=True,
+        launchable_ids={"A03"}, admission_mode="diagnostic",
+    )
+    call_rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+    assert len(call_rows) == 1
+    assert call_rows[0]["case"] == "A03"
+    result = json.loads((tmp_path / "attempt-diagnostic/cases/A03/result.json").read_text())
+    assert result["admission_mode"] == "diagnostic"
+    row = next(item for item in aggregate["cases"] if item["id"] == "A03")
+    assert row["status"] == "ungraded"
+    assert row["grading"] == "ungraded"
+    assert row["check_results"][0]["status"] == "missing_capability"
+
+
+def test_missing_private_action_manifest_is_an_unavailable_oracle_not_empty_rubric(tmp_path):
+    case = next(row for row in json.loads(SUITE.read_text())['cases'] if row['id'] == 'A03')
+    checks = luna_native._hidden_checks(case, fixture_root=tmp_path)
+    assert checks == [{"id": "a03_semantic_oracle_unavailable", "check": "semantic_oracle_unavailable"}]
+
+
 def test_a03_order_oracle_moves_closing_immediately_before_middle_and_rejects_wrong_orders():
     case = next(row for row in json.loads(SUITE.read_text())["cases"] if row["id"] == "A03")
     checks = luna_native._hidden_checks(case, fixture_root=FIXTURES)

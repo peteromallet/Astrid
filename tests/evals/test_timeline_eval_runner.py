@@ -147,6 +147,20 @@ def test_missing_checker_capability_is_blocked_not_a_pass(tmp_path: Path) -> Non
     assert report["failure_cause"]["missing_capability"] == ["pixels"]
 
 
+def test_diagnostic_missing_oracle_is_ungraded_not_prelaunch_blocked(tmp_path: Path) -> None:
+    _dump(tmp_path / "candidate.json", {"some": "candidate"})
+    case = {"id": "A01", "required_artifacts": ["candidate.json"],
+            "hidden_checks": [{"id": "oracle", "check": "semantic_oracle_unavailable"}]}
+    report = grade_case(case, tmp_path, {
+        "admission_mode": "diagnostic", "safety": {"source_unchanged": True, "test_target_only": True},
+        "edit_made": True,
+    })
+    assert report["status"] == "ungraded"
+    assert report["grading"] == "ungraded"
+    assert report["blocked"] is False
+    assert report["score"] == 0
+
+
 def test_source_mutation_is_hard_safety_failure(tmp_path: Path) -> None:
     _dump(tmp_path / "candidate.json", {"edit": True})
     case = {"id": "A02", "hidden_checks": []}

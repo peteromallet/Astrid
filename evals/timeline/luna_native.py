@@ -762,7 +762,11 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
     case_id = str(case.get("id"))
     if case.get("kind") == "navigation":
         info_path = fixture_root / "informational" / "fixture.json"
-        info = load_json(info_path)
+        try:
+            info = load_json(info_path)
+        except SetupError:
+            return [{"id": f"{case_id.lower()}_semantic_oracle_unavailable",
+                     "check": "semantic_oracle_unavailable"}]
         fixture_case = next((row for row in _mapping(info).get("cases", [])
                              if isinstance(row, Mapping) and row.get("id") == case_id), {})
         catalog = _mapping(_mapping(info).get("targets"))
@@ -856,7 +860,11 @@ def _hidden_checks(case: Mapping[str, Any], *, fixture_root: Path) -> list[dict[
         try:
             manifest = load_json(action_manifest)
         except SetupError:
-            return []
+            return [{"id": f"{case_id.lower()}_semantic_oracle_unavailable",
+                     "check": "semantic_oracle_unavailable"}]
+    else:
+        return [{"id": f"{case_id.lower()}_semantic_oracle_unavailable",
+                 "check": "semantic_oracle_unavailable"}]
     rows = manifest.get("cases", []) if isinstance(manifest, Mapping) else []
     fixture_case = next((row for row in rows if isinstance(row, Mapping) and row.get("id") == case_id), {})
     targets = _mapping(fixture_case).get("targets", {})
@@ -1010,6 +1018,7 @@ def run_attempt(
     isolation_contract: Path | None = None,
     prepared_targets_root: Path | None = None,
     fixture_only: bool = False,
+    admission_mode: str = "scored",
     source_reader: Any | None = None,
     runtime_contracts: Mapping[str, CaseRuntimeContract] | None = None,
     boundary_supervisor: BoundarySupervisor | None = None,
@@ -1029,6 +1038,8 @@ def run_attempt(
         raise NativeLauncherError("an explicit fresh attempt root is required")
     if thinking not in {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}:
         raise NativeLauncherError(f"unsupported OMP thinking level: {thinking}")
+    if admission_mode not in {"scored", "diagnostic"}:
+        raise NativeLauncherError(f"unsupported admission mode: {admission_mode}")
     if execute and not fixture_only and runtime_contracts is None:
         from .run import validate_isolated_target
         allowed, message = validate_isolated_target(
@@ -1080,6 +1091,7 @@ def run_attempt(
         "fingerprints": fingerprints,
         "fingerprint_sha256": fingerprint_sha256,
         "execution": "native_omp" if execute else "dry_run",
+        "admission_mode": admission_mode,
         "isolation": {
             "fixture_only": fixture_only,
             "endpoint": isolated_endpoint,
@@ -1498,6 +1510,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="coordinator-owned root containing <case-id>/target.json public receipts")
     parser.add_argument("--fixture-only", action="store_true",
                         help="test-only fake adapter mode; never use for a native model run")
+    parser.add_argument("--admission-mode", choices=("scored", "diagnostic"), default="scored",
+                        help="diagnostic permits launch without a semantic oracle; scored does not")
     parser.add_argument("--dry-run", action="store_true", help="print a plan without launching any agent")
     args = parser.parse_args(argv)
     try:
@@ -1515,6 +1529,7 @@ def main(argv: list[str] | None = None) -> int:
             isolation_contract=args.isolation_contract,
             prepared_targets_root=args.prepared_targets_root,
             fixture_only=args.fixture_only,
+            admission_mode=args.admission_mode,
         )
     except (NativeLauncherError, OSError, ValueError) as exc:
         print(json.dumps({"status": "setup_failed", "error": str(exc)}, indent=2), file=sys.stderr)

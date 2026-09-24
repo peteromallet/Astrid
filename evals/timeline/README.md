@@ -125,6 +125,24 @@ timeline was mutated.
 
 ## Native Luna attempt launcher
 
+### No-model admission rehearsal and generic evidence
+
+Before a live attempt, run `python -m evals.timeline.admission_rehearsal` with
+an explicit `--output-root`. It materializes offline entrypoints in a temporary
+directory and emits one row for every case. A missing action target receipt or
+edit route is `blocked-essential-input`; it is never inferred from a static
+manifest. Playback-only limitations (such as L10) are recorded as
+`diagnostic-only` when the offline/decode path remains available.
+
+`evals.timeline.evidence_collector` is the projection-neutral coordinator
+collector. It retains the actual worker transcript/final response and brief
+fingerprints, requires host confirmation that the worker and descendants are
+stopped and cannot write, then reads the committed Runtime closure through a
+host reader. The closure's actual pinned shot/internal dependencies are the
+authority, including newly created or duplicated shots. Runtime realm
+retirement happens only after `after.json` is written. Worker-authored
+`before`/`after`/closure claims are rejected rather than promoted to evidence.
+
 `evals.timeline.luna_native` is the thin one-loop OMP adapter. It creates a new
 attempt root, gives each case only its public brief plus the supplied fixture
 entry point, and invokes one bounded fresh context for every `fixture_ready`

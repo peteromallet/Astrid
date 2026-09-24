@@ -32,6 +32,8 @@ _ACTION_SIDECARS: dict[str, tuple[str, ...]] = {
     "A10": ("action/A10-brightness-collection.json",),
 }
 
+_SIDECAR_PREPARATION_CASES = tuple(sorted(_ACTION_SIDECARS))
+
 
 def inspect_action_sidecars(*, fixture_root: Path, case_id: str) -> dict[str, Any]:
     """Verify coordinator-owned action sidecars without making a target.
@@ -109,6 +111,108 @@ def inspect_action_sidecars(*, fixture_root: Path, case_id: str) -> dict[str, An
     if result["sidecars"] and not result["missing"] and not result["errors"]:
         result["status"] = "verified-inputs"
     return result
+
+
+def materialize_action_sidecar_inputs(
+    *, fixture_root: Path, destination_root: Path,
+    case_ids: tuple[str, ...] = _SIDECAR_PREPARATION_CASES,
+) -> dict[str, dict[str, Any]]:
+    """Copy verified case sidecars into isolated, non-launchable inputs.
+
+    This is intentionally narrower than target preparation: it copies only
+    sidecar JSON and the media bytes whose digests the sidecar declares.  The
+    resulting ``sidecar-receipt.json`` is evidence of disposable starting
+    inputs, not a public target receipt and never carries an edit route.
+    Missing or invalid inputs remain blocked.  Existing destination bytes may
+    only be reused when they are byte-identical, so a caller cannot silently
+    overwrite another attempt's fixture.
+    """
+    fixture_root = fixture_root.expanduser().absolute()
+    destination_root = destination_root.expanduser().absolute()
+    if fixture_root.is_symlink() or not fixture_root.is_dir():
+        raise FixtureError(f"action fixture root is missing or unsafe: {fixture_root}")
+    if destination_root.exists() and destination_root.is_symlink():
+        raise FixtureError(f"sidecar destination root is unsafe: {destination_root}")
+    destination_root.mkdir(parents=True, exist_ok=True)
+
+    rows: dict[str, dict[str, Any]] = {}
+    action_root = fixture_root / "action"
+
+    def copy_unchanged(source: Path, destination: Path) -> str:
+        if source.is_symlink() or not source.is_file():
+            raise FixtureError(f"sidecar input is missing or unsafe: {source}")
+        raw = source.read_bytes()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            if destination.is_symlink() or not destination.is_file() or destination.read_bytes() != raw:
+                raise FixtureError(f"refusing to overwrite different sidecar input: {destination}")
+        else:
+            destination.write_bytes(raw)
+        return hashlib.sha256(raw).hexdigest()
+
+    for case_id in case_ids:
+        inventory = inspect_action_sidecars(fixture_root=fixture_root, case_id=case_id)
+        row: dict[str, Any] = {
+            "kind": "astrid.timeline-eval.action-sidecar-receipt.v1",
+            "case_id": case_id,
+            "status": "blocked",
+            "launchable": False,
+            "edit_route": None,
+            "target_receipt": None,
+            "source": str(fixture_root),
+            "destination": str(destination_root / case_id),
+            "sidecars": [],
+            "media": [],
+            "errors": list(inventory["errors"]),
+            "missing": list(inventory["missing"]),
+        }
+        if inventory["status"] != "verified-inputs":
+            rows[case_id] = row
+            continue
+        case_destination = destination_root / case_id
+        for relative in _ACTION_SIDECARS.get(case_id, ()):
+            source = fixture_root / relative
+            destination = case_destination / relative.removeprefix("action/")
+            digest = copy_unchanged(source, destination)
+            row["sidecars"].append({"path": relative.removeprefix("action/"), "sha256": digest})
+        for media in inventory["media"]:
+            relative = str(media["path"])
+            source = action_root / relative
+            destination = case_destination / relative
+            digest = copy_unchanged(source, destination)
+            expected = str(media["media_id"]).removeprefix("sha256:")
+            if digest != expected:
+                raise FixtureError(f"copied sidecar media changed during preparation: {relative}")
+            row["media"].append({"path": relative, "media_id": "sha256:" + digest})
+        row.update({
+            "status": "prepared-inputs",
+            "input_count": len(row["sidecars"]) + len(row["media"]),
+            "reason": "verified sidecar-backed inputs only; disposable target receipt and edit route are intentionally absent",
+        })
+        receipt_path = case_destination / "sidecar-receipt.json"
+        rendered = json.dumps(row, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+        if receipt_path.exists() and (receipt_path.is_symlink() or receipt_path.read_text(encoding="utf-8") != rendered):
+            raise FixtureError(f"refusing to overwrite different sidecar receipt: {receipt_path}")
+        if not receipt_path.exists():
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(rendered, encoding="utf-8")
+        rows[case_id] = row
+
+    manifest = {
+        "kind": "astrid.timeline-eval.action-sidecar-preparation.v1",
+        "owner": "coordinator",
+        "launchable": False,
+        "source_root": str(fixture_root),
+        "destination_root": str(destination_root),
+        "cases": rows,
+    }
+    manifest_path = destination_root / "preparation.json"
+    rendered_manifest = json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    if manifest_path.exists() and (manifest_path.is_symlink() or manifest_path.read_text(encoding="utf-8") != rendered_manifest):
+        raise FixtureError(f"refusing to overwrite different sidecar preparation: {manifest_path}")
+    if not manifest_path.exists():
+        manifest_path.write_text(rendered_manifest, encoding="utf-8")
+    return rows
 
 
 @dataclass(frozen=True)
@@ -382,5 +486,6 @@ def write_preparation_table(rows: list[PreparationRow], path: Path) -> Path:
 
 
 __all__ = ["ACTION_PREPARATION_KIND", "PREPARATION_KIND", "PreparationRow",
-           "build_preparation_table", "materialize_action_target_receipts",
+           "build_preparation_table", "inspect_action_sidecars",
+           "materialize_action_sidecar_inputs", "materialize_action_target_receipts",
            "prepare_public_case", "write_preparation_table"]

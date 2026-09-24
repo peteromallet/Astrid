@@ -6,6 +6,7 @@ from pathlib import Path
 from evals.timeline.fixture_preparation import (
     build_preparation_table,
     inspect_action_sidecars,
+    materialize_action_sidecar_inputs,
     materialize_action_target_receipts,
     prepare_public_case,
     write_preparation_table,
@@ -126,6 +127,36 @@ def test_action_sidecar_inventory_preserves_missing_case_input(tmp_path: Path) -
     checked = inspect_action_sidecars(fixture_root=tmp_path, case_id="A07")
     assert checked["status"] == "blocked"
     assert checked["missing"] == ["no pinned case sidecar"]
+
+
+def test_sidecar_preparation_copies_verified_inputs_without_target_receipts(tmp_path: Path) -> None:
+    destination = tmp_path / "prepared"
+    rows = materialize_action_sidecar_inputs(
+        fixture_root=FIXTURES, destination_root=destination,
+    )
+    assert set(rows) == {"A05", "A06", "A09", "A10"}
+    assert all(row["status"] == "prepared-inputs" for row in rows.values())
+    assert all(row["launchable"] is False and row["target_receipt"] is None for row in rows.values())
+    assert rows["A09"]["input_count"] == 5
+    assert rows["A10"]["input_count"] == 201
+    assert (destination / "A05/A05-vo-endpoints.json").is_file()
+    assert (destination / "A09/A09-images/image-01-002e1ef76ef2.png").is_file()
+    assert (destination / "A10/A10-images/brightness-200.png").is_file()
+    assert not (destination / "A09/target.json").exists()
+    manifest = json.loads((destination / "preparation.json").read_text(encoding="utf-8"))
+    assert manifest["launchable"] is False
+    assert manifest["cases"]["A10"]["input_count"] == 201
+
+
+def test_sidecar_preparation_is_idempotent_and_refuses_changed_destination(tmp_path: Path) -> None:
+    destination = tmp_path / "prepared"
+    materialize_action_sidecar_inputs(fixture_root=FIXTURES, destination_root=destination)
+    materialize_action_sidecar_inputs(fixture_root=FIXTURES, destination_root=destination)
+    changed = destination / "A06/A06-text-roles.json"
+    changed.write_text("changed\n", encoding="utf-8")
+    import pytest
+    with pytest.raises(ValueError, match="different sidecar input"):
+        materialize_action_sidecar_inputs(fixture_root=FIXTURES, destination_root=destination)
 
 
 def test_prepare_public_action_case_fails_closed_without_target(tmp_path: Path) -> None:

@@ -1557,7 +1557,7 @@ def run_attempt(
                     before=before_observation,
                     publication=publication,
                     teardown=capture_teardown,
-                    expected_realm_id=boundary_receipt.disposable_realm_id,
+                    expected_realm_id=getattr(boundary_receipt, "disposable_realm_id", None),
                     media_root=case_dir / "media",
                     worker_state=merged_result,
                 )

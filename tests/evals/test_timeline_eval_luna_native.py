@@ -499,6 +499,7 @@ def _write_host_capture(case_dir: Path, adapter: _ReadbackAdapter, case_id: str)
         "case_tree_digest": None,
         "capture_sha256": "sha256:test-capture",
         "realm_retired": True,
+        "write_denied": True,
     })
 
 
@@ -609,6 +610,9 @@ def test_exact_publication_response_and_dependency_manifest_feed_contract(tmp_pa
     assert readback["media_digest_evidence"]["matched"] is True
     assert readback["safety"] == {"source_unchanged": None, "test_target_only": True}
     assert json.loads((tmp_path / "attempt-live/cases/A01/after.json").read_text())["target"]["active_media_digest"] == expected_digest
+    generic = json.loads((tmp_path / "attempt-live/coordinator/cases/A01/evidence/evidence-manifest.json").read_text())
+    assert generic["after_source"] == "host_read_only_runtime"
+    assert generic["teardown"]["write_denied"] is True
     # No source-reader proof means the coordinator may not call the operation
     # fully safe or award an agent pass.
     assert next(row for row in aggregate["cases"] if row["id"] == "A01")["status"] != "passed"

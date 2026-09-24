@@ -212,6 +212,17 @@ def _validate_dependency_manifest(
             if not isinstance(row, Mapping):
                 raise EvidenceCollectionError(f"publication dependency_manifest.{field} has a malformed row")
             if field == "shots":
+                # Receipts may carry a compact shot identity without the
+                # optional internal pin; the host-fetched closure still
+                # remains authoritative for that dependency.
+                if row.get("internal_timeline_revision_id") is None:
+                    identity = (row.get("shot_id"), row.get("revision_id"))
+                    actual_pairs = {(item[0], item[1]) for item in actual_shots}
+                    if identity not in actual_pairs:
+                        raise EvidenceCollectionError(
+                            f"publication dependency {field} is absent from the host-fetched committed closure"
+                        )
+                    continue
                 identity = (row.get("shot_id"), row.get("revision_id"), row.get("internal_timeline_revision_id"))
             else:
                 identity = row.get("revision_id")

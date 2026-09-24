@@ -906,8 +906,36 @@ def isolation_contract_template(
     }
 
 
+def prepare_local_disposable_project(
+    seed_dir: str | Path,
+    case_dir: str | Path,
+    *,
+    case_id: str,
+    runtime_project_id: str | None = None,
+    runtime: Any | None = None,
+    project_creator: Callable[..., Any] | None = None,
+) -> Any:
+    """Prepare a local case project through the existing adapter surface.
+
+    The implementation is kept in a standalone filesystem seam so callers can
+    use it without starting the HTTP Runtime daemon; an existing Runtime
+    ``create_project`` client may still be supplied for server-assigned IDs.
+    """
+    from .local_project_adapter import prepare_local_project
+
+    return prepare_local_project(
+        seed_dir,
+        case_dir,
+        case_id=case_id,
+        runtime_project_id=runtime_project_id,
+        runtime=runtime,
+        project_creator=project_creator,
+    )
+
+
 __all__ = [
     "ISOLATION_CONTRACT_KIND", "ISOLATION_MARKER_NAME", "REQUIRED_SCOPES",
     "RuntimeAdapterError", "RuntimeConnectionProof", "RuntimeFixtureAdapter",
     "VerifiedIsolation", "WorkspaceClosureReader", "isolation_contract_template", "verify_isolation_contract",
+    "prepare_local_disposable_project",
 ]

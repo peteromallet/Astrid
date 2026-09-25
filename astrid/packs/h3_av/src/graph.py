@@ -335,16 +335,22 @@ def _reference_bindings(request: H3Request) -> list[dict[str, Any]]:
 def _reference_port_plan(
     references: Sequence[Mapping[str, Any]],
     asset_members: Mapping[str, str] | None,
+    *,
+    reserved_audio: int = 0,
 ) -> list[dict[str, Any]]:
     """Resolve ordered occurrences to the pinned node's dynamic port families."""
 
-    counts = {"image": 0, "video": 0, "audio": 0}
+    counts = {"image": 0, "video": 0, "audio": reserved_audio}
     prefixes = {
         "image": "ref_images.ref_image_",
         "video": "ref_videos.ref_video_",
         "audio": "ref_audios.ref_audio_",
     }
     plan: list[dict[str, Any]] = []
+    if reserved_audio > H3_REFERENCE_CAPACITIES[prefixes["audio"]]:
+        raise GraphBindingError(
+            "pinned MiniMaxH3ReferenceToVideo supports at most 3 combined timeline/reference audio inputs"
+        )
     for occurrence_index, reference in enumerate(references):
         modality = str(reference["modality"])
         slot = counts[modality]
@@ -510,12 +516,19 @@ def _anchor_state(artifact: Mapping[str, Any], request: H3Request) -> list[dict[
 
 def _guide_bindings(request: H3Request, references: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     known = {str(item["id"]): item for item in references}
+    audio_only = any(item.get("modality") == "audio" for item in _timeline_items(request)) and not any(
+        item.get("modality") == "video" for item in _timeline_items(request)
+    )
     guides: list[dict[str, Any]] = []
     for item in _timeline_items(request):
         for edit_index, edit in enumerate(item.get("edit", [])):
             for guide in edit.get("guides", []):
                 if guide not in known:
                     raise GraphBindingError(f"guide {guide!r} is not a bound reference")
+                if audio_only and edit["stream"] == "audio" and known[guide].get("modality") == "audio":
+                    # These references are directly wired to the native audio
+                    # conditioner; MotionContext additionally requires video frames.
+                    continue
                 guides.append(
                     {
                         "reference": guide,
@@ -531,6 +544,10 @@ def _branch(request: H3Request) -> str:
     timeline = _timeline_items(request)
     if not timeline:
         return "source_free"
+    if any(item.get("modality") == "audio" for item in timeline) and not any(
+        item.get("modality") == "video" for item in timeline
+    ):
+        return "audio_only"
     has_source = any(item.get("modality") in {"video", "audio"} for item in timeline)
     if not has_source:
         return "source_free"
@@ -752,7 +769,7 @@ def _materialize_executable_graph(
     workflow.set_input("steps", int(settings.get("steps", workflow.inputs["steps"].value)))
     workflow.nodes["937"].inputs["sampler_name"] = str(settings.get("sampler", workflow.nodes["937"].inputs.get("sampler_name", "res_multistep")))
 
-    if branch == "source_free":
+    if branch in {"source_free", "audio_only"}:
         for target in ("110.width", "110.height", "110.length"):
             _disconnect_target(workflow, target)
         native = geometry["native"]
@@ -820,6 +837,10 @@ def _materialize_executable_graph(
             )
             managed_loaders[binding] = (*loader, modality)
         timeline_loaders[str(item.get("id", item["occurrence_id"]))] = loader
+    audio_timeline = [item for item in source_items if item.get("modality") == "audio"]
+    for index, item in enumerate(audio_timeline):
+        loader = timeline_loaders[str(item.get("id", item["occurrence_id"]))]
+        workflow.connect(f"{loader[0]}.{loader[1]}", f"110.ref_audios.ref_audio_{index}")
     if soft:
         state = {"count": len(soft), "positions": [int(item["frame"]) + 1 for item in soft]}
         _add_node(
@@ -912,7 +933,7 @@ def _materialize_executable_graph(
         "video",
     )
     _add_node(workflow, "MiniMaxH3SetAVNoiseMask", "c3-av-mask")
-    workflow.connect("110.1" if branch == "source_free" else "103.0", "c3-av-mask.latent")
+    workflow.connect("110.1" if branch in {"source_free", "audio_only"} else "103.0", "c3-av-mask.latent")
     for stream in ("video", "audio"):
         loader = f"c3-{stream}-mask-loader"
         image_mask = f"c3-{stream}-image-to-mask"
@@ -950,7 +971,7 @@ def _materialize_executable_graph(
     workflow.connect(latent_source, "124.latent_image")
 
     # The graph has one public output and one final sampler/guider ancestry.
-    if branch == "source_free":
+    if branch in {"source_free", "audio_only"}:
         workflow.nodes["992"].inputs.update(
             {
                 "filename_prefix": "video/h3_source_free_av",
@@ -983,12 +1004,12 @@ def _materialize_executable_graph(
         VibeOutput(
             node_id=output_node,
             output_type=workflow.nodes[output_node].class_type,
-            name="av" if branch == "source_free" else "continuation",
+            name="av" if branch in {"source_free", "audio_only"} else "continuation",
             artifact_kind="video",
             mime_type="video/mp4",
             filename_prefix=(
                 "video/h3_source_free_av"
-                if branch == "source_free"
+                if branch in {"source_free", "audio_only"}
                 else "video/masked_av_extension"
             ),
             expected_cardinality="one",
@@ -1006,6 +1027,7 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
     inputs = _mapping(value.get("inputs"), "inputs")
     references = inputs.get("references")
     plan = inputs.get("reference_edges")
+    audio_baselines = inputs.get("audio_baselines", [])
     executable = _mapping(value.get("executable_graph"), "executable_graph")
     edges = executable.get("edges")
     nodes = executable.get("nodes")
@@ -1040,6 +1062,21 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
         asset_field = {"image": "image", "video": "video", "audio": "audio"}[str(reference["modality"])]
         if loader_inputs.get(asset_field) != row.get("asset_member"):
             raise GraphBindingError(f"reference binding {index} asset identity changed")
+    if not isinstance(audio_baselines, list):
+        raise GraphBindingError("timeline audio baseline bindings must be an array")
+    for index, row in enumerate(audio_baselines):
+        if not isinstance(row, Mapping):
+            raise GraphBindingError(f"timeline audio baseline binding {index} is malformed")
+        loader = str(row.get("loader"))
+        port = str(row.get("conditioner_input"))
+        output = str(row.get("loader_output"))
+        expected.add((loader, output, "110", port))
+        loader_node = node_by_id.get(loader)
+        if not isinstance(loader_node, Mapping) or loader_node.get("class_type") != "VHS_LoadAudio":
+            raise GraphBindingError(f"timeline audio baseline {index} loader is missing")
+        loader_inputs = loader_node.get("inputs")
+        if not isinstance(loader_inputs, Mapping) or loader_inputs.get("audio") != row.get("asset_member"):
+            raise GraphBindingError(f"timeline audio baseline {index} managed asset identity changed")
     actual = {
         (str(edge.get("from_node")), str(edge.get("from_output")), str(edge.get("to_node")), str(edge.get("to_input")))
         for edge in edges
@@ -1115,7 +1152,22 @@ def build_h3_graph_binding(
         prepared_artifact_digest=prepared_artifact_digest,
     )
     references = _reference_bindings(request)
-    reference_plan = _reference_port_plan(references, asset_members)
+    audio_timeline = [item for item in timeline_items if item.get("modality") == "audio"]
+    reference_plan = _reference_port_plan(references, asset_members, reserved_audio=len(audio_timeline))
+    audio_baseline_bindings = []
+    for timeline_index, item in enumerate(timeline_items):
+        if item.get("modality") != "audio":
+            continue
+        audio_index = sum(1 for prior in timeline_items[:timeline_index] if prior.get("modality") == "audio")
+        asset_id = str(item["asset"])
+        audio_baseline_bindings.append({
+            "id": str(item.get("id", item["occurrence_id"])),
+            "asset": asset_id,
+            "asset_member": _asset_member(asset_id, asset_members),
+            "loader": f"c3-timeline-audio-{timeline_index}",
+            "loader_output": "0",
+            "conditioner_input": f"ref_audios.ref_audio_{audio_index}",
+        })
     geometry = _native_geometry(request, video_masks, audio_masks)
     anchors = _anchor_state(artifact, request)
     guides = _guide_bindings(request, references)
@@ -1154,6 +1206,10 @@ def build_h3_graph_binding(
         for row in reference_plan
         if row.get("paired_audio_input") is not None
     )
+    expected_reference_edges.update(
+        (str(row["loader"]), str(row["loader_output"]), "110", str(row["conditioner_input"]))
+        for row in audio_baseline_bindings
+    )
     actual_reference_edges = {
         (edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"])
         for edge in actual_edges
@@ -1179,14 +1235,14 @@ def build_h3_graph_binding(
         }
         for output in reloaded.outputs
     ]
-    expected_sink = "992" if branch == "source_free" else "946"
+    expected_sink = "992" if branch in {"source_free", "audio_only"} else "946"
     if len(output_descriptors) != 1 or output_descriptors[0]["node_id"] != expected_sink:
         raise GraphBindingError("serialized H3 graph must declare exactly one real AV sink")
     if output_descriptors[0]["expected_cardinality"] != "one":
         raise GraphBindingError("serialized H3 AV sink must declare cardinality one")
 
     hard = [item for item in anchors if item["classification"] == "hard_conditioned"]
-    if branch == "source_free":
+    if branch in {"source_free", "audio_only"}:
         latent = [
             _lineage_item("110", "110.1", "empty_av_latent", None),
             _lineage_item("c3-av-mask", "c3-av-mask.0", "nested_av_mask", "110.1"),
@@ -1226,7 +1282,7 @@ def build_h3_graph_binding(
         },
     }
     required_latent = {"nested_av_mask"}
-    if branch == "source_free":
+    if branch in {"source_free", "audio_only"}:
         required_latent.add("empty_av_latent")
     else:
         required_latent.add("source_av_context")
@@ -1270,6 +1326,7 @@ def build_h3_graph_binding(
         "inputs": {
             "references": references,
             "reference_edges": reference_plan,
+            "audio_baselines": audio_baseline_bindings,
             "guides": guides,
             "settings": dict(request.value.get("settings", {})),
             "masks": {
@@ -1277,7 +1334,7 @@ def build_h3_graph_binding(
                 "audio": audio_masks,
                 "video_policy": (
                     "all_generate_native_padding"
-                    if branch == "source_free"
+                    if branch in {"source_free", "audio_only"}
                     else ("preserve_existing" if audio_only else "prepared_sampling")
                 ),
                 "audio_policy": "all_generate_native_padding" if branch == "source_free" else "prepared_sampling",

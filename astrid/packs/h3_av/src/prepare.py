@@ -274,8 +274,10 @@ def _baseline_identity(request: H3Request, source_hashes: Mapping[str, str]) -> 
 
 
 def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction, sample_rate: int, width: int, height: int, assets: Mapping[str, Path]) -> tuple[list[list[list[int]]], list[list[int]], list[list[int]], list[list[int]], list[dict[str, Any]]]:
-    video = [[[0 for _ in range(width)] for _ in range(height)] for _ in range(frames)]
-    audio = [[0 for _ in range(samples)] for _ in range(2)]
+    # Uncovered output is generated. Declared baseline intervals are restored
+    # exactly by composition; generated edit intervals stay permitted.
+    video = [[[1 for _ in range(width)] for _ in range(height)] for _ in range(frames)]
+    audio = [[1 for _ in range(samples)] for _ in range(2)]
     video_coverage: list[list[int]] = []
     audio_coverage: list[list[int]] = []
     baseline_video: list[list[int]] = []
@@ -283,22 +285,30 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
     baseline_audio_from_video: list[list[int]] = []
     anchors: list[dict[str, Any]] = []
     media = request.value["media"]
+    has_video_baseline = any(item["role"] == "timeline" and item.get("modality") == "video" for item in media)
     has_audio_timeline = any(item["role"] == "timeline" and item.get("modality") == "audio" for item in media)
-    has_baseline = any(item["role"] == "timeline" and item.get("modality") in {"video", "audio"} for item in media)
-    if not has_baseline:
-        video = [[[1 for _ in range(width)] for _ in range(height)] for _ in range(frames)]
-        audio = [[1 for _ in range(samples)] for _ in range(2)]
+    has_baseline = has_video_baseline or has_audio_timeline
     for item in media:
         at = int(item.get("resolved_at", {}).get("value", 0)) if item["role"] == "timeline" else 0
         if item["role"] == "timeline":
-            anchors.append({"id": item["occurrence_id"], "frame": at, "mode": "hard" if item.get("hard") else "soft"})
+            anchors.append({"id": item["occurrence_id"], "frame": at, "mode": "hard" if item.get("hard") else "soft", "latent_pin": item.get("latent_pin", False)})
             if item.get("modality") in {"video", "audio"}:
                 video_range, audio_range = _baseline_interval(item, frames=frames, samples=samples, fps=fps, sample_rate=sample_rate)
-                baseline_video.extend([video_range] if video_range else [])
                 if item.get("modality") == "video":
+                    baseline_video.extend([video_range] if video_range else [])
+                    for frame in range(*video_range):
+                        video[frame] = [[0 for _ in range(width)] for _ in range(height)]
                     baseline_audio_from_video.extend([audio_range] if audio_range else [])
                 else:
                     baseline_audio.extend([audio_range] if audio_range else [])
+                if item.get("modality") == "audio" and audio_range:
+                    for channel in range(2):
+                        for sample in range(*audio_range):
+                            audio[channel][sample] = 0
+                elif item.get("modality") == "video" and audio_range:
+                    for channel in range(2):
+                        for sample in range(*audio_range):
+                            audio[channel][sample] = 0
             for edit in item.get("edit", []):
                 resolved = edit["resolved"]["range"]
                 if edit["stream"] == "video":
@@ -334,11 +344,25 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                                 audio[channel][sample] = 1
                     audio_coverage.append([start, end])
     if has_baseline:
-        video_coverage = _require_full_baseline(baseline_video, length=frames, domain="video")
+        video_coverage = _merge_int_ranges(baseline_video, frames) if has_video_baseline else [[0, frames]]
         if has_audio_timeline:
-            audio_coverage = _require_full_baseline(baseline_audio, length=samples, domain="audio")
+            audio_coverage = _merge_int_ranges(baseline_audio, samples)
         else:
-            audio_coverage = _require_full_baseline(baseline_audio_from_video, length=samples, domain="audio")
+            audio_coverage = _merge_int_ranges(baseline_audio_from_video, samples) if baseline_audio_from_video else [[0, samples]]
+        video_generated = any(
+            edit.get("stream") == "video" and edit.get("action") == "generate"
+            for item in media if item["role"] == "timeline" for edit in item.get("edit", [])
+        )
+        audio_generated = any(
+            edit.get("stream") == "audio" and edit.get("action") == "generate"
+            for item in media if item["role"] == "timeline" for edit in item.get("edit", [])
+        )
+        if has_video_baseline and video_coverage != [[0, frames]] and not video_generated:
+            raise PreparationError("video baseline is short and no generated video interval covers the remainder")
+        if video_coverage != [[0, frames]] and not has_video_baseline:
+            video_coverage = [[0, frames]]
+        if audio_coverage != [[0, samples]] and not audio_generated:
+            raise PreparationError("audio baseline is short and no generated audio interval covers the remainder")
     else:
         video_coverage = [[0, frames]]
         audio_coverage = [[0, samples]]
@@ -359,7 +383,7 @@ def _prepare_v2(request: H3Request, *, asset_map: Mapping[str, str] | None, fps:
     baseline_digest, baseline_identity = _baseline_identity(request, source_hashes)
     video, audio, video_coverage, audio_coverage, anchors = _edit_ranges(request, frames=frames, samples=samples, fps=fps_value, sample_rate=sample_rate, width=width, height=height, assets=paths)
     model = dict(target_model_dimensions or {"frames": _model_steps(frames), "height": max(1, (height + 3) // 4), "width": max(1, (width + 3) // 4)})
-    classified = classify_anchors(anchors, latent_steps=int(model["frames"]))
+    classified = classify_anchors(anchors, latent_steps=int(model["frames"]), unsupported_hard="restoration")
     require_supported_anchors(classified)
     try:
         artifact = PreparedAVMask.from_arrays(video_delivery=video, audio_delivery=audio, fps=fps_value, sample_rate=sample_rate, source_baseline_digest=baseline_digest, video_coverage=video_coverage, audio_coverage=audio_coverage, mapping={"geometry": "identity", "orientation": "identity", "temporal_policy": "explicit_half_open", "baseline_identity": baseline_identity}, channel_layout=channel_layout, source_hashes=source_hashes, native_padding_trim={"video": {"leading": 0, "trailing": 0}, "audio": {"leading": 0, "trailing": 0}}, target_model_dimensions=model, anchor_classification=classified)

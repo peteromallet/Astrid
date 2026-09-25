@@ -488,7 +488,7 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
     for index, raw_item in enumerate(media_raw):
         path = f"media[{index}]"
         item = _object(raw_item, path) or {}
-        _unknown(item, {"id", "asset", "role", "modality", "at", "range", "edit", "audio", "hard"}, path)
+        _unknown(item, {"id", "asset", "role", "modality", "at", "range", "edit", "audio", "hard", "latent_pin"}, path)
         role = item.get("role")
         if role not in _V2_ROLES:
             raise H3RequestError(f"{path}.role must be timeline or reference")
@@ -521,6 +521,12 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
             occurrence.update({"at": at, "resolved_at": {"unit": "frames", "value": at_frame}, "hard": item.get("hard", False)})
             if type(occurrence["hard"]) is not bool:
                 raise H3RequestError(f"{path}.hard must be boolean")
+            if "latent_pin" in item:
+                if type(item["latent_pin"]) is not bool:
+                    raise H3RequestError(f"{path}.latent_pin must be boolean")
+                if item["latent_pin"] and not occurrence["hard"]:
+                    raise H3RequestError(f"{path}.latent_pin requires hard=true")
+                occurrence["latent_pin"] = item["latent_pin"]
             edits_raw = item.get("edit", [])
             if not isinstance(edits_raw, list):
                 raise H3RequestError(f"{path}.edit must be an array")
@@ -570,7 +576,7 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
                 edits.append(normalized)
             occurrence["edit"] = edits
         else:
-            if any(key in item for key in ("at", "edit", "hard")):
+            if any(key in item for key in ("at", "edit", "hard", "latent_pin")):
                 raise H3RequestError(f"{path} reference entries cannot contain placement or edit fields")
             if "audio" in item:
                 if modality != "video" or type(item["audio"]) is not bool:

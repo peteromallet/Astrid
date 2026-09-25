@@ -562,7 +562,7 @@ def _compose_exact_media(
     protected_audio = sum(1 for channel in audio_permissions for value in channel if value == 0)
     editable_video = frames * height * width - protected_video
     editable_audio = channels * samples - protected_audio
-    if source is None and (protected_video or protected_audio or _anchor_items(preparation, artifact)):
+    if source is None and (protected_video or protected_audio):
         raise CompositionError("exact protected composition requires an authoritative source baseline")
     if source is not None and artifact.source_baseline_digest:
         if artifact.source_baseline_digest.removeprefix("sha256:") != _sha256(source):
@@ -582,7 +582,11 @@ def _compose_exact_media(
         composed_video_raw = temp_dir / "composed-video.rgba"
         composed_audio_raw = temp_dir / "composed-audio.s32le"
         source_frame_offset, source_sample_offset = _exact_offsets(preparation, fps, sample_rate)
-        anchor_needs_source_video = bool(_anchor_items(preparation, artifact))
+        source_asset = _primary_baseline_asset(preparation, artifact)
+        anchor_needs_source_video = any(
+            str(item.get("asset")) == source_asset and item.get("modality") == "video"
+            for _anchor, item in _anchor_items(preparation, artifact)
+        )
         if source is not None and (protected_video or anchor_needs_source_video):
             _decode_exact_video(source, source_video_raw, frames=frames, width=width, height=height, fps=fps, start_frame=source_frame_offset)
         if source is not None and protected_audio:

@@ -186,7 +186,7 @@ def _verify_exact_candidate(
     protected_video = sum(1 for frame in permissions_video for row in frame for value in row if value == 0)
     protected_audio = sum(1 for channel in permissions_audio for value in channel if value == 0)
     anchors = _anchor_items(preparation, artifact)
-    if source_path is None and (protected_video or protected_audio or anchors):
+    if source_path is None and (protected_video or protected_audio):
         raise VerificationError("exact protected verification requires an authoritative source baseline")
     composition_method = composition.get("composition")
     if not isinstance(composition_method, Mapping):
@@ -221,7 +221,12 @@ def _verify_exact_candidate(
         source_video = root / "source-video.rgba"
         source_audio = root / "source-audio.s32le"
         try:
-            if source_path is not None and (protected_video or anchors):
+            source_asset_for_anchors = _primary_baseline_asset(preparation, artifact)
+            source_video_anchor = any(
+                str(item.get("asset")) == source_asset_for_anchors and item.get("modality") == "video"
+                for _anchor, item in anchors
+            )
+            if source_path is not None and (protected_video or source_video_anchor):
                 frame_offset, _ = _exact_offsets(preparation, fps, sample_rate)
                 _decode_exact_video(source_path, source_video, frames=frames, width=width, height=height, fps=fps, start_frame=frame_offset)
             if source_path is not None and protected_audio:

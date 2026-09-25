@@ -197,8 +197,8 @@ def classify_anchors(
     Every accepted classification still requires exact final restoration.
     """
 
-    if unsupported_hard not in {"reject", "soft"}:
-        raise H3KernelContractError("unsupported_hard must be 'reject' or 'soft'")
+    if unsupported_hard not in {"reject", "soft", "restoration"}:
+        raise H3KernelContractError("unsupported_hard must be 'reject', 'soft', or 'restoration'")
     protected = {int(value) for value in protected_cells}
     staged: list[dict[str, Any]] = []
     hard_by_cell: dict[int, list[str]] = defaultdict(list)
@@ -220,6 +220,7 @@ def classify_anchors(
             "id": anchor_id,
             "frame": frame,
             "requested_mode": requested,
+            "latent_pin": raw.get("latent_pin") is True,
             "cell": cell["cell"],
             "cell_support": [cell["start"], cell["end"]],
             "exact_final_restoration": True,
@@ -243,12 +244,12 @@ def classify_anchors(
                 reasons.append("hard_anchor_cell_collision")
             if record["cell"] in protected:
                 reasons.append("cell_already_protected")
-            if reasons and unsupported_hard == "reject":
+            if reasons and (unsupported_hard == "reject" or record.get("latent_pin") is True):
                 classification = "rejected"
                 record["exact_final_restoration"] = False
             elif reasons:
-                classification = "soft_conditioned"
-                reasons.append("declared_soft_fallback")
+                classification = "restoration_only" if unsupported_hard == "restoration" else "soft_conditioned"
+                reasons.append("exact_delivery_restoration_only" if classification == "restoration_only" else "declared_soft_fallback")
             else:
                 classification = "hard_conditioned"
         record["classification"] = classification

@@ -40,7 +40,7 @@
         "id": {"type": "string", "minLength": 1}, "asset": {"$ref": "#/$defs/asset"},
         "role": {"enum": ["timeline", "reference"]}, "modality": {"enum": ["image", "video", "audio"]},
         "at": {"$ref": "#/$defs/at"}, "range": {"$ref": "#/$defs/interval"},
-        "edit": {"type": "array", "items": {"$ref": "#/$defs/edit"}}, "audio": {"type": "boolean"}, "hard": {"type": "boolean"}
+        "edit": {"type": "array", "items": {"$ref": "#/$defs/edit"}}, "audio": {"type": "boolean"}, "hard": {"type": "boolean"}, "latent_pin": {"type": "boolean"}
       }
     },
     "settings": {

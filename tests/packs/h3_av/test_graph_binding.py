@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -376,6 +377,97 @@ def test_audio_only_preserves_video_mask_and_still_emits_both_streams() -> None:
     binding = build_h3_graph_binding(_prepared(request, audio_only=True))
     assert any(node["id"] == "c3-av-mask" and node["class_type"] == "MiniMaxH3SetAVNoiseMask" for node in binding["executable_graph"]["nodes"])
     assert any(edge["to_node"] == "c3-av-mask" and edge["to_input"] == "audio_mask" for edge in binding["executable_graph"]["edges"])
+
+
+def test_fixture_c_audio_timeline_channel_edits_and_voice_reference_compile(tmp_path: Path) -> None:
+    request = normalize_request(FIXTURES["C"]())
+    assets: dict[str, str] = {}
+    for item in request.value["media"]:
+        asset = str(item["asset"])
+        path = tmp_path / asset
+        path.write_bytes(asset.encode("utf-8"))
+        assets[asset] = str(path)
+
+    preparation = prepare_request(request, asset_map=assets, width=8, height=8)
+    artifact = preparation["prepared_av_mask"]
+    assert artifact["video"]["shape"] == {"frames": 360, "height": 8, "width": 8}
+    from astrid.packs.h3_av.src.masks import load_prepared_av_mask
+
+    prepared_mask = load_prepared_av_mask(artifact)
+    assert all(value == 1 for frame in prepared_mask.video_delivery() for row in frame for value in row)
+    audio_permissions = prepared_mask.audio_delivery()
+    assert audio_permissions[0][3 * 48000] == 1
+    assert audio_permissions[1][3 * 48000] == 0
+    assert audio_permissions[1][8 * 48000] == 1
+    assert audio_permissions[0][8 * 48000] == 0
+
+    compiled = compile_preparation(preparation, out_dir=tmp_path / "compiled")
+    binding = json.loads(Path(compiled["graph_binding"]["path"]).read_text(encoding="utf-8"))
+    assert binding["branch"] == "audio_only"
+    assert binding["executable_graph"]["final_sampler"]["output"] == "992"
+    edges = {
+        (edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"])
+        for edge in binding["executable_graph"]["edges"]
+    }
+    assert ("c3-timeline-audio-0", "0", "110", "ref_audios.ref_audio_0") in edges
+    assert ("c3-reference-audio-0", "0", "110", "ref_audios.ref_audio_1") in edges
+    with zipfile.ZipFile(compiled["managed_assets"]["path"]) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert {row["binding"] for row in manifest["assets"]} >= {"source-c.wav", "voice-c.wav"}
+
+
+@pytest.mark.parametrize("label", ["D", "E", "X"])
+def test_checked_in_anchor_fixtures_prepare_and_compile_without_latent_reinterpretation(
+    tmp_path: Path, label: str
+) -> None:
+    request = normalize_request(FIXTURES[label]())
+    assets: dict[str, str] = {}
+    asset_ids = {str(item["asset"]) for item in request.value["media"]}
+    for item in request.value["media"]:
+        for edit in item.get("edit", []):
+            mask = edit.get("mask", {})
+            if isinstance(mask, dict) and isinstance(mask.get("asset"), str):
+                asset_ids.add(str(mask["asset"]))
+    for asset in sorted(asset_ids):
+        path = tmp_path / asset
+        if asset.endswith(".json"):
+            path.write_text(json.dumps([[0] * 16 for _ in range(16)]), encoding="utf-8")
+        else:
+            path.write_bytes(asset.encode("utf-8"))
+        assets[asset] = str(path)
+    preparation = prepare_request(
+        request,
+        asset_map=assets,
+        width=16,
+        height=16,
+        target_model_dimensions={"frames": 107, "height": 4, "width": 4},
+    )
+    classified = preparation["prepared_av_mask"]["anchors"]
+    assert all(anchor["exact_final_restoration"] for anchor in classified)
+    assert any(anchor["classification"] == "restoration_only" for anchor in classified)
+    compiled = compile_preparation(preparation, out_dir=tmp_path / "compiled")
+    binding = json.loads(Path(compiled["graph_binding"]["path"]).read_text(encoding="utf-8"))
+    assert binding["anchors"] == classified
+
+
+def test_unsupported_explicit_hard_latent_pin_fails_preparation(tmp_path: Path) -> None:
+    raw = FIXTURES["D"]()
+    raw["media"][1]["latent_pin"] = True
+    request = normalize_request(raw)
+    assets: dict[str, str] = {}
+    for item in request.value["media"]:
+        asset = str(item["asset"])
+        path = tmp_path / asset
+        path.write_bytes(asset.encode("utf-8"))
+        assets[asset] = str(path)
+    with pytest.raises(ValueError, match="unsupported hard anchors"):
+        prepare_request(
+            request,
+            asset_map=assets,
+            width=16,
+            height=16,
+            target_model_dimensions={"frames": 107, "height": 4, "width": 4},
+        )
 
 
 def test_missing_audio_stream_fails_before_graph_admission() -> None:

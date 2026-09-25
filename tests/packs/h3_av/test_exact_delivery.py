@@ -70,6 +70,17 @@ def _video_only(path: Path, *, colour: str) -> None:
     )
 
 
+def _still(path: Path, *, colour: str) -> None:
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", f"color=c={colour}:s=4x2", "-frames:v", "1",
+            str(path),
+        ],
+        check=True,
+    )
+
+
 def _audio_only(path: Path, *, tone: int) -> None:
     subprocess.run(
         [
@@ -141,6 +152,51 @@ def test_exact_cpu_delivery_restores_pixels_and_pcm_and_rejects_digest_tamper(tm
     tampered["candidate"]["sha256"] = "0" * 64
     with pytest.raises(VerificationError, match="digest"):
         verify_candidate(preparation=preparation, composition=tampered, source=source)
+
+
+def test_source_free_multi_image_anchors_restore_exactly_without_source_baseline(tmp_path: Path) -> None:
+    anchors = []
+    asset_map: dict[str, str] = {}
+    for frame, colour in enumerate(("green", "yellow", "magenta")):
+        asset = f"anchor-{frame}.png"
+        path = tmp_path / asset
+        _still(path, colour=colour)
+        asset_map[asset] = str(path)
+        anchors.append({
+            "id": f"anchor-{frame}",
+            "asset": asset,
+            "role": "timeline",
+            "modality": "image",
+            "at": {"frame": frame},
+            "hard": True,
+        })
+    request = normalize_request({
+        "version": 2,
+        "prompt": "A generated AV baseline with three exact opening frames.",
+        "duration": 1,
+        "media": anchors,
+    })
+    generated = tmp_path / "generated.mkv"
+    _media(generated, colour="blue", tone=880)
+    preparation = prepare_request(
+        request,
+        asset_map=asset_map,
+        fps=24,
+        width=4,
+        height=2,
+        sample_rate=48000,
+        target_model_dimensions={"frames": 7, "height": 1, "width": 1},
+    )
+
+    composition = compose_candidate(
+        preparation=preparation,
+        generated=generated,
+        out_dir=tmp_path / "composition",
+    )
+    report = verify_candidate(preparation=preparation, composition=composition)
+    assert [row["frame"] for row in report["exact_equality"]["anchors"]] == [0, 1, 2]
+    assert all(row["exact"] for row in report["exact_equality"]["anchors"])
+    assert report["preservation"]["status"] == "exact_delivery_domain"
 
 
 def test_exact_cpu_delivery_keeps_separate_video_and_audio_outputs_independent(tmp_path: Path) -> None:

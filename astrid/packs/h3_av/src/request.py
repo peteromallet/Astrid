@@ -345,12 +345,18 @@ def _v2_asset(value: Any, path: str, asset_modalities: Mapping[str, str] | None)
         inspection = value.get("inspection")
         if isinstance(inspection, Mapping):
             modality = inspection.get("modality")
-        modality = value.get("modality", modality)
+        declared = value.get("modality")
+        if declared is not None and modality is not None and declared != modality:
+            raise H3RequestError(f"{path}.modality contradicts asset inspection")
+        modality = declared or modality
     else:
         asset = value
     asset_id = _nonblank(asset, path)
-    if modality is None and asset_modalities is not None:
-        modality = asset_modalities.get(asset_id)
+    if asset_modalities is not None:
+        inspected = asset_modalities.get(asset_id)
+        if inspected is not None and modality is not None and inspected != modality:
+            raise H3RequestError(f"{path}.modality contradicts asset inspection")
+        modality = modality or inspected
     if modality is not None and modality not in _V2_MODALITIES:
         raise H3RequestError(f"{path}.modality must be image, video, or audio")
     return asset_id, modality
@@ -495,16 +501,18 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
         if role not in _V2_ROLES:
             raise H3RequestError(f"{path}.role must be timeline or reference")
         asset, inspected = _v2_asset(item.get("asset"), f"{path}.asset", asset_modalities)
+        if item.get("modality") is not None and inspected is not None and item["modality"] != inspected:
+            raise H3RequestError(f"{path}.modality contradicts asset inspection")
         modality = item.get("modality", inspected)
         if modality is not None and modality not in _V2_MODALITIES:
             raise H3RequestError(f"{path}.modality must be image, video, or audio")
         identifier = item.get("id")
         if identifier is not None:
             identifier = _nonblank(identifier, f"{path}.id")
-            if identifier in ids:
-                raise H3RequestError(f"{path}.id is duplicated")
-            ids.add(identifier)
         occurrence_id = identifier or f"occurrence-{index + 1}"
+        if occurrence_id in ids:
+            raise H3RequestError(f"{path}.occurrence_id {occurrence_id!r} is duplicated")
+        ids.add(occurrence_id)
         occurrence: dict[str, Any] = {"occurrence_id": occurrence_id, "asset": asset, "role": role}
         if identifier is not None:
             occurrence["id"] = identifier

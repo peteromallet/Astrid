@@ -165,6 +165,24 @@ def test_named_fixtures_are_deterministic_and_one_output() -> None:
         assert first.value["profile"] == "h3_av.native.v2", label
 
 
+def test_implicit_and_explicit_occurrence_ids_cannot_collide() -> None:
+    raw = base_request()
+    raw["media"] = [
+        media("first.png", "reference", "image"),
+        media("second.png", "reference", "image", id="occurrence-1"),
+    ]
+    with pytest.raises(H3RequestError, match="occurrence_id.*duplicated"):
+        normalize_request(raw)
+
+
+@pytest.mark.parametrize("asset", ["clip.mp4", {"id": "clip.mp4", "inspection": {"modality": "video"}}])
+def test_declared_modality_must_agree_with_inspection(asset: object) -> None:
+    raw = base_request()
+    raw["media"] = [media(asset, "reference", "audio")]
+    with pytest.raises(H3RequestError, match="contradicts asset inspection"):
+        normalize_request(raw, asset_modalities={"clip.mp4": "video"})
+
+
 @pytest.mark.parametrize("label", tuple(FIXTURES))
 def test_serialized_normalized_v2_preparation_round_trips_through_shared_reader(label: str) -> None:
     produced = normalize_request(FIXTURES[label]())

@@ -378,6 +378,117 @@ def test_mixed_reference_windows_keep_tags_ports_and_paired_audio_distinct() -> 
         validate_h3_graph_binding(altered)
 
 
+def test_every_emitted_vhs_loader_uses_pinned_inputs_in_compiled_api() -> None:
+    binding = build_h3_graph_binding(_prepared(_request(edits=True)))
+    graph = binding["executable_graph"]
+    native_video = {"video", "force_rate", "custom_width", "custom_height", "frame_load_cap", "start_time", "format"}
+    native_audio = {"audio_file", "seek_seconds", "duration"}
+    for node in graph["nodes"]:
+        if node["class_type"] not in {"VHS_LoadVideoFFmpeg", "VHS_LoadAudio"}:
+            continue
+        required = native_video if node["class_type"] == "VHS_LoadVideoFFmpeg" else native_audio
+        assert required <= node["inputs"].keys(), node["id"]
+        compiled_node = graph["compiled_api"].get(node["id"])
+        if compiled_node is not None:
+            compiled_inputs = compiled_node["inputs"]
+            assert required <= compiled_inputs.keys(), node["id"]
+            assert all(compiled_inputs[key] == node["inputs"][key] for key in required)
+        else:
+            assert node["id"].startswith("c3-timeline-")  # VibeWorkflow prunes unused timeline loaders.
+        if node["class_type"] == "VHS_LoadVideoFFmpeg" and node["id"].startswith("c3-"):
+            assert node["inputs"]["custom_width"] == node["inputs"]["custom_height"] == 0
+            if "mask-loader" in node["id"]:
+                assert node["inputs"]["format"] == "None"
+                assert node["inputs"]["force_rate"] == (40 if node["id"] == "c3-audio-mask-loader" else 24)
+            else:
+                assert node["inputs"]["format"] == "AnimateDiff"
+        if node["class_type"] == "VHS_LoadAudio":
+            assert "audio" not in node["inputs"]
+
+
+def test_motion_guide_target_follows_edit_interval_and_placement() -> None:
+    raw = FIXTURES["F"]()
+    first = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    raw["media"][0]["edit"][0]["during"] = [4, 5]
+    second = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    for graph, start, length in ((first, 72, 39), (second, 96, 24)):
+        guide = next(node for node in graph["executable_graph"]["nodes"] if node["id"] == "c3-motion-guide-0")
+        compiled = graph["executable_graph"]["compiled_api"][guide["id"]]["inputs"]
+        assert guide["inputs"]["target_start"] == compiled["target_start"] == start
+        assert guide["inputs"]["context_length"] == compiled["context_length"] == length
+    assert first["executable_graph"]["compiled_api"] != second["executable_graph"]["compiled_api"]
+    raw["media"][0]["at"] = {"frame": 72}
+    placed = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    placed_guide = next(node for node in placed["executable_graph"]["nodes"] if node["id"] == "c3-motion-guide-0")
+    assert placed_guide["inputs"]["target_start"] == 168
+
+
+def test_continuation_source_range_changes_compiled_native_loader() -> None:
+    raw = FIXTURES["B"]()
+    raw["media"][0]["edit"] = []
+    first = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    raw["media"][0]["range"] = [0, 7]
+    second = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    assert first["branch"] == second["branch"] == "extension_context"
+    assert first["executable_graph"]["compiled_api"]["99"]["inputs"]["frame_load_cap"] == 192
+    assert second["executable_graph"]["compiled_api"]["99"]["inputs"]["frame_load_cap"] == 168
+
+
+def test_audio_motion_guide_requires_frame_aligned_target_interval() -> None:
+    raw = FIXTURES["F"]()
+    raw["media"][0]["edit"][1]["during"] = ["144001/48000", 6]
+    with pytest.raises(GraphBindingError, match="align to 24fps frames"):
+        build_h3_graph_binding(_prepared(normalize_request(raw)))
+
+
+def test_audio_source_range_changes_compiled_loader_and_reused_audio_has_distinct_edges() -> None:
+    raw = FIXTURES["C"]()
+    raw["media"][1]["asset"] = "source-c.wav"
+    first = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    raw["media"][0]["range"] = [1, 15]
+    second = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    for graph, seek, duration in ((first, 0, 15), (second, 1, 14)):
+        rows = graph["inputs"]["reference_edges"]
+        baseline = graph["inputs"]["audio_baselines"][0]
+        assert rows[0]["loader"] != baseline["loader"]
+        compiled = graph["executable_graph"]["compiled_api"]
+        assert compiled[baseline["loader"]]["inputs"]["seek_seconds"] == seek
+        assert compiled[baseline["loader"]]["inputs"]["duration"] == duration
+        assert compiled[rows[0]["loader"]]["inputs"]["seek_seconds"] == 0
+        validate_h3_graph_binding(graph)
+    assert second["inputs"]["timeline_loaders"][0]["resolved_range"] == [48000, 720000]
+    changed = copy.deepcopy(second)
+    changed["executable_graph"]["compiled_api"]["c3-timeline-audio-0"]["inputs"]["seek_seconds"] = 0
+    with pytest.raises(GraphBindingError, match="timeline loader witness.*seek_seconds"):
+        validate_h3_graph_binding(changed)
+
+
+def test_repeated_audio_reference_asset_keeps_occurrence_edges_distinct() -> None:
+    raw = FIXTURES["C"]()
+    raw["media"].append({"id": "voice-again", "asset": "voice-c.wav", "role": "reference", "modality": "audio"})
+    binding = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    rows = binding["inputs"]["reference_edges"]
+    assert [row["conditioner_input"] for row in rows] == ["ref_audios.ref_audio_1", "ref_audios.ref_audio_2"]
+    assert rows[0]["loader"] != rows[1]["loader"]
+    assert rows[0]["asset_member"] == rows[1]["asset_member"]
+    validate_h3_graph_binding(binding)
+
+
+def test_audio_timeline_and_references_respect_combined_native_capacity() -> None:
+    raw = FIXTURES["C"]()
+    for index in range(2):
+        raw["media"].append({"id": f"extra-{index}", "asset": f"extra-{index}.wav", "role": "reference", "modality": "audio"})
+    with pytest.raises(GraphBindingError, match="at most 3 combined timeline/reference audio inputs"):
+        build_h3_graph_binding(_prepared(normalize_request(raw)))
+
+
+def test_nonzero_timeline_audio_placement_fails_before_emitting_graph() -> None:
+    raw = FIXTURES["C"]()
+    raw["media"][0]["at"] = {"frame": 24}
+    with pytest.raises(GraphBindingError, match="timeline audio placement"):
+        build_h3_graph_binding(_prepared(normalize_request(raw)))
+
+
 @pytest.mark.parametrize("field", ["guidance_scale", "guidance"])
 def test_guidance_is_bound_to_existing_lora_strength(field: str) -> None:
     raw = FIXTURES["A"]()
@@ -470,7 +581,12 @@ def test_fixture_c_audio_timeline_channel_edits_and_voice_reference_compile(tmp_
 def test_checked_in_anchor_fixtures_prepare_and_compile_without_latent_reinterpretation(
     tmp_path: Path, label: str
 ) -> None:
-    request = normalize_request(FIXTURES[label]())
+    raw = FIXTURES[label]()
+    if label == "X":
+        # The focused raster fixture below is 16x16, unlike X's production mask.
+        raw["media"][3]["edit"][0]["mask"]["shape"] = {"frames": 1, "height": 16, "width": 16}
+        raw["media"][3]["edit"][0]["mask"]["range"] = [0, 1]
+    request = normalize_request(raw)
     assets: dict[str, str] = {}
     asset_ids = {str(item["asset"]) for item in request.value["media"]}
     for item in request.value["media"]:

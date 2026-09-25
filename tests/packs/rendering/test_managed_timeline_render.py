@@ -10,13 +10,13 @@ import pytest
 
 pytest.importorskip("banodoco_timeline_schema")
 
+from astrid.packs.rendering.executors.render import managed_timeline
 from astrid.packs.rendering.executors.render.managed_timeline import (
     ManagedRenderValidationError,
     materialize_managed_render_snapshot,
     resolve_managed_render_snapshot,
     validate_managed_render_snapshot,
 )
-from astrid.packs.rendering.executors.render import managed_timeline
 from astrid.sdk.exceptions import CapabilityValidationError
 from astrid.sdk.invocation import _prepare_managed_render_inputs
 
@@ -106,7 +106,19 @@ def test_resolve_requires_explicit_runtime_client_and_pins_runtime_identity() ->
     assert snapshot.registry == {"assets": {}}
 
 
-def test_exact_parent_head_projects_pinned_children_with_unique_local_ids() -> None:
+def test_resolve_accepts_canonical_version_when_legacy_config_version_is_absent() -> None:
+    runtime = _Runtime()
+    runtime.timeline["version"] = runtime.timeline.pop("config_version")
+
+    snapshot = _snapshot(runtime, expected_version=1)
+
+    assert snapshot.config_version == 1
+
+
+@pytest.mark.parametrize("canonical_record_only", [False, True])
+def test_exact_parent_head_projects_pinned_children_with_unique_local_ids(
+    canonical_record_only: bool,
+) -> None:
     digests = [character * 64 for character in ("a", "b", "c")]
     runtime = _Runtime(
         media=[
@@ -202,8 +214,24 @@ def test_exact_parent_head_projects_pinned_children_with_unique_local_ids() -> N
             "occurrences": occurrences,
         },
     }
+    if canonical_record_only:
+        # The public Runtime read used by the A06 canary exposes the canonical
+        # timeline head/version without the legacy document or display slug.
+        runtime.timelines.show = lambda _project, _ref: _result({
+            "timeline_id": "timeline-1",
+            "project_id": "project-demo",
+            "head_revision_id": "parent-committed",
+            "version": 1,
+        })
 
     snapshot = _snapshot(runtime)
+    assert snapshot.timeline_slug == "main"
+    if canonical_record_only:
+        preview_base = resolve_managed_render_snapshot(
+            project_ref="demo", timeline_ref="main", client=runtime,
+            candidate_preview=True,
+        )
+        assert preview_base.config["clips"][0]["id"] == "occ-0:charcoal-process-preview"
 
     clips = snapshot.config["clips"]
     assert [clip["id"] for clip in clips] == [

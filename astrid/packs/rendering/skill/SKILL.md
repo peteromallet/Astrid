@@ -1,19 +1,26 @@
 ---
 name: astrid-timeline
-version: astrid-timeline-2026.09.24.1
 description: >
-  Author, inspect, edit, preview, render, and open runtime-owned Astrid
-  timelines as one creative workflow. Use when shaping a canonical timeline,
-  reviewing its textual or visual evidence, producing a video, or opening the
-  resulting render. Text and visual inspection are sister views over one
-  pinned composition, not separate timeline authorities.
+  Downstream rendering, visual evidence, playback, and compatibility guidance
+  for runtime-owned Astrid timelines after the video-editing detached-candidate
+  route. Use when pixel/render evidence or a managed playback artifact is
+  needed; existing timeline editing starts in video_editing.
 ---
 
-# Astrid timeline authoring and inspection
+# Astrid timeline rendering evidence (compatibility)
 
-This workflow opens, inspects, edits, previews, renders, and opens timeline
-content. Rendering is one downstream evidence action, not a second timeline
-authority or the name of the editing model. When the request also needs
+Existing timeline editing is owned by the [video editing skill](../../video_editing/skill/SKILL.md).
+Follow its open/pin → exact target inspection → detached candidate →
+validate/diff → optional render → publish → reopen/readback route first. This
+skill is the downstream rendering/evidence and playback compatibility layer;
+it is not an alternate editorial source of truth. In a checkout the source is
+`astrid/packs/rendering/skill/SKILL.md`; in an installed skill view it is
+`packs/rendering/SKILL.md`.
+
+This compatibility workflow renders, inspects render/input evidence, and opens
+timeline output after the editorial route has produced a candidate or
+published state. Rendering is one downstream evidence action, not a second
+timeline authority or the name of the editing model. When the request also needs
 new generated media (for example Foley audio), use [creative work](../../_core/skill/creative-work/SKILL.md)
 to find its generation capability, then return here to assemble the result.
 
@@ -31,13 +38,14 @@ python3 -m astrid timelines --help
 
 The timeline is one canonical authoring composition. `timelines show` (and the
 typed authoring-bundle opener) is the bounded structural/text view;
-`timelines visualize` is the rendered/input visual view; and offline
+`timelines visualize` is the native declared-input/rendered visual view; and offline
 `timelines inspect --manifest` is a bounded read-only view of an already
 published evidence pack. These are sister commands over the same identity and
-time model in the single `timelines` product family. Internally,
-`timelines visualize` delegates to the qualified `rendering.timeline_visualize`
-capability because rendering owns the evidence-producing backend; that
-implementation boundary is not a user-facing pack boundary. Never invent a
+time model in the single `timelines` product family. For
+`--show inputs --hide output`, `timelines visualize` is served directly by the
+Runtime's native timeline-view operation and does not require a pack host.
+Source decoding, waveforms, and rendered-output filmstrips still use the
+qualified `rendering.timeline_visualize` executor. Never invent a
 second text-only timeline, treat a filmstrip as a new source of truth, or
 switch to a mutable child document because it is easier to read.
 
@@ -93,7 +101,9 @@ store, or automatic merge service.
 
 Resolve the project explicitly whenever more than one project is visible. List
 timelines for a compact inventory, then show the selected timeline for its
-complete config, registry, identity, and `config_version`:
+identity, current head, and version. Canonical head-only reads may omit the
+legacy `config` and `registry` fields; use the SDK composition opener below
+for the pinned structural view:
 
 ```bash
 python3 -m astrid projects list --json
@@ -130,6 +140,18 @@ owns the run and returns local delivery paths for verified copies of the
 published evidence objects. The durable authority is the managed run's
 digest-verified bundle/manifest, not those disposable local paths.
 
+Input placement inspection is also available without a render. Run
+`timelines visualize --show inputs --hide output --format md --format png` to
+project the current canonical input snapshot into declared visual lanes; the
+Runtime publishes the Markdown/PNG view as derived project objects. This
+reads no rendered pixels, decodes no audio, and makes no provider call.
+Placement metadata establishes
+which sources and intervals are declared, not what those sources look like in
+the rendered composition. To compare against pixels, pin the exact successful
+render run with `--render-run <exact-run-id>`; that view is scoped to that
+frozen render and its captured frames. A current-input view and an exact-run
+view answer different questions, so retain their scope with any conclusion.
+
 When `output` and `inputs` are both shown, the primary page uses a paired-row
 layout: five (or the requested `--columns`) output samples per row with the
 input lanes relevant to that row immediately underneath. The row's linear
@@ -137,8 +159,8 @@ half-open time axis is shared by cards, placements, audio rails, and the PNG
 and `static_surface.rows` JSON contract.
 Paired pages show one row by default (five columns unless changed with
 `--columns`; `--columns 6` gives six across), while standalone output/input
-pages keep their normal page sizing. This is an intentional page-size
-inconsistency: `--page-size` changes the paired layout only and does not make
+pages keep their normal page sizing. `--page-size` changes the paired layout
+only and does not make
 standalone pages use the same card count. Pass `--page-size N` explicitly to
 opt into a denser paired page, capped at two rows / 10 cards. Multi-page paired
 results are intentional: open the numbered pages in order, then rerun with
@@ -158,7 +180,7 @@ the starting point rather than a dead-end overview.
 
 ```bash
 python3 -m astrid timelines visualize <slug-or-id> --project <project> \
-  --view filmstrip --render-run latest --every 0.5 --columns 5 --page-size 50 --include-media --json
+  --view filmstrip --render-run <exact-render-run-id> --every 0.5 --columns 5 --page-size 10 --include-media --json
 python3 -m astrid timelines visualize <slug-or-id> --project <project> \
   --view filmstrip --render-run <exact-render-run-id> --at 12 --context 3 --every-frames 6
 ```
@@ -210,8 +232,11 @@ settings identity, and verified in the bundle manifest. A pinned render keeps
 old visual evidence associated with its own timeline state even after later
 edits.
 
-The rendered paired filmstrip/storyboard is the only timeline visualization.
-There is no separate structural diagram or frozen-object navigation route.
+For rendered-output inspection, the rendered paired filmstrip/storyboard is
+the canonical visual surface. It is not the only way to inspect a timeline:
+the render-free `--show inputs` route above exposes declared placements and
+source media without pretending they are rendered pixels. There is no separate
+structural diagram or frozen-object navigation route.
 Use the managed filmstrip commands above with `--render-run`; do not supply a
 caller-owned `--rendered-video` path. The frame index's render-scoped
 range/shot/clip/track targets are the canonical navigation surface.
@@ -252,13 +277,11 @@ mapped back to the pinned scope is incomplete, not a new identity.
 
 ## Create and edit
 
-The native timeline-evaluation worker resolves this checked-in skill at
-`astrid/packs/rendering/skill/SKILL.md`. Its public brief pins the absolute path,
-version, and SHA-256 so a worker can verify that it is reading these exact
-instructions. The skill file is a checked-in worker input, not an installed
-Python package: do not claim that reading it installed Astrid or that a package
-manager made it available. When the runtime package is installed, the public
-SDK import below is the supported API; a checkout-only environment must report
+The timeline-evaluation worker reads this checked-in skill at
+`astrid/packs/rendering/skill/SKILL.md` when its case brief supplies that path.
+The skill file is guidance, not an installed Python package: reading it does
+not install Astrid. When the runtime package is installed, the public SDK
+import below is the supported API; a checkout-only environment must report
 that import/runtime capability as unavailable rather than inventing it.
 
 ### Canonical edit bundle
@@ -483,8 +506,13 @@ result = sdk.invoke(
 )
 ```
 
-Use `rendering.timeline_visualize` for evidence and `client.timelines.show` /
-`client.timelines.save` for programmatic editing. Keep `project` explicit and
+Use `client.timelines.visualize` for native declared-input evidence and
+`client.timelines.show` / `client.timelines.open_composition` for bounded text
+inspection. Use `rendering.timeline_visualize` only when source pixels,
+waveforms, or an exact rendered-output filmstrip are required. The legacy
+`client.timelines.save` path is retained for compatibility; new
+programmatic edits should use the detached authoring-bundle validate/preview/
+publish path above. Keep `project` explicit and
 use returned runtime IDs, manifests, and receipts for durable navigation.
 
 ## Renderer authoring

@@ -1,5 +1,11 @@
 # Unified timeline inspector
 
+Status: historical planning document. The implemented `--view filmstrip`
+behavior and its supported scopes are documented in
+`astrid/packs/rendering/skill/SKILL.md` and
+`docs/reference/timeline-offline-inspection.md`; this plan is not a separate
+current authority.
+
 ## Outcome
 Extend the existing rendered filmstrip into one inspector: final composited frames, expandable multi-track lanes, one shared selection/time window, and a persistent detail panel. Keep the existing structural evidence view compatible. No third public mode, new runtime store, or separate capability. Existing `--view filmstrip` produces the unified inspector; `--view structure` remains available for structural evidence.
 

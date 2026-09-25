@@ -5,8 +5,10 @@ import json
 
 from astrid.core.timeline.authoring_bundle import (
     open_authoring_bundle,
+    preview_authoring_candidate,
     validate_authoring_candidate,
 )
+from astrid.core.timeline.shot_composition_projection import project_runtime_parent_composition
 from examples.timeline_authoring_recipes import (
     audio_reactive_arrangement,
     brightness_sequence,
@@ -82,7 +84,8 @@ def test_brightness_recipe_is_deterministic_and_uses_one_candidate():
     work = _work()
     shot = brightness_sequence(work, ["dark", "bright"], lambda value: {"dark": 0.1, "bright": 0.9}[value])
     assert [clip["asset"] for clip in shot["internal_timeline"]["clips"]] == ["dark", "bright"]
-    assert [(clip["at"], clip["to"]) for clip in shot["internal_timeline"]["clips"]] == [(0, 0.1), (0.1, 0.2)]
+    assert [(clip["at"], clip["from"], clip["to"]) for clip in shot["internal_timeline"]["clips"]] == [(0, 0, 0.1), (0.1, 0, 0.1)]
+    assert work["placements"][0]["duration_ms"] == 200
 
 
 def test_quadrant_beats_and_audio_recipes_preserve_explicit_structure():
@@ -97,7 +100,8 @@ def test_quadrant_beats_and_audio_recipes_preserve_explicit_structure():
     )
     audio = audio_reactive_arrangement(work, shot_id, "audio", duration=5, analysis_seed=7)
     assert [clip["rect"]["x"] for clip in quadrants] == [0.0, 0.5, 0.0, 0.5]
-    assert beats[0]["source_start"] == 2 and beats[0]["source_end"] == 2.5
+    assert beats[0]["from"] == 2 and beats[0]["to"] == 2.5
+    assert "source_start" not in beats[0] and "source_end" not in beats[0]
     assert audio["analysis"] == {"frozen": True, "seed": 7}
 
 
@@ -132,3 +136,25 @@ def test_all_four_recipes_execute_through_one_candidate_validation_path():
 
     assert [name for name, _ in cases] == ["brightness", "quadrants", "beats", "audio"]
     assert all(result["valid"] is True for _, result in cases)
+
+
+def test_brightness_bundle_projects_200_images_at_three_frames_each():
+    work = _candidate()
+    work["placements"] = []
+    image_ids = ["sha256:" + format(index + 1, "064x") for index in range(200)]
+    brightness_sequence(work, image_ids, lambda media_id: int(media_id[-4:], 16), duration=0.1)
+    publication = preview_authoring_candidate(work)["publication"]
+    projected = project_runtime_parent_composition(
+        {
+            "project_id": publication["project_id"],
+            "timeline_id": publication["timeline_id"],
+            "revision_id": publication["parent_revision_id"],
+            "payload": publication["parent_composition"],
+        },
+        shot_revisions=publication["shot_revisions"],
+        internal_timeline_revisions=publication["internal_timeline_revisions"],
+    )
+    clips = projected.config["clips"]
+    assert len(clips) == 200
+    assert all(round((clip["to"] - clip.get("from", 0)) * 30) == 3 for clip in clips)
+    assert projected.occurrences[0]["duration_seconds"] == 20

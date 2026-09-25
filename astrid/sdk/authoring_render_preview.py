@@ -20,6 +20,7 @@ from astrid.packs.rendering.executors.render.managed_timeline import (
     ManagedRenderSnapshot,
     _exact_mapping,
     _exact_revision_reader,
+    _render_compatible_projection,
     _runtime_snapshot_registry,
 )
 from astrid.packs.rendering.executors.render.managed_timeline import (
@@ -112,8 +113,11 @@ def candidate_preview_snapshot(
         parent, shot_revisions=shots, internal_timeline_revisions=internals
     )
     raw_registry = projected.registry
+    render_config, render_registry = _render_compatible_projection(
+        projected.config, raw_registry
+    )
     registry = _runtime_snapshot_registry(
-        raw_registry, project_ref=snapshot.project_slug, client=client
+        render_registry, project_ref=snapshot.project_slug, client=client
     )
     shot_rows = []
     for shot in shots:
@@ -135,9 +139,9 @@ def candidate_preview_snapshot(
     }
     return replace(
         snapshot,
-        config=projected.config,
+        config=render_config,
         registry=registry,
-        config_hash=render_digest(projected.config),
+        config_hash=render_digest(render_config),
         registry_hash=render_digest(raw_registry),
         materialized_registry_hash=render_digest(registry),
         composition_graph=projected.graph,

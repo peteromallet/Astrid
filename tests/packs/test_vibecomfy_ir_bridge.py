@@ -148,6 +148,12 @@ def test_ir_executors_are_manifested_without_growing_the_gateway() -> None:
         "python",
         "companion",
         "source",
+        "managed_assets",
+        "workflow_inputs",
+        "source_video",
+        "source_video_node",
+        "source_video_widget",
+        "attempt_identity",
         "task_identity",
         "execution_identity",
         "readiness_profile_path",
@@ -298,7 +304,7 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
         staged_validate_members["source"] = workflow_path.with_name(
             "source.json"
         ).read_bytes()
-        assert "--yes" in argv and "--json" in argv
+        assert "--yes" in argv and "--json" in argv and "--no-schema" in argv
         gate = FakeGate()
         gate.audit.append({"decision": "allow", "reason": "assume_yes_bypass"})
         security.set_gate_context(gate)  # type: ignore[attr-defined]
@@ -329,6 +335,9 @@ def test_canonical_validate_and_run_stage_bundle_for_package_loader(
         )
     )
     assert validation_report["python_execution_consent"] == "confirmed"
+    assert validation_report["validation_mode"] == "canonical_bundle_structural"
+    assert validation_report["runtime_validation"]["status"] == "deferred"
+    assert validation_report["runtime_validation"]["executor"] == "vibecomfy.run"
     assert validation_report["security_gate_audit"][0]["reason"] == "assume_yes_bypass"
     assert staged_validate_members == {
         "python": inputs["python"].read_bytes(),

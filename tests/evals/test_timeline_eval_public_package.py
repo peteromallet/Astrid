@@ -34,6 +34,7 @@ def test_public_package_is_bounded_content_addressed_and_importable(tmp_path: Pa
     assert "pyproject.toml" in relative_paths
     assert "astrid/__main__.py" in relative_paths
     assert "astrid/sdk/__init__.py" in relative_paths
+    assert "astrid/packs/video_editing/skill/SKILL.md" in relative_paths
     assert "astrid/packs/rendering/skill/SKILL.md" in relative_paths
     assert not any(
         forbidden in Path(path).parts

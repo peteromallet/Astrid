@@ -9,8 +9,8 @@ or the in-repo ``_core/skill/SKILL.md``.
 from __future__ import annotations
 
 import argparse
-import io
 import contextlib
+import io
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -187,8 +187,16 @@ class SyncGatewayTest(unittest.TestCase):
             pack_link = view / "packs" / "foley"
             self.assertTrue(pack_link.is_symlink())
             self.assertTrue((pack_link / "SKILL.md").is_file())
+            video_skill = view / "packs" / "video_editing" / "SKILL.md"
+            video_source = next(
+                descriptor.skill_md for descriptor in _descriptors()
+                if descriptor.pack_id == "video_editing"
+            )
+            self.assertTrue(video_skill.resolve().is_file())
+            self.assertEqual(video_skill.read_bytes(), video_source.read_bytes())
             self.assertIn(registry.BEGIN_MARKER, (view / "creative-work" / "references" / "packs.md").read_text(encoding="utf-8"))
             for route in (
+                video_skill,
                 view / "packs" / "rendering" / "SKILL.md",
                 view / "packs" / "references" / "SKILL.md",
                 view / "creative-work" / "../packs" / "generation" / "SKILL.md",

@@ -62,6 +62,7 @@ from .payloads._base import (
     TrackKind as TrackKind,
     _coerce_clip_position as _coerce_clip_position,
     _require_nonempty_str,
+    _require_uuid_str,
     _require_ulid_str,
     _validate_jsonable,
 )

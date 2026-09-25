@@ -534,6 +534,7 @@ def ensure_pack_host(value: Mapping[str, Any], *, reconfigure_action: str) -> Ma
             "--ready-file", str(ready_path),
             "--support-root", str(runtime_support),
             "--source-checkout", str(source_path),
+            "--source-checkout-digest", source_digest,
             "--runtime-instance-id", str(runtime_instance_id),
             "--register",
             "--source-inventory-identity", inventory_identity,

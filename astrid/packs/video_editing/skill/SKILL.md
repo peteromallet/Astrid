@@ -37,11 +37,43 @@ optional theme, then produces `hype.timeline.json`, `hype.assets.json`,
 and `hype.metadata.json` — the three-file input to rendering.render.
 
 For edits to an existing runtime-owned timeline, route through the
-[`astrid-timeline` workflow](../../rendering/skill/SKILL.md). Its structural
-(`timelines show`) and visual (`timelines visualize`) views share one pinned
-composition, target IDs, filters, and edit/validate/preview/publish/readback
-boundary. The orchestrators and `cut` executor remain for their stated
-creation/assembly workflows; do not invent a second timeline editing path here.
+existing-timeline path in this skill. The rendering pack is downstream evidence
+for that path; it does not replace the editorial route. The orchestrators and
+`cut` executor remain for their stated creation/assembly workflows; do not
+invent a second timeline editing path here.
+
+## Existing timeline editing
+
+This is the primary agent-facing route for an already-created Runtime
+timeline. Use the same identity and time window across every view:
+
+1. **Open and pin** the explicit project/timeline and current authoring head.
+2. **Inspect the exact target** in the structural/text view, expanding the
+   occurrence, clip, track, property, and source handle only as needed.
+3. **Choose the evidence view**: text for roles, ownership, and exact values;
+   visual/input inspection for placement; rendered visual inspection only when
+   pixels are needed.
+4. **Edit a detached candidate** opened from that pinned parent/shot/internal
+   closure. Use the smallest supported primitive or ordinary Python against the
+   same-schema candidate; never mutate the checkout or canonical source.
+5. **Validate and diff** the complete candidate, then preview it when the
+   requested change needs visual confirmation.
+6. **Render only when needed** for pixel/playback evidence. Rendering is a
+   downstream evidence action, not the source of truth or the editing route.
+7. **Publish once** through the compare-and-swap/idempotent boundary.
+8. **Reopen and read back** the returned committed closure, then confirm the
+   changed target and preserved fields in the text and visual views.
+
+Checkout source path: `astrid/packs/video_editing/skill/SKILL.md`.
+Installed/public skill-view path: `packs/video_editing/SKILL.md` (the public
+timeline package also carries the downstream compatibility skill at
+`packs/rendering/SKILL.md`). Relative links in either view must resolve within
+that view; do not treat a checkout path as an installed path.
+
+For render, filmstrip, and playback evidence after the editorial readback,
+see the [rendering compatibility skill](../../rendering/skill/SKILL.md).
+For a supplied target and credential, see the executable
+[target-bound SDK edit example](../../../../docs/timeline-editing-guide.md).
 
 ## When to use
 

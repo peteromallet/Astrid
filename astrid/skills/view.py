@@ -19,6 +19,7 @@ from .harnesses.base import PlannedStep, ensure_symlink
 
 _ROOT_ROUTE_REWRITES = {
     "../../rendering/skill/SKILL.md": "packs/rendering/SKILL.md",
+    "../../video_editing/skill/SKILL.md": "packs/video_editing/SKILL.md",
     "../../references/skill/SKILL.md": "packs/references/SKILL.md",
     "../../hivemind/skill/SKILL.md": "packs/hivemind/SKILL.md",
 }

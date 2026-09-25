@@ -131,6 +131,9 @@ def test_generic_host_run_task_keeps_same_resident_identity_warm(tmp_path: Path,
         task = _task(task_id, digest)
         runtime.tasks[task_id] = task
         assert host.run_task(task, lease_token=f"lease-{task_id}")["task"]["status"] == "completed"
+    observed_binding = runtime.settlements[0][2]["result"]["managed_tool_session"]["binding"]
+    assert observed_binding["launch_generation"] == "process-a"
+    assert observed_binding["engine_birth_id"] == "comfy-a"
     assert "release:capacity_replacement" not in events[: events.index("old-child-exited")]
     release_index = events.index("release:capacity_replacement")
     assert events.index("old-child-exited") < release_index

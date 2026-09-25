@@ -31,13 +31,19 @@ beyond those modes — LoRAs, IP-adapter, ControlNet, custom samplers — belong
 ## How to use
 
 - `vibecomfy.run` maps to `python -m vibecomfy.cli run {workflow}`
-- `vibecomfy.validate` maps to `python -m vibecomfy.cli validate {workflow}`
+- Canonical `vibecomfy.validate` uses `vibecomfy validate {workflow} --json --no-schema`
+  through the audited CLI gate.
 
 For Astrid tasks, UI JSON validation uses static VibeComfy ingestion and needs
 no Python consent. A canonical Python/companion/source bundle requires the
 explicit scalar `python_execution_consent="confirmed"`; that value is mapped
 to the existing audited VibeComfy `--yes` gate. The `validation-report.json`
-artifact records the consent value and gate audit.
+artifact records the consent value and gate audit. Canonical validation reports
+`validation_mode="canonical_bundle_structural"` and runtime validation deferred
+to `vibecomfy.run`. It checks bundle authority and graph structure offline; it
+does not start, contact, or stop Comfy or establish runtime readiness. Before
+queueing, the run adapter verifies its attested session and compiles against
+fresh target schemas. A successful structural report cannot bypass those checks.
 
 Install the executor packages before running these actions. Both executors
 share the `vibecomfy` package environment via the folder-level `PACKAGE_ID`.

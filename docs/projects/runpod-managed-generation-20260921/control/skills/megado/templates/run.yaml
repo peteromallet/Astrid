@@ -1,0 +1,46 @@
+# Default role settings. Copy to OTTO_DIR/run.yaml; explicit user choices override.
+# Select 0–2 meaningful intermediate stages using references/run-config.md;
+# the two entries below are available slots, not mandatory reviews.
+# Editing this file does not launch models or authorize implementation.
+mode: planning_only  # change to delivery only when implementation is authorized
+# Mandatory kickoff choice: ask whether delivery edits the invoking main
+# checkout or uses an in-repo worktree at .otto/worktrees/<run-id>.
+source_custody: ask  # main | worktree; never create a worktree outside the repo
+roles:
+  coordinator: {model: gpt-5.6-luna, reasoning: medium}
+  worker_normal: {model: gpt-5.6-luna, reasoning: high}
+  worker_xhard: {model: gpt-5.6-sol, reasoning: high}
+  reviewer_normal: {model: gpt-5.6-luna, reasoning: medium}
+  reviewer_xhard: {model: gpt-5.6-sol, reasoning: high}
+  oracle: {model: gpt-5.6-sol, reasoning: high}
+  final_reviewer: {model: gpt-6-astra, reasoning: medium}
+oracle:
+  max_calls: 3  # total actual oracle invocations; not review rounds
+review_stages:
+  - id: core_completion
+    after: CORE_CHECKPOINT_ID  # replace with an actual task/checkpoint ID
+    reviewer_role: reviewer_normal
+    lens: completion
+    scope_tasks: [TASK_IDS_FOR_THIS_CHECKPOINT]
+    criteria_source: implementation-criteria.md
+    criteria: [CRITERION_IDS_FOR_THIS_CHECKPOINT]
+    max_rounds: 2
+  - id: integration_completion
+    after: INTEGRATION_CHECKPOINT_ID
+    reviewer_role: reviewer_normal
+    lens: completion
+    scope_tasks: [TASK_IDS_FOR_THIS_CHECKPOINT]
+    criteria_source: implementation-criteria.md
+    criteria: [CRITERION_IDS_FOR_THIS_CHECKPOINT]
+    max_rounds: 2
+  - id: final
+    after: ALL_REQUIRED_WORK_AND_TESTS
+    reviewer_role: final_reviewer
+    lens: completion_and_strategy
+    scope_tasks: [ALL_REQUIRED_TASK_IDS]
+    criteria_source: implementation-criteria.md
+    criteria: [ALL_REQUIRED_CRITERION_IDS]
+    max_rounds: 3
+# Keeping both intermediate slots permits at most 7 review calls + 3 oracle calls.
+# Delete unused slots before dispatch; never leave placeholder triggers.
+# Stop a stage early on PASS. Use only the final entry for a final-only policy.

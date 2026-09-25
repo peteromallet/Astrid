@@ -200,7 +200,7 @@ def test_public_target_receipt_contains_only_disposable_ids(tmp_path):
     assert target["edit_route"] == "timelines replace-parent-media"
 
 
-def test_public_target_receipt_does_not_advertise_a01_route_for_other_cases(tmp_path):
+def test_public_target_receipt_advertises_generic_route_for_other_edit_cases(tmp_path):
     baseline = _baseline()
     runtime = FakeRuntime(baseline)
     media_root = tmp_path / "attempt-media"
@@ -209,8 +209,46 @@ def test_public_target_receipt_does_not_advertise_a01_route_for_other_cases(tmp_
     seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A02", media_root=media_root)
     target = public_target_receipt(seed)
     assert target["case_id"] == "A02"
+    assert target["capabilities"]["edit"] == {
+        "status": "available", "route": "authoring-bundle validate/commit",
+    }
+    assert target["edit_route"] == "authoring-bundle validate/commit"
+    assert target["capabilities"]["readback"]["status"] == "unavailable"
+
+
+def test_public_target_receipt_advertises_a03_route_without_private_locator(tmp_path):
+    baseline = _baseline()
+    runtime = FakeRuntime(baseline)
+    media_root = tmp_path / "attempt-media"
+    (media_root / "media").mkdir(parents=True)
+    (media_root / "media/image.bin").write_bytes(MEDIA_BYTES)
+    seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A03", media_root=media_root)
+    assert seed["target_locator"] is None
+
+    target = public_target_receipt(seed)
+
+    assert target["capabilities"]["edit"] == {
+        "status": "available",
+        "route": "Astrid SDK move_occurrence_group() + publish_authoring_candidate",
+    }
+    assert target["edit_route"] == "Astrid SDK move_occurrence_group() + publish_authoring_candidate"
+    assert "target_locator" not in target
+    read_only = public_target_receipt(seed, read_only=True)
+    assert read_only["capabilities"]["edit"]["status"] == "not_permitted"
+    assert "edit_route" not in read_only
+
+
+def test_public_target_receipt_keeps_a01_specialized_route_unavailable_without_locator(tmp_path):
+    baseline = _baseline()
+    runtime = FakeRuntime(baseline)
+    media_root = tmp_path / "attempt-media"
+    (media_root / "media").mkdir(parents=True)
+    (media_root / "media/image.bin").write_bytes(MEDIA_BYTES)
+    seed = seed_case(runtime, baseline, attempt_id="attempt-public", case_id="A01", media_root=media_root)
+
+    target = public_target_receipt(seed)
+
     assert target["capabilities"]["edit"]["status"] == "unavailable"
-    assert "case-specific" in target["capabilities"]["edit"]["reason"]
     assert "edit_route" not in target
 
 

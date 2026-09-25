@@ -18,6 +18,9 @@ from astrid.sdk.workspace_client import (
 )
 
 
+TARGETED_EXECUTION_BINDING_CAPABILITY = "execution_binding.targeted.v1"
+
+
 class _Workspace:
     def __init__(self, health: object, handshake: object) -> None:
         self._health = health
@@ -36,8 +39,16 @@ def _health(**overrides: object) -> dict[str, object]:
         "protocol": PROTOCOL,
         "schema_digest": SCHEMA_DIGEST,
         "runtime_epoch": 1,
+        "runtime_instance_id": "instance-1",
+        "runtime_session_id": "runtime-session-1",
     }
     value.update(overrides)
+    return value
+
+
+def _health_without(field: str) -> dict[str, object]:
+    value = _health()
+    del value[field]
     return value
 
 
@@ -56,8 +67,15 @@ def _handshake(**overrides: object) -> dict[str, object]:
             "tasks:read",
             "tasks:write",
         ],
+        "capabilities": [TARGETED_EXECUTION_BINDING_CAPABILITY],
     }
     value.update(overrides)
+    return value
+
+
+def _handshake_without(field: str) -> dict[str, object]:
+    value = _handshake()
+    del value[field]
     return value
 
 
@@ -67,6 +85,10 @@ def _handshake(**overrides: object) -> dict[str, object]:
         _health(protocol="workspace.v999"),
         _health(schema_digest="sha256:" + "0" * 64),
         _health(status="degraded"),
+        _health(runtime_instance_id=""),
+        _health(runtime_session_id=42),
+        _health_without("runtime_instance_id"),
+        _health_without("runtime_session_id"),
         _health(extra="tampered"),
     ],
 )
@@ -102,6 +124,13 @@ def test_open_rejects_tampered_health(monkeypatch: pytest.MonkeyPatch, response:
             "projects:read", "projects:write", "objects:read", "objects:write",
             "tasks:read", "tasks:write", "admin",
         ]),
+        _handshake(extra="tampered"),
+        _handshake_without("capabilities"),
+        _handshake(capabilities="execution_binding.targeted.v1"),
+        _handshake(capabilities=[]),
+        _handshake(capabilities=[""]),
+        _handshake(capabilities=[42]),
+        _handshake(capabilities=["other.v1"]),
     ],
 )
 def test_open_rejects_tampered_handshake(monkeypatch: pytest.MonkeyPatch, response: object) -> None:

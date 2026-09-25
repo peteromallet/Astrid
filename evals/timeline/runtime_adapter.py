@@ -12,9 +12,12 @@ import copy
 import dataclasses
 import hashlib
 import json
+import tempfile
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from .fixture import Baseline, CaseIdentities, DisposableEndpoint, FixtureError, MediaRequirement
 
@@ -564,9 +567,6 @@ class RuntimeFixtureAdapter:
         expected_head = target.get("head_revision_id")
         if not all(isinstance(value, str) and value for value in (project_id, timeline_id, expected_head)):
             raise RuntimeAdapterError("public target is missing disposable project, timeline, or expected head")
-        locator = target.get("target_locator")
-        if not isinstance(locator, Mapping):
-            raise RuntimeAdapterError("public target has no case-scoped target locator")
         capabilities = target.get("capabilities")
         edit = capabilities.get("edit") if isinstance(capabilities, Mapping) else None
         if not isinstance(edit, Mapping) or edit.get("status") != "available":
@@ -848,6 +848,109 @@ class RuntimeFixtureAdapter:
         return {"new_head": result.get("new_head", result.get("parent_revision_id", parent_revision_id))}
 
 
+@dataclass(frozen=True)
+class LocalDisposableRuntimeSession:
+    """A live loopback Runtime whose realm/support state belongs to one temp dir.
+
+    The caller may expose the returned credential file to a worker, but the
+    temporary directory remains coordinator-owned storage.
+    """
+
+    adapter: RuntimeFixtureAdapter
+    endpoint: str
+    realm_id: str
+    root: Path
+    contract_path: Path
+
+
+@contextmanager
+def local_disposable_runtime(
+    *, scratch_parent: str | Path, canonical_endpoint: str,
+    canonical_realm_id: str, canonical_root: str | Path,
+) -> Iterator[LocalDisposableRuntimeSession]:
+    """Start an ephemeral real loopback Runtime without touching canonical data.
+
+    All realm, catalog, credential, and discovery files are created below a
+    unique temporary directory under ``scratch_parent`` and removed after the
+    context exits. The worker boundary must deny that directory and allow only
+    the explicitly returned credential file. Only ``127.0.0.1`` on an
+    OS-selected ephemeral port is used.
+    Canonical identity is an explicit read-only comparison input; it is never
+    contacted or opened for writing.
+    """
+    parent = _regular_non_symlink(Path(scratch_parent), "Runtime scratch parent").resolve()
+    canonical = _regular_non_symlink(Path(canonical_root), "canonical realm root").resolve()
+    if not parent.is_dir() or not canonical.is_dir():
+        raise RuntimeAdapterError("Runtime scratch parent and canonical root must exist as directories")
+    if not canonical_endpoint or not canonical_realm_id:
+        raise RuntimeAdapterError("explicit canonical endpoint and realm identity are required for isolation comparison")
+    try:
+        parent.relative_to(canonical)
+    except ValueError:
+        pass
+    else:
+        raise RuntimeAdapterError("Runtime scratch parent must not be inside the canonical realm root")
+    try:
+        canonical.relative_to(parent)
+    except ValueError:
+        pass
+    else:
+        raise RuntimeAdapterError("canonical realm root must not be inside the Runtime scratch parent")
+
+    try:
+        from runtime_protocol.daemon import RuntimeDaemon
+        from runtime_protocol.store import RealmStore
+    except ImportError as exc:
+        raise RuntimeAdapterError(f"local Runtime daemon package is unavailable: {exc}") from exc
+
+    with tempfile.TemporaryDirectory(prefix="astrid-timeline-eval-runtime-", dir=parent) as temporary:
+        task_root = Path(temporary).resolve()
+        realm_root = task_root / "realm"
+        support_root = task_root / "support"
+        realm_id = "timeline-eval-" + uuid.uuid4().hex
+        store = RealmStore.initialize(
+            realm_root, display_name="Astrid Timeline Eval Disposable", realm_id=realm_id,
+        )
+        store.close()
+        marker_path = realm_root / ISOLATION_MARKER_NAME
+        marker_path.write_text(json.dumps({
+            "kind": ISOLATION_CONTRACT_KIND,
+            "purpose": "timeline-eval-disposable-realm",
+            "realm_id": realm_id,
+        }, sort_keys=True) + "\n", encoding="utf-8")
+        daemon = RuntimeDaemon(
+            realm_root, support_root=support_root,
+            display_name="Astrid Timeline Eval Disposable", realm_id=realm_id,
+            host="127.0.0.1", port=0, production_worker_credentials=True,
+        )
+        try:
+            daemon.start()
+            contract_path = task_root / "isolation-contract.json"
+            contract_path.write_text(json.dumps(isolation_contract_template(
+                endpoint=daemon.endpoint,
+                realm_id=realm_id,
+                credential_file=daemon.credential_path,
+                realm_root=realm_root,
+                canonical_endpoint=canonical_endpoint,
+                canonical_realm_id=canonical_realm_id,
+                canonical_root=canonical,
+            ), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            adapter = RuntimeFixtureAdapter.connect(
+                endpoint=daemon.endpoint,
+                credential_file=daemon.credential_path,
+                contract_path=contract_path,
+            )
+            yield LocalDisposableRuntimeSession(
+                adapter=adapter,
+                endpoint=daemon.endpoint,
+                realm_id=realm_id,
+                root=task_root,
+                contract_path=contract_path,
+            )
+        finally:
+            daemon.stop()
+
+
 class WorkspaceClosureReader:
     """Read-only exact-closure view over any coordinator-owned Runtime client.
 
@@ -937,5 +1040,6 @@ __all__ = [
     "ISOLATION_CONTRACT_KIND", "ISOLATION_MARKER_NAME", "REQUIRED_SCOPES",
     "RuntimeAdapterError", "RuntimeConnectionProof", "RuntimeFixtureAdapter",
     "VerifiedIsolation", "WorkspaceClosureReader", "isolation_contract_template", "verify_isolation_contract",
-    "prepare_local_disposable_project",
+    "prepare_local_disposable_project", "LocalDisposableRuntimeSession",
+    "local_disposable_runtime",
 ]

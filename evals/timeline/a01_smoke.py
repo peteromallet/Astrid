@@ -63,9 +63,14 @@ def derive_a01_old_video_baseline(baseline: Baseline) -> tuple[Baseline, dict[st
     if not isinstance(selected_clip, dict):
         raise RuntimeError("pinned opening has no expected shot_b01 picture selector")
     prior_asset = selected_clip.get("asset")
-    if prior_asset != NEW_CHARCOAL_IMAGE_ASSET:
-        raise RuntimeError(f"source opening selector changed from the disclosed image state: {prior_asset!r}")
-    selected_clip["asset"] = OLD_OPENING_VIDEO_ASSET
+    # The adopted pinned export is already the truthful old-video starting
+    # state. Keep accepting the historical synthetic charcoal derivative used
+    # by the source-export tests, but never turn an old-video source into an
+    # answer-bearing image fixture merely to satisfy this helper.
+    if prior_asset not in {NEW_CHARCOAL_IMAGE_ASSET, OLD_OPENING_VIDEO_ASSET}:
+        raise RuntimeError(f"source opening selector is neither disclosed image nor old video: {prior_asset!r}")
+    if prior_asset == NEW_CHARCOAL_IMAGE_ASSET:
+        selected_clip["asset"] = OLD_OPENING_VIDEO_ASSET
     semantic = {
         "parent": parent,
         "shots": [row.get("payload") for row in closure["shot_revisions"]],

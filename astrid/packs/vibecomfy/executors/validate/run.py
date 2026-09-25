@@ -89,7 +89,7 @@ def _canonical_bundle_validation(
     try:
         with redirect_stdout(captured_stdout), redirect_stderr(captured_stderr):
             return_code = vibecomfy_main(
-                ["--yes", "--quiet", "validate", str(workflow_path), "--json"]
+                ["--yes", "--quiet", "validate", str(workflow_path), "--json", "--no-schema"]
             )
         gate = current_gate_context()
         audit = list(gate.audit)
@@ -116,7 +116,7 @@ def _canonical_bundle_validation(
         {
             "schema_version": 1,
             "authority": "canonical_workflow_bundle",
-            "validation_mode": "canonical_bundle",
+            "validation_mode": "canonical_bundle_structural",
             "python_execution_consent": "confirmed",
             "security_gate_audit": audit,
         }
@@ -167,6 +167,13 @@ def main(argv: list[str] | None = None) -> int:
                 report["python_execution_consent"] = (
                     "confirmed" if args.python_execution_consent == "confirmed" else None
                 )
+            # This offline executor checks structure only. The run adapter owns
+            # session attestation and fresh target-schema validation before queueing.
+            report["runtime_validation"] = {
+                "status": "deferred",
+                "executor": "vibecomfy.run",
+                "checks": ["session_identity", "target_schema"],
+            }
             _write_report(args.out, report)
             if not report.get("ok", report.get("status") == "ok"):
                 raise WorkflowValidationError("workflow validation reported errors")

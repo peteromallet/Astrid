@@ -36,7 +36,7 @@ def _requirements() -> BoundaryRequirements:
         host_selected_case_path="/host/attempt/cases/A01",
         selected_case_path="/case/A01",
         disposable_credential_path="/case/A01/runtime-credential.json",
-        skill_path="/opt/astrid-public/astrid/packs/rendering/skill/SKILL.md",
+        skill_path="/opt/astrid-public/astrid/packs/video_editing/skill/SKILL.md",
         skill_sha256="1" * 64,
         public_package_path="/opt/astrid-public",
         public_package_digest="sha256:" + "2" * 64,

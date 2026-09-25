@@ -1,0 +1,2163 @@
+{
+  "files": [
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/agent_goal.md",
+      "export_sha256": "e0f79f8dffe513128334f429561e7be86ad29640b31958970258b8940468ed20",
+      "pre_scope_amendment_export_sha256": "eba9975de86115d5f3a0a09ead3631ab7b7eee8825a10012f9a2b2027b6d795a",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "9e833304019b788ebe1f59b83268dcfb6fc9e752352a004ae8bf30283c9b34a2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/implementation-criteria.md",
+      "export_sha256": "ccd3dd568cb45e2079b4315acd4ef5f78cfd5b810a5bc04cd710f0f99ca2306e",
+      "pre_scope_amendment_export_sha256": "6876c6a86a6d43851ea02dfb7f4f339e6373603c657dfbf5c08ad24dc9d530a2",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/implementation-criteria.md",
+      "source_repository": "Astrid",
+      "source_sha256": "6876c6a86a6d43851ea02dfb7f4f339e6373603c657dfbf5c08ad24dc9d530a2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/northstar.md",
+      "export_sha256": "54c114521831d6a882b4bd369f5e15919c5b1f1e1d503a06108f817b339d466f",
+      "pre_scope_amendment_export_sha256": "5a0d8d778afc5ec876428354a01602fec41f0acc3432dd4bceb431a44068d386",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5a0d8d778afc5ec876428354a01602fec41f0acc3432dd4bceb431a44068d386",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/plan.md",
+      "export_sha256": "edca5d62d918ad0ce4a8a33af0e3673b565d97a3e52d70ca5956cf68e0f41503",
+      "pre_scope_amendment_export_sha256": "1537599c68f3893f7cf98649a0aad2e090251488be12ba5ca35bc81cf34964c7",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "1537599c68f3893f7cf98649a0aad2e090251488be12ba5ca35bc81cf34964c7",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/run.yaml",
+      "export_sha256": "944e4a45ee866ee292c98a89c8f2392afa965c2c02dbd593e0fc75f1db2dd437",
+      "pre_scope_amendment_export_sha256": "e3b44d1d6958d2966c4ab5306edd093a3995ab279def9404f0278e7e0feb6534",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "e3b44d1d6958d2966c4ab5306edd093a3995ab279def9404f0278e7e0feb6534",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/source-state.md",
+      "export_sha256": "2be713bd157bd3fb9397a171a694a047ffbd91b9167c2688e21a06a2b4e70b66",
+      "pre_scope_amendment_export_sha256": "c24e50d446818373f0427c8965b871282bcfd059fe1dca997c995123814dbf37",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/source-state.md",
+      "source_repository": "Astrid",
+      "source_sha256": "c24e50d446818373f0427c8965b871282bcfd059fe1dca997c995123814dbf37",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/status.md",
+      "export_sha256": "a7d615bf5410e8c7299edc42046888577d7fcfe033d9fbdd174172febeb4b39a",
+      "pre_scope_amendment_export_sha256": "da729c2c52fbe686bf190639e1928cae808d4f2fb4a9886404cedcb52d2d9dc3",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "da729c2c52fbe686bf190639e1928cae808d4f2fb4a9886404cedcb52d2d9dc3",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/astrid-runpod-task-queue-20260918/tasklist.md",
+      "export_sha256": "ecd403052d6d3354d35a97dfc5ef853e93aa1435e9ee50484e2a0613da54d400",
+      "pre_scope_amendment_export_sha256": "361200d62e88a7d5f5d314fec88883cb3592d9268da18f4d1989f76f6f2c5d0f",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/astrid-runpod-task-queue-20260918/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "361200d62e88a7d5f5d314fec88883cb3592d9268da18f4d1989f76f6f2c5d0f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/agent_goal.md",
+      "export_sha256": "d45231eb206edaba461dcc0b4c6dc73eea94335a7d09cdcecefe29ff92d0ef45",
+      "pre_scope_amendment_export_sha256": "de2b7765712a52e9a2580fb7c19aaea9be7d17ed8f1fc17fab36222ba37d2baa",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5e85a90646c464fe89f8e08fde769c277743da6e9c39af281aa76bed4323094f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/evidence.md",
+      "export_sha256": "5d0faf3e6541706c7aabcc5f89740b21622259b3b8d31257ff0842df0e500c1f",
+      "pre_scope_amendment_export_sha256": "544704acf93e9175a41099d23a4394d75ff0301258d78b86a054bc01e1a4e9e3",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/evidence.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e8bf3043154d62e4f2945a5b38dcc1d34954c7289f2460b66c0e18e3ff78d5a1",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/existing-runs.md",
+      "export_sha256": "a46eb101f02ef1a217098423e7a246c1fecd7d9b529fb05ffd98e1e06bb102bc",
+      "pre_scope_amendment_export_sha256": "78be9005e23b96c0fa3f69854242d1598d20f25216fee8e62ec4b27fe607bb2e",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/existing-runs.md",
+      "source_repository": "Astrid",
+      "source_sha256": "1184c9afc2a9e551c9def0d5866c75d0f1d8307bc2afbd30c7037501c14c6a72",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/exploration-brief.md",
+      "export_sha256": "8ef7c5ee43ec45797723a0b3077d15e7bc288ea07edb133b26ae09928265ffac",
+      "pre_scope_amendment_export_sha256": "64b41656b417e3fb60969551d822de7ef07d315d45553dc6e505bf3adb698f4b",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/exploration-brief.md",
+      "source_repository": "Astrid",
+      "source_sha256": "690c4095ea0736369c6c158079a31173fe718f0200d2200a6b395eb059869378",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/northstar.md",
+      "export_sha256": "890985277d880eb213e6cd3aec9a5a1e5737e5154ce84a7b3c74c5e9ce8a4ee2",
+      "pre_scope_amendment_export_sha256": "6923915c430711b68e916fa67a8f88d0edbc15dc558b94954e682bdbbe987ff1",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "6923915c430711b68e916fa67a8f88d0edbc15dc558b94954e682bdbbe987ff1",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/plan.md",
+      "export_sha256": "31da53cb3819b20a6f10884c27b7437e7775ec70d805e2dd79d7be16c8a1e8a1",
+      "pre_scope_amendment_export_sha256": "72c76067c5273d55493dff679dd1c55fb97c7482f964d82c07406b6435d570e8",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "72c76067c5273d55493dff679dd1c55fb97c7482f964d82c07406b6435d570e8",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/run.yaml",
+      "export_sha256": "73edc77c36a49624b8bb9042a380d396728344d7112aae6006d240ad7fc7ba43",
+      "pre_scope_amendment_export_sha256": "79d3b66e7306fcee947b56e54c6aa47010fe44fa63553248b4fc759fc1fa10e2",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "79d3b66e7306fcee947b56e54c6aa47010fe44fa63553248b4fc759fc1fa10e2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/source-state.md",
+      "export_sha256": "f8d97a1ae4834181831b4cb72276aab3a14bedd77c47f5a04bbedc762132745e",
+      "pre_scope_amendment_export_sha256": "928429601b7cadfdf725f071ba068eb4b17ac1698da0b48eeb3e55d522a13dd2",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/source-state.md",
+      "source_repository": "Astrid",
+      "source_sha256": "767e61333255ec1e580a95c765882e7b0b82dee045e19fb85468e3bdc97cf4ac",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/status.md",
+      "export_sha256": "0c47e4bd9b22d1c8031c0871955ed0bf9daaff550aef5cea3d53d1088d9e61ce",
+      "pre_scope_amendment_export_sha256": "78d77a5bad57da7dedca4618ceeb97d2d805597dcff8c06c76da933fe44d5e04",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f2b569adf96a21fd95b1d9b5cbca236c43018d9ca16076d80bc324a6c4af0210",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/canonical-runpod-vibecomfy-jobs-20260921/tasklist.md",
+      "export_sha256": "c90315e65d68b504b1eac30dc915d67dc4015d2a3767b078e3f7b23480a7798b",
+      "pre_scope_amendment_export_sha256": "7ef11ced2b43d9c302e6648f21e17399bab492ec6ea4795be62b1de2ecc0fcc4",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/canonical-runpod-vibecomfy-jobs-20260921/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "7ef11ced2b43d9c302e6648f21e17399bab492ec6ea4795be62b1de2ecc0fcc4",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/agent_goal.md",
+      "export_sha256": "cb445af6b93a9010e16b081f01583a8e6b3c55acb078982f17a1a64c03e4c70c",
+      "pre_scope_amendment_export_sha256": "81a9a1634b1a303014b8557c3f2867aa672433fbdb04eb2c864200ada4fcf97f",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "ff3a88e8dc7e6d49dca329acc5bc3333ea3b5422510cfc9e4a75bdadc8df6e8e",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/northstar.md",
+      "export_sha256": "8d5d9ed64a691d0d582a527b81785608cbc4a470486ef0455b92b7f5d8644238",
+      "pre_scope_amendment_export_sha256": "b4825c19b6ed9a271141ce775bd6275182eab0560907fc772390fc58876815fa",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "b4825c19b6ed9a271141ce775bd6275182eab0560907fc772390fc58876815fa",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/plan.md",
+      "export_sha256": "844b944c1014c54f1682b899f30416170141c34427816fdc49368c1e643c6720",
+      "pre_scope_amendment_export_sha256": "3279ab1710bc27c47bfaa48dca795f5ec125ede257d09d8b010b0390484de4be",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "3279ab1710bc27c47bfaa48dca795f5ec125ede257d09d8b010b0390484de4be",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/run.yaml",
+      "export_sha256": "b580c6b22ef05e8a1d4703af61949daf8abcaaacf8e739c225823c7e38f4fb2a",
+      "pre_scope_amendment_export_sha256": "b37f9c349c15848eba996edd387df8610db09f854824d1de6d897c0dd1ac3eab",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "b37f9c349c15848eba996edd387df8610db09f854824d1de6d897c0dd1ac3eab",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/source-state.md",
+      "export_sha256": "7b058a4cbb69da5eba6f1f35f03296297ca9a08153bf2e18eac5a09afd0c5f74",
+      "pre_scope_amendment_export_sha256": "9a91c342eee10db8b14d4a1f14a871e68de19dbfba3ec9a3b16117443a5f4636",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/source-state.md",
+      "source_repository": "Astrid",
+      "source_sha256": "9a91c342eee10db8b14d4a1f14a871e68de19dbfba3ec9a3b16117443a5f4636",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/status.md",
+      "export_sha256": "9a7e871c2aab81e3eef092b73ea0e830a25df786afd64bca030fa3215c884b6e",
+      "pre_scope_amendment_export_sha256": "f1c431c68db5525776927d3a43fe4e72054c002c5d22f6910b91a1a7add1ef0d",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f1c431c68db5525776927d3a43fe4e72054c002c5d22f6910b91a1a7add1ef0d",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-engine-task-path-20260920/tasklist.md",
+      "export_sha256": "26bac6300c3dea0c1402a3a4b38850f333203d22ee46dbb5b49972e25b57290e",
+      "pre_scope_amendment_export_sha256": "674e2ac0d732907dfc4780217934179649ba1b215a3ee76395dd03a3fbbd288b",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-engine-task-path-20260920/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "674e2ac0d732907dfc4780217934179649ba1b215a3ee76395dd03a3fbbd288b",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-executor-residency-20260920/agent_goal.md",
+      "export_sha256": "468921251aa3f91292d8362b0c2f5e0f0356a27d45753a26e2a4e8a3b523c09a",
+      "pre_scope_amendment_export_sha256": "20314a1a134b7e5b18639359e039d26d47f41baca656163deef02f9f5ec237a0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-executor-residency-20260920/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f55eca493dce2064e77929bf40db4bca2da45a5a8bc7da320a3238e55313d2a1",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-executor-residency-20260920/northstar.md",
+      "export_sha256": "a135b9624ee95a18dcbfea93e9d75b32ee7aa39fd8845a11b5f9554fa17b8fd7",
+      "pre_scope_amendment_export_sha256": "e8e26b455e353eff6122b799d255c68c728b53e78f234e6a4889c200a2a54383",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-executor-residency-20260920/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e8e26b455e353eff6122b799d255c68c728b53e78f234e6a4889c200a2a54383",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-executor-residency-20260920/plan.md",
+      "export_sha256": "5095988f25ec14e93b1594bda4cb8eace31e8f278c2e2a43afb62f9d58e30c25",
+      "pre_scope_amendment_export_sha256": "82582669db0173e8421206ec3d5d5ee5a0e66a1d8cf6a83afe0a6cc21e59e9b3",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-executor-residency-20260920/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "738f708743e73940c5ce0920209653e0c0fdaec20eeb9af3fb203e53d266366c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-executor-residency-20260920/run.yaml",
+      "export_sha256": "9954d9f0290f3546441cadfdadce2de7b82bb3270a001ef95fa02dd36f4f6027",
+      "pre_scope_amendment_export_sha256": "6fc96819d80983d293c129bc6f868daa82a6e2db1b87fc06afe26da5d725c9ad",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-executor-residency-20260920/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "6fc96819d80983d293c129bc6f868daa82a6e2db1b87fc06afe26da5d725c9ad",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-executor-residency-20260920/status.md",
+      "export_sha256": "5695d27458b14aba13bc05a051a2ddd6b2b9cc11c32a1529edd34246afcb979e",
+      "pre_scope_amendment_export_sha256": "08295b3d888b89e5eb4413c1393bb5ba83de3a9fc9860a7ab545afd4955b101c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-executor-residency-20260920/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "08295b3d888b89e5eb4413c1393bb5ba83de3a9fc9860a7ab545afd4955b101c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/gpu-executor-residency-20260920/tasklist.md",
+      "export_sha256": "162911ec87079b63081d7b341ea25ad59827fea225eb1d91dfdcbdf5f1184b71",
+      "pre_scope_amendment_export_sha256": "88f2fbaa25ddae24c385aa553a8f2aa9b2b7f2c42336806b90d6f4a421fc20ed",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/gpu-executor-residency-20260920/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "88f2fbaa25ddae24c385aa553a8f2aa9b2b7f2c42336806b90d6f4a421fc20ed",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/agent_goal.md",
+      "export_sha256": "f9abf01b8d8ca0d879e501074eb4b7ed253bcd217f2b5fffeec0bee283cd1172",
+      "pre_scope_amendment_export_sha256": "e69a271c1eab044568acaad3e3c66e390e973cce2d43c44bee0b647b1e662a5d",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "69b496aa134cc5bd4978eef3bceac893f441696bf7a0752b10e95edc7bc5d523",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/estimate.md",
+      "export_sha256": "a5e2a5bd5909ba29e3650dea16f3e9fb3307b39924c1abe27b7d91b434e4df97",
+      "pre_scope_amendment_export_sha256": "de5abc69c81e87042cdfe7b93d2204e01df9660ff38a3b3c392722e4b9031152",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/estimate.md",
+      "source_repository": "Astrid",
+      "source_sha256": "de5abc69c81e87042cdfe7b93d2204e01df9660ff38a3b3c392722e4b9031152",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/northstar.md",
+      "export_sha256": "c6240439040ced404950aabfd618cb32845d7925b196d32e8d9b844fe1debb1b",
+      "pre_scope_amendment_export_sha256": "9c1aa1d2e9f9fd462e99fc5311dd81298c08108cbad9c04098119e318e5a7201",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "9c1aa1d2e9f9fd462e99fc5311dd81298c08108cbad9c04098119e318e5a7201",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/plan.md",
+      "export_sha256": "001517e3a0df8d475b9719ca7082c2335d956346b6d483ff1524c7541e5284e5",
+      "pre_scope_amendment_export_sha256": "5c62282ea54b5c7e62f6df5be50349c7d9f64b56e434206c13f55a4c14fa0e69",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5c62282ea54b5c7e62f6df5be50349c7d9f64b56e434206c13f55a4c14fa0e69",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/queue-plan.md",
+      "export_sha256": "94ab935692840490e649c97fd8fe793c9b1bfa46dc6b2384b93445e4689b37cc",
+      "pre_scope_amendment_export_sha256": "70d1dd2bbeeeddad3e08a26495c4152b50dd0e38f190fd9a5c54fd5ecb74f7fb",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/queue-plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "70d1dd2bbeeeddad3e08a26495c4152b50dd0e38f190fd9a5c54fd5ecb74f7fb",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/run.yaml",
+      "export_sha256": "b580c6b22ef05e8a1d4703af61949daf8abcaaacf8e739c225823c7e38f4fb2a",
+      "pre_scope_amendment_export_sha256": "b37f9c349c15848eba996edd387df8610db09f854824d1de6d897c0dd1ac3eab",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "b37f9c349c15848eba996edd387df8610db09f854824d1de6d897c0dd1ac3eab",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/scope-decision.md",
+      "export_sha256": "d10c8c22ddca175fda0f4723a3a726b08bf5d3e503ab796a7c1c7b29a3efd942",
+      "pre_scope_amendment_export_sha256": "5d55a131478a9a710344248183991df12fc09bb718f88e0419fe2b3fd5700f41",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/scope-decision.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5d55a131478a9a710344248183991df12fc09bb718f88e0419fe2b3fd5700f41",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/source-state.md",
+      "export_sha256": "16789bb3861789040c9ea53c9545faedb928b9f991c1441eaa7815abcd6b961e",
+      "pre_scope_amendment_export_sha256": "ed9939ed52b7498c835af13439386f4d914991d1b659ca2f7d9bab4d9cf1b3c5",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/source-state.md",
+      "source_repository": "Astrid",
+      "source_sha256": "59ee8be1c7c438bc6d386b59804d82c6154452019371bab88fba13f133d4d8c1",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/status.md",
+      "export_sha256": "0ac595aa05f89ee941512ccce0e8d045b97f022fc89ff3a9b1dfed6d5131aee1",
+      "pre_scope_amendment_export_sha256": "d60a422f86a46baaf17c033351e31b4e6f0aea784778bdeba27f4c8e1367248c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "d60a422f86a46baaf17c033351e31b4e6f0aea784778bdeba27f4c8e1367248c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/h3-cuda13-golden-template-20260918/tasklist.md",
+      "export_sha256": "06e691128992557f491005d0c4e99cb3f66e39a7a2bdf5cad1c0b078a519fb61",
+      "pre_scope_amendment_export_sha256": "24f2038c8580ed832c3ec4176cf9b05bea68444d9583105e55fa0be338f77784",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/h3-cuda13-golden-template-20260918/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "24f2038c8580ed832c3ec4176cf9b05bea68444d9583105e55fa0be338f77784",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/acceptance-ledger.md",
+      "export_sha256": "85023fb9a01ab44a1d801a180881f5ceb90c7a6d38e1f19eb5fc4042076908da",
+      "pre_scope_amendment_export_sha256": "71e1298160cf837fceb37e587cfb51f2966a9aa588c9c1313b81b0f9cdceaadc",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/acceptance-ledger.md",
+      "source_repository": "Astrid",
+      "source_sha256": "71e1298160cf837fceb37e587cfb51f2966a9aa588c9c1313b81b0f9cdceaadc",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/agent_goal.md",
+      "export_sha256": "a6e4e110392b431c3920e053b2b3f483650efecc8482f9d3a3da65b978d51a22",
+      "pre_scope_amendment_export_sha256": "f320da482187751372d281d8d620da238cb8fc50ce2dd40600559abd6153c85e",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f320da482187751372d281d8d620da238cb8fc50ce2dd40600559abd6153c85e",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/architecture-decision.md",
+      "export_sha256": "0e20690cb9302981bf3c4bc32a0cb49aea3a0ca4febc340c9969ed31548a0e84",
+      "pre_scope_amendment_export_sha256": "bd7104d69699524209569ebb5af58c1285a1f419a5a91f0180fd8d9f2e7eea20",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/architecture-decision.md",
+      "source_repository": "Astrid",
+      "source_sha256": "bd7104d69699524209569ebb5af58c1285a1f419a5a91f0180fd8d9f2e7eea20",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/briefs/G0-neutral-result-profile.md",
+      "export_sha256": "b68e5e147013507f7c12aed0334826612ba5074e76cfcfd1b320f080ff930201",
+      "pre_scope_amendment_export_sha256": "e8c13e3ca08941b169125775de36bacc6bfb9a9a054fc940dad46de88bedc7cd",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/briefs/G0-neutral-result-profile.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e5caa0cde4c11fc7d19b2ee85521b20052e9774867e1649a5ab36dbada746ce0",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/briefs/G1-vibecomfy-producer-evidence.md",
+      "export_sha256": "d10eacf6f949906bab860cf98264fae550f944a6684c8492778cd34478e1f1e7",
+      "pre_scope_amendment_export_sha256": "afe0afc8b784e91fdc704f84e020d9e7d38bff293919a97d3f1761e214cde073",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/briefs/G1-vibecomfy-producer-evidence.md",
+      "source_repository": "Astrid",
+      "source_sha256": "1f006482f331ba7383401ee6644006c3bb28849d122454cc1d6276986770e433",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/briefs/G2-runpod-opaque-bundle-transport.md",
+      "export_sha256": "65d0ee5ba534ef5ae9772650baaed9a9fefaaff01f1964420b89af5ad1ad90b9",
+      "pre_scope_amendment_export_sha256": "cf1ddffe226d38911e0c7f79f149d537cc578fd6aca57a553ce0f7b8427476f0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/briefs/G2-runpod-opaque-bundle-transport.md",
+      "source_repository": "Astrid",
+      "source_sha256": "0e59bacc4c125f550e5e3e74ad1739af3fb076cbe158a5ea3a0e3c40c28a1620",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/briefs/G3-astrid-consume-and-publish.md",
+      "export_sha256": "bb03d90fdee35e7feebaefea9bf263d42fc0d015d54232aa7638127eefd66d44",
+      "pre_scope_amendment_export_sha256": "01b25a581e13142cb2bcb2561c2cbcbee97dbb4b3c3c5f19017f58ccc2e14473",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/briefs/G3-astrid-consume-and-publish.md",
+      "source_repository": "Astrid",
+      "source_sha256": "40b7fd5eccb6bdb8cebe75a7531cbd442f821e17b8e7a0890687b9eefd27ac7b",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/briefs/generalized-first-slice-oracle.md",
+      "export_sha256": "0f5ee17f5dd9dd5bf6077832956bbfb23f310040500357ecaf2e94e11d5090b3",
+      "pre_scope_amendment_export_sha256": "75b9e53c8e7dca3e248b725ca6d055571cb6bfff452e4ce2b28ecf1fba57465e",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/briefs/generalized-first-slice-oracle.md",
+      "source_repository": "Astrid",
+      "source_sha256": "75b9e53c8e7dca3e248b725ca6d055571cb6bfff452e4ce2b28ecf1fba57465e",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/briefs/vibe-drift-repair.md",
+      "export_sha256": "1c01b0b6f6508ac3b141909d15bb5d70119b38631183fc64f476094686fbacc1",
+      "pre_scope_amendment_export_sha256": "0d5c53a41cc678848c7f3eec28c93a66ca8a9a15377bfa56dfb260f4576f257d",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/briefs/vibe-drift-repair.md",
+      "source_repository": "Astrid",
+      "source_sha256": "b7e7424da9c8ae7e2a8b3c8c0929f1bda9555333ff46140d49480b75065e6abd",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/implementation-criteria.md",
+      "export_sha256": "e8cfc58ae2d150001f7254b723c487c73724aad1b3e3f092e29b1779c8018442",
+      "pre_scope_amendment_export_sha256": "cffe39831f38c1c6f8307d672c4c63f91a90ce34078256b54337857a296fa7e2",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/implementation-criteria.md",
+      "source_repository": "Astrid",
+      "source_sha256": "cffe39831f38c1c6f8307d672c4c63f91a90ce34078256b54337857a296fa7e2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/northstar.md",
+      "export_sha256": "c242d7a7c636b2549190068ada9bbac8ff63b6f582e1e2ec54d30b4b6277fee9",
+      "pre_scope_amendment_export_sha256": "b1b7a2efd704395229a61e33c02a3c3f21ce7ff92940347226d9ff7c659a6a8c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "b1b7a2efd704395229a61e33c02a3c3f21ce7ff92940347226d9ff7c659a6a8c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/plan-a.md",
+      "export_sha256": "cd3f69ed135b5394b412a961fe177e20de4134e60a0e5aa849f4b683d0c04a3c",
+      "pre_scope_amendment_export_sha256": "e0713a37cf09982356711c7cb28e1c3e7a037d1d6b7df7edada1b07a201894f5",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/plan-a.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e0713a37cf09982356711c7cb28e1c3e7a037d1d6b7df7edada1b07a201894f5",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/plan-b.md",
+      "export_sha256": "3fcabbde5c75731a926ce0b08a75da16a6531d8ee82b063dc43a0a0fdf9d914c",
+      "pre_scope_amendment_export_sha256": "e19a4fe1f8f82f7b4112adf3e59a91c21ab7416c7702ca9d669d449419093136",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/plan-b.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e19a4fe1f8f82f7b4112adf3e59a91c21ab7416c7702ca9d669d449419093136",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/plan.md",
+      "export_sha256": "bd001d669c48c4aed53f3b46a8751d0705b818be065d3f00888684e633c51e3f",
+      "pre_scope_amendment_export_sha256": "078b3dda37ec5fa3ba9431cdaa63bcf55db8232ef34c9fa7cb6692262f0fe21d",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "078b3dda37ec5fa3ba9431cdaa63bcf55db8232ef34c9fa7cb6692262f0fe21d",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/reviews/final-integrated-review.md",
+      "export_sha256": "67a1f442559ae75fbd3414fd336d2e753ac4899fbac022208a23484addffd610",
+      "pre_scope_amendment_export_sha256": "76da18ce19475486a4b9cf05dadef1332ecdb0471e5a4e0f0014e9d0ecc9df64",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/reviews/final-integrated-review.md",
+      "source_repository": "Astrid",
+      "source_sha256": "76da18ce19475486a4b9cf05dadef1332ecdb0471e5a4e0f0014e9d0ecc9df64",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/reviews/generalized-handoff-review.md",
+      "export_sha256": "27c9851fa52d3741a027bd37dba647ba3ae9216393d6af8e0f10e39e1fb27871",
+      "pre_scope_amendment_export_sha256": "ee4bf835f10c6f34a78f7d98e40ccc11555d674eeeea338490730ac1de94084a",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/reviews/generalized-handoff-review.md",
+      "source_repository": "Astrid",
+      "source_sha256": "ee4bf835f10c6f34a78f7d98e40ccc11555d674eeeea338490730ac1de94084a",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/run.yaml",
+      "export_sha256": "10ac9f926173b035a9e60f0d5914311fb3d4f05a4ec7a72169cbc2d2d1866695",
+      "pre_scope_amendment_export_sha256": "efc76088a65b34d613402df3f21b7e61a76181f3dae1e04e23a3f413129b7fc4",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "efc76088a65b34d613402df3f21b7e61a76181f3dae1e04e23a3f413129b7fc4",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/source-state.md",
+      "export_sha256": "5e08d107867be5791c4578f37b200d5b40d240e05b0af0ccd12a3d61243df181",
+      "pre_scope_amendment_export_sha256": "dbe98d9e467a692d43ab295090bffc51916a5cce73202a156d29d690c945ea2a",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/source-state.md",
+      "source_repository": "Astrid",
+      "source_sha256": "4356f7d3c5e889808337c98990080fb5b58d80972455bdab05bfe35f0a2ded34",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/status.md",
+      "export_sha256": "4645ccb9e50f86e15b94ecfe6283c1170020dde681ee92480c9b4ec4c8e7b833",
+      "pre_scope_amendment_export_sha256": "7d4b5ad14f7ebfc83361c2269b9eb3828e058a271254f04976ae4b84aaedb7d0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "7d4b5ad14f7ebfc83361c2269b9eb3828e058a271254f04976ae4b84aaedb7d0",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/runpod-managed-generation-20260921/tasklist.md",
+      "export_sha256": "ae2841e29c3d955893215555a837e2d03529d70b4594d0692a3c471ce4bea8d9",
+      "pre_scope_amendment_export_sha256": "445006bd47a15e02d619e692de9485139a2cead8d28802792060fbcb4882f5b8",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/runpod-managed-generation-20260921/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "445006bd47a15e02d619e692de9485139a2cead8d28802792060fbcb4882f5b8",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/agent_goal.md",
+      "export_sha256": "8a37d0f39cec090ef07c71d1860f17455643d1528d275eac5699c8573440ab1c",
+      "pre_scope_amendment_export_sha256": "6fb553d8ba3f628e42505f7204aaf22569c3e54a75f2abd704bca15069f302c0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "4404432bf509073ba54e2262d07dca5cdf7841ad843b25f452bfc2d9dac902af",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/implementation-criteria.md",
+      "export_sha256": "d3e730184a0ba23d5bb27badc65823ad0e25b081ff34be341f936c5126ae3ec7",
+      "pre_scope_amendment_export_sha256": "f049ac819d2e15123cfeac9f7695dba37f0cc07f41babb517da802d7e8216bd5",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/implementation-criteria.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f049ac819d2e15123cfeac9f7695dba37f0cc07f41babb517da802d7e8216bd5",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/northstar.md",
+      "export_sha256": "fe385a9896a21d2263281bb5927710523152f525542bd3a4496bcc3ee2bc3e5f",
+      "pre_scope_amendment_export_sha256": "adaa2d708e24fb37f2154b333aa427e5f8ae7146b46ff654f527473916e03014",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "adaa2d708e24fb37f2154b333aa427e5f8ae7146b46ff654f527473916e03014",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/plan.md",
+      "export_sha256": "c439f1e634d4b6bb85ec209a35c03032ba8e445586ad6f81f2fcf3a9fceb0105",
+      "pre_scope_amendment_export_sha256": "3050ed241b536218b677f2fe1335d2c166c63fbd2d4b3694f2e309e7dc7baad1",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "3050ed241b536218b677f2fe1335d2c166c63fbd2d4b3694f2e309e7dc7baad1",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/run.yaml",
+      "export_sha256": "a89a88f1aad755ecc336d324cacd3355db2225e0d3b762f6943315d1c56c3a05",
+      "pre_scope_amendment_export_sha256": "82324ee13271dd1e97e9d3029b65175f6429e2ec27d0304942b5f3fc84f0479f",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "82324ee13271dd1e97e9d3029b65175f6429e2ec27d0304942b5f3fc84f0479f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/source-state.md",
+      "export_sha256": "2cc8d085135ecd1f62d5813e543de02e8be10c06f7b3dbac1e15ad1c7e0128a1",
+      "pre_scope_amendment_export_sha256": "9f94c198e9b8db9eaf2224d75e2419e688756f7bef27add2746bf128cdfa7451",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/source-state.md",
+      "source_repository": "Astrid",
+      "source_sha256": "488c1dd5b98a320a900fd0e437d2d17720c708bd747bee938cd22c15eb0d20bb",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/status.md",
+      "export_sha256": "a02db30f2209e0112812579130ba3f3c6bedab86ba7f0fb6cd4c6cb9c0187122",
+      "pre_scope_amendment_export_sha256": "b495babc39853858a26b20bab1f2649489b0cf61f65df8dc0d65cb6cd81e7b2c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "afa8c7350442ab9620ed7ecc2250704bef63f8b67a06dd5d5b97f4e9a582c91e",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-composition-unification-20260917/tasklist.md",
+      "export_sha256": "180e9270b369c6836e0619a22bfd41a45faf7558a1a7096b6bd340a875d83a16",
+      "pre_scope_amendment_export_sha256": "bb115437e6f62d5304267dbfdc71cbf1318d3a138842ff9aef44487a64a1d43e",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-composition-unification-20260917/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "bb115437e6f62d5304267dbfdc71cbf1318d3a138842ff9aef44487a64a1d43e",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/90-10-proposal.md",
+      "export_sha256": "33e6a619a1449fb24db1d4fd952532f8dca85240cf7beed8efebb51d1e24e331",
+      "pre_scope_amendment_export_sha256": "baff6b412d1ad0923d3bdaaa91c1c65c19ede063987b0ff0337633496111860a",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/90-10-proposal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "0f1b4d1bbd993304b5bed2bdaf4cc676ffb53bd45db4b2283674e019df8f55b4",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/agent_goal.md",
+      "export_sha256": "66f248d7e8f9d569d75d4da03a9b5efddc3b19b8839345860e25535a83f03e29",
+      "pre_scope_amendment_export_sha256": "615418f2463d8767f51ff9834d3aa5748a79595be806b39f6bbc10931e4308c4",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "c0359d1c90587a442dce37250992bab0662c425f7c0fc43629d4ccbe8fafa947",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/northstar.md",
+      "export_sha256": "d0919d59d86a945eff0124156378ee30c1a4f1c76ad71dcce9881eb23b3989e7",
+      "pre_scope_amendment_export_sha256": "a5ff4251aac119eadf79dd9b320e3f12127158dafa718d9995aaf6e9a1912cef",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "a5ff4251aac119eadf79dd9b320e3f12127158dafa718d9995aaf6e9a1912cef",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/plan.md",
+      "export_sha256": "7c075ac0e75b88dbd5568748f5eacccfc702341143cc145ce2bd262f87a49c32",
+      "pre_scope_amendment_export_sha256": "a32b13618eacb1268a85fd94f04f27fe8015439f4ffc31e37b35fbfe07f5e481",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "a32b13618eacb1268a85fd94f04f27fe8015439f4ffc31e37b35fbfe07f5e481",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/run.yaml",
+      "export_sha256": "9d536274a13337d1f7fd060f7863ad9ac7f021e5e2454c41dc815bc89d102e65",
+      "pre_scope_amendment_export_sha256": "3c44daca0d91692abbd06da3354102f9fc4de08f7b39408ac9ec77d015987f78",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "3c44daca0d91692abbd06da3354102f9fc4de08f7b39408ac9ec77d015987f78",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/status.md",
+      "export_sha256": "3460f549d606da0957ca1a7d143e86dfacded7e1cfee782e386e4c0b633cc316",
+      "pre_scope_amendment_export_sha256": "a1c6c7120748fdc66885c9c35ed573c96eb81520c0aab26111d5b0a713c1ee69",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "ba696b5a268dd7410e1ea8949b784b5a00fc457cd8e663b540501c74abbe2aa2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/shot-generation-timeline-20260915/tasklist.md",
+      "export_sha256": "8dfd430b48c5b3f8155b4a4ed0adc11f60c4cfa96f4c10154d2b997bac2d779c",
+      "pre_scope_amendment_export_sha256": "f840ae9913afea17eb81751679ed1f38510ddd26f29793396286e1f8569037f2",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/shot-generation-timeline-20260915/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f840ae9913afea17eb81751679ed1f38510ddd26f29793396286e1f8569037f2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/agent_goal.md",
+      "export_sha256": "35c1d50f3734e99d09de1166709b65c2c825be3f6a148a726a2beb17577d1ad9",
+      "pre_scope_amendment_export_sha256": "f56a224edcee0e232395055321fffa8e14e0593bfb158a1051b58c54dba5069b",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "25e46552500f1d6601976cb7ee40fe1c5ab7aae31f98aeeabc654ae2395ee7c8",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/briefs/t1-typed-ir.md",
+      "export_sha256": "89b5dfb1d845589b63781b6519d34675b6c7bfb51db79cc2234c5a4a51b9b109",
+      "pre_scope_amendment_export_sha256": "1899223d2b87740ac19c864bb25e124500b6caa2b71817b57c7cb86ec66d20da",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/briefs/t1-typed-ir.md",
+      "source_repository": "Astrid",
+      "source_sha256": "06849e60b6ac20c9b7b89dc5c0653051f2e674aa547015fbee815df63bee73df",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/implementation-criteria.md",
+      "export_sha256": "d90faca30e3c35dbafac9fff84e52a564b7c4217befb35a91ae187bc91271eaf",
+      "pre_scope_amendment_export_sha256": "f8ebd9e964e1f3dd03e1462a36f299c3cb5f5e30ac2ec0a9ee6c2b8887edfcbb",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/implementation-criteria.md",
+      "source_repository": "Astrid",
+      "source_sha256": "f8ebd9e964e1f3dd03e1462a36f299c3cb5f5e30ac2ec0a9ee6c2b8887edfcbb",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/live-handoff.md",
+      "export_sha256": "e5e0eba4d07636708b1cf3ce9be22c3c113ddc33df6eb029e2314abfd1a63251",
+      "pre_scope_amendment_export_sha256": "0716424c28b9156da0b5a4d2fb5e17b01bb27a6f5caf1c0e60c95968b44e0191",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/live-handoff.md",
+      "source_repository": "Astrid",
+      "source_sha256": "7e52cabf7bd667d9bee675abbeb5d5569df16f02350a3e0c3ec87e0d2b179c1b",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/northstar.md",
+      "export_sha256": "47ea5c0a4837ce8f095830a26f87ee1f3997cfc76f87959a98c0a9d820621dcc",
+      "pre_scope_amendment_export_sha256": "e45d50844a7507ff78896f8d7b135d4dfc4340b8c48e716f02f5f387b2522b65",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e45d50844a7507ff78896f8d7b135d4dfc4340b8c48e716f02f5f387b2522b65",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/oracle-r1.md",
+      "export_sha256": "fec1e12b2c5e759567dac758d594c8f1f8b80269d6d85033496c6c6315423e0f",
+      "pre_scope_amendment_export_sha256": "3b9e97e512c9eb58d3bf416aafc4b8a42d60f0e8ffa46fe3e290a8bc2305cec0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/oracle-r1.md",
+      "source_repository": "Astrid",
+      "source_sha256": "3b9e97e512c9eb58d3bf416aafc4b8a42d60f0e8ffa46fe3e290a8bc2305cec0",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/plan.md",
+      "export_sha256": "6ab82f852075f49787af7452d962c776fa3ed492eae6446581a134e98af7da26",
+      "pre_scope_amendment_export_sha256": "3cf150350ba2f7fae189332df84dd1ae6dab28b2222350644755309a70457a64",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "3cf150350ba2f7fae189332df84dd1ae6dab28b2222350644755309a70457a64",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/run.yaml",
+      "export_sha256": "8273c588f49f496162bb6908fcdbd671b1c3b6f46df7e0260a010f971157c2eb",
+      "pre_scope_amendment_export_sha256": "82b0e1964b3a6cd2540994bcd423b95422d5ddb0a5d8144cde4ea07c562b9b2c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "82b0e1964b3a6cd2540994bcd423b95422d5ddb0a5d8144cde4ea07c562b9b2c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/status.md",
+      "export_sha256": "fbfe549c32af5defe66a19fba2cf537c7883681287a7eb499e98d7e0cfb2c5bd",
+      "pre_scope_amendment_export_sha256": "574f5d3868142bb95fb8c82d1475a8ee55aec5883a9106c4d1f59a8b08ff3ca9",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "ef26af6631908572cf9e404153449afbe2b293e2687444e502cfbcdc475633b1",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-dependency-contract-20260918/tasklist.md",
+      "export_sha256": "b10cfa521cafdb3a1f95bf2e501ec7b0f750d8163865127e6e1457cc2ff80314",
+      "pre_scope_amendment_export_sha256": "f52e5180a8f551377b2e2417e4d8a3b51ca7751bf0afd252f6b15bc0065a9a9e",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-dependency-contract-20260918/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "526da68a8e822d4c1b233cb706eb55b06887083b5e9edca473c551e027883b7c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/agent_goal.md",
+      "export_sha256": "b7184f1993d0495e9322e5321ef55daf7545ffaad43b3c6c76c36aae275f0343",
+      "pre_scope_amendment_export_sha256": "c26909079fb25a3b5cef6e858760f1189e8d3e4e0c1ea504eeab527a5faa76ef",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "c26909079fb25a3b5cef6e858760f1189e8d3e4e0c1ea504eeab527a5faa76ef",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/implementation-criteria.md",
+      "export_sha256": "e8f197a2474ac5942648b06642e615e41bc7ed483346829e26b66bfdb6858ded",
+      "pre_scope_amendment_export_sha256": "2d17debc6b750b706b1cd7303150aba1996bd6fed413abad272ea0c426c2f996",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/implementation-criteria.md",
+      "source_repository": "Astrid",
+      "source_sha256": "2d17debc6b750b706b1cd7303150aba1996bd6fed413abad272ea0c426c2f996",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/northstar.md",
+      "export_sha256": "6aeaa3fbe74ca6639940501924b0264f88048c7f70f8347474ee3f0cc0e9b184",
+      "pre_scope_amendment_export_sha256": "68a1b0987b3e3655e78d590c8286fa9c2178ee22fa8975742bba2672623b8e71",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "68a1b0987b3e3655e78d590c8286fa9c2178ee22fa8975742bba2672623b8e71",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/plan.md",
+      "export_sha256": "2f9f67af24b06a39091bb0a26c1a247e214f563c320ec7a0480c7e96a034e76a",
+      "pre_scope_amendment_export_sha256": "ca3d09046009696e9c37abbc687f1de5b5bba8121491b4d5c602f8beb3f132d0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "ca3d09046009696e9c37abbc687f1de5b5bba8121491b4d5c602f8beb3f132d0",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/run.yaml",
+      "export_sha256": "29a1fb9576fc0d8d31d63aadae5e8127153c48a9458ecd5dc9b6c9f306996b2e",
+      "pre_scope_amendment_export_sha256": "b3b78c2ff0c5339dc0c7c68702f8f7aa18db042d8465286fb82ece0d00052964",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "b3b78c2ff0c5339dc0c7c68702f8f7aa18db042d8465286fb82ece0d00052964",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/status.md",
+      "export_sha256": "da9cce1a531e5c05cda7954b5b3ec73f7f37fa1dda587478623e5af70db0c511",
+      "pre_scope_amendment_export_sha256": "5352e903b120429aed645a81e62d36fbd24dc183e6ce99b1fd64b910e960bace",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5352e903b120429aed645a81e62d36fbd24dc183e6ce99b1fd64b910e960bace",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-engine-task-20260920/tasklist.md",
+      "export_sha256": "1ac9668ce3824c434420d68be4f47b4450f798309e0fa6363b1a64b32f317d0e",
+      "pre_scope_amendment_export_sha256": "194bfceccbf9dfc0281db9661948ff8e81140adb365b7de9ac5f4173aaa9e449",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-engine-task-20260920/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "194bfceccbf9dfc0281db9661948ff8e81140adb365b7de9ac5f4173aaa9e449",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/agent_goal.md",
+      "export_sha256": "d88537eeaa7f293026ef3a119e25ed44e8e3959bb7b2cff2ab8a9b1a80452e79",
+      "pre_scope_amendment_export_sha256": "147d418cf648a832f941e80e8559a13c182d5a1b1c38ce27b2ac1b5c0d5be529",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "6ec286540ed0467a5f2afb8a5167951b3e929ef04c2be5bd36bb125d0fadc9a6",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/d14-runpod-preflight.md",
+      "export_sha256": "e3d441ae96323d219dd381ccbf0c37c7de826717510b309761648de470320ee4",
+      "pre_scope_amendment_export_sha256": "0b012bba90bde6a38638272b63d0bc11498415c5a241b47f43b369d5a8a4c202",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/d14-runpod-preflight.md",
+      "source_repository": "Astrid",
+      "source_sha256": "0b012bba90bde6a38638272b63d0bc11498415c5a241b47f43b369d5a8a4c202",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-reconciliation-amendment.md",
+      "export_sha256": "baf93c0d01b664788a1b7e09ab36c5f685905f1db5c7477b43b4418a8309ada5",
+      "pre_scope_amendment_export_sha256": "8ef9c8954aa9d2077c918ade2b7393a834be02848f896b50221b1b35f125371b",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-reconciliation-amendment.md",
+      "source_repository": "Astrid",
+      "source_sha256": "8ef9c8954aa9d2077c918ade2b7393a834be02848f896b50221b1b35f125371b",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-review-round1.md",
+      "export_sha256": "9555c3cf86a36ec591d6758bda99a6cacb8be7e867297c80fc5939049ccc3995",
+      "pre_scope_amendment_export_sha256": "4ef87579ee58e13bee4a180df237812bc1bc1ea3447a884eedd7139e1464ddf3",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-review-round1.md",
+      "source_repository": "Astrid",
+      "source_sha256": "4ef87579ee58e13bee4a180df237812bc1bc1ea3447a884eedd7139e1464ddf3",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-review-round2.md",
+      "export_sha256": "39ac4f3aa8f03a50c565657520b949cc5b5c82906f24b9aa53e13335d680a3c6",
+      "pre_scope_amendment_export_sha256": "ec7e25183e361c4a759e175ed0e2d500c63e60c8fffdc972bf6e582faf0710c5",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-review-round2.md",
+      "source_repository": "Astrid",
+      "source_sha256": "ec7e25183e361c4a759e175ed0e2d500c63e60c8fffdc972bf6e582faf0710c5",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-review-round3.md",
+      "export_sha256": "a9cd885dbcbb6bbf4d8d61562e7ee8f72548eb10e10cd7f1ee6c56cb49bc5925",
+      "pre_scope_amendment_export_sha256": "a7356ff35c19f1b880b2d11df4b2ed92f78970626855774995dcef72aa0013d5",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-review-round3.md",
+      "source_repository": "Astrid",
+      "source_sha256": "a7356ff35c19f1b880b2d11df4b2ed92f78970626855774995dcef72aa0013d5",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-validation.md",
+      "export_sha256": "590f0550b616a9c4567b64dc6d46f1c9d7595f1edc5dfaf203dfe48335be68dc",
+      "pre_scope_amendment_export_sha256": "2c8893fb927e63ef2eedca01781778b19459f5d31863cff2a0b01a1ab1396c32",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/final-validation.md",
+      "source_repository": "Astrid",
+      "source_sha256": "d6208cca9044c1272b50b0b68ddddb3f29799a0389d04a43836f1f5129342fb2",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/fo1-implementation-validation.md",
+      "export_sha256": "195f9f09fd626d4291d2545d9b48494f142a5a2f0e14f3778ff245722280b2f8",
+      "pre_scope_amendment_export_sha256": "862640feb9581a088e7af62017d2234fcfc85ed5597d42db480073a0a0316851",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/fo1-implementation-validation.md",
+      "source_repository": "Astrid",
+      "source_sha256": "9d1da1263a4167d1aa6dfd6c6f3e98596512222cf4a54a0db3ebb243e9ce996b",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/fo2-implementation-validation.md",
+      "export_sha256": "d569ec0b7b725cafc053312b9a8dd93140bf504057db1666b681ae2c86874151",
+      "pre_scope_amendment_export_sha256": "099eb4763e744c6ed92aba64a4b5e3d11e2e2292a32d4e8da795556d4fc11c37",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/fo2-implementation-validation.md",
+      "source_repository": "Astrid",
+      "source_sha256": "099eb4763e744c6ed92aba64a4b5e3d11e2e2292a32d4e8da795556d4fc11c37",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/focused-runtime-tests-round2.md",
+      "export_sha256": "ef5cfdaca2039e368efe8bc9b4bde0089ce2081844211dcfbd1e1d3ce4a3001f",
+      "pre_scope_amendment_export_sha256": "b9e57e7c6395757ee23637e6221176df32650f1b96d3249864957b9f5419d3ce",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/focused-runtime-tests-round2.md",
+      "source_repository": "Astrid",
+      "source_sha256": "cf128b26dbdbaf109559965711279bcfb0591b80d2cc2a109e419664f067dc13",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/focused-runtime-tests.md",
+      "export_sha256": "6322dd8247c9b9bf674be06854ab5605fd0c43532628d577c04592cb6c54522a",
+      "pre_scope_amendment_export_sha256": "02bb21d55d20a1d909187b24d1e293a7da3d376e5636f6d3ec70f06dba899bfe",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/focused-runtime-tests.md",
+      "source_repository": "Astrid",
+      "source_sha256": "7611b89f80c0ad7399771b8ac26fccf8d8134a6fdca15922ac80c27c7185121f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/oracle-revision-scope.md",
+      "export_sha256": "dd82c4981a243ec0adce83f4c5032916e786fa881df68e270aa2c46bafa6b775",
+      "pre_scope_amendment_export_sha256": "3921717bb27db3f5cba5d0131fa6b541acbb0ed16d41cb4989c21461c359f244",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/oracle-revision-scope.md",
+      "source_repository": "Astrid",
+      "source_sha256": "3921717bb27db3f5cba5d0131fa6b541acbb0ed16d41cb4989c21461c359f244",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/runpod-h3-dry-run.md",
+      "export_sha256": "fd28c4d3c3d96f55dce58afbf4d75f02f5b52fdf65e09785145981aa4469909b",
+      "pre_scope_amendment_export_sha256": "f3efe1efa6b87af6a940dc5ef22056b23a93b9f4afe1ea209e4a8ffcbf99d25c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/runpod-h3-dry-run.md",
+      "source_repository": "Astrid",
+      "source_sha256": "b38d7a3c53be2553f7bd0f3c2ee7dbc2922af030917b8bf0d6acdaf12089e64c",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/runtime-integration-round1.md",
+      "export_sha256": "9f447722aeb183d6f54ae647ebc8ec1bea176c1926ee2271ba82b5da0ffb9553",
+      "pre_scope_amendment_export_sha256": "0fde11be3e7e9054b778ba117da32d786decd427bb345ae2bdb4d62feb720f86",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/runtime-integration-round1.md",
+      "source_repository": "Astrid",
+      "source_sha256": "0fde11be3e7e9054b778ba117da32d786decd427bb345ae2bdb4d62feb720f86",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/runtime-integration-round2.md",
+      "export_sha256": "f9180569284cddd79674b3044e9bf08a50b0d7e10338f8d5b93bbd820fa354e9",
+      "pre_scope_amendment_export_sha256": "c44741d108d040c3f8f095bcab4890d174e02d878b145700669310dcb0118992",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/evidence/runtime-integration-round2.md",
+      "source_repository": "Astrid",
+      "source_sha256": "c44741d108d040c3f8f095bcab4890d174e02d878b145700669310dcb0118992",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/implementation-criteria.md",
+      "export_sha256": "9a5a3a6eacef0d9616dfef04db1380acb3b1b7d347799c3510c9e8f8c051040a",
+      "pre_scope_amendment_export_sha256": "99bc2d629d2de4d4549552bff0bab05865e7b08098a598e9dea8d1cdb7ae2466",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/implementation-criteria.md",
+      "source_repository": "Astrid",
+      "source_sha256": "99bc2d629d2de4d4549552bff0bab05865e7b08098a598e9dea8d1cdb7ae2466",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/northstar.md",
+      "export_sha256": "afb9d662fdb3d82aec15edcee057d0ee8399dcbd52800010ca1b11059704a536",
+      "pre_scope_amendment_export_sha256": "cf984b193a474090f5c57de0f9c5b8d28b90b8c458b6cc875c418ccfd59e0c8f",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "cf984b193a474090f5c57de0f9c5b8d28b90b8c458b6cc875c418ccfd59e0c8f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/plan.md",
+      "export_sha256": "9b63cd16e70e9036edd2c3a368b1c11bb2d6250ac755631a98d14f590a86e746",
+      "pre_scope_amendment_export_sha256": "ab271a5958d1843e632e9665dceb1fc799ec4d59ff33408fbbf30b7cccb4ee0d",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "20b2f3655ade86719d1b8493d02b005a47a977146bbf82ce0bfc1103979e6b40",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/run.yaml",
+      "export_sha256": "9a7373cf20f8656bcb2ea9ffbdff0a81bb62ff4cc91dabfd2242a7776d9505d5",
+      "pre_scope_amendment_export_sha256": "b2d6ed8b78655ad94b1b2fe5c00fc33bc948324fff37533b3c920e732a6db22f",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "b2d6ed8b78655ad94b1b2fe5c00fc33bc948324fff37533b3c920e732a6db22f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/status.md",
+      "export_sha256": "ce5e0d36c87d8dd5629729bd5b635be083ad89a1faf34d19178daf96dc839601",
+      "pre_scope_amendment_export_sha256": "082ee2a2680dceed6801d87c2d0dae84b867af5aec005c7eeb7cad34b01503c0",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "60ff1d5091d014a49fcaf316711a609ba0d8aa1b136437891abb835e5c618e23",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/tasklist.md",
+      "export_sha256": "75ea82437705af107225535a4821b1e8de4f090e4b023dee3a279c07bb77ccf0",
+      "pre_scope_amendment_export_sha256": "2f6390c9a2ed6be474f946066f4739a98d20399acbad8338f83b61e43ba3069f",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "2f6390c9a2ed6be474f946066f4739a98d20399acbad8338f83b61e43ba3069f",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/vibecomfy-runtime-dependency-contract-20260917/widget-mapping-amendment.md",
+      "export_sha256": "a7d3726684d36e0b9fccd0266186bf7a12b4a63bd9821a6d8a8f98908dbb1794",
+      "pre_scope_amendment_export_sha256": "19434ea8f42197d7bd16ff37b0f17d0647b990787ef94b3df8c310fde4ef95a4",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/vibecomfy-runtime-dependency-contract-20260917/widget-mapping-amendment.md",
+      "source_repository": "Astrid",
+      "source_sha256": "19434ea8f42197d7bd16ff37b0f17d0647b990787ef94b3df8c310fde4ef95a4",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/wan2gp-engine-followup-20260920/agent_goal.md",
+      "export_sha256": "dcea3ab2c52147f768f6aeafb1cbe84bed14568e2c5dae0402df95339999d490",
+      "pre_scope_amendment_export_sha256": "2573b7b8240d3f371180d627a264d29b8addefedf5fbad36b9fbc9e33677a439",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/wan2gp-engine-followup-20260920/agent_goal.md",
+      "source_repository": "Astrid",
+      "source_sha256": "2573b7b8240d3f371180d627a264d29b8addefedf5fbad36b9fbc9e33677a439",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/wan2gp-engine-followup-20260920/northstar.md",
+      "export_sha256": "1cd2dd1fb802e5c03a6830c57271c1889b2765ade4631e3f958e60234d8750bd",
+      "pre_scope_amendment_export_sha256": "d7a87d4de218f0480f8e4720925731e70e5da9a7e2f47caf85815b81a58e2263",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/wan2gp-engine-followup-20260920/northstar.md",
+      "source_repository": "Astrid",
+      "source_sha256": "d7a87d4de218f0480f8e4720925731e70e5da9a7e2f47caf85815b81a58e2263",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/wan2gp-engine-followup-20260920/plan.md",
+      "export_sha256": "94c981a45dd1890d818866a4e29cfb63e271135968db09a33682c39ad5b5a498",
+      "pre_scope_amendment_export_sha256": "e5e098f7ed1c37e93141fec1c33692c3136a98cd6cebe8be0fe599c31791dc57",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/wan2gp-engine-followup-20260920/plan.md",
+      "source_repository": "Astrid",
+      "source_sha256": "e5e098f7ed1c37e93141fec1c33692c3136a98cd6cebe8be0fe599c31791dc57",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/wan2gp-engine-followup-20260920/run.yaml",
+      "export_sha256": "b580c6b22ef05e8a1d4703af61949daf8abcaaacf8e739c225823c7e38f4fb2a",
+      "pre_scope_amendment_export_sha256": "b37f9c349c15848eba996edd387df8610db09f854824d1de6d897c0dd1ac3eab",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/wan2gp-engine-followup-20260920/run.yaml",
+      "source_repository": "Astrid",
+      "source_sha256": "b37f9c349c15848eba996edd387df8610db09f854824d1de6d897c0dd1ac3eab",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/wan2gp-engine-followup-20260920/status.md",
+      "export_sha256": "face5461db191fd1b78c28fea742f3594679e9b989631b2cb2189a820b5df80e",
+      "pre_scope_amendment_export_sha256": "62664d044aef105aab442ee3f39cc3c6fd9b1db185c7e3b6cda4caa07e2028b9",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/wan2gp-engine-followup-20260920/status.md",
+      "source_repository": "Astrid",
+      "source_sha256": "62664d044aef105aab442ee3f39cc3c6fd9b1db185c7e3b6cda4caa07e2028b9",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/runs/wan2gp-engine-followup-20260920/tasklist.md",
+      "export_sha256": "d17a9f6cfcfd210fc40d5cf7d8ae70acfbb1c7a2e6501bb9129af5d4a03605ea",
+      "pre_scope_amendment_export_sha256": "1ddb4a875246e96845161f81c6af8e91d4488b6797af34903f10f1cde971ca87",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": null,
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": ".otto/runs/wan2gp-engine-followup-20260920/tasklist.md",
+      "source_repository": "Astrid",
+      "source_sha256": "1ddb4a875246e96845161f81c6af8e91d4488b6797af34903f10f1cde971ca87",
+      "source_state": "untracked_or_ignored_control",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado-handover/SKILL.md",
+      "export_sha256": "7a8c394b575a9cbda984b8f8e7d61f6cccd89f57571abc4e4d9d5845d46ee978",
+      "source_git_blob": "aa99208de1c8460f6b40306d844158d44a7c532f",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado-handover/SKILL.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "7a8c394b575a9cbda984b8f8e7d61f6cccd89f57571abc4e4d9d5845d46ee978",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado-handover/assets/handover-message.md",
+      "export_sha256": "41ad8c1639924ae856d3f496acc8620ee01c8bd1438b3f5830279e9df64bdb1b",
+      "source_git_blob": "b286ec105ed4ca511a2c4e639be1007b6c8e87a1",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado-handover/assets/handover-message.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "41ad8c1639924ae856d3f496acc8620ee01c8bd1438b3f5830279e9df64bdb1b",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/SKILL.md",
+      "export_sha256": "db63822170db045bfba64040082718b0207b4d9e9ce53f9335b87f30365f30c0",
+      "source_git_blob": "b3a77e556b965ef274913b9736eb460b86495683",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/SKILL.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "db63822170db045bfba64040082718b0207b4d9e9ce53f9335b87f30365f30c0",
+      "source_state": "tracked_modified",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/references/agentbox.md",
+      "export_sha256": "d797d9febfa507a3cfc0e79c8dd23cee6193d27bff39217784c758048bc17fda",
+      "source_git_blob": "a93d3e2e9a4499711878ef94901d799a5ada8412",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/references/agentbox.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "d797d9febfa507a3cfc0e79c8dd23cee6193d27bff39217784c758048bc17fda",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/references/execution.md",
+      "export_sha256": "21d8b8ae23b6a9972a2320f67c691a655e6d4f7883ac8bc0019f0eb8d2bfd0c7",
+      "source_git_blob": "bb56b1305d94d3c2585445a9fd5329d57dd36646",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/references/execution.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "21d8b8ae23b6a9972a2320f67c691a655e6d4f7883ac8bc0019f0eb8d2bfd0c7",
+      "source_state": "tracked_modified",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/references/review-packets.md",
+      "export_sha256": "41b137c8020ed1e538416e8b6001fabc36314e7f71698fbeb0bc9f83e131174b",
+      "source_git_blob": "ebe6c3c6e6a1da8e66759e6bbe595c9fd887c73b",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/references/review-packets.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "41b137c8020ed1e538416e8b6001fabc36314e7f71698fbeb0bc9f83e131174b",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/references/run-config.md",
+      "export_sha256": "ecfc704c13ac405b6b1ce5d8e18e90f151990e2ee13482930b8d02189be611ac",
+      "source_git_blob": "915d0d22dfcec63d9b9761814c5df4569e1e097c",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/references/run-config.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "ecfc704c13ac405b6b1ce5d8e18e90f151990e2ee13482930b8d02189be611ac",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/templates/review-packet.md",
+      "export_sha256": "7b39635db70de8dd1090de78cdb7dceb3ad8be1ea7782ed97034630e88e42d0b",
+      "source_git_blob": "1223f45c79ddb6927d0b1d769b93dbed2c9e4b02",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/templates/review-packet.md",
+      "source_repository": "poms-skills",
+      "source_sha256": "7b39635db70de8dd1090de78cdb7dceb3ad8be1ea7782ed97034630e88e42d0b",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/skills/megado/templates/run.yaml",
+      "export_sha256": "2e15418ef2582771850604d1c72937b87e3cdaa2cde7f5e487b5f4ca6f48edbe",
+      "source_git_blob": "c9f235750c537c7891ca4bc32a15b8455178a004",
+      "source_head": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "source_path": "megado/templates/run.yaml",
+      "source_repository": "poms-skills",
+      "source_sha256": "2e15418ef2582771850604d1c72937b87e3cdaa2cde7f5e487b5f4ca6f48edbe",
+      "source_state": "tracked_modified",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/source-docs/Astrid/docs/contracts/managed-generation-result-v1.md",
+      "export_sha256": "a2dc69841f7bc2200ff46115695705422fffd6b15eaffefbc8f5006fb13cf1ee",
+      "pre_scope_amendment_export_sha256": "23a9375dd0c95657a75de602fd62fbdffe54a735338f533f13ab7fba7b86286e",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": "8896a92d77d8c1ede57444b33f3668cc06c23b3c",
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": "docs/contracts/managed-generation-result-v1.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5dc10889beeddd7eadccc1c0891237023eaa409ecb2d4a4f3af3761db4f00fa1",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/source-docs/Astrid/docs/plans/shot-generation-timeline.md",
+      "export_sha256": "2283b4c6c9c99705e1fc824627223b1cc63cca0eacdb5af4d4be8cb979ca41c2",
+      "pre_scope_amendment_export_sha256": "33e558142452b0a9e9dee573233136320669deb8194eab73ed955d1d4c2eb3c1",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": "d9233cf19e7750dace266875ed34c829c2565b84",
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": "docs/plans/shot-generation-timeline.md",
+      "source_repository": "Astrid",
+      "source_sha256": "83bb09e3253a15060ac33f6248cd36a6d52be4c88abc91ead0fb1938dfe131e1",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/source-docs/Astrid/docs/projects/astrid-unified-execution/runpod-practical-path-review-20260921.md",
+      "export_sha256": "f44f6fddfaccf303626129e19d186acdafe9d594867cb5505bd555a9ab6e8da1",
+      "pre_scope_amendment_export_sha256": "f38b4213eee25969f4ca2f3cbc07f99187420ff7c0e3a1e7d29b7d928c6f054c",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": "cef7de0690a808360c82cbd409a771d784f66705",
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": "docs/projects/astrid-unified-execution/runpod-practical-path-review-20260921.md",
+      "source_repository": "Astrid",
+      "source_sha256": "fcba290e7bf24c3e95bbf8aec9502117c1c7b65a76c1b5364303344212c77a9c",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/source-docs/Astrid/docs/projects/astrid-unified-execution/runpod-task-execution-build-brief.md",
+      "export_sha256": "f38592adce3accdd18873d8d47c51e1f17e2cccef67af545c15160b9cd2a62dc",
+      "pre_scope_amendment_export_sha256": "da71502fa683b00fed23245101a781047257a8c0936b8d6e773b4f0086640aa5",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": "9c25e6399e856cd82232561f3e7528e9647dc104",
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": "docs/projects/astrid-unified-execution/runpod-task-execution-build-brief.md",
+      "source_repository": "Astrid",
+      "source_sha256": "30f021ab6ec8c4a1cbc2fa09fd9dbb08ff30be3454a5671a820c5e84f3ece72a",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/source-docs/Astrid/guides/anchor-to-anchor-video-generation.md",
+      "export_sha256": "f0947b30ea4f5e0cedadf85a7e82971c2d30a671c1dfd1b67aaabe8e92f2436b",
+      "pre_scope_amendment_export_sha256": "d0768b26c70ac5100367a50dd2b283f00c2b33dc3bdbc4d153abc1cc0584b907",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": "ab1b6cf5b7fbdded08685c0537d9244947653242",
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": "guides/anchor-to-anchor-video-generation.md",
+      "source_repository": "Astrid",
+      "source_sha256": "dae440b56592fce3ec9b4f6ea3df58d349f67c16e1cf116cd41fd7193ee03de5",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    },
+    {
+      "export": "control/source-docs/Astrid/guides/astrid-intro-anchor-video-generation.md",
+      "export_sha256": "34aa6fe12c426f5846b5e2e3f4d34305e67585a062dfe22bb4c2d38d83d093bd",
+      "pre_scope_amendment_export_sha256": "3af390c59bbd7aa2e994f8d0ec024a97cebcc4931d2a0c6f0445733956d197b9",
+      "scope_amendment": "execution-scope.md; CPU/fake/offline acceptance; live testing deferred to L",
+      "source_git_blob": "cbdb3dea566a91c09da678d7e6da839427365af5",
+      "source_head": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "source_path": "guides/astrid-intro-anchor-video-generation.md",
+      "source_repository": "Astrid",
+      "source_sha256": "5f794ad03c64c7d2fedbb80b0ff4662cd3c9c314f269d2dbf83c5c80404fc58d",
+      "source_state": "tracked_exact",
+      "transforms": [
+        "portable link rewriting",
+        "machine-path/address/query redaction"
+      ]
+    }
+  ],
+  "schema": "control-export.v1"
+}

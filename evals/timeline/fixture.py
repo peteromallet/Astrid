@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from .fixture_contracts import action_target_contract, navigation_fixture_contract
+from .fixture_contracts import (
+    GENERIC_AUTHORING_ROUTE,
+    action_target_contract,
+    navigation_fixture_contract,
+)
 
 
 FIXTURE_BUILDER_VERSION = "astrid-timeline-fixture-v1"
@@ -240,25 +244,37 @@ def public_target_receipt(
     if not all(isinstance(value, str) and value for value in (endpoint_url, project_id, timeline_id, head)):
         raise FixtureError("seed receipt must include endpoint_url, project_id, timeline_id, and new_head")
     locator = seed.get("target_locator")
-    a01_route_available = (
-        not read_only
-        and identities.case_id == "A01"
-        and isinstance(locator, Mapping)
+    contract = action_target_contract({"id": identities.case_id})
+    specialized_locator_ready = (
+        isinstance(locator, Mapping)
         and all(locator.get(key) for key in ("occurrence_id", "selector_clip_id", "replacement_asset_key"))
     )
+    route_available = (
+        not read_only
+        and contract.status == "ready"
+        and (
+            contract.edit_route == GENERIC_AUTHORING_ROUTE
+            or identities.case_id == "A03"
+            or specialized_locator_ready
+        )
+    )
     edit_capability = (
-        {"status": "available", "route": "timelines replace-parent-media"}
-        if a01_route_available
+        {"status": "available", "route": contract.edit_route}
+        if route_available
         else {
             "status": "unavailable" if not read_only else "not_permitted",
             "reason": (
-                f"No case-specific publication route is admitted for {identities.case_id}. "
-                "Only the A01 receipt can currently declare timelines replace-parent-media; "
-                "do not infer an action route from the general authoring-bundle helpers."
+                f"No materialized publication route is admitted for {identities.case_id}; "
+                "do not infer a specialized route from the generic authoring helpers."
                 if not read_only
                 else "This navigation case is read-only."
             ),
         }
+    )
+    readback_projection = (
+        locator.get("readback_projection")
+        if isinstance(locator, Mapping) and isinstance(locator.get("readback_projection"), str)
+        else None
     )
     receipt = {
         "kind": "astrid.timeline-eval.public-target.v1",
@@ -268,6 +284,14 @@ def public_target_receipt(
         "capabilities": {
             "inspect": {"status": "available", "route": "timelines show / timelines visualize"},
             "edit": edit_capability,
+            "readback": (
+                {"status": "available", "projection": readback_projection}
+                if readback_projection
+                else {
+                    "status": "unavailable",
+                    "reason": "independent readback/grade projection is not materialized in this target receipt",
+                }
+            ),
         },
         "connection": {
             "endpoint_env": "ASTRID_TIMELINE_EVAL_ENDPOINT",
@@ -294,11 +318,8 @@ def public_target_receipt(
         receipt["readback_projection"] = "exact_closure_navigation.v1"
     if isinstance(locator, Mapping):
         receipt["target_locator"] = dict(locator)
-    if a01_route_available:
-        # Keep the convenient legacy field only when the exact A01 locator is
-        # present. Other seeded parent compositions must not appear writable
-        # through a route whose target contract they do not satisfy.
-        receipt["edit_route"] = "timelines replace-parent-media"
+    if route_available:
+        receipt["edit_route"] = contract.edit_route
     return receipt
 
 
@@ -425,15 +446,24 @@ def materialize_public_navigation_entrypoint(
             raise FixtureError("L07 legacy clipType=shot sidecar is missing or unsafe")
         legacy_bytes = legacy_path.read_bytes()
         legacy_copy = entry_root / "L07-legacy-compare.json"
-        legacy_copy.write_bytes(legacy_bytes)
         legacy = json.loads(legacy_bytes.decode("utf-8"))
         if not isinstance(legacy, Mapping) or legacy.get("kind") != "astrid.timeline-eval.legacy-canonical-compare.v1":
             raise FixtureError("L07 legacy sidecar has no supported comparison envelope")
         if legacy.get("case_id") != case_id or legacy.get("read_only") is not True:
             raise FixtureError("L07 legacy sidecar is not bound to this read-only case")
+        # The source sidecar points at the full coordinator manifest, which is
+        # intentionally not copied into a worker package. Keep the relationship
+        # usable by pointing at the selected public entrypoint instead.
+        canonical_fixture = legacy.get("canonical_fixture")
+        if not isinstance(canonical_fixture, dict):
+            raise FixtureError("L07 legacy sidecar has no canonical fixture reference")
+        canonical_fixture["fixture_manifest"] = "entrypoint.json"
+        worker_legacy_bytes = (json.dumps(legacy, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        legacy_copy.write_bytes(worker_legacy_bytes)
         related_inputs["legacy_canonical_compare"] = {
             "path": "L07-legacy-compare.json",
-            "sha256": hashlib.sha256(legacy_bytes).hexdigest(),
+            "source_sha256": hashlib.sha256(legacy_bytes).hexdigest(),
+            "sha256": hashlib.sha256(worker_legacy_bytes).hexdigest(),
             "read_only": True,
             "legacy_clip_count": len(legacy.get("legacy_clips", [])),
             "canonical_target_aliases": list(legacy.get("canonical_fixture", {}).get("target_aliases", [])),
@@ -450,6 +480,25 @@ def materialize_public_navigation_entrypoint(
         related_inputs["montage_collection"] = collection
         related_inputs["music_cue_times_seconds"] = list(collection.get("cue_times_seconds", []))
         related_inputs["cue_source"] = "supplied A09 fixture cue list; no beat detection is implied"
+
+    effective_case = dict(row)
+    if case_id in {"L06", "L07", "L10"}:
+        # Readiness in the pinned index predates materialization of selected
+        # sidecars and host adapters. Reconcile only prerequisites now proven
+        # present in this case package; never clear unrelated requirements.
+        requirements = []
+        for requirement in row.get("fixture_requirements", []):
+            if not isinstance(requirement, Mapping):
+                requirements.append(requirement)
+            elif case_id == "L06" and requirement.get("path") == "detached_candidates.stale_invalid" and "invalid_candidate" in related_inputs:
+                continue
+            elif case_id == "L07" and requirement.get("path") == "legacy_clip_type_shot_fixture" and "legacy_canonical_compare" in related_inputs:
+                continue
+            elif case_id == "L10" and requirement.get("path") == "surface_adapters.voice_player" and shutil.which("afplay"):
+                continue
+            else:
+                requirements.append(requirement)
+        effective_case["fixture_requirements"] = requirements
 
     entrypoint = {
         "kind": "astrid.timeline-eval.offline-navigation-entry.v1",
@@ -476,7 +525,7 @@ def materialize_public_navigation_entrypoint(
         "targets": selected,
         "related_inputs": related_inputs,
         "media": copied_media,
-        "fixture_contract": navigation_fixture_contract(row).as_dict(),
+        "fixture_contract": navigation_fixture_contract(effective_case).as_dict(),
     }
     if case_id == "L10":
         # The selected voice bytes are already copied and digest-verified
@@ -491,6 +540,19 @@ def materialize_public_navigation_entrypoint(
                 "input_role": "voice_source",
                 "scope": "local_audio_output",
             }
+        }
+        related_inputs["playback_completion_contract"] = {
+            "kind": "astrid.timeline-eval.l10-playback-evidence.v1",
+            "evidence_path": "evidence/navigation-path.json",
+            "required_fields": [
+                "voice_media_id", "player.resolved_executable", "player.exit_status",
+                "playback.completed", "trace_ordinals.player_started",
+                "trace_ordinals.playback_completed", "trace_ordinals.parent_returned",
+                "parent_return.returned", "parent_return.alias",
+                "parent_return.source_head", "parent_return.closure_digest",
+            ],
+            "completion_rule": "player exit status is zero; playback is explicitly completed; event ordinals are strictly increasing; parent return is bound to the pinned source head and closure digest",
+            "evidence_is_observed_only": True,
         }
     (entry_root / "entrypoint.json").write_text(
         json.dumps(entrypoint, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -688,13 +750,22 @@ def _runtime_data(value: Mapping[str, Any], field: str) -> Mapping[str, Any]:
     return data
 
 
-def _load_attempt_media(baseline: Baseline, media_root: Path) -> dict[str, bytes]:
+def _load_attempt_media(
+    baseline: Baseline, media_root: Path, *, extra_media: Mapping[str, bytes] | None = None,
+) -> dict[str, bytes]:
     """Read and hash-check every required byte before the first Runtime write."""
     root = media_root.expanduser().absolute()
     if not root.is_dir() or root.is_symlink():
         raise FixtureError("explicit attempt media directory is missing or unsafe")
     result: dict[str, bytes] = {}
     for row in baseline.media:
+        if extra_media and row.digest in extra_media:
+            payload = extra_media[row.digest]
+            expected = row.digest.removeprefix("sha256:")
+            if hashlib.sha256(payload).hexdigest() != expected:
+                raise FixtureError(f"extra media bytes do not match declared digest {row.digest}")
+            result[row.digest] = payload
+            continue
         relative = Path(row.source_handle)
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise FixtureError(f"media source_handle must be attempt-relative: {row.source_handle!r}")
@@ -721,12 +792,12 @@ def _load_attempt_media(baseline: Baseline, media_root: Path) -> dict[str, bytes
 
 def seed_case(
     runtime: FixtureRuntime, baseline: Baseline, *, attempt_id: str, case_id: str,
-    media_root: Path,
+    media_root: Path, extra_media: Mapping[str, bytes] | None = None,
 ) -> Mapping[str, Any]:
     endpoint = require_disposable_endpoint(getattr(runtime, "endpoint", None))
     # Preflight all bytes before creating even the disposable project. Missing or
     # corrupt fixture media therefore fails without partial Runtime writes.
-    media_bytes = _load_attempt_media(baseline, media_root)
+    media_bytes = _load_attempt_media(baseline, media_root, extra_media=extra_media)
     project_key = idempotency_key(attempt_id=attempt_id, case_id="A01", operation="create-suite-project", request={"source": baseline.semantic_digest})
     project_record = _runtime_data(runtime.create_suite_project(
         "timeline-eval-" + _stable_id(SUITE_VERSION, attempt_id, "suite", baseline.source_project_id),

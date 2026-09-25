@@ -20,7 +20,7 @@ UI companion, and byte-identical original `source.json`.
 | `vibecomfy.import` | Admitted raw `source` JSON plus a stable `workflow_id`; emits `python`, `companion`, `source`, and an origin `report`. |
 | `vibecomfy.inspect` | One UI `workflow` JSON or the complete `python`/`companion`/`source` trio; emits only a read-only `projection` and `inspection`. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is inspected statically without it. |
 | `vibecomfy.edit` | A canonical parent trio plus required `python_execution_consent="confirmed"`, and `operations` for one atomic typed batch or one separate `capture_python`/`capture_graph` candidate; emits the full successor trio and audited `report`. |
-| `vibecomfy.validate` | A UI `workflow` JSON or the canonical trio; validates without running inference. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is validated statically without it. |
+| `vibecomfy.validate` | A UI `workflow` JSON or the canonical trio; checks structure offline. Canonical Python requires `python_execution_consent="confirmed"`; UI JSON is validated statically without it. Runtime and target-schema validation are deferred to `vibecomfy.run`. |
 | `vibecomfy.run` | A UI `workflow` JSON or the canonical trio; executes the workflow and settles its result artifacts. |
 
 Canonical bundle members are immutable Astrid artifacts. Each edit or capture
@@ -46,6 +46,13 @@ admission and `authority_context` do not stand in for this input. Inspect,
 edit, and validation artifacts include the consent value and gate audit. UI
 JSON inspection and validation stay on the static ingestion path and need no
 consent. `vibecomfy.run` is a separate generation capability.
+
+Canonical validation uses `--no-schema` and reports
+`validation_mode="canonical_bundle_structural"`, with `runtime_validation.status`
+set to `deferred` and its executor set to `vibecomfy.run`. It preserves canonical
+bundle and structural graph checks without contacting or managing Comfy. Passing
+this step does not establish runtime readiness: the run adapter must attest its
+session and compile against fresh target schemas before queueing generation.
 
 ## Typed edit document
 

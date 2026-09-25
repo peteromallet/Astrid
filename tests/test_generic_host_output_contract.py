@@ -218,8 +218,12 @@ def test_runtime_upload_binding_uses_leaf_and_stable_replay_key(tmp_path: Path) 
 
     client = object.__new__(RuntimeProtocolClient)
     client.executor_id = "executor-1"
+    client._attempt_runtime_epochs = {"attempt-1": 1}
     client.INLINE_SETTLEMENT_OUTPUTS = False
-    client.generated = SimpleNamespace(ingest_object=ingest_object)
+    client.generated = SimpleNamespace(
+        health=lambda: {"runtime_epoch": 1},
+        ingest_object=ingest_object,
+    )
     host = object.__new__(GenericPackHost)
     host.client = client
     descriptor = {

@@ -1,5 +1,10 @@
 # Unified timeline inspector review
 
+Status: historical review record. Current behavior and scope are documented in
+`astrid/packs/rendering/skill/SKILL.md` and
+`docs/reference/timeline-offline-inspection.md`; this review does not define a
+second implementation authority.
+
 This review is intentionally bounded to the interface between the frozen
 render snapshot, navigation, and the offline filmstrip viewer. It does not
 approve changes to the runtime timeline authority or introduce a second

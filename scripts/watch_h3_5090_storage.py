@@ -16,9 +16,10 @@ import shutil
 import signal
 import subprocess
 import time
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import paramiko
 
@@ -56,6 +57,10 @@ WATCH = 24 * 60 * 60
 pod_id: str | None = None
 terminated = False
 tunnel_process: subprocess.Popen[str] | None = None
+tunnel_handle: dict[str, Any] | None = None
+tunnel_stop = threading.Event()
+tunnel_lock = threading.RLock()
+tunnel_supervisor_thread: threading.Thread | None = None
 remote_host_started = False
 
 
@@ -74,6 +79,40 @@ def write_json(path: Path, value: Any) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def _json_candidates(text: str) -> list[Any]:
+    """Decode JSON objects embedded in lifecycle CLI progress output."""
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        values.append(value)
+    return values
+
+
+def _provider_contains_identity(text: str, identity: str) -> bool | None:
+    """Return provider presence, or ``None`` when the observation is unusable."""
+    candidates = _json_candidates(text)
+    if not candidates:
+        return None
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            for key in ("id", "pod_id", "podId", "volume_id", "volumeId", "name"):
+                if str(value.get(key) or "") == identity:
+                    return True
+            return any(walk(item) for item in value.values())
+        if isinstance(value, list):
+            return any(walk(item) for item in value)
+        return False
+
+    return any(walk(value) for value in candidates)
 
 
 def cli(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -97,22 +136,62 @@ def parse_handle(stdout: str) -> dict[str, Any] | None:
 
 def terminate() -> None:
     global terminated
-    if not pod_id or terminated:
+    global tunnel_process, tunnel_supervisor_thread
+    if terminated and tunnel_process is None:
         return
-    global tunnel_process
-    if tunnel_process is not None:
-        try:
-            tunnel_process.terminate()
-            tunnel_process.wait(timeout=10)
-        except Exception:
-            try:
-                tunnel_process.kill()
-            except Exception:
-                pass
+    tunnel_stop.set()
+    with tunnel_lock:
+        process = tunnel_process
         tunnel_process = None
-    result = cli(["runpod-lifecycle", "terminate", pod_id, "--yes"], 120)
-    terminated = result.returncode == 0
-    log(f"terminated pod={pod_id} rc={result.returncode} stderr={result.stderr[-500:]!r}")
+    _stop_tunnel_process(process)
+    supervisor = tunnel_supervisor_thread
+    if supervisor is not None and supervisor is not threading.current_thread():
+        supervisor.join(timeout=5)
+    tunnel_supervisor_thread = None
+    if pod_id and not terminated:
+        result = cli(["runpod-lifecycle", "terminate", pod_id, "--yes"], 120)
+        pod_inventory = cli(["runpod-lifecycle", "list", "--json"], 120)
+        volume_inventory = cli(["runpod-lifecycle", "volumes", "ls", "--json"], 120)
+        pod_present = _provider_contains_identity(
+            pod_inventory.stdout, pod_id
+        ) if pod_inventory.returncode == 0 else None
+        volume_present = _provider_contains_identity(
+            volume_inventory.stdout, VOLUME
+        ) if volume_inventory.returncode == 0 else None
+        pod_verified = result.returncode == 0 and pod_present is False
+        volume_verified = volume_present is True
+        cleanup_status = "passed" if pod_verified and volume_verified else "failed"
+        write_json(RECEIPTS / "cleanup-receipt.json", {
+            "schema_version": 1,
+            "kind": "astrid.cleanup.v1",
+            "status": cleanup_status,
+            "resources": [
+                {
+                    "kind": "runpod_pod",
+                    "id": pod_id,
+                    "owned": True,
+                    "expected_postcondition": "terminated and absent from provider list",
+                    "observed_postcondition": (
+                        "absent from provider list" if pod_present is False
+                        else "provider absence not verified"
+                    ),
+                    "verified": pod_verified,
+                },
+                {
+                    "kind": "runpod_network_volume",
+                    "id": VOLUME,
+                    "owned": False,
+                    "expected_postcondition": "preserved and not deleted by this run",
+                    "observed_postcondition": (
+                        "present in provider volume inventory" if volume_present is True
+                        else "provider preservation not verified"
+                    ),
+                    "verified": volume_verified,
+                },
+            ],
+        })
+        terminated = pod_verified
+        log(f"terminated pod={pod_id} rc={result.returncode} stderr={result.stderr[-500:]!r}")
 
 
 def exit_handler(*_args: Any) -> None:
@@ -444,9 +523,36 @@ def import_managed_object(path: Path) -> str:
     return str(data["object_id"])
 
 
-def start_reverse_runtime_tunnel(handle: dict[str, Any]) -> subprocess.Popen[str]:
-    """Expose the local loopback runtime to the remote host over SSH only."""
-    global tunnel_process
+def _stop_tunnel_process(process: subprocess.Popen[str] | None) -> None:
+    """Stop the complete SSH process group and reap its leader."""
+    if process is None:
+        return
+    try:
+        if process.poll() is None:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        try:
+            process.terminate()
+        except (OSError, ProcessLookupError):
+            pass
+    try:
+        process.wait(timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            try:
+                process.kill()
+            except (OSError, ProcessLookupError):
+                pass
+        try:
+            process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def _spawn_reverse_runtime_tunnel(handle: dict[str, Any]) -> subprocess.Popen[str]:
+    """Start one SSH tunnel process for the supervisor."""
     match = re.search(r"root@([^ ]+)\s+-p\s+(\d+)", str(handle["ssh"]))
     if not match:
         raise RuntimeError(f"unparseable SSH details: {handle['ssh']!r}")
@@ -456,7 +562,7 @@ def start_reverse_runtime_tunnel(handle: dict[str, Any]) -> subprocess.Popen[str
     runtime_port = int(urlsplit(str(discovery.get("endpoint") or "http://127.0.0.1:50603")).port or 50603)
     log_path = RECEIPTS / "e2e-ssh-tunnel.log"
     stream = log_path.open("a", encoding="utf-8")
-    tunnel_process = subprocess.Popen([
+    process = subprocess.Popen([
         "ssh", "-N", "-T", "-o", "ExitOnForwardFailure=yes",
         "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30",
         "-i", str(SSH_KEY), "-p", match.group(2),
@@ -465,9 +571,50 @@ def start_reverse_runtime_tunnel(handle: dict[str, Any]) -> subprocess.Popen[str
     ], stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
        start_new_session=True, text=True)
     time.sleep(2)
-    if tunnel_process.poll() is not None:
+    if process.poll() is not None:
         raise RuntimeError(f"runtime SSH reverse tunnel exited: {log_path.read_text()[-1000:]}")
-    return tunnel_process
+    return process
+
+
+def _supervise_reverse_runtime_tunnel() -> None:
+    """Restart a dead reverse tunnel until teardown is requested."""
+    global tunnel_process
+    while not tunnel_stop.wait(1.0):
+        with tunnel_lock:
+            process = tunnel_process
+            handle = tunnel_handle
+        if process is None or process.poll() is None or handle is None:
+            continue
+        log(f"reverse runtime tunnel exited rc={process.returncode}; restarting")
+        try:
+            replacement = _spawn_reverse_runtime_tunnel(handle)
+        except Exception as exc:  # noqa: BLE001 - retry until explicit teardown
+            log(f"reverse runtime tunnel restart failed: {type(exc).__name__}: {exc}")
+            continue
+        with tunnel_lock:
+            if tunnel_stop.is_set():
+                _stop_tunnel_process(replacement)
+                return
+            tunnel_process = replacement
+        log("reverse runtime tunnel restarted")
+
+
+def start_reverse_runtime_tunnel(handle: dict[str, Any]) -> subprocess.Popen[str]:
+    """Expose the local loopback runtime through one supervised SSH tunnel."""
+    global tunnel_process, tunnel_handle, tunnel_supervisor_thread
+    tunnel_stop.clear()
+    tunnel_handle = dict(handle)
+    process = _spawn_reverse_runtime_tunnel(handle)
+    with tunnel_lock:
+        tunnel_process = process
+    if tunnel_supervisor_thread is None or not tunnel_supervisor_thread.is_alive():
+        tunnel_supervisor_thread = threading.Thread(
+            target=_supervise_reverse_runtime_tunnel,
+            name="astrid-runpod-reverse-tunnel",
+            daemon=True,
+        )
+        tunnel_supervisor_thread.start()
+    return process
 
 
 def _task_state(value: Any) -> str | None:
@@ -588,13 +735,38 @@ BASE=__BASE__
 TEST=__TEST__
 SRC=__SRC__
 PY=\"$BASE/runtime/venv/bin/python\"
-mkdir -p \"$TEST/support/astrid-host\" \"$TEST/attempts\" \"$TEST/astrid-output\" __SUPPORT_ROOT__
-# The release venv is immutable here.  The source checkout is bound through
-# PYTHONPATH and its digest is attested below; silently ignoring a failed pip
-# install would create a different, unverifiable runtime.
+SUPPORT_ROOT=__SUPPORT_ROOT__
+BOOT_MANIFEST=__BOOT_MANIFEST__
+EXPECTED_BOOT_HASH=__BOOT_HASH__
+mkdir -p \"$TEST/support/astrid-host\" \"$TEST/attempts\" \"$TEST/astrid-output\" \"$SUPPORT_ROOT\"
+# Bind the uploaded source before any Astrid/VibeComfy probe.  The release
+# venv does not install the sibling source checkout as a package, and probing
+# first would turn an environment mistake into a misleading host failure.
 export BASE TEST
 export PYTHONPATH=\"$SRC:$BASE/runtime/vibecomfy:$BASE/runtime/ComfyUI\"
 export VIBECOMFY_HEADLESS=1
+# The launcher owns provisioning; GenericPackHost remains fail-closed and only
+# consumes an existing manifest. Perform the same lexical/symlink/hash checks
+# synchronously before backgrounding the worker, so bootstrap failures cannot
+# degrade into a readiness timeout.
+\"$PY\" - \"$BOOT_MANIFEST\" \"$SUPPORT_ROOT\" \"$EXPECTED_BOOT_HASH\" <<'PY'
+import sys
+from pathlib import Path
+
+from astrid.core._shared.boot_manifest import load_boot_manifest_hash, validate_manifest_path
+
+manifest = validate_manifest_path(Path(sys.argv[1]), Path(sys.argv[2]))
+actual = load_boot_manifest_hash(manifest, support_root=Path(sys.argv[2]))
+expected = sys.argv[3]
+actual = actual.removeprefix("sha256:").lower()
+expected = expected.removeprefix("sha256:").lower()
+if len(actual) != 64 or len(expected) != 64 or actual != expected:
+    raise SystemExit(f\"boot manifest hash mismatch: expected {expected}, got {actual}\")
+print(f\"boot-manifest-ready {manifest} {actual}\")
+PY
+# The release venv is immutable here.  The source checkout is bound through
+# PYTHONPATH and its digest is attested below; silently ignoring a failed pip
+# install would create a different, unverifiable runtime.
 # The release image can omit Astrid's small schema-validator closure.  Install
 # only these packages with --no-deps, so Torch/CUDA cannot be changed.
 /usr/bin/uv pip install -q --python \"$PY\" --no-deps \\
@@ -683,10 +855,10 @@ PROFILE_HASH=$(sha256sum \"$TEST/hc03-readiness.json\" | cut -d' ' -f1)
 nohup env PYTHONPATH=\"$PYTHONPATH\" \"$PY\" -m astrid.core.execution.generic_host run \\
   --pack-root \"$SRC/astrid/packs/vibecomfy\" --runtime-endpoint http://127.0.0.1:__REMOTE_PORT__ \\
   --credential-file __CREDENTIAL__ --executor-id astrid-pack-host \\
-  --max-concurrency 1 --register --poll-seconds 1 --attempt-root \"$TEST/attempts\" \\
+  --max-concurrency 1 --register --poll-seconds 1 --attempt-base \"$TEST/attempts\" \\
   --ready-file \"$TEST/generic-host.ready.json\" --source-checkout \"$SRC\" \\
-  --support-root __SUPPORT_ROOT__ --boot-manifest-path __BOOT_MANIFEST__ \\
-  --boot-manifest-hash __BOOT_HASH__ --readiness-profile-path \"$TEST/hc03-readiness.json\" \\
+  --support-root \"$SUPPORT_ROOT\" --boot-manifest-path \"$BOOT_MANIFEST\" \\
+  --boot-manifest-hash \"$EXPECTED_BOOT_HASH\" --readiness-profile-path \"$TEST/hc03-readiness.json\" \\
   --readiness-profile-hash \"sha256:$PROFILE_HASH\" > \"$TEST/generic-host.log\" 2>&1 < /dev/null &
 echo $! > \"$TEST/generic-host.pid\"
 """
@@ -739,6 +911,28 @@ echo $! > \"$TEST/generic-host.pid\"
                     )
                     if live_rc == 0:
                         return {**receipt, "status": "host_ready", "ready_marker": marker}
+            # A bootstrap failure happens before the ready marker is written.
+            # Observe the child PID while waiting so the caller gets the real
+            # startup error immediately instead of a 300-second timeout.
+            try:
+                pid_attrs = sftp.stat(TEST + "/generic-host.pid")
+                if pid_attrs.st_mtime >= setup_started - 2:
+                    with sftp.open(TEST + "/generic-host.pid", "r") as stream:
+                        child_pid = int(stream.read().decode("utf-8").strip())
+                    live_rc, _live_out, _live_err = remote_exec(
+                        client, f"kill -0 {child_pid}", 10
+                    )
+                    if live_rc != 0:
+                        for name in ("generic-host.log", "generic-host-failure-tail.txt"):
+                            try:
+                                with sftp.open(TEST + "/" + name, "r") as stream:
+                                    receipt["remote_" + name.replace(".", "_")] = stream.read().decode("utf-8", errors="replace")[-12000:]
+                            except OSError:
+                                pass
+                        receipt["status"] = "host_bootstrap_failed"
+                        return receipt
+            except (OSError, TypeError, ValueError):
+                pass
         time.sleep(1)
     with client.open_sftp() as sftp:
         for name in ("generic-host.log", "generic-host-failure-tail.txt"):

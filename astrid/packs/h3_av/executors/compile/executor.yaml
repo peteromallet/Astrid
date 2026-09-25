@@ -1,0 +1,60 @@
+schema_version: 1
+id: h3_av.compile
+name: Compile H3 audiovisual continuation
+kind: built_in
+version: 0.1.0
+short_description: Compile a prepared request into the repaired H3 workflow bindings and managed assets.
+description: Fail closed unless the selected repaired Seitanism graph can represent the normalized request exactly.
+keywords: [h3, minimax, compile, vibecomfy]
+inputs:
+  - name: preparation
+    type: file
+    required: true
+    description: preparation.json emitted by h3_av.prepare.
+  - name: input_bundle
+    type: file
+    required: true
+    description: The same immutable dependency bundle used by prepare.
+outputs:
+  - name: compilation
+    type: file
+    path_template: "{out}/compilation.json"
+    artifact_type: h3_av/compilation
+  - name: managed_assets
+    type: file
+    path_template: "{out}/managed-assets.zip"
+    artifact_type: h3_av/managed-assets
+  - name: python
+    type: file
+    path_template: "{out}/workflow.py"
+    artifact_type: text/x-python
+    description: Selected packaged canonical workflow.py member.
+  - name: companion
+    type: file
+    path_template: "{out}/workflow.vibe.json"
+    artifact_type: application/json
+    description: Selected packaged canonical workflow.vibe.json member.
+  - name: source
+    type: file
+    path_template: "{out}/source.json"
+    artifact_type: application/json
+    description: Selected packaged canonical source.json member.
+command:
+  argv:
+    - "{python_exec}"
+    - -m
+    - astrid.packs.h3_av.executors.compile.run
+    - --preparation
+    - "{preparation}"
+    - --input-bundle
+    - "{input_bundle}"
+    - --out
+    - "{out}"
+cache:
+  mode: none
+isolation:
+  mode: subprocess
+  network: false
+metadata:
+  runtime_module: astrid.packs.h3_av.executors.compile.run
+  runtime_file: run.py

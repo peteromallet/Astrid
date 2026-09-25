@@ -9,6 +9,7 @@ import pytest
 
 from astrid.core.execution.generic_host import (
     GenericPackHost,
+    HostError,
     _prepare_vibecomfy_execution_identity,
 )
 from astrid.packs.vibecomfy import production_engine
@@ -53,6 +54,31 @@ class RecordingFakeRuntime(FakeRuntime):
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+@pytest.mark.parametrize("value", ["/Users/caller/request.json", "relative.json", {"path": "/tmp/request.json"}])
+def test_host_rejects_unmanaged_declared_file_before_fetch(tmp_path: Path, value):
+    runtime = RecordingFakeRuntime({})
+    host = GenericPackHost(pack_roots=[], client=runtime)
+    with pytest.raises(HostError, match="client.media.import_file"):
+        host._materialize_inputs({"inputs": {"request": value}}, tmp_path / "attempt",
+                                 file_input_names=frozenset({"request"}))
+    assert runtime.fetched_inputs == []
+    assert not (tmp_path / "attempt").exists()
+
+
+def test_host_materializes_prefixed_digest_and_preserves_literal_json(tmp_path: Path):
+    payload = b'{}'
+    digest = "sha256:" + _sha256(payload)
+    runtime = RecordingFakeRuntime({_sha256(payload): payload})
+    host = GenericPackHost(pack_roots=[], client=runtime)
+    settings = {"literal": "/Users/caller/example"}
+    values = host._materialize_inputs(
+        {"inputs": {"request": digest, "settings": settings}, "input_object_ids": [digest]},
+        tmp_path / "attempt", file_input_names=frozenset({"request"}),
+    )
+    assert Path(values["request"]).read_bytes() == payload
+    assert values["settings"] == settings
 
 
 def test_materialization_does_not_treat_revision_hash_as_file_digest(

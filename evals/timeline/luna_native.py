@@ -30,30 +30,43 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Mapping
 
-from .fixture import (
-    FixtureError,
-    SOURCE_PROJECT_ID,
-    SOURCE_TIMELINE_ID,
-    materialize_public_navigation_entrypoint,
-)
-from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
 from .evidence_collector import (
     EvidenceCollectionError,
     collect_case_evidence,
     teardown_receipt_from_host_capture,
 )
+from .fixture import (
+    SOURCE_PROJECT_ID,
+    SOURCE_TIMELINE_ID,
+    FixtureError,
+    materialize_public_navigation_entrypoint,
+)
+from .fixture_contracts import case_launch_prerequisites
+from .fixture_manifest import DEFAULT_FIXTURE_ROOT, build_readiness
 from .independent_readback import (
     EXACT_CLOSURE_NAVIGATION,
+    MOVE_OCCURRENCE_GROUP,
     IndependentReadbackError,
     ProjectionUnavailable,
     ReadbackContract,
     ReadbackObservation,
     observe_case_before,
     verify_case_after,
+    verify_case_safety_after,
     verify_navigation_after,
+    verify_occurrence_group_move,
 )
-from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
+from .local_coordinator import (
+    LocalBefore,
+    LocalCoordinatorError,
+    capture_local_after,
+    capture_local_entrypoint_before,
+    local_evidence_unavailable,
+    runtime_action_evidence_ready,
+    write_local_evidence,
+)
 from .result_adapter import public_result_contract
+from .run import HIDDEN_KEYS, SetupError, aggregate_attempt, load_json, visible_brief
 from .worker_boundary import (
     BoundaryReceipt,
     BoundaryRequirements,
@@ -65,7 +78,6 @@ from .worker_boundary import (
     prove_worker_boundary,
 )
 
-
 DEFAULT_SUITE = Path(__file__).with_name("suite.json")
 DEFAULT_BRIEFS = Path(__file__).with_name("cases") / "agent_briefs.json"
 DEFAULT_MODEL = "openai-codex/gpt-5.6-luna"
@@ -73,7 +85,7 @@ DEFAULT_THINKING = "high"
 ATTEMPT_KIND = "astrid.timeline-eval.case-attempt.v1"
 ATTEMPT_RESULT_KIND = "astrid.timeline-eval.native-attempt.v1"
 CASE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-SKILL_RELATIVE_PATH = "astrid/packs/rendering/skill/SKILL.md"
+SKILL_RELATIVE_PATH = "astrid/packs/video_editing/skill/SKILL.md"
 LOCAL_RUNTIME_PROJECT_PREFIX = "local-disposable"
 
 
@@ -129,6 +141,7 @@ def _verify_projected_readback(
     target: Mapping[str, Any],
     contract: ReadbackContract,
     before: ReadbackObservation,
+    before_closure: Mapping[str, Any] | None,
     publication: Mapping[str, Any] | None,
     source_reader: Any | None,
 ) -> Any:
@@ -145,6 +158,72 @@ def _verify_projected_readback(
         return verify_case_after(
             reader, target, contract, before, publication, source_reader=source_reader,
         )
+    if contract.projection == MOVE_OCCURRENCE_GROUP:
+        if not isinstance(before_closure, Mapping):
+            raise ProjectionUnavailable(
+                "move_occurrence_group.v1 requires the exact coordinator before closure"
+            )
+        if not isinstance(publication, Mapping):
+            raise ProjectionUnavailable(
+                "move_occurrence_group.v1 requires the exact publication receipt"
+            )
+        project_id = str(target.get("project_id", ""))
+        timeline_id = str(target.get("timeline_id", ""))
+        case_id = str(target.get("case_id", ""))
+        if not project_id or not timeline_id:
+            raise IndependentReadbackError("move target project/timeline identity is missing")
+        after_head = reader.current_head(project_id, timeline_id)
+        publication_record = _mapping(publication.get("publication")) or publication
+        receipt_identity = {
+            "project_id": project_id,
+            "timeline_id": timeline_id,
+            "case_id": case_id,
+        }
+        for key, expected in receipt_identity.items():
+            observed = publication.get(key, publication_record.get(key))
+            if not expected or observed != expected:
+                raise IndependentReadbackError(
+                    f"move publication receipt {key} does not match the exact public target"
+                )
+        returned_old = publication.get("expected_head", publication.get("old_head"))
+        returned_new = next((publication_record.get(key) for key in (
+            "new_head", "parent_revision_id", "revision_id",
+        ) if isinstance(publication_record.get(key), str) and publication_record.get(key)), None)
+        if returned_old != before.head_revision_id:
+            raise IndependentReadbackError(
+                "move publication receipt does not name the exact pinned old parent head"
+            )
+        if returned_new != after_head:
+            raise IndependentReadbackError(
+                "move publication receipt does not match the observed committed parent head"
+            )
+        after_closure = reader.read_current_closure(project_id, timeline_id, head=after_head)
+        locator = _mapping(target.get("target_locator"))
+        semantic = verify_occurrence_group_move(before_closure, after_closure, locator)
+        safety = verify_case_safety_after(
+            reader, target, contract, before, source_reader=source_reader,
+        )
+        # Retain the stable coordinator shape consumed by the native result
+        # adapter while preserving all details from the independent verifier.
+        return {
+            **semantic,
+            "before_observed": True,
+            "after_observed": True,
+            "safety": safety,
+            "committed_revisions": {
+                "returned_parent": returned_new,
+                "observed_parent": after_head,
+                "before_parent": before.head_revision_id,
+            },
+            "before": {"head_revision_id": before.head_revision_id},
+            "after": {
+                "head_revision_id": after_head,
+                "occurrences": [
+                    {"occurrence_id": occurrence_id}
+                    for occurrence_id in semantic["after_order"]
+                ],
+            },
+        }
     raise ProjectionUnavailable(f"case projection unavailable: {contract.projection}")
 
 
@@ -188,16 +267,11 @@ def _skill_reference() -> dict[str, str]:
     """Resolve the checked-in workflow skill and pin its exact bytes."""
     path = Path(__file__).resolve().parents[2] / SKILL_RELATIVE_PATH
     if path.is_symlink() or not path.is_file():
-        raise NativeLauncherError(f"required rendering skill is missing or unsafe: {path}")
+        raise NativeLauncherError(f"required video-editing skill is missing or unsafe: {path}")
     content = path.read_bytes()
-    text = content.decode("utf-8")
-    version_match = re.search(r"(?m)^version:\s*([A-Za-z0-9._-]+)\s*$", text[:1024])
-    if not version_match:
-        raise NativeLauncherError(f"rendering skill has no readable version field: {path}")
     return {
         "path": str(path),
         "repository_path": SKILL_RELATIVE_PATH,
-        "version": version_match.group(1),
         "sha256": hashlib.sha256(content).hexdigest(),
     }
 
@@ -278,7 +352,9 @@ def _readback_contract(
             raise IndependentReadbackError("navigation target requires exact_closure_navigation.v1")
     elif not isinstance(projection, str) or not projection:
         raise IndependentReadbackError("public target has no declared semantic readback projection")
-    if case.get("kind") == "action" and projection != "active_media_replacement.v1":
+    if case.get("kind") == "action" and projection not in {
+        "active_media_replacement.v1", MOVE_OCCURRENCE_GROUP,
+    }:
         raise IndependentReadbackError(f"unsupported action readback projection: {projection}")
     expected_digest: str | None = None
     if case_id == "A01":
@@ -548,7 +624,7 @@ def _prompt(
     )
     return (
         "You are the evaluated Luna agent in one fresh, bounded context.\n"
-        f"Read the canonical timeline skill at {skill_reference['path']} (version {skill_reference['version']}, sha256 {skill_reference['sha256']}) and verify the bytes before acting.\n"
+        f"Read the canonical timeline skill at {skill_reference['path']} (sha256 {skill_reference['sha256']}) and verify the bytes before acting.\n"
         "Read only the selected public brief at brief.json and its supplied fixture entry point.\n"
         "Use normal public tools and documentation, and work only inside this disposable case directory.\n"
         "Do not inspect the versioned suite, grader files, prior attempts, or canonical Runtime.\n"
@@ -1260,6 +1336,115 @@ def run_attempt(
         _write_json(attempt_root / "attempt.json", top_level)
         return top_level
 
+    # Prepare and validate the complete selected batch before the first worker
+    # can start. The per-case path below repeats these checks immediately before
+    # launch so credentials, receipts, and Runtime heads are revalidated at use.
+    preflight_failures: dict[str, str] = {}
+    preflight_coordinator_proofs: dict[str, dict[str, Any]] = {}
+    seen_case_ids: set[str] = set()
+    for raw_case in suite["cases"]:
+        if not isinstance(raw_case, Mapping) or not raw_case.get("id"):
+            raise NativeLauncherError("every suite case must be an object with an id")
+        case = dict(raw_case)
+        case_id = _safe_case_id(case["id"])
+        if case_id in seen_case_ids:
+            raise NativeLauncherError(f"selected suite contains duplicate case id: {case_id}")
+        seen_case_ids.add(case_id)
+        row = readiness.get(case_id)
+        is_ready = bool(row and row.readiness == "fixture_ready")
+        if forced is not None:
+            is_ready = case_id in forced
+        if not is_ready:
+            continue
+        case_dir = cases_root / case_id
+        case_dir.mkdir()
+        errors: list[str] = []
+        hidden_checks: list[dict[str, Any]] = []
+        if skill_setup_error is not None:
+            errors.append(skill_setup_error)
+        try:
+            hidden_checks = _hidden_checks(case, fixture_root=fixture_root)
+        except SetupError as exc:
+            errors.append(f"hidden-check preparation failed: {exc}")
+        target: Mapping[str, Any] | None = None
+        if case.get("kind") == "action" and prepared_targets_root is not None:
+            try:
+                target = _prepare_public_target(
+                    prepared_targets_root, case_id=case_id, case_dir=case_dir,
+                )
+            except (NativeLauncherError, SetupError) as exc:
+                errors.append(str(exc))
+        if case.get("kind") == "navigation":
+            try:
+                materialize_public_navigation_entrypoint(
+                    case_id, fixture_root=fixture_root, destination=case_dir,
+                )
+            except (FixtureError, OSError, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"navigation entry point could not be prepared: {type(exc).__name__}: {exc}")
+        if host_boundary_mode and case.get("kind") == "action":
+            try:
+                if prepared_targets_root is None:
+                    target = _load_public_target(case_dir)
+            except (NativeLauncherError, SetupError) as exc:
+                errors.append(str(exc))
+            edit = _mapping(_mapping(target).get("capabilities")).get("edit")
+            if not isinstance(edit, Mapping) or edit.get("status") != "available":
+                errors.append(_action_target_block_reason(case_id, target))
+        if not fixture_only and not host_boundary_mode:
+            proof: dict[str, Any] = {
+                "kind": "astrid.timeline-eval.coordinator-preflight-proof.v1",
+                "case_id": case_id,
+                "coordinator_readback_ready": False,
+                "coordinator_safety_ready": False,
+                "readback_evidence": None,
+                "safety_evidence": {
+                    "status": "unavailable",
+                    "reason": "local-disposable execution has no enforced worker write boundary",
+                },
+            }
+            if case.get("kind") == "navigation" and local_disposable is not False:
+                try:
+                    local_before = capture_local_entrypoint_before(
+                        case_id=case_id,
+                        pinned_fixture_root=fixture_root,
+                        entrypoint_root=case_dir / "entrypoint",
+                    )
+                    proof["coordinator_readback_ready"] = True
+                    proof["readback_evidence"] = {
+                        "status": "captured",
+                        "scope": "local-filesystem-observation-only",
+                    }
+                except (LocalCoordinatorError, OSError, ValueError) as exc:
+                    proof["readback_evidence"] = {
+                        "status": "unavailable",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+                    errors.append(f"local coordinator before-capture failed: {type(exc).__name__}: {exc}")
+            preflight_coordinator_proofs[case_id] = proof
+            admission_reasons = case_launch_prerequisites(
+                case,
+                fixture_ready=True,
+                hidden_checks=hidden_checks,
+                target_receipt=target if isinstance(target, Mapping) else None,
+                coordinator_readback_ready=proof["coordinator_readback_ready"],
+                coordinator_safety_ready=proof["coordinator_safety_ready"],
+            )
+            if admission_reasons:
+                proof["admission"] = "blocked"
+                proof["admission_reasons"] = admission_reasons
+                errors.extend(f"shared admission predicate: {reason}" for reason in admission_reasons)
+            else:
+                proof["admission"] = "ready"
+        if errors:
+            preflight_failures[case_id] = "; ".join(errors)
+    global_preflight_reason = None
+    if preflight_failures:
+        failed_case = next(iter(preflight_failures))
+        global_preflight_reason = (
+            f"global selected-row preflight failed for {failed_case}: "
+            f"{preflight_failures[failed_case]}; no worker was invoked"
+        )
+
     for raw_case in suite["cases"]:
         if not isinstance(raw_case, Mapping) or not raw_case.get("id"):
             raise NativeLauncherError("every suite case must be an object with an id")
@@ -1273,7 +1458,7 @@ def run_attempt(
         )
         case_source_reader = selected_runtime.source_reader if selected_runtime else source_reader
         case_dir = cases_root / case_id
-        case_dir.mkdir()
+        case_dir.mkdir(exist_ok=True)
         case_boundary_requirements = (boundary_requirements or {}).get(case_id)
         case_skill_reference = dict(skill_reference)
         if not fixture_only and isinstance(case_boundary_requirements, BoundaryRequirements):
@@ -1305,16 +1490,6 @@ def run_attempt(
             else _mapping(public_briefs.get(case_id)).get("runtime_project_id")
             or _local_runtime_project_id(attempt_id, case_id)
         )
-        entrypoint_error: str | None = None
-        if case.get("kind") == "navigation":
-            try:
-                materialize_public_navigation_entrypoint(
-                    case_id, fixture_root=fixture_root, destination=case_dir,
-                )
-            except (FixtureError, OSError, ValueError, json.JSONDecodeError) as exc:
-                entrypoint_error = f"{type(exc).__name__}: {exc}"
-        if target_setup_error is None and entrypoint_error is not None:
-            target_setup_error = f"selected navigation entry point could not be prepared: {entrypoint_error}"
         _write_json(case_dir / "brief.json", _public_brief(
             case, public_briefs.get(case_id), fixture_root=fixture_root, case_dir=case_dir,
             skill_reference=case_skill_reference,
@@ -1337,6 +1512,38 @@ def run_attempt(
         is_ready = bool(row and row.readiness == "fixture_ready")
         if forced is not None:
             is_ready = case_id in forced
+        if global_preflight_reason is not None and is_ready:
+            reason = preflight_failures.get(case_id, global_preflight_reason)
+            preflight_proof = preflight_coordinator_proofs.get(case_id)
+            # Keep the legacy per-case diagnostic field for consumers that
+            # inspect setup-blocked attempts.  This is reporting only: the
+            # shared preflight decision above remains the sole launch gate.
+            launch_prerequisites = (
+                list(preflight_proof.get("admission_reasons", ()))
+                if isinstance(preflight_proof, Mapping)
+                else []
+            )
+            if not launch_prerequisites:
+                launch_prerequisites = [reason]
+            _write_json(case_dir / "attempt.json", {
+                "kind": ATTEMPT_KIND,
+                "attempt_id": attempt_id,
+                "case_id": case_id,
+                "fresh_context": False,
+                "session_id": f"{attempt_id}-{case_id}-not-launched",
+                "started_at": _now(),
+                "model": model,
+                "thinking": thinking,
+                "fingerprint_sha256": fingerprint_sha256,
+                "case_fingerprint_sha256": selected_fingerprints.get(case_id),
+                "execution": "setup_blocked",
+                "global_preflight_error": global_preflight_reason,
+                "coordinator_preflight_proof": preflight_proof,
+                "launch_prerequisites": launch_prerequisites,
+            })
+            _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
+            _write_json(case_dir / "checks.json", hidden_checks)
+            continue
         if not is_ready:
             reason = "; ".join(row.reasons) if row and row.reasons else "fixture readiness was not established"
             session_id = f"{attempt_id}-{case_id}-not-launched"
@@ -1522,7 +1729,23 @@ def run_attempt(
         readback_adapter: Any | None = None
         readback_contract: ReadbackContract | None = None
         before_observation: ReadbackObservation | None = None
+        before_closure: Mapping[str, Any] | None = None
         readback_error: str | None = None
+        local_before: LocalBefore | None = None
+        if (
+            case.get("kind") == "navigation"
+            and not host_boundary_mode
+            and not fixture_only
+            and local_disposable is not False
+        ):
+            try:
+                local_before = capture_local_entrypoint_before(
+                    case_id=case_id,
+                    pinned_fixture_root=fixture_root,
+                    entrypoint_root=case_dir / "entrypoint",
+                )
+            except (LocalCoordinatorError, OSError, ValueError) as exc:
+                readback_error = f"local filesystem coordinator before-capture failed: {exc}"
         if public_target is not None and host_boundary_mode:
             try:
                 target_endpoint = public_target.get("endpoint")
@@ -1538,6 +1761,12 @@ def run_attempt(
                     readback_adapter, public_target, readback_contract,
                     source_reader=case_source_reader,
                 )
+                if readback_contract.projection == MOVE_OCCURRENCE_GROUP:
+                    before_closure = readback_adapter.read_current_closure(
+                        str(public_target["project_id"]),
+                        str(public_target["timeline_id"]),
+                        head=before_observation.head_revision_id,
+                    )
                 if case.get("kind") == "action" and case_id == "A01":
                     _require_a01_protected_roles(before_observation.target)
             except Exception as exc:  # adapter failures are a failed gate, not an agent success
@@ -1557,6 +1786,39 @@ def run_attempt(
             _setup_failed_case(case, attempt_id=attempt_id, case_dir=case_dir, reason=reason)
             _write_json(case_dir / "checks.json", hidden_checks)
             continue
+        if execute and not fixture_only:
+            launch_prerequisites = case_launch_prerequisites(
+                case,
+                fixture_ready=is_ready,
+                hidden_checks=hidden_checks,
+                target_receipt=public_target,
+                coordinator_readback_ready=(
+                    host_boundary_mode and (
+                        case.get("kind") == "navigation" or before_observation is not None
+                    )
+                ) or local_before is not None,
+                coordinator_safety_ready=host_boundary_mode and boundary_receipt is not None,
+            )
+            if launch_prerequisites:
+                reason = "pre-launch evidence gate: " + "; ".join(launch_prerequisites)
+                _write_json(case_dir / "attempt.json", {
+                    "kind": ATTEMPT_KIND,
+                    "attempt_id": attempt_id,
+                    "case_id": case_id,
+                    "fresh_context": False,
+                    "session_id": f"{attempt_id}-{case_id}-not-launched",
+                    "started_at": started_at,
+                    "model": model,
+                    "thinking": thinking,
+                    "fingerprint_sha256": fingerprint_sha256,
+                    "case_fingerprint_sha256": selected_fingerprints.get(case_id),
+                    "execution": "setup_blocked",
+                    "launch_prerequisites": launch_prerequisites,
+                })
+                _fixture_blocked_result(case, attempt_id=attempt_id,
+                                        reason=reason, case_dir=case_dir)
+                _write_json(case_dir / "checks.json", hidden_checks)
+                continue
         status, returncode, elapsed, events, output = _invoke(
             omp_bin=omp_bin,
             model=model,
@@ -1596,6 +1858,15 @@ def run_attempt(
         merged_result["admission_mode"] = admission_mode
         readback_result: Mapping[str, Any] | None = None
         final_capture: Mapping[str, Any] | None = None
+        if local_before is not None:
+            try:
+                readback_result = capture_local_after(local_before)
+            except (LocalCoordinatorError, OSError, ValueError) as exc:
+                readback_result = local_evidence_unavailable(local_before, f"{type(exc).__name__}: {exc}")
+            try:
+                write_local_evidence(attempt_root, readback_result)
+            except (LocalCoordinatorError, OSError, ValueError) as exc:
+                readback_error = f"local filesystem coordinator evidence write failed: {exc}"
         if host_boundary_mode:
             capture_path = attempt_root / "coordinator" / "cases" / case_id / "host-final-capture.json"
             try:
@@ -1619,10 +1890,14 @@ def run_attempt(
                     target=public_target,
                     contract=readback_contract,
                     before=before_observation,
+                    before_closure=before_closure,
                     publication=publication,
                     source_reader=case_source_reader,
                 )
-                readback_result = case_readback.as_dict()
+                readback_result = (
+                    case_readback.as_dict()
+                    if hasattr(case_readback, "as_dict") else dict(case_readback)
+                )
                 if case_id == "A01" and isinstance(case_readback.after, Mapping):
                     _require_a01_protected_roles(case_readback.after)
             except Exception as exc:  # noqa: BLE001 - adapter boundary is external
@@ -1684,12 +1959,20 @@ def run_attempt(
         if before_observation is not None:
             _write_json(case_dir / "before.json", {"target": before_observation.target})
         if isinstance(readback_result.get("after"), Mapping):
-            _write_json(case_dir / "after.json", {"target": readback_result["after"]})
+            after_artifact = (
+                dict(readback_result["after"])
+                if readback_result.get("projection") == MOVE_OCCURRENCE_GROUP
+                else {"target": readback_result["after"]}
+            )
+            _write_json(case_dir / "after.json", after_artifact)
         if host_boundary_mode:
             coordinator_path = attempt_root / "coordinator" / "cases" / case_id / "readback.json"
             _write_json(coordinator_path, {
                 "kind": "astrid.timeline-eval.coordinator-evidence.v1",
                 "case_id": case_id,
+                "target_receipt_sha256": hashlib.sha256(json.dumps(
+                    public_target, sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")).hexdigest(),
                 "readback": dict(readback_result),
                 "safety": dict(_mapping(readback_result.get("safety"))),
                 "boundary": boundary_receipt.as_dict() if boundary_receipt else None,
@@ -1704,6 +1987,22 @@ def run_attempt(
         _write_json(case_dir / "checks.json", hidden_checks)
 
     aggregate = aggregate_attempt(suite, attempt_root)
+    for row in aggregate.get("cases", []):
+        if not isinstance(row, dict):
+            continue
+        case_spec = next((item for item in suite.get("cases", [])
+                          if isinstance(item, Mapping) and item.get("id") == row.get("id")), None)
+        if not isinstance(case_spec, Mapping) or case_spec.get("kind") != "action":
+            continue
+        target_path = (
+            prepared_targets_root / str(row["id"]) / "target.json"
+            if prepared_targets_root is not None else attempt_root / "coordinator" / "cases" / str(row["id"]) / "target.json"
+        )
+        ready, reasons = runtime_action_evidence_ready(
+            case=case_spec, target_path=target_path, attempt_root=attempt_root,
+        )
+        row["runtime_action_evidence_ready"] = ready
+        row["runtime_action_evidence_reasons"] = reasons
     _write_json(attempt_root / "aggregate.json", aggregate)
     top_level["finished_at"] = _now()
     top_level["aggregate"] = "aggregate.json"

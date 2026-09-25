@@ -81,6 +81,32 @@ def test_hidden_checks_can_be_supplied_separately_from_visible_case(tmp_path: Pa
     assert "success_checks" not in visible_brief(case)
 
 
+def test_result_adapter_projection_is_used_by_result_backed_checks(tmp_path: Path) -> None:
+    # L08 workers may return structured segments; the public adapter projects
+    # their ordered text into the field used by the hidden result check.
+    _dump(tmp_path / "result.json", {
+        "observations": {
+            "segments": [{"segment_id": "s2", "text": "Second"},
+                          {"segment_id": "s1", "text": "First"}],
+        },
+        "status": "passed",
+    })
+    _dump(tmp_path / "trace.jsonl", {})
+    case = {
+        "id": "L08", "kind": "navigation", "required_artifacts": ["result.json"],
+        "hidden_checks": [
+            {"id": "titles", "check": "path_equals", "artifact": "result",
+             "path": "observations.available_segment_titles",
+             "expected": ["Second", "First"]},
+        ],
+    }
+    report = grade_case(case, tmp_path, coordinator_evidence={
+        "readback": {"status": "pass"},
+        "safety": {"source_unchanged": True, "read_only_target": True},
+    })
+    assert report["check_results"][0]["status"] == "pass"
+
+
 def test_wrong_expected_result_is_failed_agent_case(tmp_path: Path) -> None:
     _dump(tmp_path / "before.json", {"selector": "old"})
     _dump(tmp_path / "candidate.json", {"selector": "old"})
@@ -371,6 +397,31 @@ def test_aggregate_preserves_partial_and_marks_absent_cases_not_run(tmp_path: Pa
     assert report["deficiency_counts"]["missing_artifact"] >= 1
     assert any(item["case_id"] == "L01" and item["kind"] == "safety_unknown"
                for item in report["deficiencies"])
+
+
+def test_missing_coordinator_readback_is_unavailable_not_worker_semantic_failure(tmp_path: Path) -> None:
+    attempt = tmp_path / "attempt-coordinator-gap"
+    case_dir = attempt / "cases" / "A01"
+    case_dir.mkdir(parents=True)
+    _dump(case_dir / "result.json", {
+        "status": "completed", "route": "timelines replace-parent-media",
+        "edit_made": True, "navigation_performed": False,
+    })
+    _dump(case_dir / "trace.jsonl", {"event": "start"})
+    suite = {"suite_id": "s", "suite_version": "2", "cases": [{
+        "id": "A01", "kind": "action",
+        "required_artifacts": ["result.json", "trace.jsonl", "before.json", "after.json"],
+        "hidden_checks": [{"id": "head", "check": "path_equals", "artifact": "after",
+                           "path": "head_revision_id", "expected": "head-new"}],
+    }]}
+    report = aggregate_attempt(suite, attempt)
+    row = report["cases"][0]
+    assert row["status"] == "indeterminate"
+    assert row["counted_in_agent_pass_denominator"] is False
+    assert row["failure_cause"]["agent_or_invariant"] == []
+    missing = [item for item in row["deficiencies"] if item["kind"] == "coordinator_evidence_unavailable"]
+    assert {item["path"] for item in missing} == {"before.json", "after.json"}
+    assert all(item["owner"] == "coordinator" for item in missing)
 
 
 def test_aggregate_without_grader_rubrics_is_honestly_blocked(tmp_path: Path) -> None:

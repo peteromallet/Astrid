@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from evals.timeline.admission_rehearsal import _safe_target, rehearse_admission
+from evals.timeline.fixture_contracts import case_launch_prerequisites
 from evals.timeline.evidence_collector import (
     EvidenceCollectionError,
     TeardownReceipt,
@@ -208,9 +209,62 @@ def test_admission_rehearsal_has_twenty_explicit_no_model_rows():
     assert all(row["launched"] is False for row in result["rows"])
     assert all(row["classification"] == "blocked-essential-input" for row in result["rows"] if row["kind"] == "action")
     l10 = next(row for row in result["rows"] if row["case_id"] == "L10")
-    assert l10["classification"] in {"executable", "diagnostic-only"}
+    assert l10["classification"] == "blocked-essential-input"
     assert l10["tool_paths"].get("interactive_playback") in {"available", "unavailable"}
-    assert next(row for row in result["rows"] if row["case_id"] == "L07")["classification"] == "executable"
+    assert next(row for row in result["rows"] if row["case_id"] == "L07")["classification"] == "blocked-essential-input"
+    l01 = next(row for row in result["rows"] if row["case_id"] == "L01")
+    assert l01["classification"] == "blocked-essential-input"
+    assert any("independent coordinator safety capture is not proven" in reason
+               for reason in l01["launch_prerequisites"])
+    assert l01["readiness_matrix"]["collector"] == {
+        "before": "available", "after": "available", "safety": "not_proven",
+        "scope": "pinned-fixture-filesystem-only", "runtime_closure_observed": False,
+    }
+    assert all(
+        bool(row["launch_prerequisites"]) == (row["classification"] == "blocked-essential-input")
+        for row in result["rows"]
+    )
+    for case_id in ("L01", "L02", "L03", "L06", "L08"):
+        row = next(row for row in result["rows"] if row["case_id"] == case_id)
+        assert row["classification"] == "blocked-essential-input"
+        assert any("safety capture is not proven" in reason for reason in row["launch_prerequisites"])
+        assert row["readiness_matrix"]["collector"]["scope"] == "pinned-fixture-filesystem-only"
+    for case_id in ("L04", "L05", "L07", "L09", "L10"):
+        row = next(row for row in result["rows"] if row["case_id"] == case_id)
+        assert row["classification"] == "blocked-essential-input"
+    assert all(row["readiness_matrix"]["evidence_artifacts"] for row in result["rows"])
+    a01_route = next(row for row in result["rows"] if row["case_id"] == "A01")["readiness_matrix"]["route"]
+    assert a01_route == {
+        "status": "implemented",
+        "name": "timelines replace-parent-media",
+        "target_instantiation": "missing",
+    }
+    a03_route = next(row for row in result["rows"] if row["case_id"] == "A03")["readiness_matrix"]["route"]
+    assert a03_route == {
+        "status": "implemented",
+        "name": "Astrid SDK move_occurrence_group() + publish_authoring_candidate",
+        "target_instantiation": "missing",
+    }
+
+
+def test_filesystem_collector_alone_never_admits_offline_navigation_worker():
+    result = rehearse_admission(SUITE, FIXTURES)
+    for case_id in ("L01", "L02", "L03", "L06", "L08"):
+        row = next(item for item in result["rows"] if item["case_id"] == case_id)
+        collector = row["readiness_matrix"]["collector"]
+        assert collector["before"] == collector["after"] == "available"
+        assert collector["safety"] == "not_proven"
+        assert row["classification"] != "executable"
+        assert any("safety capture is not proven" in reason for reason in row["launch_prerequisites"])
+    a03_readback = next(row for row in result["rows"] if row["case_id"] == "A03")["readiness_matrix"]["readback"]
+    assert a03_readback == {
+        "projection": "move_occurrence_group.v1",
+        "integration": "wired",
+    }
+    a03_row = next(row for row in result["rows"] if row["case_id"] == "A03")
+    assert a03_row["classification"] == "blocked-essential-input"
+    assert any("fresh coordinator-prepared target.json is missing" in reason
+               for reason in a03_row["reasons"])
     for case_id in ("L04", "L05", "L09"):
         assert next(row for row in result["rows"] if row["case_id"] == case_id)["classification"] == "blocked-essential-input"
     assert all(row["classification"] in {"executable", "blocked-essential-input", "diagnostic-only"} for row in result["rows"])
@@ -247,3 +301,18 @@ def test_admission_distinguishes_blocked_envelope_from_missing_target_receipt(tm
     assert row["essential_inputs"]["target_receipt"] == "blocked-envelope"
     assert any("explicitly blocked/ignored" in reason for reason in row["reasons"])
     assert not any("fresh coordinator-prepared target.json is missing" in reason for reason in row["reasons"])
+
+
+def test_shared_launch_gate_requires_oracle_route_readback_and_safety() -> None:
+    case = {"id": "A01", "kind": "action"}
+    reasons = case_launch_prerequisites(
+        case, fixture_ready=True,
+        hidden_checks=[{"id": "oracle", "check": "semantic_oracle_unavailable"}],
+        target_receipt=None,
+        coordinator_readback_ready=False,
+        coordinator_safety_ready=False,
+    )
+    assert any("semantic oracle is explicitly unavailable" in item for item in reasons)
+    assert any("target receipt is missing" in item for item in reasons)
+    assert any("readback collector" in item for item in reasons)
+    assert any("safety capture" in item for item in reasons)

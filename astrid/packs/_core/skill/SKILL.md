@@ -16,7 +16,7 @@ Choose the route by the requested result. Read only that route's guidance:
 | Request | Start here |
 | --- | --- |
 | Find a project, inspect a run, or open a render | The CLI recipes below |
-| Change timing, text, layout, or existing timeline clips, then render | [Timeline editing and rendering](../../rendering/skill/SKILL.md) |
+| Change timing, text, layout, or existing timeline clips, then render | [Video editing — existing timeline route](../../video_editing/skill/SKILL.md) (rendering is downstream evidence) |
 | Generate images, video, or audio (including Foley); understand, assemble, compare, or publish work | [Creative work](creative-work/SKILL.md), then the relevant pack |
 | Reuse a character or other saved subject | [References](../../references/skill/SKILL.md) |
 | Build your own reusable tool, workflow, or visual element | [Pack builder](pack-builder/SKILL.md) |
@@ -122,9 +122,10 @@ python3 -m astrid media references list --project <project> --include-archived -
 ```
 
 Use `timelines show`, `save`, `history`, `diff`, `visualize`, and `render` for
-timeline work. Timeline editing and rendering conventions live in the
-[rendering pack skill](../../rendering/skill/SKILL.md), which is the single
-route for those operations. Use `tasks` and `runs` to inspect or manage
+timeline work. Existing timeline editing conventions live in the
+[video editing skill](../../video_editing/skill/SKILL.md); the
+[rendering compatibility skill](../../rendering/skill/SKILL.md) is downstream
+evidence and playback documentation. Use `tasks` and `runs` to inspect or manage
 admitted work:
 
 ```bash

@@ -177,6 +177,20 @@ def test_canonical_bundle_compiles_through_single_production_boundary(
     bundle.compile.assert_called_once_with()
 
 
+def test_workflow_input_binding_validates_public_input_without_mutating_bundle() -> None:
+    workflow = SimpleNamespace(inputs={"source_video": SimpleNamespace()})
+    bundle = SimpleNamespace(workflow=workflow, require_canonical_authority=Mock())
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(production_engine, "_canonical_bundle_value", lambda _: bundle)
+        assert production_engine._validate_workflow_input_bindings(
+            bundle,
+            {"source_video": "morpheus-speaking.mp4"},
+        ) == {"source_video": "morpheus-speaking.mp4"}
+    finally:
+        monkeypatch.undo()
+
+
 def test_run_workflow_path_rejects_execution_identity_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -12,8 +12,8 @@ from vibecomfy.nodes.videohelpersuite import VHS_LoadVideoFFmpeg, VHS_VideoCombi
 
 AUDIO_VAE_NAME = 'minimax_h3_audio_vae_fp32.safetensors'
 CLIP_NAME = 'qwen3vl_32b_minimax_h3_int8_convrot.safetensors'
-DEFAULT_PROMPT = 'Continue directly from the final moment of the selected start clip with no cut, reset, or re-establishment. The incoming protected audiovisual prefix is authoritative for pose, motion, camera trajectory, lighting, environment, object state, voice, ambience, and timing. Connected reference images are identity/appearance references only; never pull the subject back toward a reference-image pose, expression, framing, or lighting.\n\n[Shot 1] Continue the exact motion and sound already in progress, then develop the next action naturally. [DESCRIBE WHAT HAPPENS NEXT; DO NOT RESTART FROM REST.]'
-DEFAULT_PROMPT_2 = 'Continue the existing scene from the previous generated H3 clip with no cut, reset, or re-establishment. The incoming protected H3 audiovisual latent prefix is authoritative for current pose, motion, camera trajectory, facial state, lighting, environment, object state, voice, ambience, and timing. Connected reference images are optional; use them only to preserve stable subject identity and appearance beneath that incoming state.\n\n[Shot 1] Continue the exact motion and sound already in progress, then develop the next action naturally. [DESCRIBE WHAT HAPPENS NEXT; DO NOT RESTART FROM REST.]'
+DEFAULT_PROMPT = 'End state: Morpheus remains in the same close/medium shot, seated in the red chair in the dark room, wearing the black coat, with the same camera position, lighting, identity, and acoustic perspective. He has finished the thought begun in the supplied speaking clip and is settled in a calm, deliberate expression, looking forward with his mouth naturally at rest and one hand resting in a restrained natural gesture. Preserve the supplied audiovisual prefix, including Morpheus\'s original voice, cadence, room tone, and timing. No camera change, reset, new character, subtitles, or visible text.'
+DEFAULT_PROMPT_2 = 'End state: Morpheus remains in the same close/medium shot, seated in the red chair in the dark room, wearing the black coat, with the same camera position, lighting, identity, and acoustic perspective. He has finished the thought begun in the supplied speaking clip and is settled in a calm, deliberate expression, looking forward with his mouth naturally at rest and one hand resting in a restrained natural gesture. Preserve the supplied audiovisual prefix, including Morpheus\'s original voice, cadence, room tone, and timing. No camera change, reset, new character, subtitles, or visible text.'
 DEFAULT_PROMPT_3 = 'Create the opening clip for a new continuous video. Establish coherent subject identity, camera, lighting, environment, motion, voice, ambience, and audiovisual timing so later masked extensions can continue seamlessly. If an H3 keyframe is enabled at frame 1, treat it as the exact opening image and animate naturally forward. Connected reference images are identity/appearance references only and should not force their pose, framing, expression, or lighting onto the shot.'
 DEFAULT_PROMPT_4 = 'Regenerate the complete soundtrack for the supplied source video. The entire visual stream is protected and authoritative: do not change, reinterpret, restart, or replace the video. Generate synchronized audio for the full clip from beginning to end, including dialogue/voice when visually implied, foley, impacts, movement sounds, room tone, ambience, and other scene-appropriate sound. Match visible timing precisely and maintain continuous acoustic perspective across the whole source clip.'
 DEFAULT_SEED = 123456789
@@ -67,6 +67,10 @@ PUBLIC_INPUT_METADATA = {
     'model': InputSpec(node=ref('unetloader'), field='unet_name', default=None, infer_type=False),
     'seed': InputSpec(node=ref('randomnoise_2'), field='noise_seed', default=None, infer_type=False),
     'steps': InputSpec(node=ref('basicscheduler'), field='steps', default=None, infer_type=False),
+    # The source clip is a runtime input.  Keep it in the canonical public
+    # input contract so remote execution can bind the worker-staged basename
+    # through bundle.compile(run_inputs=...) without mutating the sealed graph.
+    'source_video': InputSpec(node=ref('vhs_loadvideoffmpeg'), field='video', default='', type='CHOICE', media_semantics='video', infer_type=False),
 }
 
 
@@ -268,7 +272,6 @@ def build() -> VibeWorkflow:
             length=comfymathexpression.out('INT'),
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         minimaxh3referencetovideo_3 = raw_call('MiniMaxH3ReferenceToVideo',
@@ -282,7 +285,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         minimaxh3referencetovideo_4 = raw_call('MiniMaxH3ReferenceToVideo',
@@ -296,7 +298,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         minimaxh3referencetovideo_5 = raw_call('MiniMaxH3ReferenceToVideo',
@@ -310,7 +311,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         minimaxh3referencetovideo_6 = raw_call('MiniMaxH3ReferenceToVideo',
@@ -324,7 +324,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         minimaxh3referencetovideo_7 = raw_call('MiniMaxH3ReferenceToVideo',
@@ -338,7 +337,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         minimaxh3referencetovideo_8 = raw_call('MiniMaxH3ReferenceToVideo',
@@ -352,7 +350,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3startcanvasselector.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         basicscheduler = BasicScheduler(
@@ -373,7 +370,6 @@ def build() -> VibeWorkflow:
             vae=vaeloader.out('VAE'),
             width=minimaxh3cropto32.out('width'),
             _mode=4,
-            _extras={'ref_images.ref_image_0': loadimage.out('IMAGE'), 'ref_images.ref_image_1': loadimage_2.out('IMAGE')},
         )
 
         basicguider_2 = BasicGuider(

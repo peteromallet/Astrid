@@ -89,6 +89,11 @@ _ASTRID_PROPAGATED_ENV = frozenset(
         PACKS_PATH_ENV,
         ASTRID_NODE_EXECUTABLE,
         ASTRID_REMOTION_PROJECT_DIR,
+        # RunPod executor manifests explicitly declare this host-owned path.
+        # It must survive the supervised host -> executor -> SSH child
+        # boundary; unlike a private key value, the path itself is not secret.
+        "RUNPOD_SSH_IDENTITY_PATH",
+        "RUNPOD_SSH_IDENTITY_PUBLIC_PATH",
     }
 )
 

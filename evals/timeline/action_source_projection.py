@@ -197,7 +197,7 @@ def derive_action_source_projection(
         closing_clips = _clips(internals.get(internal_id, {}))
         if not _has_caption(closing_clips):
             missing.append("pinned closing shot has no caption/title binding to move")
-        missing.append("disposable reorder target receipt and move-occurrence route")
+        missing.append("disposable reorder target receipt")
         locator = {
             "closing_occurrence_id": closing,
             "middle_occurrence_id": middle,

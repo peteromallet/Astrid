@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
-import copy
 import subprocess
 import time
 from dataclasses import replace
@@ -20,7 +20,6 @@ from evals.timeline.worker_boundary import (
     WorkerLaunchObservation,
     host_final_capture_digest,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SUITE = REPO_ROOT / "Astrid/evals/timeline/suite.json"
@@ -46,11 +45,15 @@ def _fake_omp(tmp_path: Path) -> tuple[Path, Path]:
     return script, calls
 
 
-def test_native_launcher_invokes_each_fixture_ready_case_once_in_fresh_contexts(tmp_path, monkeypatch):
+def test_native_launcher_invokes_selected_fixture_ready_case_once_in_fresh_context(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "L01")]
+    suite_path = tmp_path / "l01-only-suite.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
     fake, calls = _fake_omp(tmp_path)
     monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
     aggregate = run_attempt(
-        SUITE,
+        suite_path,
         tmp_path / "attempt-1",
         fixture_root=FIXTURES,
         briefs_path=BRIEFS,
@@ -60,35 +63,37 @@ def test_native_launcher_invokes_each_fixture_ready_case_once_in_fresh_contexts(
     )
 
     rows = {row["id"]: row for row in aggregate["cases"]}
-    call_rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
+    call_rows = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
     fixture_ready_ids = {
         case_id for case_id, row in rows.items()
         if row["setup_status"] == "ready"
     }
     assert len(call_rows) == len(fixture_ready_ids)
-    assert {row["case"] for row in call_rows} == {
-        case_id for case_id in fixture_ready_ids
-    }
+    assert {row["case"] for row in call_rows} == fixture_ready_ids
     assert all("--no-session" in row["argv"] for row in call_rows)
     assert all(row["argv"][row["argv"].index("--model") + 1] == DEFAULT_MODEL for row in call_rows)
     assert all("--print" in row["argv"] for row in call_rows)
-    assert aggregate["case_count"] == 20
-    assert len(list((tmp_path / "attempt-1" / "cases").iterdir())) == 20
+    assert aggregate["case_count"] == 1
+    assert len(list((tmp_path / "attempt-1" / "cases").iterdir())) == 1
     for case_id, report in rows.items():
         case_dir = tmp_path / "attempt-1" / "cases" / case_id
         assert (case_dir / "attempt.json").is_file()
         assert (case_dir / "trace.jsonl").is_file()
         assert (case_dir / "result.json").is_file()
         assert (case_dir / "checks.json").is_file()
-        if case_id not in fixture_ready_ids:
+        if report["setup_status"] == "fixture_blocked":
             result = json.loads((case_dir / "result.json").read_text())
             assert result["agent_status"] == "fixture_blocked"
             assert result["execution_status"] == "not_started"
             assert report["counted_in_agent_pass_denominator"] is False
-        else:
+        elif report["setup_status"] == "ready":
             attempt = json.loads((case_dir / "attempt.json").read_text())
             assert attempt["fresh_context"] is True
             assert json.loads((case_dir / "result.json").read_text())["execution_status"] == "completed"
+        else:
+            result = json.loads((case_dir / "result.json").read_text())
+            assert result["agent_status"] == "setup_failed"
+            assert result["execution_status"] == "not_started"
 
 
 def test_hidden_checks_are_materialized_only_after_agent_process_exits(tmp_path, monkeypatch):
@@ -109,6 +114,70 @@ def test_hidden_checks_are_materialized_only_after_agent_process_exits(tmp_path,
     assert checks and any(check["check"] == "order" for check in checks)
     public = json.loads((tmp_path / "attempt-2/cases/A03/brief.json").read_text())
     assert not any(key in public for key in ("invariants", "success_checks", "required_artifacts", "hidden_checks"))
+
+
+def test_global_preflight_blocks_all_workers_when_final_selected_row_is_unready(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [
+        next(row for row in suite["cases"] if row["id"] == "L01"),
+        next(row for row in suite["cases"] if row["id"] == "L02"),
+    ]
+    suite_path = tmp_path / "two-navigation-cases.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    fake, calls = _fake_omp(tmp_path)
+    monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
+    materialize = luna_native.materialize_public_navigation_entrypoint
+
+    def fail_final_row(case_id, **kwargs):
+        if case_id == "L02":
+            raise ValueError("final selected row is unready")
+        return materialize(case_id, **kwargs)
+
+    monkeypatch.setattr(luna_native, "materialize_public_navigation_entrypoint", fail_final_row)
+    aggregate = run_attempt(
+        suite_path, tmp_path / "attempt-global-preflight", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, omp_bin=str(fake), execute=True, fixture_only=True,
+        launchable_ids={"L01", "L02"},
+    )
+
+    assert not calls.exists()
+    assert {row["id"]: row["status"] for row in aggregate["cases"]} == {
+        "L01": "setup_failed", "L02": "setup_failed",
+    }
+    for case_id in ("L01", "L02"):
+        result = json.loads((tmp_path / "attempt-global-preflight" / "cases" / case_id / "result.json").read_text())
+        assert result["execution_status"] == "not_started"
+
+
+def test_global_preflight_blocks_batch_on_later_local_row_without_coordinator_safety(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [
+        next(row for row in suite["cases"] if row["id"] == "L01"),
+        next(row for row in suite["cases"] if row["id"] == "L02"),
+    ]
+    suite_path = tmp_path / "two-local-navigation-cases.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    invocations = []
+    monkeypatch.setattr(luna_native, "_invoke", lambda **kwargs: invocations.append(kwargs))
+
+    run_attempt(
+        suite_path, tmp_path / "attempt-local-global-preflight", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, execute=True, local_disposable=True,
+    )
+
+    assert invocations == []
+    final_attempt = json.loads(
+        (tmp_path / "attempt-local-global-preflight/cases/L02/attempt.json").read_text()
+    )
+    proof = final_attempt["coordinator_preflight_proof"]
+    assert proof["case_id"] == "L02"
+    assert proof["coordinator_readback_ready"] is True
+    assert proof["coordinator_safety_ready"] is False
+    assert any("safety capture is not proven" in reason for reason in proof["admission_reasons"])
+    final_result = json.loads(
+        (tmp_path / "attempt-local-global-preflight/cases/L02/result.json").read_text()
+    )
+    assert final_result["execution_status"] == "not_started"
 
 
 def test_diagnostic_mode_launches_with_missing_oracle_and_records_ungraded(tmp_path, monkeypatch):
@@ -132,6 +201,27 @@ def test_diagnostic_mode_launches_with_missing_oracle_and_records_ungraded(tmp_p
     assert row["status"] == "ungraded"
     assert row["grading"] == "ungraded"
     assert row["check_results"][0]["status"] == "missing_capability"
+
+
+def test_scored_local_l01_stays_blocked_without_worker_write_boundary(tmp_path, monkeypatch):
+    suite = json.loads(SUITE.read_text())
+    suite["cases"] = [next(row for row in suite["cases"] if row["id"] == "L01")]
+    suite_path = tmp_path / "l01-only-suite.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    fake, calls = _fake_omp(tmp_path)
+    monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
+    aggregate = run_attempt(
+        suite_path, tmp_path / "attempt-local-no-coordinator", fixture_root=FIXTURES,
+        briefs_path=BRIEFS, omp_bin=str(fake), execute=True,
+        local_disposable=True, admission_mode="scored",
+    )
+    assert not calls.exists()
+    result = json.loads((tmp_path / "attempt-local-no-coordinator/cases/L01/result.json").read_text())
+    assert result["execution_status"] == "not_started"
+    attempt_case = json.loads((tmp_path / "attempt-local-no-coordinator/cases/L01/attempt.json").read_text())
+    assert any("safety capture is not proven" in reason for reason in attempt_case["launch_prerequisites"])
+    assert any("safety capture is not proven" in reason
+               for reason in result["failure_cause"]["setup"])
 
 
 def test_missing_private_action_manifest_is_an_unavailable_oracle_not_empty_rubric(tmp_path):
@@ -169,18 +259,25 @@ def test_l02_identity_oracle_matches_one_publicly_requested_expansion_and_allows
     assert run_checks([identity], {"result": {"observations": {"expanded_occurrences": [actual]}}})[0].status == "pass"
 
 
-def test_skill_reference_resolves_versioned_checked_in_path():
+def test_skill_reference_pins_primary_checked_in_skill_by_path_and_digest(tmp_path):
     reference = luna_native._skill_reference()
     path = Path(reference["path"])
-    assert path.as_posix().endswith("/astrid/packs/rendering/skill/SKILL.md")
+    assert path.as_posix().endswith("/astrid/packs/video_editing/skill/SKILL.md")
     assert path.is_file()
-    assert reference["version"] == "astrid-timeline-2026.09.24.1"
+    assert reference["repository_path"] == "astrid/packs/video_editing/skill/SKILL.md"
+    assert "version" not in reference
     assert len(reference["sha256"]) == 64
+    brief = luna_native._public_brief(
+        {"id": "L01", "kind": "navigation"}, None,
+        fixture_root=FIXTURES, case_dir=tmp_path / "case",
+        skill_reference=reference, runtime_project_id="local-disposable-test",
+    )
+    assert brief["skill_reference"] == reference
 
 
 def test_prompt_does_not_claim_a_universal_edit_route():
     prompt = luna_native._prompt(
-        {"id": "A02"}, skill_reference={"path": "/skill", "version": "v1", "sha256": "hash"},
+        {"id": "A02"}, skill_reference={"path": "/skill", "sha256": "hash"},
         public_target={"capabilities": {"edit": {"status": "unavailable", "reason": "not seeded"}}},
     )
     assert "No case-specific edit capability is declared available" in prompt
@@ -190,7 +287,7 @@ def test_prompt_does_not_claim_a_universal_edit_route():
 def test_prompt_documents_bound_authoring_bundle_route_without_unbound_write():
     prompt = luna_native._prompt(
         {"id": "A03"},
-        skill_reference={"path": "/skill", "version": "v1", "sha256": "hash"},
+        skill_reference={"path": "/skill", "sha256": "hash"},
         public_target={
             "capabilities": {
                 "edit": {"status": "available", "route": "authoring-bundle validate/commit"},
@@ -228,8 +325,9 @@ def test_local_disposable_action_does_not_require_prepared_target_or_route(tmp_p
     # A02's pinned action fixture may fail the fake adapter's intentionally
     # strict contract, but local mode still reaches the process without a
     # target/credential/boundary prerequisite.
-    assert result["fresh_context"] is True
-    assert result["execution_status"] in {"completed", "failed"}
+    assert result["fresh_context"] is False
+    assert not calls.exists()
+    assert "A02 has a typed remove-occurrence projection" in result["failure_cause"]["summary"]
     brief = json.loads((tmp_path / "attempt-a02-blocked/cases/A02/brief.json").read_text())
     assert brief["case_folder"].endswith("/cases/A02")
     assert brief["runtime_project_id"].startswith("local-disposable-")
@@ -321,17 +419,20 @@ def test_cli_case_selector_emits_one_case_dry_run(tmp_path):
     assert metadata["plan"][0]["case_id"] == "L01"
 
 
-def test_native_launcher_defaults_to_local_disposable_execution(tmp_path, monkeypatch):
+def test_native_launcher_defaults_to_local_disposable_but_fails_closed_without_safety_boundary(tmp_path, monkeypatch):
     fake, calls = _fake_omp(tmp_path)
     monkeypatch.setenv("LUNA_CALL_LOG", str(calls))
     run_attempt(
         SUITE, tmp_path / "attempt-no-isolation", fixture_root=FIXTURES,
         briefs_path=BRIEFS, omp_bin=str(fake), execute=True, case_id="L01",
     )
-    assert len(calls.read_text(encoding="utf-8").splitlines()) == 1
+    assert not calls.exists()
     attempt = json.loads((tmp_path / "attempt-no-isolation/attempt.json").read_text())
     assert attempt["isolation"]["mode"] == "local_disposable"
     assert attempt["execution_order"] == "sequential"
+    result = json.loads((tmp_path / "attempt-no-isolation/cases/L01/result.json").read_text())
+    assert result["execution_status"] == "not_started"
+    assert not (tmp_path / "attempt-no-isolation/coordinator/cases/L01/readback.json").exists()
 
 
 def test_explicit_agent_blocked_status_survives_successful_omp_exit(tmp_path):
@@ -387,7 +488,7 @@ def _boundary_requirements(
         host_selected_case_path=str(tmp_path / attempt_name / "cases" / case_id),
         selected_case_path=f"/worker/cases/{case_id}",
         disposable_credential_path="/worker/authority/credential.json",
-        skill_path="/opt/astrid-public/astrid/packs/rendering/skill/SKILL.md",
+        skill_path="/opt/astrid-public/astrid/packs/video_editing/skill/SKILL.md",
         skill_sha256=skill["sha256"],
         public_package_path="/opt/astrid-public",
         public_package_digest="sha256:test-public-package",
@@ -497,17 +598,29 @@ def _install_fake_boundary(
 
 def _target() -> dict[str, object]:
     return {
+        "kind": "astrid.timeline-eval.public-target.v1",
+        "case_id": "A01",
+        "scope": "selected-case-only",
+        "read_only": False,
         "endpoint": "http://127.0.0.1:9001",
         "project_id": "project-test",
         "timeline_id": "timeline-test",
         "head_revision_id": "head-before",
+        "occurrence_ids": ["occ-target"],
+        "shot_ids": ["shot-target"],
+        "shot_revision_ids": ["shot-rev-before"],
+        "internal_revision_ids": ["internal-before"],
+        "owned_media_ids": ["sha256:new-image", "sha256:voice", "sha256:frame"],
         "target_locator": {
             "occurrence_id": "occ-target",
             "shot_id": "shot-target",
+            "shot_revision_id": "shot-rev-before",
             "selector_clip_id": "shot_b01",
             "readback_projection": "active_media_replacement.v1",
             "voice_clip_id": "vo_b01",
             "frame_overlay_clip_id": "frame_v1",
+            "replacement_asset_key": "charcoal",
+            "preserve_roles": ["timing", "voiceover", "frame-overlay"],
         },
         "capabilities": {"edit": {"status": "available", "route": "timelines replace-parent-media"}},
     }
@@ -628,7 +741,7 @@ def test_prepared_target_is_copied_and_preflight_allows_one_launch(tmp_path, mon
     assert json.loads((case_dir / "target.json").read_text(encoding="utf-8"))["project_id"] == "project-test"
     public_brief = json.loads((case_dir / "brief.json").read_text(encoding="utf-8"))
     assert public_brief["fixture_entry_point"]["root"] == "/worker/cases/A01"
-    assert public_brief["skill_reference"]["path"] == "/opt/astrid-public/astrid/packs/rendering/skill/SKILL.md"
+    assert public_brief["skill_reference"]["path"] == "/opt/astrid-public/astrid/packs/video_editing/skill/SKILL.md"
     assert str(case_dir) not in json.dumps(public_brief)
     assert (case_dir / "before.json").is_file()
     result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
@@ -730,8 +843,9 @@ def test_local_disposable_a01_does_not_require_prepared_targets_root(tmp_path, m
         isolation_contract=contract,
     )
     result = json.loads((tmp_path / "attempt-no-target-root/cases/A01/result.json").read_text())
-    assert calls.exists() and calls.read_text(encoding="utf-8").strip()
-    assert result["execution_status"] == "completed"
+    assert not calls.exists()
+    assert result["agent_status"] == "fixture_blocked"
+    assert "target receipt is missing" in result["failure_cause"]["summary"]
     assert aggregate["case_count"] == 1
 
 
@@ -756,9 +870,9 @@ def test_local_disposable_ignores_missing_boundary_supervisor(tmp_path, monkeypa
         isolation_contract=contract,
         prepared_targets_root=targets,
     )
-    assert calls.exists() and calls.read_text(encoding="utf-8").strip()
+    assert not calls.exists()
     result = json.loads((tmp_path / "attempt-preflight-fail/cases/A01/result.json").read_text(encoding="utf-8"))
-    assert result["execution_status"] == "completed"
+    assert result["agent_status"] == "fixture_blocked"
 
 
 def test_navigation_uses_exact_closure_projection_without_a01_roles(tmp_path, monkeypatch):

@@ -143,6 +143,7 @@ def stage_public_package(source_root: Path, packages_root: Path) -> PublicPackag
             Path("astrid/__init__.py"),
             Path("astrid/__main__.py"),
             Path("astrid/sdk/__init__.py"),
+            Path("astrid/packs/video_editing/skill/SKILL.md"),
             Path("astrid/packs/rendering/skill/SKILL.md"),
             Path("astrid/packs/rendering/skill/references/timeline-cookbook.md"),
             Path("banodoco_workspace_client/__init__.py"),
@@ -191,7 +192,7 @@ def stage_public_package(source_root: Path, packages_root: Path) -> PublicPackag
             tree_sha256="sha256:" + digest,
             file_count=len(rows),
             manifest_path=str(final_root / "public-package-manifest.json"),
-            skill_path=str(final_root / "astrid/packs/rendering/skill/SKILL.md"),
+            skill_path=str(final_root / "astrid/packs/video_editing/skill/SKILL.md"),
         )
     except Exception:
         if temporary.exists():

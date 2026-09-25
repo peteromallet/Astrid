@@ -18,11 +18,8 @@ The suite is a manifest only. No case is claimed to have been executed.
 - `tests/evals/test_timeline_eval_manifest.py` checks the schema contract,
   preserves the original L prompts, and guards the public/private boundary.
 - Fixture readiness inputs are recorded in `.otto/runs/timeline-text-inspection-20260922/evals/fixtures/{informational/fixture.json,action/manifest.json}`.
-  Run `PYTHONPATH=. ./.venv/bin/python -m evals.timeline.fixture_manifest` from
-  `Astrid/` to validate explicit targets, media, units, and lifecycle fields and
-  refresh the 20-case readiness matrix beside those manifests. Pass
-  `--attempt-root <attempt-dir>` to verify per-case fresh `attempt.json`, valid
-  `trace.jsonl`, terminal `result.json`, and `graded-result.json` evidence.
+  `evals.timeline.fixture_manifest` remains an optional fixture diagnostic; it
+  is not a prerequisite or admission gate for the local loop below.
 - `evals.timeline.run --aggregate --suite ... --attempt-root ...` is the future
   collector seam: it grades each isolated `cases/<case-id>/` directory, writes
   `graded-result.json`, preserves partial trace/artifact evidence, and emits one
@@ -52,10 +49,13 @@ The benchmark needs a separate fixture-preparation implementation before it can
 run. Its only canonical-source reader must export the pinned Astrid intro closure
 and its required media, then seed a disposable Runtime realm and one test project
 with independent case timelines. Agents receive only the disposable endpoint's
-credential and fixture entry point. The test project alone in the live realm is
-not an isolation boundary, and host-shell access to unrestricted local
-credentials is not a security sandbox. Never give the evaluated agent canonical
-project credentials. Abort setup if the source head differs from the pinned
+credential and selected-case fixture package. The local worker boundary makes
+the selected case package, public Astrid product package/docs, and the
+explicitly supplied disposable credential visible; canonical roots,
+evaluator/coordinator evidence, sibling cases, and Runtime backing stores are
+denied. This is filesystem confinement for the worker launch, not a claim of
+full network isolation, and outcome judging remains external to the worker.
+Never give the evaluated agent canonical project credentials. Abort setup if the source head differs from the pinned
 `last_proved_source_head` until the fixture source is deliberately re-approved.
 
 For a rerun, seed each case from the same frozen semantic baseline. A new attempt
@@ -66,6 +66,16 @@ as a new test head. Do not restore database files, move head pointers, or edit t
 canonical Astrid intro.
 
 ## Discovery, execution, and safety
+
+For an existing timeline, the agent-facing golden path is owned by
+`astrid/packs/video_editing/skill/SKILL.md` (installed view:
+`packs/video_editing/SKILL.md`): open/pin → inspect the exact target → choose
+text, visual/input, or media evidence → edit a detached candidate → validate
+and diff → render only when pixel/playback evidence is needed → publish →
+reopen and read back. `astrid/packs/rendering/skill/SKILL.md` is the downstream
+render/playback evidence compatibility route. The coordinator attributes
+worker JSON/protocol health separately from semantic outcome, which is judged
+from independent before/after/readback and render/playback artifacts.
 
 Navigation cases are read-only, including media playback. Action cases must use
 the fixture's detached candidate, validation, preview, and ordinary atomic
@@ -123,16 +133,57 @@ then proceed to the one-loop suite only if the independent grader catches the
 wrong-shot case and accepts the correct-shot case. No canonical project or
 timeline was mutated.
 
-## Native Luna attempt launcher
+## Local loop
+
+`evals.timeline.local_loop` is the single local case-launch command. It runs
+selected cases sequentially, with a fresh OMP process and workspace per case.
+Fixture readiness and the older admission rehearsal do not gate a launch.
+Each executed case is wrapped in the enforced macOS worker filesystem boundary:
+the selected `work/project/` package, public product docs, and result capture
+are available, while coordinator/evaluator/sibling/canonical/runtime-storage
+paths are denied; only the disposable credential file is re-opened from its
+denied store. If that boundary cannot be constructed, the worker is not
+launched. The loop records OMP output and the worker's `result.json`, but does
+not score the answer; semantic outcome judging remains external and a human
+review is still required.
+
+From `Astrid/`, run:
+
+```sh
+PYTHONPATH=. ./.venv/bin/python -m evals.timeline.local_loop \
+  --attempt-root ../.otto/runs/timeline-text-inspection-20260922/attempts/local-loop-<timestamp> \
+  --execute \
+  --model openai-codex/gpt-5.6-luna
+```
+
+Without `--execute`, the command writes a no-model attempt plan. Use repeated
+`--case <id>` options to select cases and `--timeout-seconds` to override each
+case timeout. A successful OMP exit is recorded as `completed` only when its
+workspace contains a valid `result.json`; process failures and timeouts remain
+in the attempt evidence, and the loop continues to the next selected case.
+OMP's JSON trace and stderr log are stored beside each case workspace. The
+loop never retries a case or overwrites an existing attempt record.
+
+## Historical native launcher and admission evidence
+
+The following admission rehearsal, `luna_native`, and evidence-collector notes
+describe older runs and integrations. They remain available for those
+consumers, but they are not prerequisites or part of the local-loop launch
+path.
 
 ### No-model admission rehearsal and generic evidence
 
-Before a live attempt, run `python -m evals.timeline.admission_rehearsal` with
-an explicit `--output-root`. It materializes offline entrypoints in a temporary
-directory and emits one row for every case. A missing action target receipt or
-edit route is `blocked-essential-input`; it is never inferred from a static
-manifest. Playback-only limitations (such as L10) are recorded as
-`diagnostic-only` when the offline/decode path remains available.
+The older `python -m evals.timeline.admission_rehearsal` command took an
+explicit `--output-root`, materialized offline entrypoints in a temporary
+directory, and emitted one row for every case. A missing action target receipt
+or edit route was `blocked-essential-input`; playback-only limitations (such
+as L10) were recorded as `diagnostic-only` when the offline/decode path
+remained available. This result does not gate `local_loop`.
+
+That command preserved its JSON/Markdown evidence when the requested scored
+scope was blocked, and exited with status `2` whenever any row was
+`blocked-essential-input`. That status describes the old admission workflow,
+not a requirement for local-loop launches.
 
 `evals.timeline.evidence_collector` is the projection-neutral coordinator
 collector. It retains the actual worker transcript/final response and brief
@@ -180,22 +231,7 @@ not start OMP. Independent pre-readback failures (including stale heads,
 missing protected roles, or an unreadable disposable realm) are also
 fail-closed; the model is never launched against an unverified target.
 
-The real invocation is explicit and bounded:
-
-```text
-cd Astrid
-PYTHONPATH=. ./.venv/bin/python -m evals.timeline.luna_native \
-  --suite evals/timeline/suite.json \
-  --fixture-root ../.otto/runs/timeline-text-inspection-20260922/evals/fixtures \
-  --briefs evals/timeline/cases/agent_briefs.json \
-  --attempt-root ../.otto/runs/timeline-text-inspection-20260922/attempts/luna-native-<timestamp> \
-  --omp-bin omp \
-  --model openai-codex/gpt-5.6-luna \
-  --execution-mode local-disposable
-```
-
-Use `--dry-run` to materialize only the top-level plan. A fake executable is
-supported with `--omp-bin` for fixture-only smoke tests; it must not be
-mistaken for a model-evaluation result. Host-boundary compatibility runs may
-add the endpoint, credential, isolation contract, prepared targets, and typed
-boundary supervisor inputs; those are not local-mode prerequisites.
+Older `luna_native` invocations may appear in archived run evidence. For new
+local case launches, use the `local_loop` command above. Its default per-case
+timeout is 600 seconds (10 minutes); pass `--timeout-seconds` only when a
+different bound is intentional.

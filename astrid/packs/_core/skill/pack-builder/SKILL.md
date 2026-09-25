@@ -32,8 +32,9 @@ The detailed contracts are maintained in these authoritative guides:
   for quick orientation; when executor, orchestrator, or element manifests
   change, regenerate it with
   [`scripts/gen_capability_index.py`](../../../../../scripts/gen_capability_index.py).
-- [Rendering skill](../../../rendering/skill/SKILL.md) — combined timeline and
-  rendering work, including the stable render facade and visual escape hatches.
+- [Video editing skill](../../../video_editing/skill/SKILL.md) — existing timeline
+  editing route; the [rendering skill](../../../rendering/skill/SKILL.md) is the
+  downstream render/evidence compatibility layer.
 
 Read only the linked guide needed for the current choice. Do not copy its
 schemas or command catalog into this skill; those documents are the source of

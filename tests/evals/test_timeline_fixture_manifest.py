@@ -87,6 +87,18 @@ def test_real_fixture_matrix_checks_sidecar_bytes_and_separates_operational_read
     assert not any(row.operational_ready for row in rows.values())
 
 
+def test_real_action_inputs_name_truthful_starting_media_and_occurrences():
+    manifest = json.loads((FIXTURES / "action/manifest.json").read_text(encoding="utf-8")) if (FIXTURES := Path(__file__).resolve().parents[3] / ".otto/runs/timeline-text-inspection-20260922/evals/fixtures") else {}
+    cases = {row["id"]: row for row in manifest["cases"]}
+    music_digest = "sha256:656cbfa229211a0031d74b5c206d6164c43c8652d25416ce2d22ddd1f6bafba9"
+    for case_id in ("A02", "A05", "A07"):
+        assert cases[case_id]["media"]["music_digest"] == music_digest
+        assert cases[case_id]["media"]["music_clip_id"] == "eval_music_bed_clip"
+    assert cases["A06"]["targets"]["visible_title_binding_id"] == "a06-visible-title"
+    assert cases["A08"]["targets"]["still_image_asset_alias"] == "still-image"
+    assert cases["A09"]["targets"]["montage_occurrence"] == "shot-6f6b80fbe16c0877"
+
+
 def test_declared_fixture_requirements_follow_actual_fields_not_case_ids(tmp_path):
     manifest = {"targets": {"shot": {"alternatives": []}}}
     requirement = {
@@ -125,6 +137,28 @@ def test_attempt_evidence_marks_only_fixture_ready_case_operational(tmp_path):
         _dump(case_dir / "result.json", {**identity, "execution_status": "completed"})
         _dump(case_dir / "graded-result.json", {**identity, "status": "failed", "setup_status": "ready"})
 
+    a01 = attempt_root / "cases" / "A01"
+    _dump(a01 / "target.json", {
+        "kind": "astrid.timeline-eval.public-target.v1", "case_id": "A01",
+        "scope": "selected-case-only", "read_only": False,
+        "endpoint": "http://127.0.0.1:9001", "project_id": "project", "timeline_id": "timeline",
+        "head_revision_id": "head-before",
+        "capabilities": {"edit": {"status": "available", "route": "timelines replace-parent-media"}},
+        "target_locator": {
+            "readback_projection": "active_media_replacement.v1", "occurrence_id": "occ-1",
+            "shot_id": "shot-1", "shot_revision_id": "shot-rev-1", "selector_clip_id": "picture-1",
+            "voice_clip_id": "voice-1", "frame_overlay_clip_id": "overlay-1",
+            "replacement_asset_key": "new-image", "preserve_roles": ["timing", "voiceover", "frame-overlay"],
+        },
+        "occurrence_ids": ["occ-1"], "shot_ids": ["shot-1"], "shot_revision_ids": ["shot-rev-1"],
+        "internal_revision_ids": ["internal-1"], "owned_media_ids": ["sha256:old", "sha256:new"],
+    })
+    _dump(attempt_root / "coordinator" / "cases" / "A01" / "readback.json", {
+        "kind": "astrid.timeline-eval.coordinator-evidence.v1", "case_id": "A01",
+        "readback": {"before_observed": True, "after_observed": True},
+        "safety": {"source_unchanged": True, "test_target_only": True},
+    })
+
     rows = {row.case_id: row for row in build_readiness(attempt_root=attempt_root)}
 
     assert rows["A01"].readiness == "fixture_ready"
@@ -133,6 +167,49 @@ def test_attempt_evidence_marks_only_fixture_ready_case_operational(tmp_path):
     assert rows["L04"].readiness == "blocked"
     assert rows["L04"].operational_ready is False
     assert "fixture prerequisites are blocked" in rows["L04"].operational_reasons[0]
+
+
+def test_all_case_matrix_admits_a03_route_but_keeps_missing_fixture_blocked():
+    rows = {row.case_id: row for row in build_readiness()}
+    assert len(rows) == 20
+    assert rows["A01"].execution_contract["edit_route"] == "timelines replace-parent-media"
+    assert "publication receipt" in " ".join(rows["A01"].execution_contract["required_coordinator_evidence"])
+    assert rows["A03"].execution_contract["edit_route"] == "Astrid SDK move_occurrence_group() + publish_authoring_candidate"
+    assert rows["A03"].execution_contract["readback_projection"] == "move_occurrence_group.v1"
+    assert rows["A03"].execution_contract["status"] == "ready"
+    assert rows["A03"].operational_ready is False
+    assert not any("no occurrence-group move operation" in item for item in rows["A03"].operational_reasons)
+
+
+def test_fixture_ready_case_is_not_operational_without_coordinator_readback_and_safety(tmp_path):
+    attempt_root = tmp_path / "attempt-fresh"
+    case_dir = attempt_root / "cases" / "A01"
+    case_dir.mkdir(parents=True)
+    identity = {"attempt_id": attempt_root.name, "case_id": "A01"}
+    _dump(case_dir / "attempt.json", {
+        **identity, "kind": "astrid.timeline-eval.case-attempt.v1", "fresh_context": True,
+        "session_id": "session", "started_at": "2026-09-24T10:00:00Z",
+    })
+    (case_dir / "trace.jsonl").write_text('{"event":"finished"}\n', encoding="utf-8")
+    _dump(case_dir / "result.json", {**identity, "execution_status": "completed"})
+    _dump(case_dir / "graded-result.json", {**identity, "status": "failed", "setup_status": "ready"})
+    _dump(case_dir / "target.json", {
+        "kind": "astrid.timeline-eval.public-target.v1", "case_id": "A01", "scope": "selected-case-only",
+        "read_only": False, "endpoint": "http://127.0.0.1:9001", "project_id": "project",
+        "timeline_id": "timeline", "head_revision_id": "head-before",
+        "capabilities": {"edit": {"status": "available", "route": "timelines replace-parent-media"}},
+        "target_locator": {"readback_projection": "active_media_replacement.v1", "occurrence_id": "occ-1",
+                            "shot_id": "shot-1", "shot_revision_id": "shot-rev-1", "selector_clip_id": "picture-1",
+                            "voice_clip_id": "voice-1", "frame_overlay_clip_id": "overlay-1",
+                            "replacement_asset_key": "new-image", "preserve_roles": ["timing", "voiceover", "frame-overlay"]},
+        "occurrence_ids": ["occ-1"], "shot_ids": ["shot-1"], "shot_revision_ids": ["shot-rev-1"],
+        "internal_revision_ids": ["internal-1"], "owned_media_ids": ["sha256:old", "sha256:new"],
+    })
+
+    row = {item.case_id: item for item in build_readiness(attempt_root=attempt_root)}["A01"]
+    assert row.readiness == "fixture_ready"
+    assert row.operational_ready is False
+    assert any("coordinator-owned before/after readback" in item for item in row.operational_reasons)
 
 
 def test_blocked_and_setup_failed_attempts_remain_non_operational(tmp_path):

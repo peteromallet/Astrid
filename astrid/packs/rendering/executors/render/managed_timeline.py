@@ -42,6 +42,196 @@ class ManagedRenderValidationError(ValueError):
         self.details = details
 
 
+def _render_compatible_projection(
+    config: Mapping[str, Any], registry: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Adapt public authoring-helper output to the existing render schema.
+
+    Detached candidates accept exact Runtime media identities and convenient
+    clip-local placement fields.  The renderer consumes the older shared
+    timeline schema, where media is selected through ``clip.asset``, fit is a
+    track property, and rectangles are ordinary clip geometry.  Project those
+    equivalent spellings here, after the immutable composition is resolved but
+    before managed-media admission and schema validation.  Publication remains
+    byte-for-byte the candidate compiled by the authoring bundle.
+    """
+
+    normalized_config = copy.deepcopy(dict(config))
+    normalized_registry = copy.deepcopy(dict(registry))
+    raw_assets = normalized_registry.setdefault("assets", {})
+    if not isinstance(raw_assets, dict):
+        return normalized_config, normalized_registry
+
+    def media_identity(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        stripped = value.removeprefix("sha256:")
+        if len(stripped) == 64 and all(character in "0123456789abcdef" for character in stripped):
+            return "sha256:" + stripped
+        return value
+
+    assets_by_media: dict[str, list[str]] = {}
+    for asset_key, raw_entry in raw_assets.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        # ``managed-local`` is the authoring/import description used by the
+        # evaluation helpers.  Once Runtime has admitted the exact media id and
+        # digest, it is an opaque imported source for renderer purposes.
+        if raw_entry.get("origin") == "managed-local":
+            raw_entry["origin"] = "opaque-foreign"
+        identity = media_identity(raw_entry.get("object_id") or raw_entry.get("media_id"))
+        if identity is not None:
+            assets_by_media.setdefault(identity, []).append(str(asset_key))
+
+    raw_tracks = normalized_config.get("tracks", [])
+    tracks_by_id = {
+        str(track.get("id")): track
+        for track in raw_tracks
+        if isinstance(track, dict) and isinstance(track.get("id"), str)
+    } if isinstance(raw_tracks, list) else {}
+    raw_clips = normalized_config.get("clips", [])
+    if not isinstance(raw_clips, list):
+        return normalized_config, normalized_registry
+
+    for index, raw_clip in enumerate(raw_clips):
+        if not isinstance(raw_clip, dict):
+            continue
+        compatibility: dict[str, Any] = {}
+        direct_field = next(
+            (field for field in ("media_id", "object_id") if field in raw_clip),
+            None,
+        )
+        if direct_field is not None:
+            direct_value = raw_clip.get(direct_field)
+            identity = media_identity(direct_value)
+            if identity is None:
+                raise ManagedRenderValidationError(
+                    f"canonical timeline clip {index} has an invalid {direct_field}",
+                    path=f"$.clips[{index}].{direct_field}",
+                    reason="direct media selector must be a non-empty Runtime media identity",
+                    recovery="Use the exact media id returned by the project Runtime.",
+                    validator="authoring_render_projection",
+                )
+            matches = sorted(assets_by_media.get(identity, ()))
+            selected_asset = raw_clip.get("asset")
+            if isinstance(selected_asset, str):
+                entry = raw_assets.get(selected_asset)
+                selected_identity = media_identity(
+                    entry.get("object_id") or entry.get("media_id")
+                ) if isinstance(entry, Mapping) else None
+                if selected_identity != identity:
+                    raise ManagedRenderValidationError(
+                        f"canonical timeline clip {index} has conflicting asset and {direct_field}",
+                        path=f"$.clips[{index}]",
+                        reason="asset alias and direct media selector resolve to different identities",
+                        recovery="Keep one exact Runtime media selection for the clip.",
+                        validator="authoring_render_projection",
+                    )
+            elif matches:
+                # Parent and occurrence-local registries may legitimately
+                # contain aliases for the same digest. Prefer the alias in
+                # this projected occurrence so its type/origin provenance is
+                # retained instead of binding the clip to an unrelated global
+                # parent alias merely because it sorts first.
+                clip_id = raw_clip.get("id")
+                namespace = (
+                    str(clip_id).rsplit(":", 1)[0] + ":"
+                    if isinstance(clip_id, str) and ":" in clip_id
+                    else None
+                )
+                local_matches = (
+                    [key for key in matches if key.startswith(namespace)]
+                    if namespace is not None else []
+                )
+                selected_asset = local_matches[0] if local_matches else matches[0]
+            else:
+                digest = identity.removeprefix("sha256:")
+                key_seed = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+                selected_asset = f"authoring-media-{key_seed}"
+                suffix = 1
+                while selected_asset in raw_assets:
+                    suffix += 1
+                    selected_asset = f"authoring-media-{key_seed}-{suffix}"
+                entry = {"media_id": str(direct_value)}
+                if identity.startswith("sha256:"):
+                    entry["content_sha256"] = digest
+                raw_assets[selected_asset] = entry
+                assets_by_media.setdefault(identity, []).append(selected_asset)
+            raw_clip["asset"] = selected_asset
+            raw_clip.pop("media_id", None)
+            raw_clip.pop("object_id", None)
+            compatibility["media_selector"] = {
+                "field": direct_field,
+                "media_id": str(direct_value),
+                "asset": selected_asset,
+            }
+
+        if "fit" in raw_clip:
+            fit = raw_clip.pop("fit")
+            track_id = raw_clip.get("track")
+            track = tracks_by_id.get(str(track_id))
+            if track is None:
+                raise ManagedRenderValidationError(
+                    f"canonical timeline clip {index} cannot project fit without its track",
+                    path=f"$.clips[{index}].fit",
+                    reason="clip-local fit references a missing track",
+                    recovery="Attach the clip to an existing visual track, then retry.",
+                    validator="authoring_render_projection",
+                )
+            existing_fit = track.get("fit")
+            if existing_fit is not None and existing_fit != fit:
+                raise ManagedRenderValidationError(
+                    f"canonical timeline clip {index} conflicts with track fit {existing_fit!r}",
+                    path=f"$.clips[{index}].fit",
+                    reason="the existing renderer supports one fit policy per track",
+                    recovery="Use a separate visual track for clips with a different fit policy.",
+                    validator="authoring_render_projection",
+                )
+            track["fit"] = fit
+            compatibility["fit"] = {"value": fit, "projected_to_track": str(track_id)}
+
+        rect = raw_clip.pop("rect", None)
+        if rect is not None:
+            if not isinstance(rect, Mapping):
+                raise ManagedRenderValidationError(
+                    f"canonical timeline clip {index} has an invalid rect",
+                    path=f"$.clips[{index}].rect",
+                    reason="rect must be an object",
+                    recovery="Provide x, y, width, and height geometry.",
+                    validator="authoring_render_projection",
+                )
+            unknown = sorted(set(rect) - {"x", "y", "width", "height"})
+            if unknown:
+                raise ManagedRenderValidationError(
+                    f"canonical timeline clip {index} rect has unsupported fields: {unknown!r}",
+                    path=f"$.clips[{index}].rect",
+                    reason="the existing renderer supports x, y, width, and height geometry",
+                    recovery="Express the rectangle with x, y, width, and height only.",
+                    validator="authoring_render_projection",
+                )
+            for field in ("x", "y", "width", "height"):
+                if field in rect:
+                    if field in raw_clip and raw_clip[field] != rect[field]:
+                        raise ManagedRenderValidationError(
+                            f"canonical timeline clip {index} has conflicting {field} geometry",
+                            path=f"$.clips[{index}].rect.{field}",
+                            reason="rect and canonical clip geometry disagree",
+                            recovery="Keep one value for each geometry field.",
+                            validator="authoring_render_projection",
+                        )
+                    raw_clip[field] = copy.deepcopy(rect[field])
+            compatibility["rect"] = copy.deepcopy(dict(rect))
+
+        if compatibility:
+            app = raw_clip.setdefault("app", {})
+            if not isinstance(app, dict):
+                app = {}
+                raw_clip["app"] = app
+            app["astrid_authoring_render_projection"] = compatibility
+
+    return normalized_config, normalized_registry
+
+
 def _json_path(parts: Any) -> str:
     path = "$"
     for part in parts:
@@ -759,23 +949,38 @@ def resolve_managed_render_snapshot(
             f"timeline {timeline_ref!r} was not found in project {project_ref!r}"
         )
     timeline_data = timeline_result.data
-    version = int(timeline_data["config_version"])
+    version_value = timeline_data.get("config_version", timeline_data.get("version"))
+    if isinstance(version_value, bool) or not isinstance(version_value, (int, float, str)):
+        raise ValueError("canonical timeline snapshot has no config_version or version")
+    try:
+        version = int(version_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("canonical timeline snapshot has an invalid config_version or version") from exc
+    if version < 1:
+        raise ValueError("canonical timeline snapshot version must be positive")
     if expected_version is not None and expected_version != version:
         raise ValueError(
             f"stale timeline version: expected {expected_version}, current version is {version}; "
             "show the timeline and retry with the current version"
         )
     rows = paged_rows(client.timelines.list, project_ref)
+    listed_timeline = None
     if rows is not None:
         for row in rows:
-            if isinstance(row, Mapping) and row.get("timeline_id") == timeline_data.get("timeline_id") and row.get("archived_at"):
-                raise ValueError(
-                    f"timeline {timeline_ref!r} is archived; unarchive it before rendering"
-                )
+            if isinstance(row, Mapping) and row.get("timeline_id") == timeline_data.get("timeline_id"):
+                listed_timeline = row
+                if row.get("archived_at"):
+                    raise ValueError(
+                        f"timeline {timeline_ref!r} is archived; unarchive it before rendering"
+                    )
+                break
+    timeline_slug = str(
+        timeline_data.get("slug")
+        or (listed_timeline or {}).get("slug")
+        or timeline_ref
+    )
     config = timeline_data.get("config")
     stored_registry = timeline_data.get("registry")
-    if not isinstance(config, dict) or not isinstance(stored_registry, dict):
-        raise ValueError("canonical timeline snapshot is not a JSON object")
     project_id = str(project.get("id") or project["project_id"])
     exact_parent = None
     composition_graph = None
@@ -800,12 +1005,25 @@ def resolve_managed_render_snapshot(
         parent_digest = parent.get("content_digest")
         if not isinstance(parent_digest, str) or not parent_digest.startswith("sha256:"):
             raise ValueError("preview base parent has no canonical content digest")
+        if config is None and stored_registry is None:
+            # Canonical Runtime timeline reads expose a head and version, not
+            # the legacy mutable document fields. The exact parent closure is
+            # the source of the preview base in that response shape.
+            _parent, projected, _expansion = _project_exact_parent_head(
+                client=client,
+                project_id=project_id,
+                timeline_id=str(timeline_data["timeline_id"]),
+                parent_revision_id=parent_head,
+            )
+            config, stored_registry = projected.config, projected.registry
+        if not isinstance(config, dict) or not isinstance(stored_registry, dict):
+            raise ValueError("canonical timeline snapshot is not a JSON object")
         return ManagedRenderSnapshot(
             project_id=project_id,
             project_slug=str(project["slug"]),
             timeline_id=str(timeline_data["timeline_id"]),
             timeline_ulid=str(timeline_data.get("timeline_ulid") or timeline_data["timeline_id"]),
-            timeline_slug=str(timeline_data["slug"]),
+            timeline_slug=timeline_slug,
             config_version=version,
             head_event_id=parent_head,
             head_hash=parent_digest.removeprefix("sha256:"),
@@ -826,6 +1044,8 @@ def resolve_managed_render_snapshot(
         stored_registry = projected.registry
         composition_graph = projected.graph
     else:
+        if not isinstance(config, dict) or not isinstance(stored_registry, dict):
+            raise ValueError("canonical timeline snapshot is not a JSON object")
         for key in ("shot_composition", "composition_graph", "canonical_graph", "prepared_shot_composition"):
             candidate = timeline_data.get(key)
             if isinstance(candidate, Mapping) and isinstance(candidate.get("shot_revisions"), list):
@@ -882,6 +1102,8 @@ def resolve_managed_render_snapshot(
     # The SDK's read model is the authority. Keep runtime-admitted media
     # identities in the snapshot; the generic host supplies bytes to the child
     # attempt without any local database or filesystem lookup.
+    raw_registry = stored_registry
+    config, stored_registry = _render_compatible_projection(config, stored_registry)
     config = _normalize_pinned_element_references(config)
     registry = _runtime_snapshot_registry(
         stored_registry,
@@ -889,7 +1111,7 @@ def resolve_managed_render_snapshot(
         client=client,
     )
     config_hash = _digest(config)
-    registry_hash = _digest(stored_registry)
+    registry_hash = _digest(raw_registry)
     if exact_parent is not None:
         head_event_id = str(exact_parent["revision_id"])
         head_hash = str(exact_parent["content_digest"]).removeprefix("sha256:")
@@ -915,7 +1137,7 @@ def resolve_managed_render_snapshot(
         project_slug=str(project["slug"]),
         timeline_id=str(timeline_data["timeline_id"]),
         timeline_ulid=str(timeline_data.get("timeline_ulid") or timeline_data["timeline_id"]),
-        timeline_slug=str(timeline_data["slug"]),
+        timeline_slug=timeline_slug,
         config_version=version,
         head_event_id=head_event_id,
         head_hash=head_hash,

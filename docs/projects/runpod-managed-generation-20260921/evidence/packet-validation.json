@@ -1,0 +1,18 @@
+{
+  "control_export_hashes": "PASS",
+  "control_files_verified": 136,
+  "final_archive_checks": "See external validation-receipt.json beside ZIP for actual deterministic rebuild, extraction, hashes and path results.",
+  "run_yaml_count": 12,
+  "scope": "Packet-only scope amendment and integrity validation; no product build/test, provider call or live GPU test executed.",
+  "current_project_acceptance": "CPU_FAKE_OFFLINE",
+  "post_handoff_live_gate": "DEFERRED_POST_HANDOFF; outside P0-P11/Q/H acceptance",
+  "scope_notices": "PASS: all 127 exported project and source-control documents explicitly apply the amendment",
+  "scope_edit_files": "scope-edit-files.json",
+  "secret_and_forbidden_file_pattern_scan": "PASS; bounded pattern/allowlist audit, not an exhaustive secret-detection guarantee",
+  "source_fetch": {
+    "not_checked": 1,
+    "pass": 11,
+    "unavailable": 1
+  },
+  "yaml": "PASS: YAML parses, seven roles, reviewer references and stage caps"
+}

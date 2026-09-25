@@ -27,10 +27,28 @@ _REQUIRED_SCOPES = frozenset(
         "tasks:write",
     }
 )
-_HEALTH_KEYS = frozenset({"status", "protocol", "schema_digest", "runtime_epoch"})
-_HANDSHAKE_KEYS = frozenset(
-    {"protocol", "schema_digest", "session_id", "actor_id", "realm_id", "scopes"}
+_HEALTH_KEYS = frozenset(
+    {
+        "status",
+        "protocol",
+        "runtime_epoch",
+        "runtime_instance_id",
+        "runtime_session_id",
+        "schema_digest",
+    }
 )
+_HANDSHAKE_KEYS = frozenset(
+    {
+        "protocol",
+        "schema_digest",
+        "session_id",
+        "actor_id",
+        "realm_id",
+        "scopes",
+        "capabilities",
+    }
+)
+_TARGETED_EXECUTION_BINDING_CAPABILITY = "execution_binding.targeted.v1"
 
 
 def _protocol_error(field: str, message: str) -> Any:
@@ -80,6 +98,10 @@ def _validate_health(value: Any, *, expected_protocol: str, expected_digest: str
     epoch = health.get("runtime_epoch")
     if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
         raise _protocol_error("health.runtime_epoch", "runtime health runtime_epoch is invalid")
+    for field in ("runtime_instance_id", "runtime_session_id"):
+        identity = health.get(field)
+        if not isinstance(identity, str) or not identity.strip():
+            raise _protocol_error(f"health.{field}", f"runtime health {field} is invalid")
 
 
 def _validate_handshake(
@@ -111,6 +133,20 @@ def _validate_handshake(
         raise _protocol_error("handshake.scopes", "runtime handshake scopes must be non-empty strings")
     if len(set(scopes)) != len(scopes) or frozenset(scopes) != _REQUIRED_SCOPES:
         raise _protocol_error("handshake.scopes", "runtime handshake did not grant exactly the required scopes")
+    capabilities = handshake.get("capabilities")
+    if not isinstance(capabilities, (list, tuple)) or any(
+        not isinstance(capability, str) or not capability.strip()
+        for capability in capabilities
+    ):
+        raise _protocol_error(
+            "handshake.capabilities",
+            "runtime handshake capabilities must be non-empty strings",
+        )
+    if _TARGETED_EXECUTION_BINDING_CAPABILITY not in capabilities:
+        raise _protocol_error(
+            "handshake.capabilities",
+            "runtime handshake did not advertise targeted execution binding support",
+        )
 
 
 class AstridClient:
@@ -272,6 +308,12 @@ class AstridClient:
 
         kwargs.setdefault("client", self)
         return invoke_result(capability_id, kind=kind, **kwargs)
+
+    def open_authoring_target(self, target: Any) -> Any:
+        """Open the existing detached authoring seam on this bound connection."""
+        from astrid.sdk.authoring_remote import TargetBoundAuthoringBundle
+
+        return TargetBoundAuthoringBundle(self._remote._transport, target)
 
     def __enter__(self) -> Self:
         return self

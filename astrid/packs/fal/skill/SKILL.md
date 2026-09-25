@@ -64,6 +64,7 @@ result = sdk.invoke(
 
 For a finished video with Foley, use the returned runtime audio artifact in the
 source video's timeline on an audio track aligned to the scored clip. Follow
-[timeline editing and rendering](../../rendering/skill/SKILL.md) to save and
-render it; Foley generation alone returns audio, not a muxed video. Read the
+[video editing — existing timeline route](../../video_editing/skill/SKILL.md) to
+place and save it, then use rendering downstream to render it; Foley generation
+alone returns audio, not a muxed video. Read the
 selected executor's `STAGE.md` before admission.

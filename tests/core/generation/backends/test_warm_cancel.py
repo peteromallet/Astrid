@@ -365,6 +365,22 @@ def test_managed_release_accepts_only_explicit_model_unload_observation(monkeypa
     assert result["released"] is True
 
 
+def test_managed_release_accepts_empty_2xx_control_ack(monkeypatch) -> None:
+    _native_http(monkeypatch)
+    adapter = CheckoutServerAdapter("http://gpu.example.test")
+    adapter._host_session = {"managed": True}
+    adapter._revalidate_host_session = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter._probe_system_stats = Mock(return_value=None)  # type: ignore[method-assign]
+    adapter._engine._post = Mock(  # type: ignore[method-assign]
+        side_effect=[{}, {"acknowledged": True}]
+    )
+
+    result = adapter.release(reason="replacement")
+
+    assert result["ok"] is True
+    assert result["released"] is True
+
+
 def test_managed_cleanup_sends_no_control_calls_after_ownership_failure(monkeypatch) -> None:
     calls = _native_http(monkeypatch)
     adapter = CheckoutServerAdapter("http://gpu.example.test")

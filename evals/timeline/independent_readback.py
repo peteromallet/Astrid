@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Protocol
 
@@ -34,6 +35,7 @@ class ClosureReader(Protocol):
 
 ACTIVE_MEDIA_REPLACEMENT = "active_media_replacement.v1"
 EXACT_CLOSURE_NAVIGATION = "exact_closure_navigation.v1"
+MOVE_OCCURRENCE_GROUP = "move_occurrence_group.v1"
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,29 @@ class CaseReadbackResult:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def independent_outcome_evidence(
+    *, before: Any = None, after: Any = None, readback: Any = None,
+    conclusion: Any = None, render_artifacts: Any = None,
+    playback_artifacts: Any = None,
+) -> dict[str, Any]:
+    """Normalize coordinator evidence for the outcome-oriented judge record.
+
+    This is deliberately evidence-only: it does not convert a readback status
+    or a worker conclusion into a semantic pass/fail. The caller compares the
+    request against these independently captured fields.
+    """
+    def plain(value: Any) -> Any:
+        if hasattr(value, "as_dict") and callable(value.as_dict):
+            return value.as_dict()
+        return value
+    return {
+        "before": plain(before), "after": plain(after),
+        "readback": plain(readback), "conclusion": conclusion,
+        "render_artifacts": render_artifacts,
+        "playback_artifacts": playback_artifacts,
+    }
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -443,7 +468,9 @@ def observe_case_before(
     *, source_reader: ClosureReader | None = None,
 ) -> ReadbackObservation:
     """Capture coordinator-owned evidence before the evaluated agent starts."""
-    if contract.projection not in {ACTIVE_MEDIA_REPLACEMENT, EXACT_CLOSURE_NAVIGATION}:
+    if contract.projection not in {
+        ACTIVE_MEDIA_REPLACEMENT, EXACT_CLOSURE_NAVIGATION, MOVE_OCCURRENCE_GROUP,
+    }:
         raise ProjectionUnavailable(f"case projection unavailable: {contract.projection}")
     project_id = _required_string(target.get("project_id"), "target project ID")
     timeline_id = _required_string(target.get("timeline_id"), "target timeline ID")
@@ -678,9 +705,171 @@ def verify_case_after(
     )
 
 
+def verify_occurrence_group_move(
+    before_closure: Mapping[str, Any],
+    after_closure: Mapping[str, Any],
+    target_locator: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Independently verify an A03 occurrence permutation and child bindings.
+
+    The verifier reads only the two exact closure snapshots supplied by the
+    coordinator. It checks the full group payload for every occurrence, all
+    duration values, cumulative starts, and the total running time.
+    """
+
+    closing_id = _required_string(target_locator.get("closing_occurrence_id"), "closing occurrence ID")
+    middle_id = _required_string(target_locator.get("middle_occurrence_id"), "middle occurrence ID")
+
+    def closure_parts(closure: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], dict[tuple[str, str], Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
+        parent = _mapping(closure.get("parent_revision"))
+        payload = _mapping(parent.get("payload"))
+        occurrences = _rows(payload.get("occurrences"))
+        shots = {(str(row.get("shot_id", "")), str(row.get("revision_id", ""))): row
+                 for row in _rows(closure.get("shot_revisions"))}
+        internals = {str(row.get("revision_id", "")): row
+                     for row in _rows(closure.get("internal_timeline_revisions"))}
+        return occurrences, shots, internals
+
+    def group_fingerprints(closure: Mapping[str, Any]) -> tuple[list[str], dict[str, str], dict[str, Any], dict[str, str], str]:
+        occurrences, shots, internals = closure_parts(closure)
+        order = [str(row.get("occurrence_id", "")) for row in occurrences]
+        if not order or any(not value for value in order) or len(order) != len(set(order)):
+            raise IndependentReadbackError("parent occurrences have missing or duplicate IDs")
+        result: dict[str, str] = {}
+        durations: dict[str, Any] = {}
+        placement_content: dict[str, str] = {}
+        parent_payload = copy.deepcopy(dict(_mapping(_mapping(closure.get("parent_revision")).get("payload"))))
+        parent_payload.pop("occurrences", None)
+        for occurrence in occurrences:
+            occurrence_id = str(occurrence["occurrence_id"])
+            shot_id = str(occurrence.get("shot_id", ""))
+            shot_revision_id = str(occurrence.get("shot_revision_id", occurrence.get("revision_id", "")))
+            shot = shots.get((shot_id, shot_revision_id))
+            if shot is None:
+                raise IndependentReadbackError(f"occurrence {occurrence_id} has no pinned shot revision")
+            shot_payload = copy.deepcopy(dict(_mapping(shot.get("payload"))))
+            internal_id = shot.get("internal_timeline_revision_id", shot_payload.get("internal_timeline_revision_id"))
+            internal = internals.get(str(internal_id))
+            if internal is None:
+                raise IndependentReadbackError(f"occurrence {occurrence_id} has no pinned internal timeline")
+            shot_payload.pop("internal_timeline_revision_id", None)
+            internal_payload = _mapping(internal.get("payload"))
+            result[occurrence_id] = _fingerprint({"shot": shot_payload, "internal": internal_payload})
+            durations[occurrence_id] = occurrence.get("duration_ms")
+            stable_occurrence = copy.deepcopy(dict(occurrence))
+            stable_occurrence.pop("shot_id", None)
+            stable_occurrence.pop("shot_revision_id", None)
+            stable_occurrence.pop("revision_id", None)
+            stable_placement = stable_occurrence.get("placement")
+            if isinstance(stable_placement, dict):
+                stable_placement.pop("start_ms", None)
+            placement_content[occurrence_id] = _fingerprint(stable_occurrence)
+        return order, result, durations, placement_content, _fingerprint(parent_payload)
+
+    before_order, before_groups, before_durations, before_placements, before_parent = group_fingerprints(before_closure)
+    after_order, after_groups, after_durations, after_placements, after_parent = group_fingerprints(after_closure)
+    if closing_id not in before_order or middle_id not in before_order or closing_id == middle_id:
+        raise IndependentReadbackError("closing/middle target is absent or ambiguous in source closure")
+    expected_order = list(before_order)
+    expected_order.remove(closing_id)
+    expected_order.insert(expected_order.index(middle_id), closing_id)
+
+    def starts(
+        closure: Mapping[str, Any], *, origin: int | float | None = None,
+    ) -> tuple[dict[str, Any], Any, bool, int | float]:
+        occurrences, _, _ = closure_parts(closure)
+        by_id = {str(row.get("occurrence_id")): row for row in occurrences}
+        order = [str(row.get("occurrence_id", "")) for row in occurrences]
+        observed_start = _mapping(by_id[order[0]].get("placement")).get("start_ms")
+        if isinstance(observed_start, bool) or not isinstance(observed_start, (int, float)):
+            raise IndependentReadbackError("occurrence placement start is missing or invalid")
+        if origin is None:
+            origin = observed_start
+        expected: dict[str, Any] = {}
+        cursor = origin
+        contiguous = True
+        for occurrence_id in order:
+            row = by_id[occurrence_id]
+            actual = _mapping(row.get("placement")).get("start_ms")
+            duration = row.get("duration_ms")
+            if (isinstance(duration, bool) or not isinstance(duration, (int, float))
+                    or not math.isfinite(duration) or duration <= 0
+                    or isinstance(actual, bool) or not isinstance(actual, (int, float))):
+                raise IndependentReadbackError("occurrence timing is missing or invalid")
+            expected[occurrence_id] = cursor
+            contiguous = contiguous and math.isclose(float(actual), float(cursor), rel_tol=0, abs_tol=1e-6)
+            cursor += duration
+        origin_ok = math.isclose(float(observed_start), float(origin), rel_tol=0, abs_tol=1e-6)
+        return expected, cursor - origin, contiguous and origin_ok, origin
+
+    _, before_total, before_contiguous, before_origin = starts(before_closure)
+    after_expected, after_total, after_contiguous, _ = starts(after_closure, origin=before_origin)
+    order_ok = after_order == expected_order and expected_order != before_order
+    groups_ok = after_groups == before_groups
+    placements_ok = after_placements == before_placements
+    parent_ok = after_parent == before_parent
+    duration_ok = after_durations == before_durations
+    total_ok = math.isclose(float(after_total), float(before_total), rel_tol=0, abs_tol=1e-6)
+    timing_ok = before_contiguous and after_contiguous and all(
+        math.isclose(float(_mapping(row.get("placement")).get("start_ms")), float(after_expected[oid]), rel_tol=0, abs_tol=1e-6)
+        for row in _rows(_mapping(_mapping(after_closure.get("parent_revision")).get("payload")).get("occurrences"))
+        for oid in [str(row.get("occurrence_id"))]
+    )
+    status = "pass" if order_ok and groups_ok and placements_ok and parent_ok and duration_ok and total_ok and timing_ok else "fail"
+    return {
+        "projection": MOVE_OCCURRENCE_GROUP,
+        "status": status,
+        "before_order": before_order,
+        "expected_order": expected_order,
+        "after_order": after_order,
+        "original_occurrence_identity_and_payload_unchanged": placements_ok and parent_ok,
+        "moved_group_preserves_picture_voice_caption_bindings": groups_ok,
+        "durations_unchanged": duration_ok,
+        "cumulative_starts_valid": timing_ok,
+        "total_duration_before_ms": before_total,
+        "total_duration_after_ms": after_total,
+        "total_duration_unchanged": total_ok,
+        "reasons": [] if status == "pass" else [
+            label for label, valid in (
+                ("occurrence order is not the requested immediate-before permutation", order_ok),
+                ("one or more occurrence child groups changed", groups_ok),
+                ("placement metadata or non-occurrence parent payload changed", placements_ok and parent_ok),
+                ("occurrence durations changed", duration_ok),
+                ("cumulative starts or contiguous placement invariant failed", timing_ok),
+                ("total running time changed", total_ok),
+            ) if not valid
+        ],
+    }
+
+
+def verify_case_safety_after(
+    reader: ClosureReader,
+    target: Mapping[str, Any],
+    contract: ReadbackContract,
+    before: ReadbackObservation,
+    *,
+    source_reader: ClosureReader | None = None,
+) -> dict[str, bool | None]:
+    """Compare coordinator source and sibling-timeline safety observations."""
+    project_id = _required_string(target.get("project_id"), "target project ID")
+    timeline_id = _required_string(target.get("timeline_id"), "target timeline ID")
+    source_after = _source_fingerprint(source_reader, contract)
+    source_unchanged = (
+        before.source_fingerprint == source_after
+        if before.source_fingerprint is not None and source_after is not None else None
+    )
+    siblings_after = _sibling_timeline_fingerprints(reader, project_id, timeline_id)
+    test_target_only = (
+        before.sibling_timeline_fingerprints == siblings_after
+        if before.sibling_timeline_fingerprints is not None and siblings_after is not None else None
+    )
+    return {"source_unchanged": source_unchanged, "test_target_only": test_target_only}
+
+
 __all__ = [
-    "ACTIVE_MEDIA_REPLACEMENT", "EXACT_CLOSURE_NAVIGATION", "CaseReadbackResult", "ClosureReader",
+    "ACTIVE_MEDIA_REPLACEMENT", "EXACT_CLOSURE_NAVIGATION", "MOVE_OCCURRENCE_GROUP", "CaseReadbackResult", "ClosureReader", "independent_outcome_evidence",
     "IndependentReadbackError", "ProjectionUnavailable", "ReadbackContract",
     "ReadbackObservation", "SourceObservation", "capture_source_observation",
-    "observe_case_before", "read_target_snapshot", "verify_case_after", "verify_navigation_after",
+    "observe_case_before", "read_target_snapshot", "verify_case_after", "verify_case_safety_after", "verify_navigation_after",
+    "verify_occurrence_group_move",
 ]

@@ -11,6 +11,7 @@ import pytest
 from astrid.core.timeline.authoring_bundle import (
     AuthoringBundleError,
     UnsupportedAuthoringEditError,
+    approve_authoring_candidate,
     authoring_contract,
     authoring_media_inventory,
     compile_authoring_candidate,
@@ -19,6 +20,7 @@ from astrid.core.timeline.authoring_bundle import (
     inspect_authoring_candidate,
     open_authoring_bundle,
     preview_authoring_candidate,
+    promote_approved_authoring_candidate,
     publish_authoring_candidate,
     validate_authoring_candidate,
 )
@@ -35,6 +37,8 @@ from astrid.sdk.invocation import _prepare_managed_render_inputs
 from astrid.sdk.timeline_editing import (
     add_track,
     duplicate_authoring_shot,
+    move_occurrence_group,
+    place_media,
     remove_authoring_shot,
 )
 
@@ -363,6 +367,197 @@ def test_publish_uses_one_compilation_and_returns_complete_mapping():
     assert set(result["identity_mapping"]["placements"]) == {"occ-1", "occ-2"}
 
 
+def test_group_move_compiles_and_uses_existing_publication_boundary():
+    parent, shots, timelines = _closure(shared=True)
+    candidate = open_authoring_bundle(
+        parent, shot_revisions=shots, internal_timeline_revisions=timelines
+    )
+    move_occurrence_group(candidate, "occ-2", before_occurrence_id="occ-1")
+    writer = _Writer()
+
+    result = publish_authoring_candidate(candidate, writer, idempotency_key="a03-group-move")
+
+    assert len(writer.calls) == 1
+    assert writer.calls[0][3] == "a03-group-move"
+    occurrences = writer.calls[0][2]["parent_composition"]["occurrences"]
+    assert [row["occurrence_id"] for row in occurrences] == ["occ-2", "occ-1"]
+    assert [row["placement"]["start_ms"] for row in occurrences] == [0, 1000]
+    assert [row["duration_ms"] for row in occurrences] == [1000, 1000]
+    assert result["publication"]["data"]["new_head"] == writer.calls[0][2]["parent_revision_id"]
+
+
+def test_approval_is_bound_to_candidate_and_base_revision():
+    parent, shots, timelines = _closure(shared=True)
+    candidate = open_authoring_bundle(
+        parent, shot_revisions=shots, internal_timeline_revisions=timelines
+    )
+    approval = approve_authoring_candidate(
+        candidate, approver="editor-1", approval_id="approval-1"
+    )
+    writer = _Writer()
+
+    changed = copy.deepcopy(candidate)
+    changed["parent"]["config"]["approved-edit"] = True
+    with pytest.raises(AuthoringBundleError, match="stale or does not match"):
+        promote_approved_authoring_candidate(
+            changed, approval, writer, idempotency_key="promote-1"
+        )
+    assert writer.calls == []
+
+    promoted = promote_approved_authoring_candidate(
+        candidate, approval, writer, idempotency_key="promote-1"
+    )
+    assert promoted["approval"]["approval_id"] == "approval-1"
+    assert len(writer.calls) == 1
+
+
+def test_frozen_render_restart_then_approval_promotion_is_single_generation(tmp_path):
+    """Exercise the contract, durable replay, and candidate promotion seam together."""
+    from astrid.core.execution.reconciler import ExecutionReconciler
+    from astrid.core.execution.target_adapter import LocalMachineTargetAdapter
+
+    source = b"deterministically extracted source bytes"
+    source_digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    contract = {
+        "schema_version": 1,
+        "workflow": {
+            "id": "render.authoring-candidate",
+            "contract_digest": "sha256:workflow",
+            "required_bindings": ["source_video"],
+        },
+        "inputs": [
+            {
+                "name": "source_video",
+                "object_id": source_digest,
+                "filename": "source.mp4",
+                "required": True,
+            }
+        ],
+        "target": {"kind": "machine", "id": "local-1"},
+        "retry_policy": {"max_attempts": 2},
+        "checks": {"outputs": ["sha256"]},
+    }
+
+    class Runtime:
+        def __init__(self):
+            self.task = None
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(("create", kwargs))
+            if self.task is None:
+                self.task = {
+                    "task_id": "render-task-1",
+                    "run_id": "render-run-1",
+                    "state": "queued",
+                    "idempotency_key": kwargs["idempotency_key"],
+                    "capability_id": kwargs["capability"],
+                    "spec": {**kwargs["spec"], "execution_request": kwargs["execution_request"]},
+                }
+            return {"task_id": self.task["task_id"], "run_id": self.task["run_id"]}
+
+        def get_task(self, task_id):
+            assert task_id == self.task["task_id"]
+            return dict(self.task)
+
+        def claim(self, **kwargs):
+            self.calls.append(("claim", kwargs))
+            self.task.update({"state": "running", "attempt_id": "render-attempt-1"})
+            return {
+                "task_id": self.task["task_id"],
+                "attempt_id": "render-attempt-1",
+                "lease_id": "render-lease-1",
+                "fence": 1,
+                "runtime_epoch": 1,
+                "idempotency_key": "render-request-1",
+                "capability_id": "render.authoring-candidate",
+                "spec": self.task["spec"],
+            }
+
+        def settle(self, attempt_id, **kwargs):
+            self.calls.append(("settle", kwargs))
+            self.task.update({"state": "completed", "result": {"outputs": kwargs["outputs"]}})
+            return {"ok": True}
+
+        def fail(self, *args, **kwargs):
+            self.calls.append(("fail", kwargs))
+            self.task["state"] = "failed"
+            return {"ok": True}
+
+    runtime = Runtime()
+    adapter = LocalMachineTargetAdapter(
+        {"kind": "machine", "id": "local-1"},
+        observer=lambda: {
+            "kind": "machine",
+            "target_id": "local-1",
+            "live": True,
+            "runtime_epoch": 1,
+            "launch_generation": "launch-1",
+            "process_birth_id": "process-1",
+            "engine_birth_id": "engine-1",
+            "output_root": str(tmp_path),
+        },
+    )
+    render_count = 0
+
+    def execute(_claim, observation):
+        nonlocal render_count
+        render_count += 1
+        output = tmp_path / "render.bin"
+        output.write_bytes(source + b"/rendered")
+        data = output.read_bytes()
+        return {
+            "outputs": [
+                {
+                    "path": output.name,
+                    "content_hash": "sha256:" + hashlib.sha256(data).hexdigest(),
+                    "bytes": len(data),
+                }
+            ],
+            "source_digest": source_digest,
+            "source_filename": "source.mp4",
+            "output_root": observation.output_root,
+        }
+
+    reconciler = ExecutionReconciler(runtime, adapter)
+    first = reconciler.run(
+        contract=contract,
+        project_id="project-1",
+        capability="render.authoring-candidate",
+        spec={"inputs": {}},
+        executor_id="worker-1",
+        execute=execute,
+        idempotency_key="render-request-1",
+    )
+    second = reconciler.run(
+        contract=contract,
+        project_id="project-1",
+        capability="render.authoring-candidate",
+        spec={"inputs": {}},
+        executor_id="worker-1",
+        execute=execute,
+        idempotency_key="render-request-1",
+    )
+
+    assert first.status == "complete"
+    assert second.status == "complete"
+    assert second.phase == "recovery"
+    assert render_count == 1
+    assert [name for name, _ in runtime.calls].count("claim") == 1
+
+    parent, shots, timelines = _closure(shared=True)
+    candidate = open_authoring_bundle(
+        parent, shot_revisions=shots, internal_timeline_revisions=timelines
+    )
+    approval = approve_authoring_candidate(candidate, approver="editor-1", approval_id="approval-render-1")
+    writer = _Writer()
+    promoted = promote_approved_authoring_candidate(
+        candidate, approval, writer, idempotency_key="promote-render-1"
+    )
+    assert promoted["candidate_digest"] == approval["candidate_digest"]
+    assert len(writer.calls) == 1
+
+
 def test_full_authored_field_edits_compile_without_normalizing_opaque_fields():
     parent, shots, timelines = _closure(shared=False)
     candidate = open_authoring_bundle(
@@ -577,7 +772,7 @@ def test_frozen_candidate_projects_to_labelled_managed_render_without_publicatio
             self.projects = SimpleNamespace(show=lambda _ref: result({"id": "project-1", "slug": "demo"}))
             timeline = {
                 "timeline_id": "main", "timeline_ulid": "main", "slug": "main",
-                "config_version": 1, "head_revision_id": "parent-1",
+                "version": 7, "head_revision_id": "parent-1",
                 "config": {"tracks": [], "clips": []}, "registry": {"assets": {}},
             }
             self.timelines = SimpleNamespace(
@@ -597,7 +792,7 @@ def test_frozen_candidate_projects_to_labelled_managed_render_without_publicatio
 
     snapshot = ManagedRenderSnapshot(
         project_id="project-1", project_slug="demo", timeline_id="main",
-        timeline_ulid="main", timeline_slug="main", config_version=1,
+        timeline_ulid="main", timeline_slug="main", config_version=7,
         head_event_id="parent-1", head_hash=parent["content_digest"][7:],
         config={"tracks": [], "clips": []}, registry={"assets": {}},
         config_hash="0" * 64, registry_hash="0" * 64,
@@ -624,13 +819,22 @@ def test_frozen_candidate_projects_to_labelled_managed_render_without_publicatio
     shot_id = render_candidate["placements"][0]["shot_id"]
     internal = render_candidate["shots"][shot_id]["internal_timeline"]
     internal["tracks"] = copy.deepcopy(render_candidate["parent"]["config"]["tracks"])
-    internal["clips"] = [
-        {"id": "picture-1", "track": "picture", "clipType": "media", "asset": "old-picture", "at": 0, "hold": 1},
-        {"id": "voice-1", "track": "voice", "clipType": "media", "asset": "voice", "at": 0, "hold": 1},
-    ]
+    internal["clips"] = []
+    picture_clip = place_media(
+        internal, OLD, track=internal["tracks"][0], start=0, end=1,
+        clip_id="picture-1", fit="cover",
+        rect={"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+        clipType="media",
+    )
+    place_media(
+        internal, AUDIO, track=internal["tracks"][1], start=0, end=1,
+        clip_id="voice-1", clipType="media",
+    )
+    assert picture_clip["media_id"] == OLD
+    assert picture_clip["fit"] == "cover"
     internal["registry"] = {"assets": {
-        "old-picture": {"media_id": OLD, "type": "image"},
-        "voice": {"media_id": AUDIO, "type": "audio"},
+        "old-picture": {"media_id": OLD, "type": "image", "origin": "managed-local"},
+        "voice": {"media_id": AUDIO, "type": "audio", "origin": "managed-local"},
     }}
     render_preview = preview_authoring_candidate(render_candidate)
 
@@ -649,7 +853,28 @@ def test_frozen_candidate_projects_to_labelled_managed_render_without_publicatio
     assert admitted["authoring_preview"]["candidate_digest"] == render_preview["candidate_digest"]
     assert admitted["authority"] == "kernel"
     assert admitted["render_mode"] == "authoring_candidate_preview"
-    assert prepared["timeline_snapshot"]["config"]["clips"]
+    assert admitted["config_version"] == 7
+    assert admitted["authoring_preview"]["publication_digest"] == render_preview["publication_digest"]
+    prepared_config = prepared["timeline_snapshot"]["config"]
+    prepared_picture = next(
+        clip for clip in prepared_config["clips"] if clip["id"].endswith(":picture-1")
+    )
+    prepared_track = next(
+        track for track in prepared_config["tracks"] if track["id"] == prepared_picture["track"]
+    )
+    assert prepared_picture["asset"]
+    assert "media_id" not in prepared_picture
+    assert "fit" not in prepared_picture
+    assert "rect" not in prepared_picture
+    assert prepared_track["fit"] == "cover"
+    assert {key: prepared_picture[key] for key in ("x", "y", "width", "height")} == {
+        "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4,
+    }
+    projection = prepared_picture["app"]["astrid_authoring_render_projection"]
+    assert projection["media_selector"]["media_id"] == OLD
+    assert projection["fit"] == {"value": "cover", "projected_to_track": prepared_picture["track"]}
+    prepared_asset = prepared["timeline_snapshot"]["registry"]["assets"][prepared_picture["asset"]]
+    assert prepared_asset["origin"] == "opaque-foreign"
 
     stale = copy.deepcopy(preview)
     stale["candidate_digest"] = "sha256:" + "0" * 64

@@ -7,16 +7,22 @@ then validate, preview, and submit the complete candidate through the existing
 CAS publication boundary.
 
 ```python
-from astrid.core.timeline.authoring_bundle import (
+from astrid.sdk import (
     open_authoring_bundle, validate_authoring_candidate,
     preview_authoring_candidate, publish_authoring_candidate,
+    add_authoring_shot, move_occurrence_group, add_track, place_media, sequence, grid,
 )
-from astrid.sdk import add_authoring_shot, add_track, place_media, sequence, grid
 from examples.timeline_authoring_recipes import brightness_sequence
 
+# `client.timelines.open_composition(project, ref)` is a read-only projection
+# for inspection. It does not return the editable bundle.
+inspection = client.timelines.open_composition(project_id, timeline_id)
+# Open the same exact pinned closure as an editable detached candidate.
 work = open_authoring_bundle(parent, shot_revisions=shots,
                              internal_timeline_revisions=timelines)
 brightness_sequence(work, admitted_image_ids, brightness_key)
+# Move one complete occurrence group while keeping durations and total time.
+move_occurrence_group(work, "closing-occurrence", before_occurrence_id="middle-occurrence")
 validate_authoring_candidate(work)       # no persistence
 preview = preview_authoring_candidate(work)  # frozen candidate artifact
 receipt = publish_authoring_candidate(work, writer, idempotency_key="run-1")
@@ -48,6 +54,17 @@ explicit (`preserve`, `extend`, or `trim`).
 field table above. It distinguishes editable fields, derived fields, guarded
 placement fields, and invariants so an agent can inspect capability coverage
 without rediscovering the compiler rules.
+
+| Helper | Use |
+| --- | --- |
+| `place_media` | Add an admitted media item using canonical `at`, source `from`/`to`, optional `hold`, and `speed`. |
+| `move` / `retime` | Change a clip's timeline interval while preserving its source origin and playback speed. |
+| `sequence` / `align` | Arrange supplied clips on explicit half-open timeline intervals. |
+| `retime_with_ripple` | Shift following visual clips on the same track with an explicit duration policy; audio is never moved. |
+| `move_occurrence_group` | Move one whole occurrence immediately before another in a contiguous sequence; child shot/clip bindings and durations stay attached to the occurrence. |
+| `fit_duration` | Extend or trim the timeline duration to cover its clips. |
+| `quantize_interval` | Convert requested boundaries to exact frames and report any rounding. |
+| `duplicate` / `replace_media` / `remove` | Manage detached clip, track, shot, or media identities. |
 
 ## Four small recipes
 

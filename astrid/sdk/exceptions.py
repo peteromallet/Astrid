@@ -59,6 +59,10 @@ class UnsupportedCapabilityError(AstridSDKError):
 class CapabilityInvocationError(AstridSDKError):
     """Raised when the SDK cannot construct or execute an invocation."""
 
+    def __init__(self, message: str, *, details: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
 
 class CapabilityValidationError(AstridSDKError):
     """Raised when capability metadata or invocation arguments are invalid."""

@@ -1,0 +1,105 @@
+{
+  "declarations": [
+    {
+      "path": "pyproject.toml",
+      "repository": "Astrid",
+      "sha": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "sha256": "5af1b80fe9a7f4ab2b8fa497146039d0cedeaf8e26d8bfb1ac811f5e1b48a7d9",
+      "source_url": "https://github.com/peteromallet/Astrid/blob/032f65bcd84bd6360f83c260aa902c3a70cc0575/pyproject.toml"
+    },
+    {
+      "path": "pyproject.toml",
+      "repository": "runpod-lifecycle",
+      "sha": "f6a94f52a7f9a5a83e83de46abbec8a9f86dfd77",
+      "sha256": "b3fc3fba8a06427a0ed27d1e479f9ab284bdea5c80ce235b642f538cbe544488",
+      "source_url": "https://github.com/banodoco/runpod-lifecycle/blob/f6a94f52a7f9a5a83e83de46abbec8a9f86dfd77/pyproject.toml"
+    },
+    {
+      "path": "uv.lock",
+      "repository": "runpod-lifecycle",
+      "sha": "f6a94f52a7f9a5a83e83de46abbec8a9f86dfd77",
+      "sha256": "4ab12ce3789b30c65482e96c25f6931ea653efcaddcf68d12ac55b948970bafc",
+      "source_url": "https://github.com/banodoco/runpod-lifecycle/blob/f6a94f52a7f9a5a83e83de46abbec8a9f86dfd77/uv.lock"
+    },
+    {
+      "path": "pyproject.toml",
+      "repository": "VibeComfy",
+      "sha": "fba5567d4efb59e2ae5020b8ad0d3db11cf02910",
+      "sha256": "23e9b91143261aa36440baab3aa186cbe895529608c10357dc01c71c58631db5",
+      "source_url": "https://github.com/peteromallet/VibeComfy/blob/fba5567d4efb59e2ae5020b8ad0d3db11cf02910/pyproject.toml"
+    },
+    {
+      "path": "uv.lock",
+      "repository": "VibeComfy",
+      "sha": "fba5567d4efb59e2ae5020b8ad0d3db11cf02910",
+      "sha256": "1f13c0cb756d819c5e63f3ef0ec7d6a956a78ffc825af7666d8e6a4079f2198c",
+      "source_url": "https://github.com/peteromallet/VibeComfy/blob/fba5567d4efb59e2ae5020b8ad0d3db11cf02910/uv.lock"
+    },
+    {
+      "path": "custom_nodes.lock",
+      "repository": "VibeComfy",
+      "sha": "fba5567d4efb59e2ae5020b8ad0d3db11cf02910",
+      "sha256": "7741945b99176bedf97fd14009539156ccccde41c3cbe4f03b9f26df0ccead42",
+      "source_url": "https://github.com/peteromallet/VibeComfy/blob/fba5567d4efb59e2ae5020b8ad0d3db11cf02910/custom_nodes.lock"
+    },
+    {
+      "path": "pyproject.toml",
+      "repository": "Runtime",
+      "sha": "8ea6b3e2a41567a9880cf15f4116b1ae2a1ec019",
+      "sha256": "7b33931ac3106396dd80cacdc84ae7e2739c2a2181190cd604d7619628e86941",
+      "source_url": "https://github.com/banodoco/banodoco-workspace-runtime/blob/8ea6b3e2a41567a9880cf15f4116b1ae2a1ec019/pyproject.toml"
+    },
+    {
+      "path": "pyproject.toml",
+      "repository": "reigh-worker",
+      "sha": "c2c6eca79f474033bfaedc6a8fa80f70940b057f",
+      "sha256": "f2523238646e1a67d1a0cf0c045572f471181aee89bfafcf9ef3286fe821e114",
+      "source_url": "https://github.com/banodoco/reigh-worker/blob/c2c6eca79f474033bfaedc6a8fa80f70940b057f/pyproject.toml"
+    },
+    {
+      "path": "uv.lock",
+      "repository": "reigh-worker",
+      "sha": "c2c6eca79f474033bfaedc6a8fa80f70940b057f",
+      "sha256": "f4b03270aa100439672b2219338ecc79e492657e4edc9563d1e97315cb0f3d7b",
+      "source_url": "https://github.com/banodoco/reigh-worker/blob/c2c6eca79f474033bfaedc6a8fa80f70940b057f/uv.lock"
+    },
+    {
+      "path": "requirements.txt",
+      "repository": "reigh-worker",
+      "sha": "c2c6eca79f474033bfaedc6a8fa80f70940b057f",
+      "sha256": "34f9d73c16547fea31a8180b79810983cc62ef08f9c16441c2580377d0bf0b28",
+      "source_url": "https://github.com/banodoco/reigh-worker/blob/c2c6eca79f474033bfaedc6a8fa80f70940b057f/requirements.txt"
+    },
+    {
+      "path": ".gitmodules",
+      "repository": "reigh-worker",
+      "sha": "c2c6eca79f474033bfaedc6a8fa80f70940b057f",
+      "sha256": "26960b186a9e8e938465139c0ebd3f8f87f617a355c561f1867c62834c9d0b7a",
+      "source_url": "https://github.com/banodoco/reigh-worker/blob/c2c6eca79f474033bfaedc6a8fa80f70940b057f/.gitmodules"
+    },
+    {
+      "path": "requirements.txt",
+      "repository": "Wan2GP",
+      "sha": "181bb71a21008032e4771e11663f33e4489c4512",
+      "sha256": "46cbe42a38987df50a364d02a362d12c388c681d99c66873f9f794c3a84a871f",
+      "source_url": "https://github.com/banodoco/Wan2GP/blob/181bb71a21008032e4771e11663f33e4489c4512/requirements.txt"
+    },
+    {
+      "path": "package-lock.json",
+      "repository": "reigh-app",
+      "sha": "23d7fc65310b67692dcea4286a01dfbbdf011dc0",
+      "sha256": "b1518d0da88cec34b72fc31f7d1dc412ac4c32172b17ed19eb35bccc24cb0be0",
+      "source_url": "https://github.com/banodoco/reigh-app/blob/23d7fc65310b67692dcea4286a01dfbbdf011dc0/package-lock.json"
+    }
+  ],
+  "qualification": "Source pins and declaration hashes, not a qualified GPU release lock.",
+  "repository_lock": "repo-lock.json",
+  "schema": "dependency-provenance.v1",
+  "unresolved": [
+    "ComfyUI qualified release revision, node/runtime lock and model digest closure are not certified for current program.",
+    "OCI digest, wheelhouse/source fallback hashes and clean-host reproduction remain P6/Q gates.",
+    "VibeComfy declares an older lifecycle pin; reigh-worker declares a moving lifecycle branch. Integration pins require explicit dependency update/qualification.",
+    "Separate Python >=3.11 control/Runtime environments from reigh-worker Python >=3.10,<3.11 GPU environment.",
+    "All receiver model/provider capabilities and native delegation remain unverified. No silent substitution."
+  ]
+}

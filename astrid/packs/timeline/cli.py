@@ -657,16 +657,41 @@ def _cmd_visualize(parsed: argparse.Namespace) -> int:
     inputs["occurrence"] = inspection_options({"occurrence": getattr(parsed, "occurrence", None)})["occurrence"]
     if inputs["occurrence"] is None:
         inputs.pop("occurrence")
-    result = parsed.client.invoke_result(
-        "rendering.timeline_visualize",
-        kind="executor",
-        project=parsed.project,
-        inputs=inputs,
-        out=parsed.out,
-        # Wait for the admitted task so the CLI cannot report a successful run
-        # before the PNG/manifest artifacts (or a terminal failure) exist.
-        wait=True,
+    shown_components = inputs.get("show") or []
+    hidden_components = inputs.get("hide") or []
+    native_input_only = (
+        "inputs" in shown_components
+        and "output" in hidden_components
+        and not inputs.get("render_run")
+        and not inputs.get("include_media")
     )
+    native_visualize = getattr(getattr(parsed.client, "timelines", None), "visualize", None)
+    if native_input_only and callable(native_visualize):
+        result = native_visualize(
+            parsed.project,
+            timeline_slug,
+            formats=formats,
+            occurrence=inputs.get("occurrence"),
+            shot=inputs.get("shot"),
+            clip=inputs.get("clip"),
+            asset=inputs.get("asset"),
+            track=inputs.get("track"),
+            range_value=inputs.get("range"),
+            detail=bool(inputs.get("detail")),
+            neighbors=int(inputs.get("neighbors") or 0),
+            out=getattr(parsed, "out", None),
+        )
+    else:
+        result = parsed.client.invoke_result(
+            "rendering.timeline_visualize",
+            kind="executor",
+            project=parsed.project,
+            inputs=inputs,
+            out=getattr(parsed, "out", None),
+            # Wait for the admitted task so the CLI cannot report a successful run
+            # before the PNG/manifest artifacts (or a terminal failure) exist.
+            wait=True,
+        )
     if result.ok:
         outputs = result.outputs
         if isinstance(outputs, Mapping):

@@ -1,0 +1,130 @@
+{
+  "repositories": [
+    {
+      "clean": true,
+      "destination": "Astrid-032f65bcd84b",
+      "id": "Astrid",
+      "observed_sha": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "requested_sha": "032f65bcd84bd6360f83c260aa902c3a70cc0575",
+      "status": "PASS",
+      "tree": "25dbba19aac0c68acc34453363a35de706cae176",
+      "url": "https://github.com/peteromallet/Astrid.git"
+    },
+    {
+      "clean": true,
+      "destination": "runpod-lifecycle-f6a94f52a7f9",
+      "id": "runpod-lifecycle",
+      "observed_sha": "f6a94f52a7f9a5a83e83de46abbec8a9f86dfd77",
+      "requested_sha": "f6a94f52a7f9a5a83e83de46abbec8a9f86dfd77",
+      "status": "PASS",
+      "tree": "ebbd650ee89c8d27805d4ea62a7c928168f4fa52",
+      "url": "https://github.com/banodoco/runpod-lifecycle.git"
+    },
+    {
+      "clean": true,
+      "destination": "VibeComfy-fba5567d4efb",
+      "id": "VibeComfy",
+      "observed_sha": "fba5567d4efb59e2ae5020b8ad0d3db11cf02910",
+      "requested_sha": "fba5567d4efb59e2ae5020b8ad0d3db11cf02910",
+      "status": "PASS",
+      "tree": "1cd29ea1413c00372edb7d925ae7e21fc95ec1b7",
+      "url": "https://github.com/peteromallet/VibeComfy.git"
+    },
+    {
+      "clean": true,
+      "destination": "Runtime-8ea6b3e2a415",
+      "id": "Runtime",
+      "observed_sha": "8ea6b3e2a41567a9880cf15f4116b1ae2a1ec019",
+      "requested_sha": "8ea6b3e2a41567a9880cf15f4116b1ae2a1ec019",
+      "status": "PASS",
+      "tree": "2340eac8daec78a973f80b30b3b16d4b4001742d",
+      "url": "https://github.com/banodoco/banodoco-workspace-runtime.git"
+    },
+    {
+      "clean": true,
+      "destination": "reigh-worker-c2c6eca79f47",
+      "id": "reigh-worker",
+      "observed_sha": "c2c6eca79f474033bfaedc6a8fa80f70940b057f",
+      "requested_sha": "c2c6eca79f474033bfaedc6a8fa80f70940b057f",
+      "status": "PASS",
+      "tree": "b4475ebf3842202b14bd007655d8334a6027e7b3",
+      "url": "https://github.com/banodoco/reigh-worker.git"
+    },
+    {
+      "clean": true,
+      "destination": "Wan2GP-181bb71a2100",
+      "id": "Wan2GP",
+      "observed_sha": "181bb71a21008032e4771e11663f33e4489c4512",
+      "requested_sha": "181bb71a21008032e4771e11663f33e4489c4512",
+      "status": "PASS",
+      "tree": "ffb942fba66d77ed19ddbed7e148ba5dd900bdf4",
+      "url": "https://github.com/banodoco/Wan2GP.git"
+    },
+    {
+      "destination": "reigh-worker-orchestrator-5f58f30d6ac3",
+      "fallback": "Exact fetch and depth-256 branch/tag fetch could not resolve pin. Publisher must expose the same object at a public ref; no automatic latest replacement.",
+      "id": "reigh-worker-orchestrator",
+      "requested_sha": "5f58f30d6ac35a9fce81497680ecdb9ef30b9386",
+      "status": "PIN_UNAVAILABLE",
+      "url": "https://github.com/banodoco/reigh-worker-orchestrator.git"
+    },
+    {
+      "clean": true,
+      "destination": "poms-skills-f12960343864",
+      "id": "poms-skills",
+      "observed_sha": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "requested_sha": "f1296034386486d65cf19876d5e5ebfb0547e7cf",
+      "status": "PASS",
+      "tree": "870df37ef8e72cdf12bbf900499c9a4726f9b1b0",
+      "url": "https://github.com/peteromallet/poms-skills.git"
+    },
+    {
+      "clean": true,
+      "destination": "ArtAgents-242f9c4306bf",
+      "id": "ArtAgents",
+      "observed_sha": "242f9c4306bf3b501222cb041a9eb246ef47bc85",
+      "requested_sha": "242f9c4306bf3b501222cb041a9eb246ef47bc85",
+      "status": "PASS",
+      "tree": "8fb939bfb293cc76e565604e8c74aec3780dbfc0",
+      "url": "https://github.com/banodoco/ArtAgents.git"
+    },
+    {
+      "clean": true,
+      "destination": "sisypy-dfb3fa3e71e4",
+      "id": "sisypy",
+      "observed_sha": "dfb3fa3e71e4130df081d1d15d62f57f6e8ebb87",
+      "requested_sha": "dfb3fa3e71e4130df081d1d15d62f57f6e8ebb87",
+      "status": "PASS",
+      "tree": "5f9fe99c29d40a3dc378600358ec2c8f4d5a6ee3",
+      "url": "https://github.com/peteromallet/sisypy.git"
+    },
+    {
+      "clean": true,
+      "destination": "Arnold-9d8b2a4af93b",
+      "id": "Arnold",
+      "observed_sha": "9d8b2a4af93ba764e7e82381656a8fffb3678cf7",
+      "requested_sha": "9d8b2a4af93ba764e7e82381656a8fffb3678cf7",
+      "status": "PASS",
+      "tree": "1806c804d407e8a8cbf1c98e338eee98b39d9bcd",
+      "url": "https://github.com/peteromallet/Arnold.git"
+    },
+    {
+      "clean": true,
+      "destination": "lifecycle-declared-14d12f3c5e10",
+      "id": "lifecycle-declared",
+      "observed_sha": "14d12f3c5e100247ffb1360c8fe6ba82aa5c7aa6",
+      "requested_sha": "14d12f3c5e100247ffb1360c8fe6ba82aa5c7aa6",
+      "status": "PASS",
+      "tree": "79b50f7321b56ff447b279acab4d6cf570462c81",
+      "url": "https://github.com/banodoco/runpod-lifecycle.git"
+    },
+    {
+      "id": "reigh-app",
+      "reason": "Added after prior fetch validation; user instructed stop further source inspection and finish archive.",
+      "requested_sha": "23d7fc65310b67692dcea4286a01dfbbdf011dc0",
+      "status": "PENDING_NOT_CHECKED",
+      "url": "https://github.com/banodoco/reigh-app.git"
+    }
+  ],
+  "scope": "public exact source retrieval only; no installation, tests, models, provider calls or acceptance"
+}

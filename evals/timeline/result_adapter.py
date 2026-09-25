@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 RESULT_ADAPTER_KIND = "astrid.timeline-eval.result-adapter.v1"
 RESULT_SCHEMA = "astrid.timeline-eval.worker-result.v1"
+OUTCOME_RECORD_KIND = "astrid.timeline-eval.outcome-record.v1"
 
 
 class ResultContractError(ValueError):
@@ -194,6 +195,35 @@ def _adapt_l06(raw: Mapping[str, Any]) -> dict[str, Any]:
     return {"diagnostic": dict(diagnostic)}
 
 
+def _adapt_l08(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose an exact ordered text projection while retaining segment data."""
+    observations = raw.get("observations")
+    if observations is None:
+        return {"available_segment_titles": None}
+    if not isinstance(observations, Mapping):
+        raise ResultContractError("L08 observations must be an object")
+    segments = observations.get("segments")
+    titles = observations.get("available_segment_titles")
+    if segments is not None:
+        if not isinstance(segments, list):
+            raise ResultContractError("L08 observations.segments must be an array")
+        projected: list[str] = []
+        for index, segment in enumerate(segments):
+            if not isinstance(segment, Mapping) or not isinstance(segment.get("text"), str):
+                raise ResultContractError(f"L08 segment {index} must be an object with string text")
+            projected.append(segment["text"])
+        if titles is not None and titles != projected:
+            raise ResultContractError(
+                "L08 segment conflict: available_segment_titles disagrees with ordered segments.text"
+            )
+        return {"available_segment_titles": projected}
+    if titles is not None:
+        if not isinstance(titles, list) or any(not isinstance(title, str) for title in titles):
+            raise ResultContractError("L08 available_segment_titles must be an array of strings")
+        return {"available_segment_titles": list(titles)}
+    return {"available_segment_titles": None}
+
+
 def _validate_artifact_ownership(case: Mapping[str, Any], raw: Mapping[str, Any]) -> None:
     """Reject an optional worker declaration that contradicts the contract."""
     declared = raw.get("artifact_ownership")
@@ -213,6 +243,16 @@ def _validate_artifact_ownership(case: Mapping[str, Any], raw: Mapping[str, Any]
             )
 
 
+def artifact_owner(case: Mapping[str, Any], path: str) -> str:
+    """Return the declared owner for a case artifact path."""
+    for spec in _artifact_specs(case):
+        if spec.path == path:
+            return spec.owner
+    if path in {"before.json", "after.json", "target.json", "brief.json"}:
+        return "coordinator"
+    return "worker"
+
+
 def adapt_worker_result(case: Mapping[str, Any], raw: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and normalize one result without mutating the raw output."""
     if not isinstance(raw, Mapping):
@@ -224,6 +264,8 @@ def adapt_worker_result(case: Mapping[str, Any], raw: Mapping[str, Any]) -> dict
         observations = _adapt_l02(raw)
     elif case_id == "L06":
         observations = _adapt_l06(raw)
+    elif case_id == "L08":
+        observations = _adapt_l08(raw)
     else:
         observations = {}
     return {
@@ -234,3 +276,69 @@ def adapt_worker_result(case: Mapping[str, Any], raw: Mapping[str, Any]) -> dict
         "observations": observations,
         "raw_preserved": True,
     }
+
+
+def worker_protocol_record(
+    case: Mapping[str, Any], raw: Any, *, parse_error: str | None = None,
+) -> dict[str, Any]:
+    """Capture worker JSON/protocol health without grading the user request.
+
+    A malformed or conflicting worker envelope is useful evidence, but it is
+    not a semantic verdict. The original value is represented as preserved
+    evidence and the coordinator can still judge any independently captured
+    before/after/readback artifacts.
+    """
+    errors: list[str] = []
+    normalized: Mapping[str, Any] | None = None
+    if parse_error:
+        errors.append(str(parse_error))
+    elif not isinstance(raw, Mapping):
+        errors.append("worker result is not a JSON object")
+    else:
+        try:
+            normalized = adapt_worker_result(case, raw)
+        except ResultContractError as exc:
+            errors.append(str(exc))
+    return {
+        "schema": RESULT_SCHEMA,
+        "valid": not errors,
+        "errors": errors,
+        "raw_preserved": True,
+        "normalized": dict(normalized) if normalized is not None else None,
+    }
+
+
+def build_outcome_record(
+    case: Mapping[str, Any], *, worker_protocol: Mapping[str, Any],
+    conclusion: Any = None, independent_before: Any = None,
+    independent_after: Any = None, independent_readback: Any = None,
+    render_artifacts: Any = None, playback_artifacts: Any = None,
+) -> dict[str, Any]:
+    """Build the minimal coordinator-owned record Astra can judge later.
+
+    ``semantic_outcome`` intentionally starts as ``unjudged``. Worker JSON
+    validity is nested under ``worker_protocol`` and can never become a
+    semantic pass/fail by itself.
+    """
+    return {
+        "kind": OUTCOME_RECORD_KIND,
+        "schema": "astrid.timeline-eval.outcome-evidence.v1",
+        "case_id": str(case.get("id", "")),
+        "semantic_outcome": {"status": "unjudged", "judge": "coordinator", "reason": "compare request with independent evidence"},
+        "worker_protocol": dict(worker_protocol),
+        "conclusion": conclusion,
+        "independent_evidence": {
+            "before": independent_before,
+            "after": independent_after,
+            "readback": independent_readback,
+        },
+        "render_artifacts": render_artifacts,
+        "playback_artifacts": playback_artifacts,
+    }
+
+
+__all__ = [
+    "ArtifactSpec", "OUTCOME_RECORD_KIND", "RESULT_ADAPTER_KIND", "RESULT_SCHEMA",
+    "ResultContractError", "adapt_worker_result", "artifact_owner",
+    "build_outcome_record", "public_result_contract", "worker_protocol_record",
+]

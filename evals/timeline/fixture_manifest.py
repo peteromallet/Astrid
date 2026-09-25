@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .fixture_contracts import navigation_fixture_contract
+    from .fixture_contracts import action_target_contract, navigation_fixture_contract, validate_action_target_receipt
 except ImportError:  # pragma: no cover - direct script invocation
-    from fixture_contracts import navigation_fixture_contract
+    from fixture_contracts import action_target_contract, navigation_fixture_contract, validate_action_target_receipt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -40,6 +40,7 @@ class CaseReadiness:
     operational_ready: bool = False
     operational_reasons: list[str] = field(default_factory=list)
     contract: dict[str, Any] | None = None
+    execution_contract: dict[str, Any] | None = None
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -368,6 +369,12 @@ def _validate_target_catalog(targets: Any, ids: dict[str, set[str]], media: set[
 
 def _validate_action_case(case: dict[str, Any], ids: dict[str, set[str]], media: set[str], action_root: Path) -> list[str]:
     reasons: list[str] = []
+    music_path = action_root / "media" / "music-bed.wav"
+    music_digest_verified = (
+        music_path.is_file() and not music_path.is_symlink()
+        and "sha256:" + hashlib.sha256(music_path.read_bytes()).hexdigest()
+        == str(case.get("media", {}).get("music_digest", ""))
+    )
     if str(case.get("status", "")).lower() != "ready":
         reasons.append(f"case manifest status is {case.get('status', 'missing')!r}")
     if case.get("blockers"):
@@ -393,7 +400,18 @@ def _validate_action_case(case: dict[str, Any], ids: dict[str, set[str]], media:
     if isinstance(case_media, dict):
         for key, value in case_media.items():
             if key.endswith("digest") and isinstance(value, str) and value.startswith("sha256:") and value not in media:
-                reasons.append(f"media digest for {key} is not present in verified pinned bytes")
+                # Case preparation may add a coordinator-owned action asset to
+                # the disposable derivative. It is still factual only when
+                # the declared bytes verify here; do not call it a pinned
+                # source-media dependency before preparation.
+                extra_ok = False
+                if key == "music_digest":
+                    music = action_root / "media" / "music-bed.wav"
+                    extra_ok = music.is_file() and not music.is_symlink() and (
+                        "sha256:" + hashlib.sha256(music.read_bytes()).hexdigest() == value
+                    )
+                if not extra_ok:
+                    reasons.append(f"media digest for {key} is not present in verified pinned bytes")
             if key.endswith("_path") or key.endswith("_directory") or key == "collection_path":
                 if isinstance(value, str):
                     resource = (action_root / value).resolve()
@@ -404,22 +422,42 @@ def _validate_action_case(case: dict[str, Any], ids: dict[str, set[str]], media:
                     else:
                         if not resource.exists():
                             reasons.append(f"media path for {key} is missing: {value}")
-    if case.get("id") == "A02" and not (action_root / "media/music-bed.wav").is_file():
-        reasons.append("A02 continuous fixture music bytes are missing")
+    if case.get("id") == "A02":
+        if not (action_root / "media/music-bed.wav").is_file():
+            reasons.append("A02 continuous fixture music bytes are missing")
+        if case_media.get("music_digest") not in media and not music_digest_verified:
+            reasons.append("A02 existing music clip digest is not verified")
+        if case_media.get("music_clip_id") != "eval_music_bed_clip":
+            reasons.append("A02 starting fixture does not name its existing music clip")
     if case.get("id") == "A03" and not any("concrete clip IDs" in item for item in reasons):
         pass
     if case.get("id") == "A04" and not case_media.get("alternate_image_digest"):
         reasons.append("A04 alternate image digest is missing")
     if case.get("id") == "A05" and not (action_root / "A05-vo-endpoints.json").is_file():
         reasons.append("A05 frame-aligned voice endpoint table is missing")
+    if case.get("id") == "A05":
+        if case_media.get("music_digest") not in media and not music_digest_verified:
+            reasons.append("A05 existing music clip digest is not verified")
+        if case_media.get("music_clip_id") != "eval_music_bed_clip":
+            reasons.append("A05 starting fixture does not name its existing music clip")
     if case.get("id") == "A06" and not (action_root / "A06-text-roles.json").is_file():
         reasons.append("A06 separate title/script/transcript/voice fixture is missing")
+    if case.get("id") == "A06" and targets.get("visible_title_binding_id") != "a06-visible-title":
+        reasons.append("A06 starting fixture does not identify the visible title binding")
     if case.get("id") == "A07" and not (action_root / "audio-fixtures.json").is_file():
         reasons.append("A07 decoded audio fixture is missing")
+    if case.get("id") == "A07":
+        if case_media.get("music_digest") not in media and not music_digest_verified:
+            reasons.append("A07 existing music clip digest is not verified")
+        if case_media.get("music_clip_id") != "eval_music_bed_clip":
+            reasons.append("A07 starting fixture does not name its existing music clip")
     if case.get("id") == "A09":
         collection = action_root / "A09-images.json"
         if not collection.is_file():
             reasons.append("A09 four-image collection bytes are missing")
+        montage = targets.get("montage_occurrence")
+        if not isinstance(montage, str) or montage not in ids["occurrence"]:
+            reasons.append("A09 montage target must resolve to a concrete pinned occurrence")
     if case.get("id") == "A10":
         collection = action_root / "A10-brightness-collection.json"
         if not collection.is_file():
@@ -451,6 +489,36 @@ def _case_operational_evidence(case_id: str, attempt_root: Path | None) -> tuple
         reasons.append("attempt manifest ID does not match the supplied attempt root")
     if attempt.get("case_id") != case_id:
         reasons.append("attempt manifest case ID does not match fixture case")
+    if case_id.startswith("L"):
+        entrypoint_path = case_dir / "entrypoint" / "entrypoint.json"
+        if entrypoint_path.is_symlink() or not entrypoint_path.is_file():
+            reasons.append("selected pinned offline entrypoint is missing from the attempt")
+        else:
+            try:
+                entrypoint = _read_json(entrypoint_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                reasons.append(f"selected offline entrypoint is invalid: {exc}")
+            else:
+                source = entrypoint.get("source") if isinstance(entrypoint.get("source"), dict) else {}
+                target_receipt = entrypoint.get("target_receipt") if isinstance(entrypoint.get("target_receipt"), dict) else {}
+                if entrypoint.get("kind") != "astrid.timeline-eval.offline-navigation-entry.v1" or entrypoint.get("case_id") != case_id or entrypoint.get("read_only") is not True:
+                    reasons.append("selected offline entrypoint is not bound to this read-only case")
+                if not all(isinstance(source.get(key), str) and source[key] for key in ("timeline_id", "head_revision_id", "closure_digest")):
+                    reasons.append("selected offline entrypoint is missing pinned timeline/head/closure identity")
+                if target_receipt.get("source_head") != source.get("head_revision_id") or target_receipt.get("source_closure_digest") != source.get("closure_digest"):
+                    reasons.append("selected offline target receipt does not match its pinned source identity")
+    else:
+        target_path = case_dir / "target.json"
+        if target_path.is_symlink() or not target_path.is_file():
+            reasons.append("coordinator-prepared disposable target receipt is missing from the attempt")
+        else:
+            try:
+                target = _read_json(target_path)
+                target_errors = validate_action_target_receipt(target, action_target_contract({"id": case_id}))
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                reasons.append(f"disposable action target receipt is invalid: {exc}")
+            else:
+                reasons.extend("disposable action target receipt: " + error for error in target_errors)
     if attempt.get("fresh_context") is not True:
         reasons.append("attempt does not certify a fresh agent context")
     if not attempt.get("session_id") or not attempt.get("started_at"):
@@ -478,6 +546,26 @@ def _case_operational_evidence(case_id: str, attempt_root: Path | None) -> tuple
         reasons.append("graded result has no recognized terminal status")
     if setup_status != "ready":
         reasons.append(f"grader setup status is {setup_status or 'missing'}")
+    coordinator_path = attempt_root / "coordinator" / "cases" / case_id / "readback.json"
+    if coordinator_path.is_symlink() or not coordinator_path.is_file():
+        reasons.append("coordinator-owned before/after readback and safety evidence is missing")
+    else:
+        try:
+            coordinator = _read_json(coordinator_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            reasons.append(f"coordinator readback evidence is invalid: {exc}")
+        else:
+            if coordinator.get("kind") != "astrid.timeline-eval.coordinator-evidence.v1":
+                reasons.append("coordinator readback evidence schema is missing or unsupported")
+            if coordinator.get("case_id") != case_id:
+                reasons.append("coordinator readback evidence is bound to another case")
+            readback = coordinator.get("readback") if isinstance(coordinator.get("readback"), dict) else {}
+            if readback.get("before_observed") is not True or readback.get("after_observed") is not True:
+                reasons.append("coordinator readback does not prove both before and after observations")
+            safety = coordinator.get("safety") if isinstance(coordinator.get("safety"), dict) else {}
+            for field in ("source_unchanged", "read_only_target" if case_id.startswith("L") else "test_target_only"):
+                if safety.get(field) is not True:
+                    reasons.append(f"coordinator safety evidence does not prove {field}=true")
     return not reasons, reasons
 
 
@@ -717,6 +805,8 @@ def build_readiness(
             readiness = validate_case(row, kind, path, target_catalog)
             if kind == "navigation":
                 readiness.contract = navigation_fixture_contract(row).as_dict()
+            else:
+                readiness.execution_contract = action_target_contract(row).as_dict()
             specific_reasons = []
             specific_reasons.extend(_fixture_requirement_reasons(row, manifest, path, eval_root))
             for problem in group_problems:
@@ -746,6 +836,14 @@ def build_readiness(
                 readiness.operational_reasons = ["fixture prerequisites are blocked; attempt evidence cannot clear them"]
             elif not readiness.operational_ready:
                 readiness.operational_reasons = evidence_reasons
+            if kind == "action" and readiness.execution_contract:
+                route = readiness.execution_contract.get("edit_route")
+                projection = readiness.execution_contract.get("readback_projection")
+                if not route or not projection:
+                    readiness.operational_ready = False
+                    readiness.operational_reasons = list(dict.fromkeys(
+                        [*readiness.operational_reasons, str(readiness.execution_contract.get("reason") or "no supported edit/readback route")]
+                    ))
             result[case_id] = readiness
         for case_id in expected:
             if case_id not in seen:

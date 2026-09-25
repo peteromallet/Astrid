@@ -1,0 +1,21 @@
+{
+  "execution_mode": "cpu_fake_offline",
+  "live_gpu_tests_enabled": false,
+  "runpod_tests_enabled": false,
+  "post_handoff_gpu_gate": "DEFERRED_POST_HANDOFF",
+  "runtime_endpoint": null,
+  "runtime_credential_reference": null,
+  "provider_credential_reference": null,
+  "exact_target_identity": null,
+  "storage_identity": null,
+  "release_manifest_digest": null,
+  "oci_image_digest": null,
+  "engine_interpreter": null,
+  "node_lock_digest": null,
+  "model_manifest_digest": null,
+  "source_workspace": null,
+  "lifecycle_owner": null,
+  "finite_resource_budget": null,
+  "durable_scheduler_identity": null,
+  "manager_resume_command": null
+}

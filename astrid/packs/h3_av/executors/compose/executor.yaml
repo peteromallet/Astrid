@@ -1,0 +1,61 @@
+schema_version: 1
+id: h3_av.compose
+name: Compose H3 audiovisual candidate
+kind: built_in
+version: 0.1.0
+short_description: Settle an H3 candidate with explicit changed and protected permissions.
+description: Copy a generated candidate into an attempt-local result directory and publish deterministic composition evidence without inventing preservation claims.
+keywords: [h3, video, audio, compose, evidence]
+inputs:
+  - name: preparation
+    type: file
+    required: true
+    description: Preparation manifest produced by h3_av.prepare.
+  - name: generated
+    type: file
+    required: true
+    description: Generated candidate media artifact.
+  - name: source
+    type: file
+    required: false
+    description: Source media for protected material.
+  - name: preservation_evidence
+    type: file
+    required: false
+    description: Optional JSON permission evidence from a media compositor.
+outputs:
+  - name: candidate
+    type: file
+    path_template: "{out}/candidate.media"
+    artifact_type: h3_av/candidate
+    description: Composed audiovisual bytes; container is detected from media content.
+  - name: composition
+    type: file
+    path_template: "{out}/composition-manifest.json"
+    artifact_type: h3_av/composition
+command:
+  argv:
+    - "{python_exec}"
+    - "-m"
+    - astrid.packs.h3_av.executors.compose.run
+    - "--preparation"
+    - "{preparation}"
+    - "--generated"
+    - "{generated}"
+    - "--out"
+    - "{out}"
+  input_args:
+    - input: source
+      flag: "--source"
+      optional: true
+    - input: preservation_evidence
+      flag: "--preservation-evidence"
+      optional: true
+cache:
+  mode: none
+isolation:
+  mode: subprocess
+  network: false
+metadata:
+  runtime_module: astrid.packs.h3_av.executors.compose.run
+  runtime_file: run.py

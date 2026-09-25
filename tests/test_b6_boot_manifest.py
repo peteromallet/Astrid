@@ -17,6 +17,7 @@ from astrid.core._shared.boot_manifest import (
     build_manifest,
     load_boot_manifest_hash,
     manifest_hash,
+    normalize_sha256_digest,
     validate_manifest_path,
 )
 from astrid.core.receipts.contract import CommandReceipt, RECEIPT_SHAPE_KEYS
@@ -40,6 +41,17 @@ def test_manifest_is_canonical_and_profile_order_is_frozen() -> None:
     assert first["profile_order"] == list(VIBE_PROFILE_ORDER)
     assert set(first["fixture_digests"]) == set(FROZEN_FIXTURE_DIGESTS)
     assert manifest_hash(first) == manifest_hash(second)
+
+
+@pytest.mark.parametrize("value", ["a" * 64, "sha256:" + "A" * 64])
+def test_sha256_digest_normalization_accepts_wire_forms(value: str) -> None:
+    assert normalize_sha256_digest(value) == "a" * 64
+
+
+@pytest.mark.parametrize("value", ["", "sha256:short", "md5:" + "a" * 64, "g" * 64])
+def test_sha256_digest_normalization_rejects_malformed_values(value: str) -> None:
+    with pytest.raises(BootManifestError, match="SHA-256"):
+        normalize_sha256_digest(value)
 
 
 def test_composition_root_stamps_under_explicit_support_without_sqlite(tmp_path: Path) -> None:
@@ -153,7 +165,7 @@ def test_generic_host_cli_reads_explicit_manifest_without_sqlite(
     host = GenericPackHost(
         pack_roots=[pack_root],
         boot_manifest_path=manifest,
-        boot_manifest_hash=expected_hash,
+        boot_manifest_hash="sha256:" + expected_hash,
     )
     assert host.boot_manifest_provenance() == {
         "kind": "astrid.boot_manifest",

@@ -27,7 +27,7 @@
       }
     ]
   },
-  "description": "Validate UI JSON statically or validate a canonical Python bundle after explicit python_execution_consent=confirmed through VibeComfy's audited CLI gate.",
+  "description": "Validate UI JSON or canonical bundle structure offline. Canonical Python requires python_execution_consent=confirmed through VibeComfy's audited CLI gate with --no-schema. Runtime/session and target-schema validation are deferred to vibecomfy.run.",
   "graph": {
     "consumes": [
       "workflow",
@@ -83,7 +83,7 @@
       "type": "file",
       "path_template": "{out}/validation-report.json",
       "artifact_type": "vibecomfy/workflow-validation-report",
-      "description": "Validation status, issues, consent input when used, and audited VibeComfy gate decisions."
+      "description": "Structural validation status (canonical_bundle_structural for Python bundles), issues, consent and gate audit; runtime_validation is explicitly deferred to vibecomfy.run. Success does not establish runtime readiness."
     }
   ],
   "isolation": {
@@ -134,6 +134,6 @@
     "workflows": []
   },
   "name": "VibeComfy Validate",
-  "short_description": "Validate a VibeComfy workflow without running generation.",
+  "short_description": "Validate workflow structure offline; runtime checks belong to vibecomfy.run.",
   "version": "0.1.0"
 }

@@ -124,6 +124,43 @@ def _clips(timeline: MutableMapping[str, Any]) -> list[MutableMapping[str, Any]]
     return clips
 
 
+def _clip_speed(clip: Mapping[str, Any]) -> Any:
+    speed = clip.get("speed", 1)
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or speed <= 0:
+        raise TimelineEditError("clip speed must be positive")
+    return speed
+
+
+def _clip_duration(clip: Mapping[str, Any]) -> Any:
+    speed = _clip_speed(clip)
+    hold = clip.get("hold")
+    if hold is not None:
+        if isinstance(hold, bool) or not isinstance(hold, (int, float)) or hold < 0:
+            raise TimelineEditError("clip hold must be non-negative")
+        source_duration = hold
+    else:
+        source_from, source_to = clip.get("from", 0), clip.get("to", 0)
+        source_duration = source_to - source_from
+    duration = source_duration / speed
+    if duration <= 0:
+        raise TimelineEditError("clip interval must be non-empty")
+    return duration
+
+
+def _set_clip_interval(clip: MutableMapping[str, Any], start: Any, end: Any) -> None:
+    if end <= start:
+        raise TimelineEditError("clip interval must be non-empty")
+    speed = _clip_speed(clip)
+    source_duration = (end - start) * speed
+    if "hold" in clip:
+        clip["hold"] = source_duration
+    else:
+        source_from = clip.get("from", 0)
+        clip["from"] = source_from
+        clip["to"] = source_from + source_duration
+    clip["at"] = start
+
+
 def add_track(container: MutableMapping[str, Any], *, kind: str = "video", name: str | None = None, track_id: str | None = None) -> MutableMapping[str, Any]:
     """Add and return a valid empty track in a main timeline or shot."""
 
@@ -158,21 +195,36 @@ def place_media(container: MutableMapping[str, Any], media: Mapping[str, Any] | 
 
     if end <= start:
         raise TimelineEditError("placement interval must be non-empty")
+    reserved = {"at", "from", "to", "source_start", "source_end", "track", "id"}
+    overridden = sorted(reserved.intersection(fields))
+    if overridden:
+        raise TimelineEditError(f"place_media cannot override reserved fields: {', '.join(overridden)}")
+    speed = fields.get("speed", 1)
+    if isinstance(speed, bool) or not isinstance(speed, (int, float)) or speed <= 0:
+        raise TimelineEditError("clip speed must be positive")
+    source_from = 0 if source_start is None else source_start
+    source_to = source_from + (end - start) * speed if source_end is None else source_end
+    if source_to <= source_from:
+        raise TimelineEditError("source trim interval must be non-empty")
+    if not math.isclose((source_to - source_from) / speed, end - start, rel_tol=1e-9, abs_tol=1e-9):
+        raise TimelineEditError("source trim duration and requested timeline duration are inconsistent")
+    hold = fields.get("hold")
+    if hold is not None:
+        if isinstance(hold, bool) or not isinstance(hold, (int, float)) or hold < 0:
+            raise TimelineEditError("clip hold must be non-negative")
+        if not math.isclose(hold / speed, end - start, rel_tol=1e-9, abs_tol=1e-9):
+            raise TimelineEditError("clip hold and requested timeline duration are inconsistent")
     timeline = _timeline(container)
     owned_track = _track_for(timeline, track)
     clips = _clips(timeline)
     media_id = media if isinstance(media, str) else media.get("id", media.get("media_id", media.get("object_id")))
     _id(media_id, "media id")
     selector = "media_id" if _is_media_digest(media_id) else "asset"
-    clip: MutableMapping[str, Any] = {"id": clip_id or _next_id("clip"), selector: media_id, "track": owned_track.get("id"), "at": start, "to": end}
+    clip: MutableMapping[str, Any] = {"id": clip_id or _next_id("clip"), selector: media_id, "track": owned_track.get("id"), "at": start, "from": source_from, "to": source_to}
     if fit is not None:
         clip["fit"] = fit
     if rect is not None:
         clip["rect"] = copy.deepcopy(dict(rect))
-    if source_start is not None:
-        clip["source_start"] = source_start
-    if source_end is not None:
-        clip["source_end"] = source_end
     clip.update(copy.deepcopy(fields))
     if any(existing.get("id") == clip["id"] for existing in clips):
         raise TimelineEditError(f"clip id already exists: {clip['id']}")
@@ -199,14 +251,14 @@ def replace_media(container: MutableMapping[str, Any], clip_id: str, media: Mapp
     _, _, clip = _find_clip(container, clip_id)
     media_id = media if isinstance(media, str) else media.get("id", media.get("media_id", media.get("object_id")))
     _id(media_id, "media id")
-    old_start, old_end = clip.get("at"), clip.get("to")
+    old_start = clip.get("at")
     selector = "media_id" if _is_media_digest(media_id) else "asset"
     for key in ("asset", "asset_id", "media_id", "object_id"):
         if key != selector:
             clip.pop(key, None)
     clip[selector] = media_id
     if preserve_interval:
-        clip["at"], clip["to"] = old_start, old_end
+        clip["at"] = old_start
     clip.update(copy.deepcopy(fields))
     return clip
 
@@ -280,11 +332,12 @@ def move(container: MutableMapping[str, Any], clip_id: str, *, track: MutableMap
     target_track = _track_for(timeline, track)
     old_track, clips, clip = _find_clip(container, clip_id)
     new_start = clip.get("at", 0) if start is None else start
-    new_end = clip.get("to") if end is None else end
+    old_end = new_start + _clip_duration(clip)
+    new_end = old_end if end is None else end
     if new_end is None or new_end <= new_start:
         raise TimelineEditError("moved interval must be non-empty")
     clips.remove(clip)
-    clip["at"], clip["to"] = new_start, new_end
+    _set_clip_interval(clip, new_start, new_end)
     clip["track"] = target_track.get("id")
     _clips(timeline).append(clip)
     return clip
@@ -295,11 +348,14 @@ def retime(clip: MutableMapping[str, Any], *, start: int | float | None = None, 
 
     if ripple != "none":
         raise TimelineEditError("only ripple='none' is supported by the primitive; use an explicit sequence for ripple")
-    current_start, current_end = clip.get("at", 0), clip.get("to")
+    current_start = clip.get("at", 0)
+    current_end = current_start + _clip_duration(clip)
     new_start, new_end = current_start if start is None else start, current_end if end is None else end
+    if start is not None and end is None:
+        new_end = new_start + _clip_duration(clip)
     if new_end <= new_start:
         raise TimelineEditError("retimed interval must be non-empty")
-    clip["at"], clip["to"] = new_start, new_end
+    _set_clip_interval(clip, new_start, new_end)
     return clip
 
 
@@ -331,11 +387,11 @@ def retime_with_ripple(
     if kind in {"audio", "voice", "vo", "music", "sound"}:
         raise TimelineEditError("ripple is not allowed on audio/voice/music tracks")
     old_start = clip.get("at", 0)
-    old_end = clip.get("to")
+    old_end = old_start + _clip_duration(clip)
     if old_end is None or old_end <= old_start:
         raise TimelineEditError("existing interval must be non-empty")
     new_start = old_start if start is None else start
-    new_end = old_end if end is None else end
+    new_end = new_start + _clip_duration(clip) if end is None else end
     if new_end <= new_start:
         raise TimelineEditError("retimed interval must be non-empty")
 
@@ -345,9 +401,7 @@ def retime_with_ripple(
         if sibling is clip or sibling.get("track") != track.get("id"):
             continue
         sibling_start = sibling.get("at", 0)
-        sibling_end = sibling.get("to")
-        if sibling_end is None or sibling_end <= sibling_start:
-            raise TimelineEditError("all clips on a ripple track must have non-empty intervals")
+        sibling_end = sibling_start + _clip_duration(sibling)
         if sibling_start >= old_end and delta:
             shifted.append((sibling, sibling_start + delta, sibling_end + delta))
 
@@ -362,14 +416,14 @@ def retime_with_ripple(
             "ripple exceeds parent duration; choose parent_duration='extend' or 'trim'"
         )
 
-    clip["at"], clip["to"] = new_start, new_end
+    _set_clip_interval(clip, new_start, new_end)
     for sibling, sibling_start, sibling_end in shifted:
-        sibling["at"], sibling["to"] = sibling_start, sibling_end
+        _set_clip_interval(sibling, sibling_start, sibling_end)
     if parent_duration == "extend":
         timeline["duration"] = max(existing_duration or 0, resulting_end)
     elif parent_duration == "trim":
         timeline["duration"] = max(
-            [item.get("to", item.get("at", 0)) for item in clips] or [0]
+            [item.get("at", 0) + _clip_duration(item) for item in clips] or [0]
         )
     return clip
 
@@ -488,10 +542,10 @@ def sequence(clips: Sequence[MutableMapping[str, Any]], *, start: int | float = 
         raise TimelineEditError("durations must match clips")
     cursor = start
     for index, clip in enumerate(clips):
-        duration = durations[index] if durations is not None else clip.get("to", 0) - clip.get("at", 0)
+        duration = durations[index] if durations is not None else _clip_duration(clip)
         if duration <= 0:
             raise TimelineEditError("sequence durations must be positive")
-        clip["at"], clip["to"] = cursor, cursor + duration
+        _set_clip_interval(clip, cursor, cursor + duration)
         cursor += duration + gap
     return clips
 
@@ -500,15 +554,15 @@ def align(clips: Sequence[MutableMapping[str, Any]], anchors: Sequence[int | flo
     if len(clips) != len(anchors) or edge not in {"start", "end", "center"}:
         raise TimelineEditError("align requires equal clips/anchors and a supported edge")
     for clip, anchor in zip(clips, anchors):
-        duration = clip.get("to", 0) - clip.get("at", 0)
+        duration = _clip_duration(clip)
         if duration <= 0:
             raise TimelineEditError("cannot align an empty clip")
         if edge == "start":
-            clip["at"], clip["to"] = anchor, anchor + duration
+            _set_clip_interval(clip, anchor, anchor + duration)
         elif edge == "end":
-            clip["at"], clip["to"] = anchor - duration, anchor
+            _set_clip_interval(clip, anchor - duration, anchor)
         else:
-            clip["at"], clip["to"] = anchor - duration / 2, anchor + duration / 2
+            _set_clip_interval(clip, anchor - duration / 2, anchor + duration / 2)
     return clips
 
 
@@ -530,7 +584,7 @@ def fit_duration(container: MutableMapping[str, Any], *, mode: str = "extend") -
     timeline = _timeline(container)
     latest = 0
     for clip in _clips(timeline):
-        latest = max(latest, clip.get("to", clip.get("at", 0)))
+        latest = max(latest, clip.get("at", 0) + _clip_duration(clip))
     if mode == "extend":
         timeline["duration"] = max(timeline.get("duration", 0), latest)
     else:
@@ -726,10 +780,74 @@ def remove_authoring_shot(bundle: MutableMapping[str, Any], shot_id: str) -> Mut
     return shot
 
 
+def move_occurrence_group(
+    bundle: MutableMapping[str, Any],
+    occurrence_id: str,
+    *,
+    before_occurrence_id: str,
+) -> MutableMapping[str, Any]:
+    """Move one complete shot occurrence immediately before another.
+
+    The operation changes only placement order and derived ``start_ms`` values.
+    Duration and every shot/item/clip binding remain attached to their stable
+    occurrence identity. It accepts only a contiguous sequence so the total
+    running time is provably unchanged.
+    """
+
+    placements = _list(bundle.get("placements"), "authoring bundle placements")
+    target_id = _id(occurrence_id, "occurrence id")
+    anchor_id = _id(before_occurrence_id, "before occurrence id")
+    if target_id == anchor_id:
+        raise TimelineEditError("an occurrence cannot be moved before itself")
+
+    indexed: dict[str, MutableMapping[str, Any]] = {}
+    for index, value in enumerate(placements):
+        row = _mapping(value, f"placements[{index}]")
+        row_id = _id(row.get("occurrence_id"), f"placements[{index}].occurrence_id")
+        if row_id in indexed:
+            raise TimelineEditError(f"duplicate occurrence id: {row_id}")
+        indexed[row_id] = row
+    if target_id not in indexed:
+        raise TimelineEditError(f"occurrence not found: {target_id}")
+    if anchor_id not in indexed:
+        raise TimelineEditError(f"before occurrence not found: {anchor_id}")
+
+    start_values: list[float] = []
+    durations: dict[str, float] = {}
+    for row in placements:
+        occurrence = indexed[row["occurrence_id"]]
+        placement = _mapping(occurrence.get("placement"), f"{occurrence['occurrence_id']}.placement")
+        start = placement.get("start_ms")
+        duration = occurrence.get("duration_ms")
+        if (isinstance(start, bool) or not isinstance(start, (int, float)) or not math.isfinite(start)
+                or isinstance(duration, bool) or not isinstance(duration, (int, float))
+                or not math.isfinite(duration) or duration <= 0):
+            raise TimelineEditError("group move requires finite starts and positive durations")
+        start_values.append(float(start))
+        durations[occurrence["occurrence_id"]] = float(duration)
+    if any(not math.isclose(start_values[i], start_values[i - 1] + durations[placements[i - 1]["occurrence_id"]], rel_tol=0, abs_tol=1e-6)
+           for i in range(1, len(placements))):
+        raise TimelineEditError("group move requires contiguous occurrence placements")
+
+    reordered = list(placements)
+    target_index = next(i for i, row in enumerate(reordered) if row["occurrence_id"] == target_id)
+    target = reordered.pop(target_index)
+    anchor_index = next(i for i, row in enumerate(reordered) if row["occurrence_id"] == anchor_id)
+    reordered.insert(anchor_index, target)
+
+    cursor = start_values[0]
+    for row in reordered:
+        _mapping(row.get("placement"), f"{row['occurrence_id']}.placement")["start_ms"] = cursor
+        cursor += durations[row["occurrence_id"]]
+    bundle["placements"] = reordered
+    return bundle
+
+
 __all__ = [
     "TimelineEditError", "clone_candidate", "add_track", "add_shot", "place_media",
     "replace_media", "duplicate", "remove", "move", "retime", "frame_time",
     "source_to_timeline_time", "timeline_to_source_time", "quantize_time", "quantize_interval",
     "sequence", "align", "grid", "fit_duration", "reorder_layers", "retime_with_ripple",
     "add_authoring_shot", "duplicate_authoring_shot", "remove_authoring_shot",
+    "move_occurrence_group",
 ]

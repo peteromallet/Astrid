@@ -90,6 +90,16 @@ def test_all_builtin_orchestrator_manifests_parse_through_runtime_and_registry()
     assert failures == {}
 
 
+def test_h3_transform_declares_vibecomfy_import_environment() -> None:
+    payload = load_manifest_mapping(
+        PACKS_ROOT / "h3_av" / "orchestrators" / "transform" / "orchestrator.yaml",
+        manifest_kind="orchestrator",
+    )
+
+    declared = set(payload["isolation"]["env_passthrough"])
+    assert {"VIBECOMFY_CHECKOUT", "PYTHONPATH", "VIBECOMFY_HEADLESS"} <= declared
+
+
 def test_orchestrator_schema_accepts_legacy_python_cli_runtime_shape() -> None:
     payload = load_manifest_mapping(
         PACKS_ROOT / "video_editing" / "orchestrators" / "hype" / "orchestrator.yaml",

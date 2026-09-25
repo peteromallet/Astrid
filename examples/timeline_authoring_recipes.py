@@ -35,11 +35,15 @@ def brightness_sequence(
         raise ValueError("duration must be positive")
     shot = add_authoring_shot(work, shot_id=shot_id, occurrence_id=occurrence_id, name="Brightness")
     track = add_track(shot, kind="visual", track_id=f"{shot_id}-track")
+    ordered_ids = sorted(image_ids, key=lambda media_id: (brightness_key(media_id), media_id))
     clips = [
         place_media(shot, media_id, track=track, start=0, end=duration, clip_id=f"{shot_id}-{index}")
-        for index, media_id in enumerate(sorted(image_ids, key=brightness_key))
+        for index, media_id in enumerate(ordered_ids)
     ]
     sequence(clips, start=0, durations=[duration] * len(clips))
+    placement = next(row for row in work["placements"] if row.get("occurrence_id") == occurrence_id)
+    placement["placement"]["start_ms"] = 0
+    placement["duration_ms"] = round(len(clips) * duration * 1000)
     return shot
 
 

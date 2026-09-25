@@ -21,9 +21,15 @@ except ImportError:  # pragma: no cover - direct-script path
     from checks import CheckResult, DecodedMediaVerifier, run_checks
 
 try:
-    from .result_adapter import ResultContractError, adapt_worker_result
+    from .result_adapter import (
+        ResultContractError, adapt_worker_result, artifact_owner,
+        build_outcome_record, worker_protocol_record,
+    )
 except ImportError:  # pragma: no cover - direct-script path
-    from result_adapter import ResultContractError, adapt_worker_result
+    from result_adapter import (
+        ResultContractError, adapt_worker_result, artifact_owner,
+        build_outcome_record, worker_protocol_record,
+    )
 
 
 ARTIFACT_FILES = {
@@ -141,6 +147,21 @@ def _required_filenames(case: Mapping[str, Any]) -> list[str]:
             name = ARTIFACT_FILES[name]
         names.append(name)
     return names
+
+
+def _coordinator_missing_check(check: Mapping[str, Any], missing: set[str]) -> bool:
+    """Whether this check cannot run because a coordinator-owned input is absent."""
+    names: list[str] = []
+    check_type = str(check.get("check", ""))
+    if check_type in {"path_equals", "records_include", "order", "panel_coverage", "decoded_media"}:
+        names.append(str(check.get("artifact", "after")))
+    elif check_type == "paths_unchanged":
+        names.extend(("before", "after"))
+    elif check_type == "identity_disjoint":
+        names.extend((str(check.get("before_artifact", "before")),
+                      str(check.get("after_artifact", "after"))))
+    filenames = {ARTIFACT_FILES.get(name, name) for name in names}
+    return bool(filenames & missing)
 
 
 def _agent_public_status(agent: Mapping[str, Any]) -> str | None:
@@ -357,6 +378,8 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     required = _required_filenames(case)
     available = _available_paths(case_dir)
     missing = [name for name in required if name not in available]
+    coordinator_missing = [name for name in missing if artifact_owner(case, name) == "coordinator"]
+    worker_missing = [name for name in missing if artifact_owner(case, name) != "coordinator"]
     setup_failures = [f"malformed artifact: {name}" for name in malformed]
     reported_status = _agent_public_status(agent)
     upstream_setup_reasons: list[str] = []
@@ -388,6 +411,21 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     except ResultContractError as exc:
         adapted_result = None
         result_contract_failures.append(str(exc))
+    if adapted_result is not None:
+        normalized_observations = adapted_result.get("observations", {})
+        if isinstance(normalized_observations, Mapping) and normalized_observations:
+            # Grade a copy through the adapter's normalized projection while
+            # preserving the original worker result on disk and in raw_output.
+            normalized_agent = dict(agent)
+            observations = dict(agent.get("observations", {})) if isinstance(agent.get("observations"), Mapping) else {}
+            observations.update(normalized_observations)
+            normalized_agent["observations"] = observations
+            agent = normalized_agent
+            # Result-backed checks read the separately loaded ``result``
+            # artifact. Keep that artifact on the same normalized projection;
+            # otherwise L08/L06-style adapters validate successfully but the
+            # checker still sees the raw worker shape.
+            artifacts["result"] = normalized_agent
     check_results: list[CheckResult] = []
     try:
         checks = _validate_check_list(hidden_checks) if hidden_checks is not None else _check_dicts(case)
@@ -400,8 +438,20 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
     blocked_before_worker = bool(upstream_setup_reasons)
     if not setup_failures and not blocked_before_worker:
         _load_check_artifacts(case, case_dir, checks, artifacts)
+    coordinator_check_unavailable: list[str] = []
     if not setup_failures and not blocked_before_worker:
-        check_results = run_checks(checks, artifacts, verifier)
+        runnable_checks = []
+        for check in checks:
+            if _coordinator_missing_check(check, set(coordinator_missing)):
+                check_id = str(check.get("id", "unknown"))
+                coordinator_check_unavailable.append(check_id)
+                check_results.append(CheckResult(
+                    check_id, "missing_capability",
+                    "coordinator-owned evidence required by this check is unavailable",
+                ))
+            else:
+                runnable_checks.append(check)
+        check_results.extend(run_checks(runnable_checks, artifacts, verifier))
 
     missing_capability = [r.check_id for r in check_results if r.status == "missing_capability"]
     failed_checks = [r.check_id for r in check_results if r.status == "fail"]
@@ -483,11 +533,13 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         status = "partial"
     elif reported_status == "failed":
         status = "failed"
+    elif coordinator_missing and not diagnostic_mode:
+        # Coordinator-owned readback inputs being absent says nothing about
+        # whether the agent's semantic answer was correct.
+        status = "indeterminate"
     elif missing_capability:
         status = "ungraded" if diagnostic_mode else "missing_capability"
-    elif result_contract_failures:
-        status = "failed"
-    elif missing or failed_checks or invalid_check_results:
+    elif worker_missing or failed_checks or invalid_check_results:
         status = "failed"
     elif safety == "fail":
         status = "failed"
@@ -574,12 +626,17 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         deficiencies.append({"kind": "setup", "message": reason})
     for reason in upstream_setup_reasons:
         deficiencies.append({"kind": "fixture_blocked", "message": reason})
-    for name in missing:
+    for name in coordinator_missing:
+        deficiencies.append({
+            "kind": "coordinator_evidence_unavailable", "path": name,
+            "owner": "coordinator", "status": "not_ready",
+        })
+    for name in worker_missing:
         deficiencies.append({"kind": "missing_artifact", "path": name, "owner": "worker"})
     for name in malformed:
         deficiencies.append({"kind": "malformed_artifact", "path": name, "owner": "worker"})
     for message in result_contract_failures:
-        deficiencies.append({"kind": "result_contract", "message": message})
+        deficiencies.append({"kind": "worker_protocol", "message": message})
     for check_id in missing_capability:
         deficiencies.append({"kind": "semantic_oracle_unavailable", "check_id": check_id})
     for check_id in failed_checks:
@@ -610,6 +667,9 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
             ) else "unavailable"
         ),
         "coordinator_readback_status": coordinator_readback.get("status", "unavailable"),
+        "coordinator_readback_scope": coordinator_readback.get("scope", "unavailable"),
+        "coordinator_runtime_closure_observed": coordinator_readback.get("runtime_closure_observed", False),
+        "coordinator_safety_scope": coordinator.get("safety_scope", "unavailable"),
         "agent_safety_claims": dict(agent_safety),
         "evidence_completeness": evidence_completeness,
         "tool_calls": trace_calls if trace["present"] else int(agent.get("tool_calls", 0)),
@@ -624,15 +684,28 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         ),
         "failure_cause": {
             "setup": setup_failures + upstream_setup_reasons,
+            "coordinator_evidence_unavailable": coordinator_missing,
             "missing_capability": missing_capability,
-            "agent_or_invariant": failed_checks + result_contract_failures,
+            "agent_or_invariant": failed_checks,
             "summary": ("; ".join(setup_failures + upstream_setup_reasons) if setup_failures or upstream_setup_reasons else
+                        "coordinator evidence unavailable: " + ", ".join(coordinator_missing) if coordinator_missing else
                         "missing capability: " + ", ".join(missing_capability) if missing_capability else
-                        "invariants failed: " + ", ".join(failed_checks + result_contract_failures) if failed_checks or result_contract_failures else
+                        "invariants failed: " + ", ".join(failed_checks) if failed_checks else
                         "safety evidence explicitly failed" if safety == "fail" else
                         "safety evidence is unknown" if safety == "unknown" else None),
         },
         "deficiencies": deficiencies,
+        "worker_protocol": worker_protocol_record(case, agent, parse_error=("; ".join(result_contract_failures) if result_contract_failures else None)),
+        "outcome_record": build_outcome_record(
+            case,
+            worker_protocol=worker_protocol_record(case, agent, parse_error=("; ".join(result_contract_failures) if result_contract_failures else None)),
+            conclusion={key: agent.get(key) for key in ("answer", "evidence", "conclusion") if key in agent},
+            independent_before=coordinator.get("before"),
+            independent_after=coordinator.get("after"),
+            independent_readback=coordinator_readback,
+            render_artifacts={key: value for key, value in artifacts.items() if key in {"preview", "render", "filmstrip"}},
+            playback_artifacts=coordinator.get("playback"),
+        ),
         "raw_output": {
             "result_path": "result.json" if (case_dir / "result.json").is_file() else None,
             "trace_path": "trace.jsonl" if (case_dir / "trace.jsonl").is_file() else None,
@@ -659,6 +732,7 @@ def grade_case(case: Mapping[str, Any], case_dir: Path,
         "execution_outcome": reported_status or "unknown",
         "counted_in_agent_pass_denominator": (
             not setup_failures
+            and not coordinator_missing
             and reported_status not in {"fixture_blocked", "not_run", "setup_failed", "setup_failure"}
             and agent.get("setup_status") not in {"fixture_blocked", "failed"}
         ),

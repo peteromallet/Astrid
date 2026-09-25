@@ -5,7 +5,9 @@ import pytest
 from evals.timeline.result_adapter import (
     ResultContractError,
     adapt_worker_result,
+    build_outcome_record,
     public_result_contract,
+    worker_protocol_record,
 )
 
 
@@ -106,3 +108,44 @@ def test_worker_cannot_relabel_coordinator_artifact() -> None:
         adapt_worker_result(_case("L02"), {
             "artifact_ownership": {"brief.json": "worker"},
         })
+
+
+def test_l08_adapter_projects_ordered_segment_text_and_preserves_rich_observations() -> None:
+    raw = {"observations": {
+        "segments": [
+            {"segment_id": "seg-2", "start": 4.0, "text": "Second"},
+            {"segment_id": "seg-1", "start": 1.0, "text": "First"},
+        ],
+        "missing_text_roles": ["transcript"],
+    }}
+    adapted = adapt_worker_result(_case("L08"), raw)
+    assert adapted["observations"]["available_segment_titles"] == ["Second", "First"]
+    assert raw["observations"]["segments"][0]["segment_id"] == "seg-2"
+    assert raw["observations"]["missing_text_roles"] == ["transcript"]
+
+
+def test_l08_adapter_rejects_conflicting_text_projection() -> None:
+    with pytest.raises(ResultContractError, match="L08 segment conflict"):
+        adapt_worker_result(_case("L08"), {"observations": {
+            "segments": [{"text": "Expected"}],
+            "available_segment_titles": ["Different"],
+        }})
+
+
+def test_protocol_health_is_separate_from_semantic_outcome_and_preserves_malformed_evidence() -> None:
+    protocol = worker_protocol_record(_case("L06"), {
+        "agent_status": "blocked", "status": "passed",
+    })
+    assert protocol["valid"] is False
+    assert protocol["raw_preserved"] is True
+    record = build_outcome_record(
+        _case("L06"), worker_protocol=protocol,
+        conclusion={"answer": "observed"},
+        independent_before={"head": "before"}, independent_after={"head": "after"},
+        independent_readback={"status": "pass"},
+        render_artifacts={"preview": "preview.json"},
+        playback_artifacts=None,
+    )
+    assert record["semantic_outcome"]["status"] == "unjudged"
+    assert record["worker_protocol"]["valid"] is False
+    assert record["independent_evidence"]["before"]["head"] == "before"

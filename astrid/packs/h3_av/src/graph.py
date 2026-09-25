@@ -913,8 +913,18 @@ def _materialize_executable_graph(
     )
     _add_node(workflow, "MiniMaxH3SetAVNoiseMask", "c3-av-mask")
     workflow.connect("110.1" if branch == "source_free" else "103.0", "c3-av-mask.latent")
-    workflow.connect("c3-video-mask-loader.1", "c3-av-mask.video_mask")
-    workflow.connect("c3-audio-mask-loader.1", "c3-av-mask.audio_mask")
+    for stream in ("video", "audio"):
+        loader = f"c3-{stream}-mask-loader"
+        image_mask = f"c3-{stream}-image-to-mask"
+        threshold = f"c3-{stream}-threshold-mask"
+        # VHS output 1 is inverted alpha (zero for grayscale FFV1); its IMAGE
+        # output 0 repeats the encoded gray value in RGB. Red is that gray
+        # channel, and thresholding restores exact binary permission endpoints.
+        _add_node(workflow, "ImageToMask", image_mask, channel="red")
+        _add_node(workflow, "ThresholdMask", threshold, value=0.5)
+        workflow.connect(f"{loader}.0", f"{image_mask}.image")
+        workflow.connect(f"{image_mask}.0", f"{threshold}.mask")
+        workflow.connect(f"{threshold}.0", f"c3-av-mask.{stream}_mask")
     latent_source = "c3-av-mask.0"
     if hard:
         state = {"count": len(hard), "positions": [int(item["frame"]) + 1 for item in hard]}

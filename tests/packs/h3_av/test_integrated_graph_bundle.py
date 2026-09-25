@@ -131,8 +131,10 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
     graph = binding["executable_graph"]
     assert graph["final_sampler"] == {"node": "124", "guider": "121", "output": "946"}
     edges = {(edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"]) for edge in graph["edges"]}
-    assert ("c3-video-mask-loader", "1", "c3-av-mask", "video_mask") in edges
-    assert ("c3-audio-mask-loader", "1", "c3-av-mask", "audio_mask") in edges
+    for stream in ("video", "audio"):
+        assert (f"c3-{stream}-mask-loader", "0", f"c3-{stream}-image-to-mask", "image") in edges
+        assert (f"c3-{stream}-image-to-mask", "0", f"c3-{stream}-threshold-mask", "mask") in edges
+        assert (f"c3-{stream}-threshold-mask", "0", "c3-av-mask", f"{stream}_mask") in edges
     assert ("c3-soft-anchors", "0", "c3-motion-guide-0", "conditioning") in edges
     assert ("c3-motion-guide-1", "0", "121", "conditioning") in edges
     validate_final_sampler_state(

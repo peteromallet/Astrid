@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from astrid.packs.h3_av.src.graph import build_h3_graph_binding
+from astrid.packs.h3_av.src.compile import _write_mask_video
 from astrid.packs.h3_av.src.kernel import (
     H3KernelContractError,
     classify_anchors,
@@ -266,6 +267,52 @@ def test_mask_plus_extension_and_audio_only_set_preserve_existing_video_mask() -
     assert torch.equal(out_audio[0, 0, 0], out_audio[0, 0, 1])
 
 
+@pytest.mark.parametrize("pattern", ["white", "black", "spatiotemporal"])
+def test_encoded_mask_image_channel_reaches_pinned_h3_av_streams(
+    tmp_path: Path, pattern: str
+) -> None:
+    """Exercise the FFV1 bytes, RGB IMAGE channel, threshold and pinned H3 resizing."""
+
+    pinned = _load_pinned_module("existing_video_extension.py", "existing_video_extension")
+    video = [[[int(pattern == "white") for _ in range(64)] for _ in range(64)] for _ in range(5)]
+    audio = [[[int(pattern == "white")]] for _ in range(8)]
+    if pattern == "spatiotemporal":
+        for frame in range(2, 5):
+            for row in range(64):
+                video[frame][row][32:] = [1] * 32
+        audio[3][0][0] = audio[4][0][0] = 1
+
+    def decoded_threshold(frames, rate: int, size: int):
+        path = _write_mask_video(tmp_path / f"mask-{rate}.mkv", frames, rate=rate)
+        raw = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(path),
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+            check=True, capture_output=True,
+        ).stdout
+        rgb = torch.tensor(list(raw), dtype=torch.uint8).reshape(len(frames), size, size, 3)
+        return (rgb[..., 0].float() / 255 > 0.5).float()
+
+    video_mask = decoded_threshold(video, 24, 64)
+    audio_mask = decoded_threshold(audio, 40, 1)
+    latent = _latent(video_mask=torch.zeros((1, 1, 2, 4, 4)), audio_mask=torch.zeros((1, 1, 2, 8)))
+    result = pinned.MiniMaxH3SetAVNoiseMask().set_mask(
+        latent, video_mask=video_mask, audio_mask=audio_mask
+    )[0]
+    out_video, out_audio = result["noise_mask"].unbind()
+    assert out_video.shape == (1, 1, 2, 4, 4)
+    assert out_audio.shape == (1, 1, 2, 8)
+    if pattern in {"white", "black"}:
+        expected = int(pattern == "white")
+        assert torch.all(out_video == expected)
+        assert torch.all(out_audio == expected)
+    else:
+        assert torch.all(out_video[0, 0, 0] == 0)
+        assert torch.all(out_video[0, 0, 1, :, :2] == 0)
+        assert torch.all(out_video[0, 0, 1, :, 2:] == 1)
+        assert torch.equal(out_audio[0, 0, 0], out_audio[0, 0, 1])
+        assert out_audio[0, 0, 0].tolist() == [0, 0, 0, 1, 1, 0, 0, 0]
+
+
 def test_anchor_default_soft_restoration_and_phase_zero_hard_rule() -> None:
     classified = classify_anchors(
         [
@@ -450,8 +497,10 @@ def test_pinned_native_four_image_payload_is_ordered_and_drives_masked_cpu_subst
     assert ("121", "0", "124", "guider") in graph_edges
     assert ("110", "1", "c3-av-mask", "latent") in graph_edges
     assert ("c3-av-mask", "0", "124", "latent_image") in graph_edges
-    assert ("c3-video-mask-loader", "1", "c3-av-mask", "video_mask") in graph_edges
-    assert ("c3-audio-mask-loader", "1", "c3-av-mask", "audio_mask") in graph_edges
+    for stream in ("video", "audio"):
+        assert (f"c3-{stream}-mask-loader", "0", f"c3-{stream}-image-to-mask", "image") in graph_edges
+        assert (f"c3-{stream}-image-to-mask", "0", f"c3-{stream}-threshold-mask", "mask") in graph_edges
+        assert (f"c3-{stream}-threshold-mask", "0", "c3-av-mask", f"{stream}_mask") in graph_edges
     baseline = substitute(resolved_payload, video, audio)
     assert payload == sentinels
 

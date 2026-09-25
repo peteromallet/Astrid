@@ -179,8 +179,11 @@ def test_mixed_media_and_four_dynamic_references_bind_one_final_sampler() -> Non
     assert graph["final_sampler"] == {"node": "124", "guider": "121", "output": "946"}
     assert binding["sampler_state"]["sampler_sockets"]["latent_image"] == "c3-hard-anchors.0"
     edges = {(edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"]) for edge in graph["edges"]}
-    assert ("c3-video-mask-loader", "1", "c3-av-mask", "video_mask") in edges
-    assert ("c3-audio-mask-loader", "1", "c3-av-mask", "audio_mask") in edges
+    for stream in ("video", "audio"):
+        assert (f"c3-{stream}-mask-loader", "0", f"c3-{stream}-image-to-mask", "image") in edges
+        assert (f"c3-{stream}-image-to-mask", "0", f"c3-{stream}-threshold-mask", "mask") in edges
+        assert (f"c3-{stream}-threshold-mask", "0", "c3-av-mask", f"{stream}_mask") in edges
+        assert graph["compiled_api"]["c3-av-mask"]["inputs"][f"{stream}_mask"] == [f"c3-{stream}-threshold-mask", 0]
     assert ("c3-reference-image-0", "0", "110", "ref_images.ref_image_0") in edges
     assert ("c3-reference-audio-1", "0", "110", "ref_audios.ref_audio_0") in edges
     assert ("c3-reference-video-2", "0", "110", "ref_videos.ref_video_0") in edges

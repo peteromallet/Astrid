@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asset-map", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--project")
-    parser.add_argument("--execution-request", type=Path)
+    parser.add_argument("--execution-request", default="")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -582,7 +582,8 @@ def run_transform(args: argparse.Namespace) -> dict[str, Any]:
             "asset_map": str(args.asset_map.resolve()),
             "stages": ["h3_av.prepare", "h3_av.compile", "vibecomfy.validate", "vibecomfy.run", "h3_av.compose", "h3_av.verify"],
         }
-    execution_request = _json_mapping(args.execution_request) if args.execution_request else None
+    execution_request_path = Path(args.execution_request) if args.execution_request else None
+    execution_request = _json_mapping(execution_request_path) if execution_request_path else None
     request_value = _json_mapping(args.request)
     asset_map = _json_mapping(args.asset_map)
     request_model = normalize_request(request_value)

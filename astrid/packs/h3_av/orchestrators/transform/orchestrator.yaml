@@ -18,6 +18,7 @@ inputs:
   - name: execution_request
     type: file
     required: false
+    default: ""
     description: Optional normalized target/lifecycle request for the VibeComfy child.
 child_executors:
   - h3_av.prepare
@@ -38,6 +39,8 @@ runtime:
       - "{request}"
       - --asset-map
       - "{asset_map}"
+      - --execution-request
+      - "{execution_request}"
       - --out
       - "{out}"
       - "{orchestrator_args}"

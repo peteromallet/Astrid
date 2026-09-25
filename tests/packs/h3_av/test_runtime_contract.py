@@ -20,6 +20,9 @@ from astrid.packs.h3_av.src.compose import compose_candidate
 from astrid.packs.h3_av.src.prepare import prepare_request
 from astrid.packs.h3_av.src.request import normalize_request
 from astrid.packs.h3_av.src.verify import VerificationError, verify_candidate
+from astrid.core.execution.orchestrator.registry import OrchestratorRegistry
+from astrid.core.execution.orchestrator.runner import OrchestratorRunRequest, build_orchestrator_command
+from astrid.core.execution.orchestrator.schema import load_orchestrator_manifest
 
 
 def _request():
@@ -52,6 +55,41 @@ def test_transform_invokes_children_through_the_connected_client(tmp_path: Path)
     assert result.ok is True
     assert calls[0]["capability_id"] == "h3_av.prepare"
     assert calls[0]["wait"] is True
+
+
+def test_transform_command_forwards_execution_request_and_keeps_default(tmp_path: Path) -> None:
+    manifest = Path(__file__).resolve().parents[3] / "astrid/packs/h3_av/orchestrators/transform/orchestrator.yaml"
+    registry = OrchestratorRegistry([load_orchestrator_manifest(manifest)])
+    execution_request = tmp_path / "execution-request.json"
+
+    supplied = build_orchestrator_command(
+        OrchestratorRunRequest(
+            orchestrator_id="h3_av.transform",
+            out=tmp_path / "out",
+            inputs={
+                "request": "request.json",
+                "asset_map": "assets.json",
+                "execution_request": str(execution_request),
+            },
+        ),
+        registry,
+    )
+    assert supplied[supplied.index("--execution-request") + 1] == str(execution_request.resolve())
+
+    defaulted = build_orchestrator_command(
+        OrchestratorRunRequest(
+            orchestrator_id="h3_av.transform",
+            out=tmp_path / "out",
+            inputs={"request": "request.json", "asset_map": "assets.json"},
+        ),
+        registry,
+    )
+    assert defaulted[defaulted.index("--execution-request") + 1] == ""
+    from astrid.packs.h3_av.orchestrators.transform.run import build_parser
+
+    assert build_parser().parse_args(
+        ["--request", "request.json", "--asset-map", "assets.json", "--out", "out"]
+    ).execution_request == ""
 
 
 def test_transform_reaches_default_canonical_sdk_before_prepare(monkeypatch, tmp_path: Path) -> None:

@@ -10,8 +10,7 @@ import tempfile
 import zipfile
 from contextlib import contextmanager
 from fractions import Fraction
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from .masks import PreparedAVMask, PreparedAVMaskError, load_prepared_av_mask
@@ -344,6 +343,84 @@ def _decode_exact_audio(
         )
 
 
+def _decode_generated_audio(
+    path: Path, destination: Path, *, samples: int, sample_rate: int, channels: int,
+    fps: Fraction, temp_dir: Path,
+) -> dict[str, Any]:
+    """Put pinned 32 kHz H3 audio on the prepared delivery clock at sample zero."""
+
+    stream = _probe_stream(path, "audio")
+    try:
+        input_rate = int(stream.get("sample_rate"))
+    except (TypeError, ValueError):
+        input_rate = 0
+    if stream.get("channels") != channels or input_rate not in {sample_rate, 32000}:
+        raise CompositionError(
+            f"{path} audio format {input_rate}Hz/{stream.get('channels')}ch "
+            f"does not match prepared {sample_rate}Hz/{channels}ch or pinned H3 native audio"
+        )
+    if input_rate == sample_rate:
+        _decode_exact_audio(path, destination, samples=samples, sample_rate=sample_rate, channels=channels)
+        return {
+            "method": "decoded-delivery-pcm-v1", "input_sha256": _sha256(path),
+            "input_sample_rate": input_rate, "output_sample_rate": sample_rate,
+            "input_channels": channels, "channels": channels,
+            "placement_sample": 0, "delivery_samples": samples,
+            "delivery_pcm_sha256": _sha256(destination),
+        }
+    if not (input_rate == 32000 and sample_rate == 48000 and channels == 2):
+        raise CompositionError("pinned H3 native audio conversion requires 32 kHz stereo to 48 kHz stereo")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise CompositionError("native audio conversion requires ffmpeg")
+    native = temp_dir / "generated-native.s32le"
+    converted = temp_dir / "generated-resampled.s32le"
+    commands = (
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(path),
+         "-map", "0:a:0", "-vn", "-sn", "-dn", "-f", "s32le", "-acodec", "pcm_s32le",
+         "-ar", "32000", "-ac", "2", str(native)],
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "s32le",
+         "-ar", "32000", "-ac", "2", "-i", str(native), "-af", "aresample=48000",
+         "-f", "s32le", "-acodec", "pcm_s32le", "-ar", "48000", "-ac", "2", str(converted)],
+    )
+    for command in commands:
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            detail = getattr(exc, "stderr", "") or str(exc)
+            raise CompositionError(f"native audio conversion failed: {detail[-500:]}") from exc
+    sample_bytes = channels * 4
+    native_size, converted_size = native.stat().st_size, converted.stat().st_size
+    if not native_size or native_size % sample_bytes or not converted_size or converted_size % sample_bytes:
+        raise CompositionError("native audio conversion produced incomplete PCM samples")
+    converted_samples = converted_size // sample_bytes
+    pad_samples = max(0, samples - converted_samples)
+    # A short decode is only repairable within one prepared video frame.
+    max_pad = (sample_rate * fps.denominator + fps.numerator - 1) // fps.numerator
+    if pad_samples > max_pad:
+        raise CompositionError("native audio is too short for the prepared delivery")
+    with converted.open("rb") as source, destination.open("wb") as output:
+        remaining = min(samples, converted_samples) * sample_bytes
+        while remaining:
+            chunk = source.read(min(1024 * 1024, remaining))
+            if not chunk:
+                raise CompositionError("resampled audio became short during delivery trim")
+            output.write(chunk)
+            remaining -= len(chunk)
+        output.truncate(samples * sample_bytes)
+    return {
+        "method": "ffmpeg-native-32000-to-delivery-48000-v1",
+        "input_sha256": _sha256(path), "input_sample_rate": input_rate,
+        "input_channels": channels, "input_samples": native_size // sample_bytes,
+        "native_pcm_sha256": _sha256(native), "output_sample_rate": sample_rate,
+        "channels": channels, "placement_sample": 0,
+        "resampled_samples": converted_samples, "resampled_pcm_sha256": _sha256(converted),
+        "trimmed_tail_samples": max(0, converted_samples - samples),
+        "padded_tail_samples": pad_samples, "delivery_samples": samples,
+        "delivery_pcm_sha256": _sha256(destination),
+    }
+
+
 def _anchor_items(preparation: Mapping[str, Any], artifact: PreparedAVMask) -> list[tuple[Mapping[str, Any], Mapping[str, Any]]]:
     request = preparation.get("request")
     media = request.get("media") if isinstance(request, Mapping) else None
@@ -499,7 +576,6 @@ def _apply_exact_anchors(
     temp_dir: Path,
 ) -> list[dict[str, Any]]:
     assets = _asset_paths(preparation)
-    request = preparation.get("request")
     source_asset = _primary_baseline_asset(preparation, artifact)
     records: list[dict[str, Any]] = []
     frame_bytes = width * height * 4
@@ -603,8 +679,12 @@ def _compose_exact_media(
             _decode_exact_audio(source, source_audio_raw, samples=samples, sample_rate=sample_rate, channels=channels, start_sample=source_sample_offset)
         if generated_video is not None:
             _decode_exact_video(generated_video, generated_video_raw, frames=frames, width=width, height=height, fps=fps)
+        generated_audio_evidence = None
         if generated_audio is not None:
-            _decode_exact_audio(generated_audio, generated_audio_raw, samples=samples, sample_rate=sample_rate, channels=channels)
+            generated_audio_evidence = _decode_generated_audio(
+                generated_audio, generated_audio_raw, samples=samples, sample_rate=sample_rate,
+                channels=channels, fps=fps, temp_dir=temp_dir,
+            )
 
         frame_bytes = width * height * 4
         composed_video_raw.touch()
@@ -688,6 +768,8 @@ def _compose_exact_media(
         except (OSError, subprocess.SubprocessError) as exc:
             detail = getattr(exc, "stderr", "") or str(exc)
             raise CompositionError(f"lossless master encoding failed: {detail[-500:]}") from exc
+        composed_video_digest = _sha256(composed_video_raw)
+        composed_audio_digest = _sha256(composed_audio_raw)
 
     return {
         "method": "cpu-exact-delivery-compose-v1",
@@ -707,6 +789,9 @@ def _compose_exact_media(
         "editable_counts": {"video_pixels": editable_video, "audio_samples": editable_audio},
         "anchors": anchors,
         "baseline_identity": baseline_identity,
+        "generated_audio_conversion": generated_audio_evidence,
+        "composed_video_rgba_sha256": composed_video_digest,
+        "composed_audio_pcm_sha256": composed_audio_digest,
     }
 
 
@@ -987,7 +1072,8 @@ def compose_candidate(
                         "audio": {"decoded_pcm_format": _EXACT_AUDIO_SAMPLE_FORMAT, "sample_rate": composition_method["sample_rate"], "channels": artifact.audio_shape[0], "channel_order": "prepared_channel_order"},
                     },
                     "lossless_master": {"container": _EXACT_MASTER_CONTAINER, "video_codec": _EXACT_VIDEO_CODEC, "audio_codec": _EXACT_AUDIO_CODEC, "preview": None},
-                    "codec_semantics": "FFV1 and PCM encode the composed canonical decoded domain; no resize, resample, channel mix, or temporal shift is permitted.",
+                    "audio_conversion": composition_method["generated_audio_conversion"],
+                    "codec_semantics": "FFV1 and PCM encode the composed canonical decoded domain without further conversion; native H3 audio conversion is recorded at the input boundary.",
                     "anchors": composition_method["anchors"],
                 },
                 "provenance": dict(provenance) if isinstance(provenance, Mapping) else {},

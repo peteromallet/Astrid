@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -160,6 +162,94 @@ def _verify_provenance(preparation: Mapping[str, Any], composition: Mapping[str,
         raise VerificationError("composition asset provenance does not match preparation")
 
 
+def _verify_full_decoded_extent(
+    candidate: Path, root: Path, *, frames: int, width: int, height: int,
+    samples: int, channels: int, sample_rate: int,
+) -> None:
+    """Count both entire decoded streams; prefix decodes alone hide trailing AV."""
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise VerificationError("exact verification requires ffmpeg")
+    streams = (
+        ("video", root / "full-video.rgba", width * height * 4, frames,
+         ["-map", "0:v:0", "-an", "-sn", "-dn", "-fps_mode", "passthrough",
+          "-f", "rawvideo", "-pix_fmt", "rgba"]),
+        ("audio", root / "full-audio.s32le", channels * 4, samples,
+         ["-map", "0:a:0", "-vn", "-sn", "-dn", "-f", "s32le",
+          "-acodec", "pcm_s32le", "-ar", str(sample_rate), "-ac", str(channels)]),
+    )
+    for stream_type, destination, unit_bytes, expected, options in streams:
+        try:
+            subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(candidate),
+                 *options, str(destination)], check=True, capture_output=True, text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise VerificationError(f"candidate full {stream_type} stream is corrupt") from exc
+        actual_bytes = destination.stat().st_size
+        if actual_bytes != expected * unit_bytes:
+            raise VerificationError(
+                f"candidate {stream_type} decoded extent is {actual_bytes // unit_bytes} "
+                f"{'frames' if stream_type == 'video' else 'samples'}; expected {expected}"
+            )
+
+
+def _verify_audio_conversion_evidence(
+    composition: Mapping[str, Any], method: Mapping[str, Any], *,
+    sample_rate: int, channels: int, samples: int, fps: Any,
+) -> None:
+    evidence = method.get("generated_audio_conversion")
+    delivery = composition["delivery_contract"]
+    if delivery.get("audio_conversion") != evidence:
+        raise VerificationError("delivery audio conversion evidence disagrees with composition")
+    if evidence is None:
+        if method.get("editable_counts", {}).get("audio_samples"):
+            raise VerificationError("editable audio lacks generated conversion evidence")
+        return
+    if not isinstance(evidence, Mapping):
+        raise VerificationError("generated audio conversion evidence is malformed")
+    if (
+        evidence.get("input_channels") != channels
+        or evidence.get("channels") != channels
+        or evidence.get("output_sample_rate") != sample_rate
+        or evidence.get("placement_sample") != 0
+        or evidence.get("delivery_samples") != samples
+    ):
+        raise VerificationError("generated audio conversion has the wrong clock, channels, or placement")
+    digests = ["input_sha256", "delivery_pcm_sha256"]
+    if evidence.get("method") == "ffmpeg-native-32000-to-delivery-48000-v1":
+        digests += ["native_pcm_sha256", "resampled_pcm_sha256"]
+        counts = [evidence.get(key) for key in (
+            "input_samples", "resampled_samples", "trimmed_tail_samples", "padded_tail_samples",
+        )]
+        if any(type(value) is not int for value in counts):
+            raise VerificationError("native audio conversion sample counts are malformed")
+        input_samples, resampled, trimmed, padded = counts
+        max_pad = (sample_rate * fps.denominator + fps.numerator - 1) // fps.numerator
+        if (
+            sample_rate != 48000 or channels != 2 or evidence.get("input_sample_rate") != 32000
+            or input_samples < 1 or resampled < 1 or trimmed < 0 or padded < 0
+            or trimmed != max(0, resampled - samples)
+            or padded != max(0, samples - resampled) or padded > max_pad
+        ):
+            raise VerificationError("native audio conversion sample counts contradict delivery")
+    elif evidence.get("method") != "decoded-delivery-pcm-v1" or evidence.get("input_sample_rate") != sample_rate:
+        raise VerificationError("generated audio conversion method is unsupported")
+    if any(
+        not isinstance(evidence.get(key), str)
+        or len(evidence[key]) != 64
+        or any(character not in "0123456789abcdef" for character in evidence[key])
+        for key in digests
+    ):
+        raise VerificationError("generated audio conversion digest evidence is malformed")
+    outputs = composition.get("generated_outputs")
+    if isinstance(outputs, list):
+        audio = [row for row in outputs if isinstance(row, Mapping) and row.get("role") == "audio"]
+        if audio and (len(audio) != 1 or audio[0].get("sha256") != evidence["input_sha256"]):
+            raise VerificationError("generated audio conversion input disagrees with output custody")
+
+
 def _verify_exact_candidate(
     *,
     preparation: Mapping[str, Any],
@@ -202,6 +292,10 @@ def _verify_exact_candidate(
     declared_counts = composition_method.get("protected_counts")
     if declared_counts != {"video_pixels": protected_video, "audio_samples": protected_audio}:
         raise VerificationError("exact protected permission counts do not match the prepared AV mask")
+    _verify_audio_conversion_evidence(
+        composition, composition_method, sample_rate=sample_rate, channels=channels,
+        samples=samples, fps=fps,
+    )
     if isinstance(composition.get("source"), Mapping) and source_path is not None:
         if composition["source"].get("sha256") != _sha256(source_path):
             raise VerificationError("authoritative source does not match composition evidence")
@@ -218,6 +312,14 @@ def _verify_exact_candidate(
             _decode_exact_audio(candidate_path, candidate_audio, samples=samples, sample_rate=sample_rate, channels=channels)
         except Exception as exc:  # noqa: BLE001 - fail-closed verification boundary
             raise VerificationError("candidate media is missing, short, corrupt, or has the wrong decoded format") from exc
+        _verify_full_decoded_extent(
+            candidate_path, root, frames=frames, width=width, height=height,
+            samples=samples, channels=channels, sample_rate=sample_rate,
+        )
+        candidate_decoded_digests = {
+            "composed_video_rgba_sha256": _sha256(candidate_video),
+            "composed_audio_pcm_sha256": _sha256(candidate_audio),
+        }
         source_video = root / "source-video.rgba"
         source_audio = root / "source-audio.s32le"
         try:
@@ -329,6 +431,10 @@ def _verify_exact_candidate(
         raise VerificationError("exact equality evidence does not match fresh decoded verification")
     if video_mismatches or audio_mismatches:
         raise VerificationError("protected decoded pixels or PCM samples differ")
+    for field, actual in candidate_decoded_digests.items():
+        declared = composition_method.get(field)
+        if not isinstance(declared, str) or declared != actual:
+            raise VerificationError(f"candidate {field} does not match fresh decoded media")
     return {
         "schema_version": 1,
         "kind": "h3_av_verification",

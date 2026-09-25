@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import shutil
 import subprocess
 import zipfile
@@ -11,12 +11,16 @@ from pathlib import Path
 import pytest
 
 from astrid.packs.h3_av.src.baseline import BaselineError, render_timeline_baseline
-from astrid.packs.h3_av.src.compose import CompositionError, _decode_exact_audio, _decode_exact_video, compose_candidate
+from astrid.packs.h3_av.src.compose import (
+    CompositionError,
+    _decode_exact_audio,
+    _decode_exact_video,
+    compose_candidate,
+)
 from astrid.packs.h3_av.src.masks import PreparedAVMask, load_prepared_av_mask
 from astrid.packs.h3_av.src.prepare import prepare_request
 from astrid.packs.h3_av.src.request import normalize_request
 from astrid.packs.h3_av.src.verify import VerificationError, verify_candidate
-
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -402,6 +406,72 @@ def test_exact_cpu_delivery_supports_mono_44100_decoded_domain(tmp_path: Path) -
         )
 
 
+@pytest.mark.parametrize(("duration", "expected_trim", "expected_pad"), [
+    (2, 48000, 0), (0.99, 0, 480),
+])
+def test_native_32000_audio_is_resampled_and_bounded_on_delivery_clock(
+    tmp_path: Path, duration: float, expected_trim: int, expected_pad: int,
+) -> None:
+    source = tmp_path / "source.mkv"
+    generated = tmp_path / "generated-native.mkv"
+    _media(source, colour="blue", tone=440)
+    _media(generated, colour="red", tone=880, sample_rate=32000, duration=duration)
+    preparation = prepare_request(
+        _request(), asset_map={"source.mkv": str(source)}, fps=24, width=4,
+        height=2, sample_rate=48000,
+    )
+    composition = compose_candidate(
+        preparation=preparation, generated=generated, source=source,
+        out_dir=tmp_path / "composition",
+    )
+    conversion = composition["composition"]["generated_audio_conversion"]
+    assert conversion["method"] == "ffmpeg-native-32000-to-delivery-48000-v1"
+    assert conversion["input_sha256"] == hashlib.sha256(generated.read_bytes()).hexdigest()
+    assert conversion["input_sample_rate"] == 32000
+    assert conversion["input_channels"] == conversion["channels"] == 2
+    assert conversion["input_samples"] == round(duration * 32000)
+    assert conversion["placement_sample"] == 0
+    assert conversion["resampled_samples"] == round(duration * 48000)
+    assert conversion["trimmed_tail_samples"] == expected_trim
+    assert conversion["padded_tail_samples"] == expected_pad
+    assert conversion["delivery_samples"] == 48000
+    assert len(conversion["native_pcm_sha256"]) == 64
+    assert len(conversion["resampled_pcm_sha256"]) == 64
+    assert len(conversion["delivery_pcm_sha256"]) == 64
+    assert verify_candidate(preparation=preparation, composition=composition, source=source)["status"] == "verified"
+    candidate_pcm = tmp_path / "candidate.s32le"
+    source_pcm = tmp_path / "source.s32le"
+    _decode_exact_audio(
+        Path(composition["candidate"]["path"]), candidate_pcm,
+        samples=48000, sample_rate=48000, channels=2,
+    )
+    _decode_exact_audio(source, source_pcm, samples=48000, sample_rate=48000, channels=2)
+    native_delivery = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(generated),
+         "-map", "0:a:0", "-f", "s32le", "-acodec", "pcm_s32le",
+         "-ar", "48000", "-ac", "2", "pipe:1"],
+        check=True, capture_output=True,
+    ).stdout
+    candidate_bytes, source_bytes = candidate_pcm.read_bytes(), source_pcm.read_bytes()
+    edited = 123 * 8
+    assert candidate_bytes[edited:edited + 4] == native_delivery[edited:edited + 4]
+    assert candidate_bytes[edited + 4:edited + 8] == source_bytes[edited + 4:edited + 8]
+    assert candidate_bytes[edited - 8:edited] == source_bytes[edited - 8:edited]
+    false_evidence = json.loads(json.dumps(composition))
+    false_evidence["composition"]["generated_audio_conversion"]["padded_tail_samples"] += 1
+    false_evidence["delivery_contract"]["audio_conversion"]["padded_tail_samples"] += 1
+    with pytest.raises(VerificationError, match="sample counts contradict"):
+        verify_candidate(preparation=preparation, composition=false_evidence, source=source)
+
+    wrong_channels = tmp_path / "native-mono.mkv"
+    _media(wrong_channels, colour="red", tone=880, channels=1, sample_rate=32000)
+    with pytest.raises(CompositionError, match="audio format"):
+        compose_candidate(
+            preparation=preparation, generated=wrong_channels, source=source,
+            out_dir=tmp_path / "wrong-channels",
+        )
+
+
 @pytest.mark.parametrize("sample_rate", [44100, 48000])
 def test_timeline_baseline_preserves_placed_ranges_and_native_padding(tmp_path: Path, sample_rate: int) -> None:
     source = tmp_path / "source.mkv"
@@ -469,6 +539,37 @@ def test_exact_verification_rejects_short_or_corrupt_candidate_after_digest_refr
     truncated.write_bytes(candidate.read_bytes()[:-257])
     _refresh_candidate(composition, truncated)
     with pytest.raises(VerificationError, match="short|corrupt|decoded format"):
+        verify_candidate(preparation=preparation, composition=composition, source=source)
+
+
+@pytest.mark.parametrize(("stream", "filter_args"), [
+    ("video", ["-vf", "tpad=stop_mode=clone:stop=1"]),
+    ("audio", ["-af", "apad=pad_len=2000"]),
+])
+def test_exact_verification_rejects_trailing_decoded_duration_after_digest_refresh(
+    tmp_path: Path, stream: str, filter_args: list[str],
+) -> None:
+    source = tmp_path / "source.mkv"
+    generated = tmp_path / "generated.mkv"
+    _media(source, colour="blue", tone=440)
+    _media(generated, colour="red", tone=880)
+    preparation = prepare_request(
+        _request(), asset_map={"source.mkv": str(source)}, fps=24, width=4,
+        height=2, sample_rate=48000,
+    )
+    composition = compose_candidate(
+        preparation=preparation, generated=generated, source=source,
+        out_dir=tmp_path / "composition",
+    )
+    extended = tmp_path / f"extended-{stream}.mkv"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i",
+         str(composition["candidate"]["path"]), *filter_args,
+         "-c:v", "ffv1", "-pix_fmt", "rgba", "-c:a", "pcm_s32le", str(extended)],
+        check=True,
+    )
+    _refresh_candidate(composition, extended)
+    with pytest.raises(VerificationError, match=f"{stream} decoded extent"):
         verify_candidate(preparation=preparation, composition=composition, source=source)
 
 

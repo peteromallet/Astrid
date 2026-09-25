@@ -452,6 +452,29 @@ def _timeline_items(request: H3Request) -> list[Mapping[str, Any]]:
     return [item for item in request.value["media"] if item.get("role") == "timeline"]
 
 
+def require_supported_source_timeline(request: H3Request) -> None:
+    """Reject source edits that the continuation graph cannot put on the delivery clock."""
+
+    for item in _timeline_items(request):
+        if item.get("modality") != "video":
+            continue
+        occurrence = str(item.get("id", item.get("occurrence_id", "video timeline")))
+        at = item.get("resolved_at", {}).get("value")
+        source_range = item.get("resolved_range")
+        if at != 0 or not isinstance(source_range, list) or source_range[0] != 0:
+            raise GraphBindingError(
+                f"video timeline {occurrence!r} has unsupported source placement/range: "
+                "the continuation loader starts at source and delivery zero; "
+                "an output-clock source baseline is required"
+            )
+        if any(edit.get("action") == "generate" for edit in item.get("edit", [])):
+            raise GraphBindingError(
+                f"video timeline {occurrence!r} has unsupported in-place source edits: "
+                "the current H3 output contains the original source prefix followed by "
+                "generated extension, so it cannot supply edited samples at delivery positions"
+            )
+
+
 def _anchors(artifact: Mapping[str, Any], request: H3Request) -> list[dict[str, Any]]:
     supplied = artifact.get("anchors")
     if supplied is not None:
@@ -1117,6 +1140,7 @@ def build_h3_graph_binding(
     if artifact.get("status") not in {None, "prepared", "ready"}:
         raise GraphBindingError("prepared input is not ready for graph binding")
     request = _request_from_preparation(preparation, artifact)
+    require_supported_source_timeline(request)
     branch = _branch(request)
     timeline_items = _timeline_items(request)
     source_digest = artifact.get("source_baseline_digest", artifact.get("baseline_digest"))

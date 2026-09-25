@@ -11,6 +11,7 @@ import pytest
 from astrid.packs.h3_av.src.compile import CompilationError, compile_preparation
 from astrid.packs.h3_av.src.graph import (
     PINNED_SEITANISM_COMMIT,
+    GraphBindingError,
     build_h3_graph_binding,
 )
 from astrid.packs.h3_av.src.kernel import validate_final_sampler_state
@@ -52,7 +53,7 @@ def _raw_request(*, source: bool = True, edits: bool = True) -> dict[str, object
     return {"version": 2, "prompt": "One continuous audiovisual result.", "duration": 15, "media": media, "settings": {"steps": 8, "seed": 17, "sampler": "res_multistep"}}
 
 
-def _prepared(tmp_path: Path, *, source: bool = True, edits: bool = True) -> tuple[dict[str, object], Path]:
+def _prepared(tmp_path: Path, *, source: bool = True, edits: bool = False) -> tuple[dict[str, object], Path]:
     request = normalize_request(_raw_request(source=source, edits=edits))
     asset_dir = tmp_path / ("source" if source else "references")
     asset_map: dict[str, str] = {}
@@ -117,7 +118,7 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
 
     binding = build_h3_graph_binding(reloaded_preparation)
     state = binding["sampler_state"]
-    assert binding["branch"] == "extension_context"
+    assert binding["branch"] == "source_backed_v2v"
     assert binding["prepared_artifact_digest"] == artifact.artifact_digest
     assert len(binding["inputs"]["references"]) == 4
     assert {item["modality"] for item in binding["inputs"]["references"]} == {"image", "video", "audio"}
@@ -135,12 +136,11 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
         assert (f"c3-{stream}-mask-loader", "0", f"c3-{stream}-image-to-mask", "image") in edges
         assert (f"c3-{stream}-image-to-mask", "0", f"c3-{stream}-threshold-mask", "mask") in edges
         assert (f"c3-{stream}-threshold-mask", "0", "c3-av-mask", f"{stream}_mask") in edges
-    assert ("c3-soft-anchors", "0", "c3-motion-guide-0", "conditioning") in edges
-    assert ("c3-motion-guide-1", "0", "121", "conditioning") in edges
+    assert ("c3-soft-anchors", "0", "121", "conditioning") in edges
     validate_final_sampler_state(
         state,
         required_latent_kinds={"source_av_context", "nested_av_mask", "hard_anchor"},
-        required_conditioning_kinds={"reference_conditioning", "soft_keyframe", "motion_context"},
+        required_conditioning_kinds={"reference_conditioning", "soft_keyframe"},
     )
 
     first = compile_preparation(reloaded_preparation, out_dir=tmp_path / "compiled")
@@ -175,6 +175,10 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
 )
 def test_real_preparation_exposes_all_internal_branches(tmp_path: Path, source: bool, edits: bool, expected: str) -> None:
     preparation, _ = _prepared(tmp_path, source=source, edits=edits)
+    if edits:
+        with pytest.raises(GraphBindingError, match="unsupported in-place source edits"):
+            build_h3_graph_binding(preparation)
+        return
     binding = build_h3_graph_binding(preparation)
     assert binding["branch"] == expected
     assert binding["shared_components"]["loaders"] == "shared_h3_av_media_loaders"

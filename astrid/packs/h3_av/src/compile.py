@@ -15,7 +15,7 @@ from astrid.packs.vibecomfy.asset_manifest import (
     build_asset_manifest,
 )
 
-from .graph import GraphBindingError, build_h3_graph_binding, validate_h3_graph_binding
+from .graph import GraphBindingError, build_h3_graph_binding, require_supported_source_timeline, validate_h3_graph_binding
 from .masks import PreparedAVMaskError, load_prepared_av_mask
 from .output_contract import build_output_contract, validate_output_contract
 from .request import H3Request, read_prepared_request
@@ -570,6 +570,25 @@ def _write_mask_video(path: Path, frames: Any, *, rate: int) -> Path:
 
 def _compile_prepared_v2(preparation: Mapping[str, Any], destination: Path) -> dict[str, Any]:
     """Compile one T2 artifact into the shared Astrid H3 graph boundary."""
+    try:
+        raw = preparation.get("request")
+        expected_digest = preparation.get("request_digest")
+        if not isinstance(raw, Mapping):
+            for key in ("prepared_input", "prepared_av_mask", "prepared"):
+                candidate = preparation.get(key)
+                if isinstance(candidate, Mapping) and isinstance(candidate.get("request"), Mapping):
+                    raw = candidate["request"]
+                    expected_digest = expected_digest or candidate.get("request_digest")
+                    break
+        if isinstance(raw, Mapping):
+            request = read_prepared_request(
+                raw,
+                expected_digest,
+                require_normalized_v2=True,
+            )
+            require_supported_source_timeline(request)
+    except (GraphBindingError, TypeError, ValueError) as exc:
+        raise CompilationError(str(exc)) from exc
     destination.mkdir(parents=True, exist_ok=True)
     assets = _prepared_asset_paths(preparation)
     prepared_manifest = _prepared_artifact_manifest(preparation)

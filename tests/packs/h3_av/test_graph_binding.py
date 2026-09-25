@@ -21,7 +21,7 @@ from astrid.packs.h3_av.src.request import normalize_request
 from tests.packs.h3_av.test_request_contract import FIXTURE_DIGESTS, FIXTURES
 
 
-def _request(*, source: bool = True, mixed_refs: bool = True):
+def _request(*, source: bool = True, mixed_refs: bool = True, edits: bool = False):
     media: list[dict[str, object]] = []
     if source:
         media.append(
@@ -36,7 +36,7 @@ def _request(*, source: bool = True, mixed_refs: bool = True):
                 "edit": [
                     {"stream": "video", "during": [3, 6], "mask": {"full_frame": True}, "guides": ["picture"]},
                     {"stream": "audio", "during": [3, 6], "text": "The exact line.", "guides": ["voice"]},
-                ],
+                ] if edits else [],
             }
         )
     media.extend(
@@ -161,38 +161,14 @@ def _real_prepared_for_compile(tmp_path: Path) -> dict[str, object]:
     )
 
 
-def test_mixed_media_and_four_dynamic_references_bind_one_final_sampler() -> None:
-    request = _request()
+def test_mixed_media_source_edits_do_not_bind_extension_output() -> None:
+    request = _request(edits=True)
     prepared = _prepared(
         request,
         anchors=[{"id": "source", "frame": 0, "mode": "hard"}, {"id": "anchor", "frame": 2, "mode": "soft"}],
     )
-    binding = build_h3_graph_binding(prepared)
-
-    assert binding["branch"] == "extension_context"
-    assert len(binding["inputs"]["references"]) == 4
-    assert {item["modality"] for item in binding["inputs"]["references"]} == {"image", "video", "audio"}
-    assert binding["pinned_seitanism"]["commit"] == PINNED_SEITANISM_COMMIT
-    assert binding["inputs"]["masks"]["video"]["delivery"]["shape"] == [360, 576, 1024]
-    assert binding["inputs"]["masks"]["audio"]["delivery"]["shape"] == [2, 720000]
-    assert binding["final_sampler_validation"]["status"] == "valid"
-    graph = binding["executable_graph"]
-    assert graph["final_sampler"] == {"node": "124", "guider": "121", "output": "946"}
-    assert binding["sampler_state"]["sampler_sockets"]["latent_image"] == "c3-hard-anchors.0"
-    edges = {(edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"]) for edge in graph["edges"]}
-    for stream in ("video", "audio"):
-        assert (f"c3-{stream}-mask-loader", "0", f"c3-{stream}-image-to-mask", "image") in edges
-        assert (f"c3-{stream}-image-to-mask", "0", f"c3-{stream}-threshold-mask", "mask") in edges
-        assert (f"c3-{stream}-threshold-mask", "0", "c3-av-mask", f"{stream}_mask") in edges
-        assert graph["compiled_api"]["c3-av-mask"]["inputs"][f"{stream}_mask"] == [f"c3-{stream}-threshold-mask", 0]
-    assert ("c3-reference-image-0", "0", "110", "ref_images.ref_image_0") in edges
-    assert ("c3-reference-audio-1", "0", "110", "ref_audios.ref_audio_0") in edges
-    assert ("c3-reference-video-2", "0", "110", "ref_videos.ref_video_0") in edges
-    assert ("c3-soft-anchors", "0", "c3-motion-guide-0", "conditioning") in edges
-    assert ("c3-motion-guide-0", "0", "c3-motion-guide-1", "conditioning") in edges
-    assert ("c3-motion-guide-1", "0", "121", "conditioning") in edges
-    assert any(edge["to_node"] == "c3-hard-anchors" and edge["to_input"].startswith("keyframe_image_") for edge in graph["edges"])
-    assert "The exact line." in next(node for node in graph["nodes"] if node["id"] == "110")["inputs"]["prompt"]
+    with pytest.raises(GraphBindingError, match="unsupported in-place source edits"):
+        build_h3_graph_binding(prepared)
 
 
 def test_fixture_a_source_free_uses_one_native_conditioner_sampler_and_mux() -> None:
@@ -373,8 +349,8 @@ def test_wrong_missing_and_duplicate_output_descriptors_are_rejected() -> None:
 
 
 def test_audio_only_preserves_video_mask_and_still_emits_both_streams() -> None:
-    request = _request()
-    binding = build_h3_graph_binding(_prepared(request, audio_only=True))
+    request = normalize_request(FIXTURES["C"]())
+    binding = build_h3_graph_binding(_prepared(request))
     assert any(node["id"] == "c3-av-mask" and node["class_type"] == "MiniMaxH3SetAVNoiseMask" for node in binding["executable_graph"]["nodes"])
     assert any(edge["to_node"] == "c3-av-mask" and edge["to_input"] == "audio_mask" for edge in binding["executable_graph"]["edges"])
 
@@ -445,6 +421,10 @@ def test_checked_in_anchor_fixtures_prepare_and_compile_without_latent_reinterpr
     classified = preparation["prepared_av_mask"]["anchors"]
     assert all(anchor["exact_final_restoration"] for anchor in classified)
     assert any(anchor["classification"] == "restoration_only" for anchor in classified)
+    if label in {"E", "X"}:
+        with pytest.raises(CompilationError, match="unsupported (in-place source edits|source placement/range)"):
+            compile_preparation(preparation, out_dir=tmp_path / "compiled")
+        return
     compiled = compile_preparation(preparation, out_dir=tmp_path / "compiled")
     binding = json.loads(Path(compiled["graph_binding"]["path"]).read_text(encoding="utf-8"))
     assert binding["anchors"] == classified
@@ -497,7 +477,7 @@ def test_late_sampler_latent_overwrite_is_rejected_by_t3_validator() -> None:
     state = json.loads(json.dumps(binding["sampler_state"]))
     state["sampler_sockets"]["latent_image"] = "stale-before-mask.out"
     with pytest.raises(H3KernelContractError, match="final latent mutation"):
-        validate_final_sampler_state(state, required_latent_kinds={"source_av_context", "nested_av_mask", "hard_anchor"}, required_conditioning_kinds={"reference_conditioning", "motion_context"})
+        validate_final_sampler_state(state, required_latent_kinds={"source_av_context", "nested_av_mask", "hard_anchor"}, required_conditioning_kinds={"reference_conditioning"})
 
 
 def test_compile_relocation_keeps_graph_identity_and_pinned_lineage(tmp_path: Path) -> None:

@@ -126,6 +126,40 @@ def test_preparation_rejects_unresolved_v2_baseline(tmp_path: Path) -> None:
         prepare_request(_request(), width=4, height=4)
 
 
+def test_preserve_edit_requires_authoritative_baseline_coverage(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"baseline prefix only")
+    request = normalize_request({
+        "version": 2, "prompt": "Protect the requested region.", "duration": 4,
+        "media": [{"id": "source", "asset": "source.mp4", "role": "timeline", "modality": "video",
+                   "at": {"frame": 0}, "range": [0, 2],
+                   "edit": [{"stream": "video", "during": [2, 3], "action": "preserve", "mask": {"full_frame": True}}]}],
+        "settings": {},
+    })
+    with pytest.raises(PreparationError, match="not covered by an authoritative baseline"):
+        prepare_request(request, asset_map={"source.mp4": str(source)}, width=2, height=2)
+
+
+def test_video_mask_asset_range_and_shape_are_applied(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"baseline")
+    mask = tmp_path / "mask.json"
+    mask.write_text(json.dumps([[[1, 0], [0, 0]], [[0, 1], [0, 0]], [[0, 0], [1, 0]]]))
+    request = normalize_request({
+        "version": 2, "prompt": "Use selected mask frames.", "duration": 1,
+        "media": [{"id": "source", "asset": "source.mp4", "role": "timeline", "modality": "video",
+                   "at": {"frame": 0}, "range": [0, 1],
+                   "edit": [{"stream": "video", "during": [0, "1/12"], "mask": {
+                       "asset": "mask.json", "range": [1, 3], "shape": {"frames": 3, "height": 2, "width": 2}}}]}],
+        "settings": {},
+    })
+    artifact = load_prepared_av_mask(prepare_request(
+        request, asset_map={"source.mp4": str(source), "mask.json": str(mask)}, width=2, height=2,
+    )["prepared_av_mask"])
+    assert artifact.video_delivery()[0] == ((0, 1), (0, 0))
+    assert artifact.video_delivery()[1] == ((0, 0), (1, 0))
+
+
 def test_binary_permissions_reject_nan_fractional_and_wrong_shapes() -> None:
     with pytest.raises(PreparedAVMaskError, match="binary"):
         PreparedAVMask.from_arrays(

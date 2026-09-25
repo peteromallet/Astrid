@@ -332,12 +332,16 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                         for sample in range(*audio_range):
                             audio[channel][sample] = 0
             for edit in item.get("edit", []):
+                if edit.get("hard") is True:
+                    raise PreparationError("edit hard conditioning is not supported")
                 resolved = edit["resolved"]["range"]
                 if edit["stream"] == "video":
                     start, end = at + int(resolved[0]), at + int(resolved[1])
                     if start < 0 or end > frames or end <= start:
                         raise PreparationError("video edit coverage is outside the output")
                     mask = edit.get("mask", {"full_frame": True})
+                    if ("range" in mask or "shape" in mask) and "asset" not in mask:
+                        raise PreparationError("video mask range/shape require a supplied raster asset")
                     raster = _mask_pixels(mask, height=height, width=width) if "asset" not in mask else None
                     moving = None
                     if raster is None:
@@ -350,12 +354,28 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                             moving = _load_mask_png(mask_path, height=height, width=width)
                         else:
                             raise PreparationError("supplied masks must be binary JSON rasters or PNG stills")
+                        declared = mask.get("shape")
+                        if declared is not None and declared != {"frames": len(moving), "height": height, "width": width}:
+                            raise PreparationError("declared mask shape does not match the supplied raster")
+                        mask_range = mask.get("range", [0, len(moving)])
+                        if not isinstance(mask_range, (list, tuple)) or len(mask_range) != 2 or any(type(value) is not int for value in mask_range):
+                            raise PreparationError("video mask range must be an integer half-open frame interval")
+                        mask_start, mask_end = mask_range
+                        if mask_start < 0 or mask_end <= mask_start or mask_end > len(moving):
+                            raise PreparationError("video mask range is outside the supplied raster")
+                        moving = moving[mask_start:mask_end]
+                        if len(moving) not in {1, end - start}:
+                            raise PreparationError("video mask range does not match its edit interval")
                     for offset, frame in enumerate(range(start, end)):
                         current = moving[offset] if moving and len(moving) > 1 else (moving[0] if moving else raster)
                         if moving and len(moving) not in {1, end - start}:
                             raise PreparationError("moving mask coverage does not match its edit interval")
                         if edit["action"] == "generate":
                             video[frame] = [[max(video[frame][row][column], current[row][column]) for column in range(width)] for row in range(height)]
+                        else:
+                            baseline_ranges = baseline_video
+                            if not any(base_start <= frame and frame + 1 <= base_end for base_start, base_end in baseline_ranges):
+                                raise PreparationError("preserve video edit is not covered by an authoritative baseline")
                     video_coverage.append([start, end])
                 else:
                     offset = (at * sample_rate) // fps.numerator if fps.denominator == 1 else int(Fraction(at * sample_rate, 1) / fps)
@@ -369,6 +389,8 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                         for channel in channels:
                             for sample in range(start, end):
                                 audio[channel][sample] = 1
+                    elif not any(base_start <= start and end <= base_end for base_start, base_end in baseline_audio_from_video + baseline_audio):
+                        raise PreparationError("preserve audio edit is not covered by an authoritative baseline")
                     audio_coverage.append([start, end])
     if has_baseline:
         video_coverage = _validate_baseline(baseline_video, length=frames, domain="video", require_full=not has_explicit_edits) if has_video_baseline else [[0, frames]]
@@ -437,10 +459,24 @@ def prepare_request(
         raise PreparationError("fps, width, height, and sample_rate must be positive")
     if request.value.get("version") == 2:
         return _prepare_v2(request, asset_map=asset_map, fps=fps, width=width, height=height, sample_rate=sample_rate, target_model_dimensions=target_model_dimensions, channel_layout=channel_layout)
+    if any("mask_asset" in change for change in request.value["changes"]["audio"]):
+        raise PreparationError("audio mask assets are not supported")
     try:
         schedule = build_mask_schedule(request)
     except MaskScheduleError as exc:
         raise PreparationError(str(exc)) from exc
+    if request.value["operation"] == "continue" and not request.value["changes"]["video"] and not request.value["changes"]["audio"]:
+        source_start, source_end = request.value["source"]["range"]
+        protected_end = source_end - source_start
+        duration = request.value["output"]["duration"]
+        if protected_end < duration:
+            prefix = [[0.0, protected_end]] if protected_end > 0 else []
+            tail = [[protected_end, duration]]
+            schedule["video"].update({"generated_intervals": tail, "protected_intervals": prefix})
+            schedule["audio"].update({"generated_intervals": tail, "protected_intervals": prefix})
+            schedule["source_protected"] = False
+            unsigned = {key: value for key, value in schedule.items() if key != "digest"}
+            schedule["digest"] = hashlib.sha256(_canonical_json(unsigned)).hexdigest()
     assets = _resolve_assets(request, asset_map)
     unresolved = [record["asset"] for record in assets if record["status"] != "resolved"]
     # Managed identifiers are intentionally retained for the runtime, but a

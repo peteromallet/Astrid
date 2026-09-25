@@ -102,3 +102,27 @@ def test_binary_png_still_mask_is_admitted_for_source_edit(tmp_path: Path) -> No
     assert compiled["status"] == "compiled"
     binding = json.loads((tmp_path / "png-compiled" / "graph_binding.json").read_text())
     assert binding["branch"] == "source_backed_v2v"
+
+
+def test_continuation_tail_is_declared_generated() -> None:
+    request = normalize_request({
+        "version": 1, "operation": "continue", "source": {"asset": "source.mp4", "range": [0, 2]},
+        "output": {"duration": 4}, "content": {"prompt": "Continue the shot."},
+        "changes": {"video": [], "audio": []}, "references": [], "overrides": {},
+    })
+    preparation = prepare_request(request)
+    schedule = preparation["mask_schedule"]
+    assert schedule["video"]["protected_intervals"] == [[0.0, 2.0]]
+    assert schedule["video"]["generated_intervals"] == [[2.0, 4.0]]
+    assert schedule["audio"]["generated_intervals"] == [[2.0, 4.0]]
+
+
+def test_audio_mask_is_rejected_instead_of_discarded() -> None:
+    request = normalize_request({
+        "version": 1, "operation": "edit", "source": {"asset": "source.mp4", "range": [0, 2]},
+        "output": {"duration": 2}, "content": {"prompt": "Edit the audio."},
+        "changes": {"video": [], "audio": [{"during": [0, 1], "action": "generate", "mask_asset": "mask.wav"}]},
+        "references": [], "overrides": {},
+    })
+    with pytest.raises(ValueError, match="audio mask assets are not supported"):
+        prepare_request(request)

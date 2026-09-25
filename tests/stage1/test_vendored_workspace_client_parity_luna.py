@@ -35,7 +35,7 @@ PINNED_PROTOCOL = "workspace.v1"
 PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:fcae767eaba85e406658ac3b14f3c3447e11073dffcb5e1256e223bdb84f51f4"
 PINNED_SCHEMA_DIGEST = "sha256:f47cff3ee8939b6caa23bd8a2cb32e4df82fb4c3cd6fa2d77aa02df69a7a0dee"
 PINNED_GENERATED_SHA256 = "c9efb120637753c0422b9f8e058a11965d367691dd40038ee7f86315115c26f9"
-PINNED_METADATA_SHA256 = "63e2de4ffca15f1055e44069ed28134ffb03cf94bf3cb5ef55a842d6889c48df"
+PINNED_METADATA_SHA256 = "f29eb4804c16b946f9ac6ba6c676e689d5eb3afa59497a9e8b207f62a4215ecd"
 
 
 def _camel_to_snake(value: str) -> str:
@@ -44,7 +44,7 @@ def _camel_to_snake(value: str) -> str:
 
 
 def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
-    assert SOURCE_COMMIT == "04fee31cba2a9b7c095e1c64313b8d8b6ab0e3dd"
+    assert SOURCE_COMMIT == "04fee311ceb9ade57b05c739e880e7d25818ed56"
     assert PROTOCOL == PINNED_PROTOCOL == generated.PROTOCOL
     assert COMPONENT_MANIFEST_SHA256 == PINNED_COMPONENT_MANIFEST_SHA256
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST

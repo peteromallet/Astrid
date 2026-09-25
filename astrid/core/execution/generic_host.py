@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
 import hashlib
 import heapq
 import hmac
@@ -16,9 +17,11 @@ import importlib.util
 import json
 import mimetypes
 import os
+import re
 import secrets as secrets_module
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -89,6 +92,7 @@ from astrid.core.generation.vibecomfy_dependency import (
 )
 from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.core.util.secrets import load_local_api_key_with_source
+from astrid.sdk.execution_request import normalize_execution_request
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -109,6 +113,14 @@ _VIDEO_SUFFIX_MEDIA_TYPES = {
     ".webm": "video/webm",
     ".mkv": "video/x-matroska",
 }
+_SUFFIX_MEDIA_TYPES = {
+    **_VIDEO_SUFFIX_MEDIA_TYPES,
+    ".wav": "audio/wav",
+}
+_ACTIVATION_VERSION = "runtime.local-worker-activation/v1"
+_ACTIVATION_ACCEPTED_VERSION = "astrid.local-worker-activation-accepted/v1"
+_ACTIVATION_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ACTIVATION_FRAME_LIMIT = 64 * 1024
 
 _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
     "role",
@@ -144,7 +156,7 @@ def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
     artifact_type = str(descriptor.get("artifact_type") or "")
     filename = descriptor.get("filename")
     if isinstance(filename, str) and filename:
-        suffix_media_type = _VIDEO_SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
+        suffix_media_type = _SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
         if suffix_media_type is not None:
             return suffix_media_type
         guessed_media_type = mimetypes.guess_type(filename)[0]
@@ -1312,6 +1324,200 @@ def _admitted_task_spec(task_data: Mapping[str, Any]) -> Mapping[str, Any]:
     return _admitted_spec_envelope(task_data.get("spec"))
 
 
+def _assert_verified_placement_binding(
+    binding: Mapping[str, Any], target: Mapping[str, Any]
+) -> None:
+    """Require Runtime's exact credential-backed placement projection.
+
+    The host consumes this evidence; it does not mint or upgrade selector,
+    config, environment, or self-reported target data into evidence.
+    """
+
+    actual = binding.get("actual_target")
+    if not isinstance(actual, Mapping):
+        raise HostError("task target binding has no credential-verified actual target")
+    verification = binding.get("verification")
+    if not isinstance(verification, Mapping) or set(verification) != {
+        "method", "evidence_digest", "verified",
+    }:
+        raise HostError("task target binding has no credential-verified placement verification")
+    if verification.get("method") != "credential_claim" or verification.get("verified") is not True:
+        raise HostError("task target binding placement verification is not a credential claim")
+    digest = verification.get("evidence_digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise HostError("task target binding placement verification digest is invalid")
+    incarnation = binding.get("executor_incarnation")
+    if not isinstance(incarnation, str) or not incarnation.strip() or len(incarnation) > 256:
+        raise HostError("task target binding has no valid executor incarnation")
+
+    selected_kind = target.get("kind")
+    actual_kind = actual.get("kind")
+    resolved = binding.get("resolved_target")
+    if not isinstance(resolved, Mapping) or resolved != target:
+        raise HostError("credential-verified resolved target disagrees with execution_request")
+    if selected_kind != "default" and actual_kind != selected_kind:
+        raise HostError("credential-verified actual target kind disagrees with execution_request")
+    for key, expected in target.items():
+        if key != "kind" and actual.get(key) != expected:
+            raise HostError(f"credential-verified actual target {key} disagrees with execution_request")
+
+
+def _execution_contract(
+    task_data: Mapping[str, Any],
+    *,
+    runtime_session_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Validate the carried request before the worker spends or opens a session."""
+    envelope = task_data.get("spec")
+    # A small set of legacy in-process callers intentionally provide only the
+    # task identity while exercising capability-level admission guards.  With
+    # no carried contract there is nothing to validate here; preserve that
+    # compatibility path and let the ordinary capability checks continue.
+    if envelope is None:
+        return None
+    if not isinstance(envelope, Mapping):
+        raise HostError("runtime task is missing its immutable spec envelope")
+    request = envelope.get("execution_request")
+    nested = _admitted_spec_envelope(envelope)
+    nested_request = nested.get("execution_request")
+    if request is None:
+        request = nested_request
+    elif nested_request is not None and request != nested_request:
+        raise HostError("runtime task has conflicting execution_request values")
+    if request is None:
+        return None
+    try:
+        normalized = normalize_execution_request(request)
+    except ValueError as exc:
+        raise HostError(f"invalid execution_request: {exc}") from exc
+    if normalized is None or not isinstance(request, Mapping):
+        raise HostError("invalid execution_request")
+    if dict(request) != normalized:
+        raise HostError("runtime task execution_request is not normalized")
+
+    declared = normalized.get("inputs", [])
+    authorized = task_data.get("input_object_ids")
+    if not isinstance(authorized, (list, tuple)):
+        raise HostError("execution_request requires task input_object_ids")
+    def object_id(value: Any) -> str:
+        if not isinstance(value, str):
+            raise HostError("execution_request input object IDs must be strings")
+        return value.removeprefix("sha256:")
+    expected_ids = [object_id(item["object_id"]) for item in declared]
+    actual_ids = [object_id(item) for item in authorized]
+    if len(actual_ids) != len(expected_ids) or set(actual_ids) != set(expected_ids):
+        raise HostError("task input_object_ids do not match execution_request inputs")
+    inputs = nested.get("inputs")
+    if not isinstance(inputs, Mapping):
+        inputs = {}
+    declared_names = {item["name"] for item in declared}
+    for name, descriptor in inputs.items():
+        if isinstance(descriptor, Mapping) and (
+            "digest" in descriptor or "object_id" in descriptor
+        ) and name not in declared_names:
+            raise HostError(f"task spec managed input {name!r} is absent from execution_request")
+    for item in declared:
+        name = item["name"]
+        descriptor = inputs.get(name)
+        if not isinstance(descriptor, Mapping):
+            raise HostError(f"task spec input {name!r} is missing its execution_request descriptor")
+        # ``object_id`` is the canonical managed-object digest.  ``digest``
+        # is an optional repeated witness for callers that want the wire
+        # envelope to spell it out, so its absence must not make an otherwise
+        # valid frozen input unrunnable.
+        digest = descriptor.get("digest") or descriptor.get("object_id")
+        if digest is None:
+            raise HostError(f"task spec input {name!r} is missing its materialization digest")
+        if object_id(digest) != object_id(item["object_id"]):
+            raise HostError(f"task spec input {name!r} disagrees with execution_request object_id")
+        if descriptor.get("object_id") is not None and object_id(descriptor["object_id"]) != object_id(item["object_id"]):
+            raise HostError(f"task spec input {name!r} disagrees with execution_request object_id")
+        if descriptor.get("filename") != item["filename"]:
+            raise HostError(f"task spec input {name!r} disagrees with execution_request filename")
+
+    workflow = normalized.get("workflow")
+    if isinstance(workflow, Mapping):
+        workflow_spec = nested.get("workflow")
+        workflow_id = nested.get("workflow_id")
+        if workflow_id is None and isinstance(workflow_spec, Mapping):
+            workflow_id = workflow_spec.get("id")
+        if workflow_id is None:
+            workflow_id = task_data.get("capability")
+        if workflow_id != workflow["id"]:
+            raise HostError("task spec workflow id disagrees with execution_request")
+        identity = nested.get("workflow_contract_digest")
+        if identity is None and isinstance(workflow_spec, Mapping):
+            identity = workflow_spec.get("contract_digest")
+        if identity != workflow["contract_digest"]:
+            raise HostError("task spec workflow contract digest disagrees with execution_request")
+
+    target = normalized["target"]
+    binding = task_data.get("execution_binding") or task_data.get("placement_binding") or task_data.get("binding")
+    if not isinstance(binding, Mapping):
+        raise HostError("execution_request target requires an observed task binding")
+    if binding.get("status") not in (None, "claimed"):
+        raise HostError("task target binding is not claimed")
+    required_identity = {
+        "task_id": task_data.get("id") or task_data.get("task_id"),
+        "run_id": task_data.get("run_id"),
+        "attempt_id": task_data.get("attempt_id"),
+        "lease_id": task_data.get("lease_id"),
+        "fence": task_data.get("fence"),
+        "executor_id": task_data.get("executor_id"),
+        "runtime_epoch": task_data.get("runtime_epoch"),
+        "capability_id": task_data.get("capability") or task_data.get("capability_id"),
+    }
+    for field, expected in required_identity.items():
+        if expected is not None and binding.get(field) != expected:
+            raise HostError(f"task target binding {field} disagrees with the claimed identity")
+    if not isinstance(binding.get("binding_id"), str) or not binding["binding_id"]:
+        raise HostError("task target binding has no Runtime-issued binding_id")
+    if not isinstance(binding.get("session_id"), str) or not binding["session_id"]:
+        raise HostError("task target binding has no Runtime session identity")
+    expected_session = task_data.get("runtime_session_id") or runtime_session_id
+    if expected_session is not None and binding["session_id"] != expected_session:
+        raise HostError("task target binding session_id disagrees with the Runtime session")
+    resolved_target = binding.get("resolved_target")
+    if not isinstance(resolved_target, Mapping):
+        raise HostError("task target binding has no resolved target identity")
+    kind = target["kind"]
+    if binding.get("target_kind") not in (None, kind) and binding.get("kind") not in (None, kind):
+        raise HostError("task target binding kind disagrees with execution_request")
+    identity_fields = {
+        "default": (),
+        "profile": (("id", "target_id"), ("profile_alias", "target_id")),
+        "machine": (("id", "target_id"), ("machine_id", "target_id")),
+        "runpod": (("pod_id", "pod_id"), ("provider_account_ref", "provider_account_ref")),
+    }[kind]
+    for requested, observed in identity_fields:
+        if requested in target and target[requested] is not None and binding.get(observed) != target[requested]:
+            raise HostError(f"task target binding {observed} disagrees with execution_request")
+    for key in ("profile_revision", "profile_digest", "release_digest"):
+        if key in target and binding.get(key) != target[key]:
+            raise HostError(f"task target binding {key} disagrees with execution_request")
+    for key in ("storage", "mounts"):
+        if key in target and resolved_target.get(key) != target[key]:
+            raise HostError(f"task target binding {key} disagrees with execution_request")
+    _assert_verified_placement_binding(binding, target)
+    return normalized
+
+
+def _contract_queue_age(task_data: Mapping[str, Any]) -> float:
+    for key in ("queued_at", "admitted_at", "created_at"):
+        value = task_data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return max(0.0, time.time() - float(value))
+        if isinstance(value, str):
+            try:
+                stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise HostError(f"runtime task {key} is not a valid timestamp") from exc
+            if stamp.tzinfo is None:
+                raise HostError(f"runtime task {key} must include a timezone")
+            return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
+    raise HostError("execution_request max_queue_seconds requires task admission timestamp")
+
+
 def _assert_fixed_request_scope(record: Any, task_data: Mapping[str, Any]) -> None:
     """Reject task parameters that escape a capability's declared profile."""
     scope = _fixed_request_scope(record.definition.metadata)
@@ -1733,6 +1939,10 @@ class RuntimeProtocolClient:
         )
         self.executor_id: str | None = None
         self._runtime_epoch: int | None = None
+        # The runtime epoch is part of the claim fence.  Never replace it with
+        # a freshly observed epoch while an attempt is in flight: a restart
+        # must revoke the old attempt rather than make its lease look current.
+        self._attempt_runtime_epochs: dict[str, int] = {}
         self._heartbeat_session = secrets_module.token_hex(8)
         self._heartbeat_sequence = 0
         self._heartbeat_lock = threading.Lock()
@@ -1758,6 +1968,22 @@ class RuntimeProtocolClient:
         if epoch is None:
             raise HostError("runtime health returned no runtime_epoch")
         return int(epoch)
+
+    @staticmethod
+    def _claim_attempt_id(claim: Any) -> str | None:
+        value = claim.get("attempt_id") if isinstance(claim, Mapping) else getattr(claim, "attempt_id", None)
+        return str(value) if isinstance(value, str) and value else None
+
+    def _claimed_runtime_epoch(self, attempt_id: str) -> int:
+        expected = self._attempt_runtime_epochs.get(str(attempt_id))
+        if expected is None:
+            raise HostError("attempt runtime epoch was not captured at claim")
+        current = self._current_runtime_epoch()
+        if current != expected:
+            raise HostError(
+                "runtime epoch changed after claim; stale attempt is fenced and requires reconciliation"
+            )
+        return expected
 
     def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None, verified_facts: Mapping[str, Any] | None = None):
         # Runtime schema identity is negotiated through health/compatibility;
@@ -1835,7 +2061,7 @@ class RuntimeProtocolClient:
     def heartbeat(self, task_id: str, lease_token: str, *, attempt_id: str | None = None, fence: int | None = None, progress: Mapping[str, Any] | None = None):
         if not attempt_id or fence is None:
             raise HostError("generated heartbeat requires attempt_id and fence")
-        runtime_epoch = self._current_runtime_epoch()
+        runtime_epoch = self._claimed_runtime_epoch(attempt_id)
         # A heartbeat extends the lease and is therefore a new mutation, not a
         # replay of the first pulse.  Reusing one idempotency key here makes a
         # long render appear healthy to the host while the runtime repeatedly
@@ -1859,13 +2085,20 @@ class RuntimeProtocolClient:
     def claim(self, task_id: str, worker_id: str, lease_token: str):
         raise HostError("per-task claim is not a canonical operation; use claim_task")
 
-    def claim_next(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
-        return self.generated.claim_task(
+    def claim_next(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str, target: Mapping[str, Any] | None = None):
+        claim_epoch = self._current_runtime_epoch()
+        claim = self.generated.claim_task(
             executor_id=executor_id,
             capability_ids=capability_ids,
             idempotency_key=idempotency_key,
-            runtime_epoch=self._current_runtime_epoch(),
+            runtime_epoch=claim_epoch,
+            target=target,
         )
+        attempt_id = self._claim_attempt_id(claim)
+        if attempt_id is not None:
+            raw_epoch = claim.get("runtime_epoch") if isinstance(claim, Mapping) else getattr(claim, "runtime_epoch", None)
+            self._attempt_runtime_epochs[attempt_id] = int(raw_epoch if raw_epoch is not None else claim_epoch)
+        return claim
 
     def task(self, task_id: str):
         return self.generated.get_task(task_id)
@@ -1880,7 +2113,7 @@ class RuntimeProtocolClient:
             "outputs": outputs,
             "effect": effect,
             "result": dict(result),
-            "runtime_epoch": self._current_runtime_epoch(),
+            "runtime_epoch": self._claimed_runtime_epoch(attempt_id),
         }
         return self.generated.settle_attempt(
             attempt_id,
@@ -1909,7 +2142,7 @@ class RuntimeProtocolClient:
             lease_id=lease_token,
             fence=int(fence),
             error=payload,
-            runtime_epoch=self._current_runtime_epoch(),
+            runtime_epoch=self._claimed_runtime_epoch(attempt_id),
             idempotency_key=f"fail-{attempt_id}-{fence}",
         )
 
@@ -1962,8 +2195,11 @@ class RuntimeProtocolClient:
     ):
         if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
             raise HostError("output upload project_id must be a non-empty string or None")
+        claim_epoch = self._claimed_runtime_epoch(attempt_id)
         if runtime_epoch is None:
-            runtime_epoch = self._current_runtime_epoch()
+            runtime_epoch = claim_epoch
+        elif int(runtime_epoch) != claim_epoch:
+            raise HostError("output upload runtime_epoch does not match the claim fence")
         executor_id = self.executor_id
         if any(
             not isinstance(value, str) or not value
@@ -2022,7 +2258,7 @@ class RuntimeProtocolClient:
             attempt_id,
             lease_id=lease_token,
             fence=int(fence),
-            runtime_epoch=self._current_runtime_epoch(),
+            runtime_epoch=self._claimed_runtime_epoch(attempt_id),
             timeline_id=timeline_id,
             expected_version=int(expected_version),
             config=config,
@@ -2033,6 +2269,90 @@ class RuntimeProtocolClient:
 
 
 _OPTIONAL_EXTERNAL_MATRIX_PREFIXES = ("discord_local.", "hivemind.", "seedance_local.")
+
+
+def _configured_claim_target(raw_value: str | None = None) -> dict[str, Any] | None:
+    """Return an explicit target for queue claims when one is configured.
+
+    Targeted task admission creates a Runtime-owned binding, and the claim
+    boundary must repeat the same target so the Runtime can route the task to
+    the intended worker.  Keep this opt-in so existing untargeted hosts retain
+    queue-wide claim behavior.
+    """
+    raw = (
+        os.environ.get("ASTRID_EXECUTION_TARGET_JSON", "")
+        if raw_value is None
+        else raw_value
+    ).strip()
+    if not raw:
+        return None
+    try:
+        target = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise HostError("ASTRID_EXECUTION_TARGET_JSON must be valid JSON") from exc
+    if not isinstance(target, Mapping):
+        raise HostError("ASTRID_EXECUTION_TARGET_JSON must be a JSON object")
+    try:
+        normalized = normalize_execution_request({"target": dict(target)})
+    except ValueError as exc:
+        raise HostError(f"ASTRID_EXECUTION_TARGET_JSON is not a valid execution target: {exc}") from exc
+    if not isinstance(normalized, Mapping) or not isinstance(normalized.get("target"), Mapping):
+        raise HostError("ASTRID_EXECUTION_TARGET_JSON did not produce an execution target")
+    return dict(normalized["target"])
+
+
+def _startup_identity_attestation(
+    *,
+    source_checkout: Path | None,
+    source_inventory_identity: str | None,
+    expected_source_checkout_digest: str | None = None,
+    boot_manifest_hash: str | None = None,
+    require_target: bool = False,
+    target_json: str | None = None,
+) -> dict[str, Any]:
+    """Validate and record the worker identity before discovery or registration.
+
+    A readiness marker is useful only when it proves which source and target
+    produced it.  Keep the check small and deterministic: target identity is
+    normalized by the execution-request contract, while source identity is
+    the exact pack tree used by capability admission.  The expected source
+    digest is supplied by the launcher so a stale checkout fails before it can
+    advertise readiness.
+    """
+    target = _configured_claim_target(target_json)
+    if target is None and require_target:
+        raise HostError(
+            "worker startup requires an explicit execution target; set "
+            "ASTRID_EXECUTION_TARGET_JSON or pass --execution-target-json"
+        )
+    if source_checkout is None:
+        if expected_source_checkout_digest:
+            raise HostError("source checkout digest was supplied without a source checkout")
+        source_digest = None
+    else:
+        try:
+            source_digest = source_checkout_digest(source_checkout)
+        except (OSError, ValueError) as exc:
+            raise HostError(f"worker source identity could not be verified: {exc}") from exc
+        expected = str(expected_source_checkout_digest or "").strip()
+        if expected and expected != source_digest:
+            raise HostError(
+                "worker source identity mismatch: "
+                f"expected {expected!r}, observed {source_digest!r}"
+            )
+    return {
+        "schema_version": 1,
+        "target": target,
+        "target_digest": (
+            "sha256:" + _canonical_digest(target) if target is not None else None
+        ),
+        "source": {
+            "checkout": str(source_checkout) if source_checkout is not None else None,
+            "checkout_digest": source_digest,
+            "inventory_identity": str(source_inventory_identity or ""),
+        },
+        "boot_manifest_hash": boot_manifest_hash,
+    }
 
 
 class GenericPackHost:
@@ -2046,6 +2366,7 @@ class GenericPackHost:
         executor_id: str = "astrid-pack-host",
         max_concurrency: int = 1,
         attempt_root: str | Path | None = None,
+        attempt_base: str | Path | None = None,
         capability_matrix: str | Path | None = None,
         credential_source: Mapping[str, str] | None = None,
         source_inventory_identity: str | None = None,
@@ -2064,7 +2385,10 @@ class GenericPackHost:
         self.client = client
         self.executor_id = executor_id
         self.max_concurrency = max(1, int(max_concurrency))
+        if attempt_root is not None and attempt_base is not None:
+            raise ValueError("attempt_root and attempt_base are mutually exclusive")
         self.attempt_root = Path(attempt_root).expanduser().resolve() if attempt_root else None
+        self.attempt_base = Path(attempt_base).expanduser().resolve() if attempt_base else None
         self.capabilities: dict[str, CapabilityRecord] = {}
         self._registered_digests: dict[str, str] = {}
         self._registered_state: dict[str, dict[str, str]] = {}
@@ -2091,7 +2415,14 @@ class GenericPackHost:
             if boot_manifest_path is not None
             else None
         )
-        self.boot_manifest_hash = boot_manifest_hash
+        if boot_manifest_hash is not None:
+            from astrid.core._shared.boot_manifest import normalize_sha256_digest
+
+            self.boot_manifest_hash = normalize_sha256_digest(
+                boot_manifest_hash, label="boot manifest hash"
+            )
+        else:
+            self.boot_manifest_hash = None
         self.execution_policy = execution_policy or ExecutionGuardPolicy()
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
@@ -2103,6 +2434,7 @@ class GenericPackHost:
         self.managed_tool_session = ManagedToolSession(
             manager_id=self.executor_id
         )
+
         self._active_processes: set[subprocess.Popen] = set()
         self._process_lock = threading.RLock()
         self._shutdown = threading.Event()
@@ -2118,6 +2450,21 @@ class GenericPackHost:
         self._vibecomfy_warmth_hint: str | None = None
         self._vibecomfy_current_warmth_hint: str | None = None
         self._vibecomfy_requested_warmth_hint: str | None = None
+
+    def _allocate_attempt_root(self, task_id: str, attempt_id: str) -> Path:
+        """Allocate the filesystem namespace for one claimed attempt."""
+        if self.attempt_base is not None:
+            self.attempt_base.mkdir(parents=True, exist_ok=True)
+            if self.attempt_base.is_symlink() or not self.attempt_base.is_dir():
+                raise HostError("attempt_base must be an absolute non-symlink directory")
+            root = self.attempt_base / f"{task_id}-{attempt_id}"
+            if root.exists() or root.is_symlink():
+                raise HostError(f"attempt-base allocation already exists: {root.name}")
+            root.mkdir()
+            return root.resolve()
+        root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
     @property
     def last_cleanup_receipt(self) -> dict[str, Any] | None:
@@ -2173,7 +2520,11 @@ class GenericPackHost:
             self.boot_manifest_path,
             support_root=self.boot_manifest_path.parents[1],
         )
-        if self.boot_manifest_hash and stamped_manifest_hash != self.boot_manifest_hash:
+        from astrid.core._shared.boot_manifest import normalize_sha256_digest
+
+        if self.boot_manifest_hash and normalize_sha256_digest(
+            stamped_manifest_hash, label="stamped boot manifest hash"
+        ) != self.boot_manifest_hash:
             raise HostError("boot manifest changed after host startup")
         return {
             "kind": "astrid.boot_manifest",
@@ -2615,6 +2966,7 @@ class GenericPackHost:
             "protocol": getattr(health, "protocol", None),
             "schema_digest": getattr(health, "schema_digest", None),
             "runtime_epoch": getattr(health, "runtime_epoch", None),
+            "runtime_session_id": getattr(health, "runtime_session_id", None),
         }
         actual_protocol = str(value.get("protocol", ""))
         actual_schema = str(value.get("schema_digest", ""))
@@ -2637,6 +2989,7 @@ class GenericPackHost:
             "protocol": actual_protocol,
             "schema_digest": actual_schema,
             "runtime_epoch": runtime_epoch,
+            "runtime_session_id": value.get("runtime_session_id"),
             "runtime_instance_id": value.get("runtime_instance_id") or value.get("instance_id"),
             "coordinator_epoch": value.get("coordinator_epoch"),
         }
@@ -2965,7 +3318,7 @@ class GenericPackHost:
         }
         for name, value in list(values.items()):
             digest = (
-                value.get("digest")
+                (value.get("digest") or value.get("object_id"))
                 if isinstance(value, Mapping)
                 else (
                     value
@@ -3001,6 +3354,21 @@ class GenericPackHost:
                     materialized_objects[str(digest).removeprefix("sha256:")] = str(destination)
                     continue
                 input_name = Path("theme.json") if str(name) == "theme" else Path(str(name))
+                # Preserve a managed file object's safe filename when the
+                # capability consumes it as a normal file port.  The logical
+                # port name (for example ``source_video``) is not necessarily
+                # a usable media suffix; losing ``.mp4`` here makes downstream
+                # Comfy loaders reject an otherwise valid managed object.
+                if str(name) in file_input_names and isinstance(value, Mapping):
+                    raw_filename = value.get("filename")
+                    if (
+                        isinstance(raw_filename, str)
+                        and raw_filename
+                        and Path(raw_filename).name == raw_filename
+                        and not Path(raw_filename).is_absolute()
+                        and ".." not in Path(raw_filename).parts
+                    ):
+                        input_name = Path(raw_filename)
                 if str(name) in cas_names:
                     filename = value.get("filename") if isinstance(value, Mapping) else None
                     if not isinstance(filename, str) or not filename or Path(filename).name != filename:
@@ -4390,6 +4758,21 @@ class GenericPackHost:
 
         try:
             _assert_fixed_request_scope(record, task_data)
+            execution_contract = _execution_contract(
+                task_data,
+                runtime_session_id=self.runtime_state.get("runtime_session_id"),
+            )
+            contract_limits = execution_contract.get("limits", {}) if execution_contract else {}
+            queue_limit = contract_limits.get("max_queue_seconds")
+            if queue_limit is not None and _contract_queue_age(task_data) > queue_limit:
+                raise HostError("execution_request max_queue_seconds exceeded before execution")
+            claim_epoch = task_data.get("runtime_epoch", self.runtime_state.get("runtime_epoch"))
+            if execution_contract is not None:
+                if isinstance(claim_epoch, bool) or not isinstance(claim_epoch, int) or claim_epoch < 1:
+                    raise HostError("execution_request requires a claimed runtime_epoch")
+                observed_epoch = self.runtime_state.get("runtime_epoch")
+                if observed_epoch is not None and observed_epoch != claim_epoch:
+                    raise HostError("claimed runtime_epoch disagrees with observed runtime")
             storage_estimate = _task_storage_estimate(task_data)
             if record.definition.metadata.get("storage_estimate_required"):
                 if storage_estimate is None:
@@ -4423,10 +4806,17 @@ class GenericPackHost:
             raise HostError(str(exc)) from exc
         spec = task_data.get("spec", {})
         authorized_input_object_ids = task_data.get("input_object_ids")
-        ephemeral_attempt_root = self.attempt_root is None
-        root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
-        root.mkdir(parents=True, exist_ok=True)
+        ephemeral_attempt_root = self.attempt_root is None and self.attempt_base is None
+        # ``attempt_root`` is intentionally an exact caller-owned spool for
+        # debug/single-attempt callers. Long-lived hosts use ``attempt_base``
+        # so sequential tasks get isolated namespaces.
+        root = self._allocate_attempt_root(task_id, attempt_id)
         execution_deadline = self.execution_policy.deadline_from_now()
+        runtime_limit = contract_limits.get("max_runtime_seconds")
+        if runtime_limit is not None:
+            execution_deadline = min(execution_deadline, time.monotonic() + runtime_limit)
+        collection_limit = contract_limits.get("collection_seconds")
+        collection_deadline: float | None = None
         warm_receipt = self.execution_policy.warm_expectation()
         evidence_receipt: dict[str, Any] | None = None
         deadline_exceeded = False
@@ -4473,10 +4863,11 @@ class GenericPackHost:
             or getattr(getattr(self.client, "generated", None), "endpoint", None)
             or "runtime://local"
         )
+        host_birth_id = process_birth_identity()
         managed_binding = SessionBinding(
             session_id=f"{capability_id}:{task_id}",
             runtime_instance_id=runtime_instance_id,
-            process_birth_id=process_birth_identity(),
+            process_birth_id=host_birth_id,
             endpoint=runtime_endpoint,
             source_digest=record.source_digest,
             config_digest=_canonical_digest(
@@ -4486,6 +4877,9 @@ class GenericPackHost:
                     "interpreter": str(Path(sys.executable).resolve()),
                 }
             ),
+            runtime_epoch=claim_epoch if isinstance(claim_epoch, int) and not isinstance(claim_epoch, bool) else None,
+            launch_generation=str(self.runtime_state.get("launch_generation") or host_birth_id),
+            engine_birth_id=host_birth_id,
         )
         managed_capability = CapabilityDescriptor(
             capability_id=capability_id,
@@ -4519,7 +4913,10 @@ class GenericPackHost:
         def cancelled():
             nonlocal deadline_exceeded, evidence_cap_exceeded
             nonlocal evidence_failure_receipt
-            if self.execution_policy.deadline_expired(execution_deadline):
+            if self.execution_policy.deadline_expired(execution_deadline) or (
+                collection_deadline is not None
+                and self.execution_policy.deadline_expired(collection_deadline)
+            ):
                 deadline_exceeded = True
                 cancel_signal.set()
                 return True
@@ -4886,6 +5283,8 @@ class GenericPackHost:
                 session_endpoint = str(vibe_session.get("server_url") or "")
                 session_source = str(vibe_session.get("source_revision") or "")
                 session_config = str(vibe_session.get("config_digest") or "")
+                if execution_contract is not None and not vibe_session.get("comfy_process_birth_id"):
+                    raise HostError("execution_request requires observed VibeComfy engine birth identity")
                 managed_binding = SessionBinding(
                     session_id=session_id,
                     runtime_instance_id=str(
@@ -4898,6 +5297,9 @@ class GenericPackHost:
                     source_digest=session_source,
                     config_digest=session_config,
                     execution_identity=stable_session_identity,
+                    runtime_epoch=claim_epoch if isinstance(claim_epoch, int) and not isinstance(claim_epoch, bool) else None,
+                    launch_generation=str(vibe_session.get("launch_generation") or session_birth),
+                    engine_birth_id=str(vibe_session.get("comfy_process_birth_id") or session_birth),
                 )
                 managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
                 from astrid.core.generation.backends.vibecomfy import vibecomfy_warmth_hint
@@ -5032,6 +5434,8 @@ class GenericPackHost:
                 # The outer run_task finally owns lease-pump shutdown and
                 # cleanup; this boundary only preserves child env cleanup.
                 pass
+            if collection_limit is not None:
+                collection_deadline = time.monotonic() + collection_limit
             # The periodic lease pump may not get another turn after a fast
             # command writes its terminal checkpoint. Persist that final
             # checkpoint before harvesting and settling so a completed task
@@ -5207,7 +5611,11 @@ class GenericPackHost:
                 retained_owner = "generic-pack-host"
             payload["execution_guards"] = {
                 "evidence": evidence_receipt,
-                "deadline_seconds": self.execution_policy.deadline_seconds,
+                "deadline_seconds": min(
+                    self.execution_policy.deadline_seconds,
+                    runtime_limit if runtime_limit is not None else self.execution_policy.deadline_seconds,
+                ),
+                "collection_seconds": collection_limit,
                 "warm_expectation": warm_receipt,
                 "evidence_budget": {
                     "run_observed_bytes": self.execution_policy.evidence_budget.charged_bytes,
@@ -5470,10 +5878,12 @@ class GenericPackHost:
         )
         if not capability_ids:
             return None
+        claim_target = _configured_claim_target()
         claim = claim_next(
             executor_id=self.executor_id,
             capability_ids=capability_ids,
             idempotency_key=f"claim-{self.executor_id}-{time.time_ns()}",
+            target=claim_target,
         )
         if claim is None:
             return None
@@ -5485,11 +5895,16 @@ class GenericPackHost:
             "lease_id": getattr(claim, "lease_id", None),
             "fence": getattr(claim, "fence", None),
             "runtime_epoch": getattr(claim, "runtime_epoch", None),
+            "executor_id": getattr(claim, "executor_id", None),
             "input_object_ids": list(getattr(claim, "input_object_ids", ()) or ()),
             "spec": getattr(claim, "spec", None),
             "project_id": getattr(claim, "project_id", None),
             "expected_effect": getattr(claim, "expected_effect", None),
             "generation_intent": getattr(claim, "generation_intent", None),
+            "execution_binding": getattr(claim, "execution_binding", None),
+            "queued_at": getattr(claim, "queued_at", None),
+            "admitted_at": getattr(claim, "admitted_at", None),
+            "created_at": getattr(claim, "created_at", None),
         }
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
@@ -5525,13 +5940,57 @@ class GenericPackHost:
                 "spec": getattr(task, "spec", claim_data.get("spec") or {}),
                 "expected_effect": getattr(task, "expected_effect", claim_data.get("expected_effect")),
                 "generation_intent": getattr(task, "generation_intent", claim_data.get("generation_intent")),
+                "execution_binding": getattr(task, "execution_binding", claim_data.get("execution_binding")),
                 "storage_estimate": getattr(task, "storage_estimate", claim_data.get("storage_estimate")),
                 "required_facts": getattr(task, "required_facts", claim_data.get("required_facts")),
+                "queued_at": getattr(task, "queued_at", None),
+                "admitted_at": getattr(task, "admitted_at", None),
+                "created_at": getattr(task, "created_at", None),
             }
+        def fail_claim_handoff(reason: str) -> None:
+            try:
+                self.client.fail(
+                    task_id, lease_id, reason, retryable=False,
+                    attempt_id=attempt_id, fence=int(fence),
+                )
+            except Exception as exc:
+                raise HostError("claim handoff failure could not be recorded") from exc
+            raise HostError(reason)
+
+        if task_data.get("id") not in (None, task_id):
+            fail_claim_handoff("claimed task_id disagrees with task read")
+        claim_spec = claim_data.get("spec")
+        read_spec = task_data.get("spec")
+        if isinstance(claim_spec, Mapping) and isinstance(read_spec, Mapping):
+            claim_nested = claim_spec.get("spec")
+            read_nested = read_spec.get("spec")
+            claim_request = claim_spec.get("execution_request") or (
+                claim_nested.get("execution_request") if isinstance(claim_nested, Mapping) else None
+            )
+            read_request = read_spec.get("execution_request") or (
+                read_nested.get("execution_request") if isinstance(read_nested, Mapping) else None
+            )
+            if claim_request != read_request and (claim_request is not None or read_request is not None):
+                fail_claim_handoff("claim and task read disagree on execution_request")
+            if claim_request is not None:
+                claim_ids = claim_data.get("input_object_ids")
+                read_ids = task_data.get("input_object_ids")
+                if claim_ids is not None and read_ids is not None and (
+                    not isinstance(claim_ids, (list, tuple))
+                    or not isinstance(read_ids, (list, tuple))
+                    or list(claim_ids) != list(read_ids)
+                ):
+                    fail_claim_handoff("claim and task read disagree on input_object_ids")
+        claim_binding = claim_data.get("execution_binding") or claim_data.get("placement_binding") or claim_data.get("binding")
+        read_binding = task_data.get("execution_binding") or task_data.get("placement_binding") or task_data.get("binding")
+        if claim_binding is not None and read_binding is not None and claim_binding != read_binding:
+            fail_claim_handoff("claim and task read disagree on execution binding")
         task_data.update(
             {
                 "id": task_id,
                 "attempt_id": claim_data.get("attempt_id"),
+                "lease_id": claim_data.get("lease_id"),
+                "executor_id": claim_data.get("executor_id") or getattr(self, "executor_id", None),
                 "fence": claim_data.get("fence"),
             }
         )
@@ -5539,6 +5998,11 @@ class GenericPackHost:
             task_data["project_id"] = claim_data["project_id"]
         if claim_data.get("runtime_epoch") is not None:
             task_data["runtime_epoch"] = claim_data["runtime_epoch"]
+        if claim_binding is not None:
+            task_data["execution_binding"] = claim_binding
+        for timestamp_key in ("queued_at", "admitted_at", "created_at"):
+            if claim_data.get(timestamp_key) is not None:
+                task_data[timestamp_key] = claim_data[timestamp_key]
         if claim_data.get("input_object_ids") is not None:
             task_data["input_object_ids"] = claim_data["input_object_ids"]
         # The claim response is the execution snapshot.  Preserve it over
@@ -5705,13 +6169,16 @@ def _compose_cli_boot_manifest(
     try:
         from astrid.core._shared.boot_manifest import (
             load_boot_manifest_hash,
+            normalize_sha256_digest,
             validate_manifest_path,
         )
         manifest_path = validate_manifest_path(args.boot_manifest_path, args.support_root)
         digest = load_boot_manifest_hash(
             manifest_path, support_root=args.support_root
         )
-        if args.boot_manifest_hash is not None and args.boot_manifest_hash != digest:
+        if args.boot_manifest_hash is not None and normalize_sha256_digest(
+            args.boot_manifest_hash, label="boot manifest hash"
+        ) != normalize_sha256_digest(digest, label="stamped boot manifest hash"):
             raise RuntimeError("boot manifest hash does not match the existing manifest")
     except (OSError, RuntimeError) as exc:
         parser.error(f"boot manifest composition failed: {exc}")
@@ -5729,6 +6196,119 @@ def _write_ready_marker(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _await_worker_activation(
+    descriptor: int,
+    *,
+    operation_id: str,
+    channel_id: str,
+    credential_file: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Accept one Runtime grant over the Worker's inherited private socket.
+
+    This is intentionally the first active operation in parked CLI mode.  The
+    credential path is only a reference until the message, channel, and actual
+    process birth identity have all been accepted.
+    """
+
+    if descriptor < 3 or not operation_id or not channel_id:
+        raise HostError("parked activation channel identity is invalid")
+    if timeout_seconds <= 0 or timeout_seconds > 900:
+        raise HostError("parked activation timeout is invalid")
+    expected_credential = Path(credential_file).expanduser()
+    if not expected_credential.is_absolute():
+        raise HostError("parked credential reference must be absolute")
+    actual_birth = process_birth_identity()
+    if not actual_birth:
+        raise HostError("parked host process birth identity is unavailable")
+
+    control = socket.socket(fileno=descriptor)
+    try:
+        control.settimeout(timeout_seconds)
+        frame = bytearray()
+        while b"\n" not in frame:
+            chunk = control.recv(min(4096, _ACTIVATION_FRAME_LIMIT + 1 - len(frame)))
+            if not chunk:
+                raise HostError("parked activation channel closed before a grant")
+            frame.extend(chunk)
+            if len(frame) > _ACTIVATION_FRAME_LIMIT:
+                raise HostError("parked activation grant is too large")
+        encoded, remainder = bytes(frame).split(b"\n", 1)
+        if remainder:
+            raise HostError("parked activation channel carried multiple frames")
+        try:
+            grant = json.loads(encoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HostError("parked activation grant is malformed") from exc
+        expected_keys = {
+            "version", "operation_id", "channel_id", "credential_file",
+            "executor_incarnation", "evidence_digest", "host",
+        }
+        if not isinstance(grant, dict) or set(grant) != expected_keys:
+            raise HostError("parked activation grant has an invalid shape")
+        if grant["version"] != _ACTIVATION_VERSION:
+            raise HostError("parked activation grant version is invalid")
+        if grant["operation_id"] != operation_id or grant["channel_id"] != channel_id:
+            raise HostError("parked activation grant came from the wrong private channel")
+        if Path(str(grant["credential_file"])).expanduser() != expected_credential:
+            raise HostError("parked activation credential reference is invalid")
+        incarnation = grant["executor_incarnation"]
+        if not isinstance(incarnation, str) or not incarnation or len(incarnation) > 256:
+            raise HostError("parked activation executor incarnation is invalid")
+        digest = grant["evidence_digest"]
+        if not isinstance(digest, str) or not _ACTIVATION_DIGEST.fullmatch(digest):
+            raise HostError("parked activation evidence digest is invalid")
+        host = grant["host"]
+        if (
+            not isinstance(host, dict)
+            or set(host) != {"pid", "birth_id"}
+            or host["pid"] != os.getpid()
+            or host["birth_id"] != actual_birth
+        ):
+            raise HostError("parked activation host process identity is invalid")
+        accepted = {
+            "version": _ACTIVATION_ACCEPTED_VERSION,
+            "operation_id": operation_id,
+            "channel_id": channel_id,
+            "executor_incarnation": incarnation,
+            "evidence_digest": digest,
+            "host": host,
+        }
+        control.sendall(
+            json.dumps(accepted, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
+        return grant
+    except (OSError, socket.timeout) as exc:
+        raise HostError("parked activation channel failed") from exc
+    finally:
+        control.close()
+
+
+def _await_enabled_runtime_credential(
+    client: "RuntimeProtocolClient", *, timeout_seconds: float
+) -> None:
+    """Hold activated startup until Runtime publishes the disabled bearer."""
+
+    deadline = time.monotonic() + max(0.05, min(float(timeout_seconds), 30.0))
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            health = client.health()
+            status = (
+                health.get("status")
+                if isinstance(health, Mapping)
+                else getattr(health, "status", None)
+            )
+            if status == "ok":
+                return
+            last_error = HostError("Runtime health did not report ok")
+        except Exception as exc:  # Runtime owns the short publication race.
+            last_error = exc
+        time.sleep(0.02)
+    raise HostError("activated Runtime credential was not enabled") from last_error
+
+
 def _cli() -> int:
 
     parser = argparse.ArgumentParser(prog="astrid-generic-host")
@@ -5739,6 +6319,7 @@ def _cli() -> int:
     parser.add_argument("--executor-id", default="astrid-pack-host")
     parser.add_argument("--max-concurrency", type=int, default=1)
     parser.add_argument("--attempt-root")
+    parser.add_argument("--attempt-base", help="host-owned base directory; allocate one isolated child per task attempt")
     parser.add_argument("--capability-matrix")
     parser.add_argument("--register", action="store_true")
     parser.add_argument("--run-task")
@@ -5751,6 +6332,7 @@ def _cli() -> int:
     parser.add_argument("--max-frame-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--ready-file", help="write host registration/readiness metadata before entering the claim loop")
     parser.add_argument("--source-checkout", help="absolute source checkout bound to this host")
+    parser.add_argument("--source-checkout-digest", help="expected digest for the source checkout's pack tree")
     parser.add_argument("--support-root", help="absolute runtime support directory bound to this host")
     parser.add_argument("--runtime-instance-id", help="runtime instance identity bound to this host")
     parser.add_argument("--source-inventory-identity", help="verified managed source inventory identity bound to this host")
@@ -5758,9 +6340,52 @@ def _cli() -> int:
     parser.add_argument("--boot-manifest-hash", help="expected SHA-256 hash of the boot manifest")
     parser.add_argument("--readiness-profile-path", help="Worker-published HC-03 readiness profile")
     parser.add_argument("--readiness-profile-hash", help="expected SHA-256 hash of the readiness profile")
+    parser.add_argument("--execution-target-json", help="explicit target JSON used for claim binding")
+    parser.add_argument(
+        "--require-target-attestation",
+        action="store_true",
+        help="fail startup unless an exact execution target is configured",
+    )
+    parser.add_argument("--activation-fd", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--activation-operation-id", help=argparse.SUPPRESS)
+    parser.add_argument("--activation-channel-id", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--activation-timeout-seconds", type=float, default=120.0, help=argparse.SUPPRESS
+    )
     args = parser.parse_args()
+    if args.attempt_root and args.attempt_base:
+        parser.error("--attempt-root and --attempt-base are mutually exclusive")
     if (args.readiness_profile_path is None) != (args.readiness_profile_hash is None):
         parser.error("--readiness-profile-path and --readiness-profile-hash must be supplied together")
+    activation_values = (
+        args.activation_fd,
+        args.activation_operation_id,
+        args.activation_channel_id,
+    )
+    if any(value is not None for value in activation_values) != all(
+        value is not None for value in activation_values
+    ):
+        parser.error("parked activation arguments must be supplied together")
+    target_requested = bool(
+        args.execution_target_json is not None
+        or os.environ.get("ASTRID_EXECUTION_TARGET_JSON", "").strip()
+    )
+    if target_requested and args.activation_fd is None:
+        parser.error("targeted execution requires Worker-supervised activation")
+    activation = None
+    if args.activation_fd is not None:
+        if not args.credential_file:
+            parser.error("parked activation requires --credential-file")
+        try:
+            activation = _await_worker_activation(
+                args.activation_fd,
+                operation_id=args.activation_operation_id,
+                channel_id=args.activation_channel_id,
+                credential_file=args.credential_file,
+                timeout_seconds=args.activation_timeout_seconds,
+            )
+        except HostError as exc:
+            parser.error(str(exc))
     if args.readiness_profile_path is not None:
         readiness_path = Path(args.readiness_profile_path).expanduser()
         if (
@@ -5823,19 +6448,15 @@ def _cli() -> int:
             parser.error("credential file is empty")
     boot_manifest, boot_manifest_hash = _compose_cli_boot_manifest(args, parser)
     client = RuntimeProtocolClient(args.runtime_endpoint, credential) if args.runtime_endpoint else None
-    host = GenericPackHost(
-        pack_roots=args.pack_root,
-        client=client,
-        executor_id=args.executor_id,
-        max_concurrency=args.max_concurrency,
-        attempt_root=args.attempt_root,
-        capability_matrix=args.capability_matrix,
-        source_inventory_identity=args.source_inventory_identity,
-        boot_manifest_path=boot_manifest,
-        boot_manifest_hash=boot_manifest_hash,
-    )
-    host.discover()
-    host.preflight()
+    if activation is not None:
+        if client is None:
+            parser.error("parked activation requires --runtime-endpoint")
+        try:
+            _await_enabled_runtime_credential(
+                client, timeout_seconds=args.activation_timeout_seconds
+            )
+        except HostError as exc:
+            parser.error(str(exc))
     if args.source_checkout:
         source_checkout = Path(args.source_checkout).expanduser()
         if not source_checkout.is_absolute() or source_checkout.is_symlink() or not source_checkout.is_dir():
@@ -5848,6 +6469,34 @@ def _cli() -> int:
             parser.error("--support-root must be an absolute non-symlink directory")
     else:
         support_root = None
+
+    if args.execution_target_json is not None:
+        os.environ["ASTRID_EXECUTION_TARGET_JSON"] = args.execution_target_json
+    try:
+        identity_attestation = _startup_identity_attestation(
+            source_checkout=source_checkout,
+            source_inventory_identity=args.source_inventory_identity,
+            expected_source_checkout_digest=args.source_checkout_digest,
+            boot_manifest_hash=boot_manifest_hash,
+            require_target=args.require_target_attestation,
+        )
+    except HostError as exc:
+        parser.error(str(exc))
+
+    host = GenericPackHost(
+        pack_roots=args.pack_root,
+        client=client,
+        executor_id=args.executor_id,
+        max_concurrency=args.max_concurrency,
+        attempt_root=args.attempt_root,
+        attempt_base=args.attempt_base,
+        capability_matrix=args.capability_matrix,
+        source_inventory_identity=args.source_inventory_identity,
+        boot_manifest_path=boot_manifest,
+        boot_manifest_hash=boot_manifest_hash,
+    )
+    host.discover()
+    host.preflight()
 
     def handle_shutdown(_signum, _frame):
         host.shutdown()
@@ -5909,6 +6558,16 @@ def _cli() -> int:
             "runtime_instance_id": args.runtime_instance_id,
             "runtime_epoch": host.runtime_state.get("runtime_epoch"),
             "schema_digest": host.runtime_state.get("schema_digest"),
+            "identity_attestation": identity_attestation,
+            "activation": {
+                key: activation[key]
+                for key in (
+                    "version", "operation_id", "channel_id",
+                    "executor_incarnation", "evidence_digest", "host",
+                )
+            }
+            if activation is not None
+            else None,
         }
         _write_ready_marker(ready_path, ready_payload)
     if args.run_task:

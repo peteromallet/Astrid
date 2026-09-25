@@ -32,10 +32,10 @@ METADATA_PATH = ROOT / "banodoco_workspace_client" / "contract_metadata.py"
 # hashes, and this test in one reviewed change; no ambient sibling checkout can
 # silently alter the shipped transport.
 PINNED_PROTOCOL = "workspace.v1"
-PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:dc91a45390f33582f0299f81285d165128e1885a9fd62b4ccffa7b8e465ed63a"
-PINNED_SCHEMA_DIGEST = "sha256:abecb1a9e4be08d8400726e92565a0a6107028adddd31eacb3d155a68b789136"
-PINNED_GENERATED_SHA256 = "9494d30b7ad3d872cf0fe9018f10dffdc8550cfb6b6a39cb655b3a76c6bb6680"
-PINNED_METADATA_SHA256 = "527fa00ebffbdd93b93beb500949bd1085e52871df80d37043a4518fdd3423ce"
+PINNED_COMPONENT_MANIFEST_SHA256 = "sha256:fcae767eaba85e406658ac3b14f3c3447e11073dffcb5e1256e223bdb84f51f4"
+PINNED_SCHEMA_DIGEST = "sha256:510b40ce55d488347001656014cd07e19c35d1a9e1f810dfc8f5c9fd1a26eae0"
+PINNED_GENERATED_SHA256 = "d6206ad8528e56d680c031d5eaa7ba67bcce85f64ec29953dab100e85ce55838"
+PINNED_METADATA_SHA256 = "a66091f6ed572d1ba0d33049414afe0b846789d4668ef274b62e4a87a899c9fe"
 
 
 def _camel_to_snake(value: str) -> str:
@@ -44,7 +44,7 @@ def _camel_to_snake(value: str) -> str:
 
 
 def test_vendored_client_is_the_frozen_runtime_artifact() -> None:
-    assert SOURCE_COMMIT == "03d75d76cf72556976437705475b0d237b8def09"
+    assert SOURCE_COMMIT == "60e3efdbb9591c25c113402136bfb31b7dfcc4c4"
     assert PROTOCOL == PINNED_PROTOCOL == generated.PROTOCOL
     assert COMPONENT_MANIFEST_SHA256 == PINNED_COMPONENT_MANIFEST_SHA256
     assert SCHEMA_DIGEST == PINNED_SCHEMA_DIGEST == generated.SCHEMA_DIGEST
@@ -65,6 +65,19 @@ def test_vendored_client_operation_catalog_matches_typed_methods() -> None:
     # resource-scoped method for product adapters.
     composed_helpers = {"update_timeline_document"}
     assert methods == operation_methods | composed_helpers
+
+
+def test_vendored_health_preserves_runtime_identity() -> None:
+    health = generated.Health.from_json({
+        "status": "ok",
+        "protocol": "workspace.v1",
+        "schema_digest": SCHEMA_DIGEST,
+        "runtime_epoch": 1,
+        "runtime_session_id": "runtime-session-1",
+        "runtime_instance_id": "runtime-instance-1",
+    })
+    assert health.runtime_session_id == "runtime-session-1"
+    assert health.runtime_instance_id == "runtime-instance-1"
 
 
 def test_frozen_mutation_signatures_require_idempotency_keys() -> None:

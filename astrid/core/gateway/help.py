@@ -22,8 +22,8 @@ def _print_entrypoint_help() -> None:
         """Astrid command gateway — Python SDK + CLI
 
 The canonical Python boundary is ``import astrid`` (see docs/reference/sdk.md).
-This gateway is the CLI entry point for the five product families, two
-operational families (doctor, backup), and the external Hivemind tool.
+This gateway is the CLI entry point for the five product families, setup,
+workspace status, operational families (doctor, backup), and external tools.
 
 Usage:
   python3 -m astrid <family> <command> [options]
@@ -45,8 +45,11 @@ Latest project render:
   python3 -m astrid runs open [RUN_ID] [--project PROJECT] [--json]
 
 Operational families:
+  python3 -m astrid setup [--input FILE | --create | --attach] [--apply]
+  python3 -m astrid status [--json]
   python3 -m astrid doctor [--json]
   python3 -m astrid backup {create,restore,export,tombstone,recover,purge} [--json]
+  python3 -m astrid auth {login,status,logout,revoke}
 
 External tools:
   python3 -m astrid hivemind search QUERY [--limit N] [--json]
@@ -84,18 +87,20 @@ def _product_help_text() -> str:
     the ``--json`` envelope convention, the stable exit codes, and the
     two operational families (``doctor``, ``backup``).
     """
-    families = "projects timelines media tasks runs doctor backup hivemind"
-    return f"""Astrid commands — runtime families and external tools
+    families = "projects timelines media tasks runs setup status doctor backup hivemind"
+    return f"""Astrid product commands — runtime families and external tools
 
-The gateway owns five product families, two operational families, and the
-external Hivemind tool. ``shots`` mounts beneath ``timelines`` and
+The gateway owns five product families, two operational families, two reserved
+workspace commands, and the external Hivemind tool. ``shots`` mounts beneath ``timelines`` and
 ``references`` mounts beneath ``media``.
 
 Usage:
   python3 -m astrid <family> <command> [options]
   python3 -m astrid <family> --help
 
-Command census: {families}
+Family census (exactly seven families): projects timelines media tasks runs doctor backup
+
+Reserved workspace commands (outside the family census): setup status
 
 Product families:
   projects    [kernel] project create/list/show/update/select/current
@@ -105,8 +110,13 @@ Product families:
   timelines   [pack: timeline] timelines create/list/show/retime-clip/save/archive/recover/history/diff/visualize/render
 
 Operational families:
+  setup       [runtime] preview/check/apply one explicit Create-or-Attach plan
+  status      [runtime] read-only workspace/Runtime/readiness status
   doctor      [runtime] read-only runtime health diagnostics
   backup      [runtime] create/restore/export/tombstone/recover/purge
+
+Contributor authentication (reserved):
+  auth        [hivemind] login/status/logout/revoke; contribution-only access
 
 External tools:
   hivemind    [managed pack] search current messages and resources

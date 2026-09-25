@@ -15,23 +15,35 @@ def _dispatch(raw: list[str]) -> int:
         return 0
 
     first = raw[0]
-    if first not in _CORE_ROUTE_NAMES:
-        _register_installed_pack_routes()
-    if first not in _top_level_commands():
-        raise AstridError(
-            f"unknown command '{first}'",
-            valid_options=sorted(_top_level_commands()),
-            recovery_command="astrid --help",
-            state_snapshot={"command": first},
-        )
-
-    parser = _build_dispatch_parser()
-    parsed, tail = parser.parse_known_args(raw)
-    return int(parsed.handler(tail))
+    try:
+        if first not in _CORE_ROUTE_NAMES:
+            _register_installed_pack_routes()
+        if first not in frozenset(_TOP_LEVEL_HANDLERS):
+            raise AstridError(
+                f"unknown command '{first}'",
+                valid_options=sorted(_TOP_LEVEL_HANDLERS),
+                recovery_command="astrid --help",
+                state_snapshot={"command": first},
+            )
+        parser = _build_dispatch_parser()
+        parsed, tail = parser.parse_known_args(raw)
+        try:
+            return int(parsed.handler(tail))
+        except SystemExit as exc:
+            # Nested product parsers use argparse's normal help/usage exit.
+            # Keep the Python gateway boundary integer-returning while
+            # preserving argparse's documented 0/2 status codes.
+            return int(exc.code) if isinstance(exc.code, int) else 1
+    finally:
+        # Pack routes are request-local discovery results. Keeping them in the
+        # process-global core table makes later help/tests depend on which
+        # command happened to run first.
+        _clear_dynamic_pack_routes()
 
 
 def _top_level_commands() -> frozenset[str]:
-    return frozenset(_TOP_LEVEL_HANDLERS)
+    """Return the stable seven-family gateway census, excluding pack routes."""
+    return _CORE_ROUTE_NAMES
 
 
 def _build_dispatch_parser() -> Any:
@@ -60,76 +72,171 @@ def _dispatch_media(args: list[str]) -> int:
     return _dispatch_product(["media", *args])
 
 
+def _dispatch_setup(args: list[str]) -> int:
+    """Use the shared setup plan/apply core; preview remains the default."""
+    from astrid.setup import main
+
+    return int(main(args))
+
+
+def _dispatch_status(args: list[str]) -> int:
+    """Observe workspace/Runtime/readiness without launcher or provisioning."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(prog="astrid status", description="Read-only workspace and Runtime status.")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--diagnostic", action="store_true", help="emit the strict C2 diagnostic document")
+    parser.add_argument("--shared", action="store_true", help="redact the diagnostic for shared transport")
+    if any(token in {"-h", "--help"} for token in args):
+        parser.print_help()
+        return 0
+    parsed = parser.parse_args(args)
+    from astrid.core.auth import contributor_key_present
+    from astrid.core.gateway.diagnostics import collect_diagnostic
+    from astrid.runtime_cli import RuntimeCLI, RuntimeCLIError
+    from astrid.sdk.storage_root import resolve_runtime_data_root
+
+    try:
+        support_root = resolve_runtime_data_root()
+        runtime = RuntimeCLI()
+        diagnostic, workspace, status = collect_diagnostic(
+            runtime,
+            support_root=support_root,
+            mode="shared" if parsed.shared else "local",
+            command="status",
+        )
+    except (RuntimeCLIError, ValueError) as exc:
+        payload = {
+            "ok": False,
+            "problem_code": getattr(exc, "code", "runtime_unavailable"),
+            "error": str(exc),
+            "effects": ["observe"],
+            "authorization_required": False,
+            "next_action": "astrid setup",
+        }
+        if parsed.diagnostic:
+            from astrid.core.gateway.diagnostics import build_diagnostic, _failure_from
+            code, boundary = _failure_from(exc)
+            payload = build_diagnostic(
+                mode="shared" if parsed.shared else "local",
+                facts={},
+                problem_code=code,
+                failure_boundary=boundary,
+                next_actions=[{
+                    "commandId": "runtime-up",
+                    "arguments": ["--data-root", "<redacted:path>"] if parsed.shared else [],
+                    "effects": ["start-stop-local-service", "configure-install", "write-relocate-change-data"],
+                    "authorizationRequired": True,
+                    "executable": not parsed.shared,
+                }],
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 1
+        if parsed.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print("Astrid status\nruntime: unavailable\nnext action: astrid setup")
+        return 1
+    if parsed.diagnostic:
+        print(json.dumps(diagnostic, indent=2, sort_keys=True))
+        return 0 if diagnostic["problemCode"] is None else 1
+    from astrid.core.gateway.diagnostics import redact_for_shared
+    workspace_data = redact_for_shared(dict(workspace.data)) if parsed.shared and workspace else (dict(workspace.data) if workspace else {})
+    status_data = redact_for_shared(dict(status.data)) if parsed.shared and status else (dict(status.data) if status else {})
+    payload = {
+        "ok": bool(workspace and workspace.ok and status and status.ok),
+        "workspace": workspace_data,
+        "runtime": status_data,
+        "readiness": {
+            "workspace": "ready" if workspace.ok else "unavailable",
+            "runtime": "ready" if status.ok else "unavailable",
+            "compute_worker": "unavailable",
+            "optional_contribution_auth": "local-present-unverified" if contributor_key_present() else "no-local-key",
+        },
+        "effects": ["observe"],
+        "authorization_required": False,
+        "diagnostic": diagnostic,
+    }
+    if parsed.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print("Astrid status")
+        for key, value in payload["readiness"].items():
+            print(f"{key.replace('_', ' ')}: {value}")
+        if not payload["ok"]:
+            print("next action: astrid setup")
+    return 0 if payload["ok"] else 1
+
+
 def _dispatch_doctor(args: list[str]) -> int:
-    """Read the runtime-owned integrity report without local storage."""
+    """Read the Runtime observer directly; never connect, start or provision."""
     import argparse
     import json
     import sys
 
     parser = argparse.ArgumentParser(prog="astrid doctor", description="Read-only runtime health check.")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--diagnostic", action="store_true", help="emit the strict C2 diagnostic document")
+    parser.add_argument("--shared", action="store_true", help="redact the diagnostic for shared transport")
     if any(token in {"-h", "--help"} for token in args):
         parser.print_help()
         return 0
     parsed = parser.parse_args(args)
-    from astrid.sdk.client import AstridClient
-    from astrid.sdk.exceptions import ServiceUnavailableError
-    from astrid.sdk.workspace_client import WorkspaceClientError
-
     try:
-        # Doctor is a cheap runtime health read. It must not start the
-        # optional pack host or trigger execution-side discovery; deep audit
-        # belongs to an explicit offline/snapshot-capable route.
-        with AstridClient.open_from_launcher(start_pack_host=False) as client:
-            try:
-                report = client.doctor()
-            except WorkspaceClientError as exc:
-                # The deep runtime doctor endpoint is admin-only.  A normal
-                # Astrid product credential can still establish a healthy,
-                # project-scoped session, so do not turn that deliberate
-                # permission boundary into a false launcher/runtime outage.
-                if not (
-                    exc.status in (401, 403)
-                    and exc.details.get("scope") == "admin"
-                ):
-                    raise
-                health = client.health()
-                if not isinstance(health, dict) or health.get("status") != "ok":
-                    raise exc
-                report = {
-                    "ok": True,
-                    "state": "ready",
-                    "health": health,
-                    "deep_diagnostics": {
-                        "ok": False,
-                        "state": "permission_limited",
-                        "required_scope": "admin",
-                        "error": str(exc),
-                    },
-                }
-    except (ServiceUnavailableError, WorkspaceClientError) as exc:
-        details = getattr(exc, "details", {})
+        from astrid.core.gateway.diagnostics import collect_diagnostic
+        from astrid.runtime_cli import RuntimeCLI, RuntimeCLIError
+        from astrid.sdk.storage_root import resolve_runtime_data_root
+
+        diagnostic, _workspace, observed = collect_diagnostic(
+            RuntimeCLI(),
+            support_root=resolve_runtime_data_root(),
+            mode="shared" if parsed.shared else "local",
+            command="doctor",
+        )
+        from astrid.core.gateway.diagnostics import redact_for_shared
+        report = dict(redact_for_shared(dict(observed.data))) if parsed.shared and observed else (dict(observed.data) if observed else {"ok": False})
+        result_code = observed.returncode if observed else 1
+    except (RuntimeCLIError, ValueError) as exc:
         payload = {
             "ok": False,
-            "state": "unavailable",
-            "next_action": details.get(
-                "next_action", "banodoco-local up --profile astrid"
-            ),
+            "problem_code": getattr(exc, "code", "runtime_unavailable"),
+            "state": "runtime_unavailable",
+            "next_action": "astrid-runtime up",
+            "effects": ["observe"],
+            "authorization_required": False,
             "error": str(exc),
         }
+        if parsed.diagnostic:
+            from astrid.core.gateway.diagnostics import build_diagnostic, _failure_from
+            code, boundary = _failure_from(exc)
+            payload = build_diagnostic(
+                mode="shared" if parsed.shared else "local",
+                facts={},
+                problem_code=code,
+                failure_boundary=boundary,
+                next_actions=[{
+                    "commandId": "runtime-up",
+                    "arguments": ["--data-root", "<redacted:path>"] if parsed.shared else [],
+                    "effects": ["start-stop-local-service", "configure-install", "write-relocate-change-data"],
+                    "authorizationRequired": True,
+                    "executable": not parsed.shared,
+                }],
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 1
         if parsed.json:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print(f"Astrid doctor: {payload['error']}", file=sys.stderr)
             print(f"next action: {payload['next_action']}", file=sys.stderr)
         return 1
-    if isinstance(report, dict) and report.get("deep_diagnostics", {}).get("state") == "permission_limited":
-        if parsed.json:
-            print(json.dumps(report, indent=2, sort_keys=True))
-        else:
-            print("Astrid doctor\nstate: ready")
-            print("deep diagnostics: permission limited (admin scope required)")
-        return 0
+    report.setdefault("effects", ["observe"])
+    report.setdefault("authorization_required", False)
+    report["diagnostic"] = diagnostic
+    if parsed.diagnostic:
+        print(json.dumps(diagnostic, indent=2, sort_keys=True))
+        return 0 if diagnostic["problemCode"] is None else 1
     if parsed.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
@@ -137,7 +244,7 @@ def _dispatch_doctor(args: list[str]) -> int:
         print(f"Astrid doctor\nstate: {state}")
         if isinstance(report, dict) and report.get("recovery_action"):
             print(f"recovery action: {report['recovery_action']}")
-    return 0 if not isinstance(report, dict) or report.get("ok", False) else 1
+    return result_code
 
 
 def _dispatch_backup(args: list[str]) -> int:
@@ -324,7 +431,7 @@ from .hivemind import PACK_COMMANDS as _PACK_COMMANDS, installed_pack_ids as _in
 # outer launcher command. This is a blocklist/precedence rule, not a second
 # hand-maintained pack allowlist.
 _PACK_ROUTE_BLOCKLIST = frozenset(
-    {"agent", "auth", "help", "login", "status", "logout", "revoke", "--help", "--version"}
+    {"agent", "auth", "help", "login", "setup", "status", "logout", "revoke", "--help", "--version"}
 )
 _DYNAMIC_PACK_ROUTE_NAMES: set[str] = set()
 
@@ -342,6 +449,12 @@ def _register_installed_pack_routes() -> None:
             lambda args, pack=pack_name: _dispatch_pack(pack, args)
         )
         _DYNAMIC_PACK_ROUTE_NAMES.add(pack_name)
+
+
+def _clear_dynamic_pack_routes() -> None:
+    for pack_name in _DYNAMIC_PACK_ROUTE_NAMES:
+        _TOP_LEVEL_HANDLERS.pop(pack_name, None)
+    _DYNAMIC_PACK_ROUTE_NAMES.clear()
 
 
 def compose_profile_handoff(

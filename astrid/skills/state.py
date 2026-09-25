@@ -41,6 +41,10 @@ def _empty_state() -> dict[str, Any]:
         # as filesystem drift on the next command.
         "disabled_defaults": {harness: [] for harness in HARNESSES},
         "nudge": {harness: {"last_shown_at": None} for harness in HARNESSES},
+        # Setup composition belongs with the existing source/skill selection
+        # state.  Runtime remains authoritative for the selected workspace;
+        # this is the durable binding of Astrid's choices to that identity.
+        "setup_selection": None,
     }
 
 
@@ -59,6 +63,7 @@ def load(path: Path | None = None) -> dict[str, Any]:
     installs = data.setdefault("installs", {})
     disabled_defaults = data.setdefault("disabled_defaults", {})
     nudge = data.setdefault("nudge", {})
+    data.setdefault("setup_selection", None)
     for harness in HARNESSES:
         installs.setdefault(harness, {})
         disabled_defaults.setdefault(harness, [])
@@ -104,6 +109,59 @@ def record_nudge(state: dict[str, Any], harness: str) -> None:
     state["nudge"].setdefault(harness, {})["last_shown_at"] = now_iso()
 
 
+def record_setup_selection(
+    state: dict[str, Any],
+    *,
+    workspace_id: str,
+    support_root: str,
+    realm_root: str,
+    runtime_profile: str,
+    target_profile: str | None,
+    integrations: list[str] | None,
+    default_target_profile: str,
+) -> bool:
+    """Bind setup composition choices to Runtime's selected workspace.
+
+    The caller must first validate the UUID and roots at the Runtime boundary.
+    Returning whether the document changed lets setup report repeat/resume
+    accurately without introducing another workspace authority.
+    """
+
+    prior = state.get("setup_selection")
+    same_identity = isinstance(prior, dict) and all(
+        prior.get(key) == expected
+        for key, expected in (
+            ("workspace_id", workspace_id),
+            ("support_root", support_root),
+            ("realm_root", realm_root),
+        )
+    )
+    retained_target = prior.get("target_profile") if same_identity else None
+    retained_integrations = prior.get("integrations") if same_identity else None
+    selected = {
+        "workspace_id": workspace_id,
+        "support_root": support_root,
+        "realm_root": realm_root,
+        "runtime_profile": runtime_profile,
+        "target_profile": (
+            target_profile
+            if target_profile is not None
+            else retained_target or default_target_profile
+        ),
+        "integrations": list(
+            dict.fromkeys(
+                integrations
+                if integrations is not None
+                else retained_integrations or []
+            )
+        ),
+    }
+    if state.get("setup_selection") == selected:
+        return False
+    state["setup_selection"] = selected
+    return True
+
+
 __all__ = [
     "HARNESSES",
     "STATE_VERSION",
@@ -111,6 +169,7 @@ __all__ = [
     "now_iso",
     "record_install",
     "record_nudge",
+    "record_setup_selection",
     "record_uninstall",
     "save",
     "state_path",

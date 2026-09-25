@@ -15,6 +15,16 @@ from . import discovery, registry, state
 from .discovery import SkillDescriptor, list_skills
 from .harnesses import ADAPTERS, HarnessAdapter, adapter_for, all_adapters
 
+# Frozen setup composition selected from existing first-party declarations.
+# Broader shipped-pack availability remains unchanged; these are only the
+# stable skill surfaces composed into a normal agent view by default.
+DEFAULT_FIRST_PARTY_SKILL_IDS = (
+    "vibecomfy",
+    "rendering",
+    "typed_timeline",
+    "video_editing",
+)
+
 
 def default_descriptors(
     descriptors: Iterable[SkillDescriptor] | None = None,
@@ -31,7 +41,8 @@ def default_descriptors(
     from astrid.core.pack.source_setup import active_source_inventory
 
     available = list(descriptors if descriptors is not None else list_skills())
-    result: list[SkillDescriptor] = [d for d in available if d.pack_id == "_core"]
+    by_id = {descriptor.pack_id: descriptor for descriptor in available}
+    result: list[SkillDescriptor] = [by_id["_core"]] if "_core" in by_id else []
     try:
         managed_default_ids = {
             source.pack_id for source in active_source_inventory().sources
@@ -39,10 +50,14 @@ def default_descriptors(
     except Exception:
         managed_default_ids = set()
     for descriptor in available:
-        if descriptor.pack_id == "_core":
-            continue
-        if descriptor.pack_id in managed_default_ids:
+        if descriptor.pack_id in managed_default_ids and descriptor not in result:
             result.append(descriptor)
+    for pack_id in DEFAULT_FIRST_PARTY_SKILL_IDS:
+        descriptor = by_id.get(pack_id)
+        if descriptor is not None and descriptor not in result:
+            result.append(descriptor)
+    for descriptor in available:
+        if descriptor in result:
             continue
         manifest_path = pack_manifest_path(descriptor.skill_dir.parent)
         if manifest_path is None:
@@ -156,18 +171,24 @@ def sync(
     dry_run: bool = False,
     state_path: Path | None = None,
     skill_md_path: Path | None = None,
+    selected_pack_ids: Iterable[str] = (),
+    proposed_state: dict | None = None,
 ) -> dict:
     """Refresh the gateway link + registry block (and, with *deep*, per-pack links).
 
     Default (gateway-only) links just the ``_core`` skill as ``astrid`` into
-    every detected harness and regenerates the managed pack registry block in
-    the creative-work supporting reference. With *deep*, every discovered pack skill is also
+    every detected harness, composes retained/requested integrations into its
+    pack routes, and regenerates the managed pack registry block in the
+    creative-work supporting reference. With *deep*, every discovered pack skill is also
     linked as ``astrid-<pack>`` and the block records those skill names.
     Orphan ``astrid-*`` installs (no longer-discovered packs) are pruned.
     """
     all_descriptors = list_skills()
+    selected_pack_ids = tuple(selected_pack_ids)
     targets = _resolve_harnesses(None)
-    current_state = state.load(state_path)
+    if proposed_state is not None and not dry_run:
+        raise ValueError("proposed_state is only valid for a dry-run sync")
+    current_state = proposed_state if proposed_state is not None else state.load(state_path)
 
     report: dict = {"actions": []}
 
@@ -186,7 +207,11 @@ def sync(
 
     for harness_name, adapter in targets.items():
         descriptors = _sync_descriptors_for_harness(
-            all_descriptors, current_state, harness_name, deep=deep
+            all_descriptors,
+            current_state,
+            harness_name,
+            deep=deep,
+            selected_pack_ids=selected_pack_ids,
         )
         view_steps: list = []
         if skill_md_path is None:
@@ -660,12 +685,24 @@ def _sync_descriptors_for_harness(
     harness_name: str,
     *,
     deep: bool,
+    selected_pack_ids: Iterable[str] = (),
 ) -> list[SkillDescriptor]:
     disabled = set(current_state.get("disabled_defaults", {}).get(harness_name, []))
     if deep:
         return [d for d in all_descriptors if d.pack_id not in disabled]
     installed_ids = set(current_state["installs"].get(harness_name, {}).keys())
-    expected_ids = installed_ids | set(default_pack_ids(all_descriptors))
+    setup_selection = current_state.get("setup_selection")
+    retained_integrations = (
+        setup_selection.get("integrations", [])
+        if isinstance(setup_selection, dict)
+        else []
+    )
+    expected_ids = (
+        installed_ids
+        | set(default_pack_ids(all_descriptors))
+        | {str(value) for value in retained_integrations}
+        | {str(value) for value in selected_pack_ids}
+    )
     expected_ids.difference_update(disabled)
     expected_ids.add("_core")
     return [descriptor for descriptor in all_descriptors if descriptor.pack_id in expected_ids]
@@ -696,6 +733,7 @@ def _link_pack_id(link_name: str) -> str:
 
 
 __all__ = [
+    "DEFAULT_FIRST_PARTY_SKILL_IDS",
     "NUDGE_ENV",
     "NUDGE_INTERVAL_DAYS",
     "check",

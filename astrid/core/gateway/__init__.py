@@ -29,6 +29,8 @@ from astrid.core.gateway.dispatch import (
     _dispatch_backup,
     _dispatch_doctor,
     _dispatch_product,
+    _dispatch_setup,
+    _dispatch_status,
     _top_level_commands,
 )
 from astrid.core.gateway.help import (
@@ -52,6 +54,12 @@ SPRINT1_UNBOUND_ALLOWLIST_CONTRACT: tuple[tuple[str, ...], ...] = (
     ("--version",),
     ("doctor",),
     ("backup",),
+    ("setup",),
+    ("status",),
+    ("auth",),
+    ("login",),
+    ("logout",),
+    ("revoke",),
 )
 
 
@@ -59,6 +67,16 @@ def main(argv: list[str] | None = None) -> int:
     raw = sys.argv[1:] if argv is None else list(argv)
     try:
         return _main_impl(raw)
+    except SystemExit as exc:
+        # Product-family argparse parsers use SystemExit for their normal
+        # command-line result. Normalize only integer/empty exit codes at the
+        # public gateway boundary so embedded callers receive an int while
+        # ``python -m astrid`` retains the same shell status.
+        if exc.code is None:
+            return 0
+        if isinstance(exc.code, int):
+            return exc.code
+        raise
     except AstridError as exc:
         return render_astrid_error(exc)
     except Exception as exc:  # noqa: BLE001
@@ -84,6 +102,19 @@ def _main_impl(raw: list[str]) -> int:
     if first_arg == "--version":
         print(f"astrid/{ASTRID_VERSION}")
         return 0
+    # Reserved setup/status commands sit outside the long-standing seven
+    # gateway families so pack discovery cannot claim them and product-family
+    # census consumers remain stable.
+    if first_arg == "setup":
+        return _dispatch_setup(raw[1:])
+    if first_arg == "status":
+        return _dispatch_status(raw[1:])
+    if first_arg == "auth":
+        from astrid.core.auth import run_auth
+        return int(run_auth(raw[1:]))
+    if first_arg in {"login", "logout", "revoke"}:
+        from astrid.core.auth import run_auth
+        return int(run_auth(raw))
     return _dispatch(raw)
 
 

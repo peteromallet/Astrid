@@ -226,6 +226,18 @@ def manifest_hash(manifest: Mapping[str, Any]) -> str:
     return _sha256(dict(manifest))
 
 
+def normalize_sha256_digest(value: str, *, label: str = "digest") -> str:
+    """Return bare lowercase SHA-256 hex from raw or ``sha256:`` input."""
+    if not isinstance(value, str):
+        raise BootManifestError(f"{label} must be a SHA-256 string")
+    raw = value.strip().lower()
+    if raw.startswith("sha256:"):
+        raw = raw.removeprefix("sha256:")
+    if len(raw) != 64 or any(char not in "0123456789abcdef" for char in raw):
+        raise BootManifestError(f"{label} must be raw 64-character SHA-256 hex")
+    return raw
+
+
 def assert_secret_free(manifest: Mapping[str, Any]) -> None:
     """Reject unknown fields and recursively reject credential-shaped data."""
     unknown = set(manifest) - _MANIFEST_FIELDS
@@ -433,6 +445,7 @@ __all__ = [
     "fixture_scope",
     "load_boot_manifest_hash",
     "manifest_hash",
+    "normalize_sha256_digest",
     "registry_scope",
     "stamp_boot_manifest",
 ]

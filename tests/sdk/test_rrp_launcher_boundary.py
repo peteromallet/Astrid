@@ -108,32 +108,20 @@ def test_thin_launcher_fails_closed_on_conflict_or_interruption(monkeypatch, lau
     ]]
 
 
-def test_doctor_uses_cheap_launcher_boundary_without_pack_host(monkeypatch, capsys):
+def test_doctor_uses_nonstarting_runtime_observer(monkeypatch, capsys, tmp_path):
     from astrid.core.gateway import dispatch
-    from astrid.sdk import client as sdk_client
+    from astrid import runtime_cli
 
-    seen: list[bool] = []
+    seen: list[str] = []
 
-    class _Client:
-        def __enter__(self):
-            return self
+    class _Runtime:
+        def observe(self, command, *, support_root):
+            seen.append(command)
+            return runtime_cli.RuntimeResult(("banodoco-local", command), 0, {"ok": True, "state": "ready"})
 
-        def __exit__(self, *args):
-            return None
-
-        def doctor(self):
-            return {"ok": True, "state": "ready"}
-
-    def open_from_launcher(cls, **kwargs):
-        seen.append(kwargs["start_pack_host"])
-        return _Client()
-
-    monkeypatch.setattr(
-        sdk_client.AstridClient,
-        "open_from_launcher",
-        classmethod(open_from_launcher),
-    )
+    monkeypatch.setattr(runtime_cli, "RuntimeCLI", _Runtime)
+    monkeypatch.setattr("astrid.sdk.storage_root.resolve_runtime_data_root", lambda: tmp_path / "support")
 
     assert dispatch._dispatch_doctor(["--json"]) == 0
-    assert seen == [False]
+    assert seen == ["doctor"]
     assert '"state": "ready"' in capsys.readouterr().out

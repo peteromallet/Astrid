@@ -40,7 +40,6 @@ class PipelineDispatchAliasTest(unittest.TestCase):
             "renderers",
             "replay",
             "publish",
-            "setup",
         ):
             self.assertNotIn(removed, help_text)
         self.assertNotIn("gateway.py", help_text)
@@ -60,7 +59,6 @@ class PipelineDispatchAliasTest(unittest.TestCase):
             "replay",
             "elements",
             "publish",
-            "setup",
         ):
             with self.subTest(token=token):
                 stderr = io.StringIO()

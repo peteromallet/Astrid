@@ -370,9 +370,9 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                                 audio[channel][sample] = 1
                     audio_coverage.append([start, end])
     if has_baseline:
-        video_coverage = _merge_int_ranges(baseline_video, frames) if has_video_baseline else [[0, frames]]
+        video_coverage = _require_full_baseline(baseline_video, length=frames, domain="video") if has_video_baseline else [[0, frames]]
         audio_members = baseline_audio_from_video + baseline_audio
-        audio_coverage = _merge_int_ranges(audio_members, samples) if audio_members else [[0, samples]]
+        audio_coverage = _require_full_baseline(audio_members, length=samples, domain="audio") if audio_members else [[0, samples]]
         if video_coverage != [[0, frames]] and not has_video_baseline:
             video_coverage = [[0, frames]]
         # Uncovered delivery positions were initialized as generated above.

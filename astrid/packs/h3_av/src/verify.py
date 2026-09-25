@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -195,6 +197,81 @@ def _verify_full_decoded_extent(
             )
 
 
+def _verify_presentation_clock(
+    candidate: Path, *, frames: int, fps: Fraction, samples: int, sample_rate: int,
+) -> None:
+    """Check the muxed presentation timeline independently of normalized decodes."""
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        raise VerificationError("exact verification requires ffprobe")
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-show_streams", "-show_frames", "-show_format",
+             "-show_entries",
+             "stream=index,codec_type,time_base,start_pts,start_time:"
+             "frame=media_type,stream_index,pts,nb_samples:format=start_time,duration",
+             "-of", "json", str(candidate)],
+            check=True, capture_output=True, text=True,
+        )
+        probe = json.loads(result.stdout)
+        streams = probe["streams"]
+        decoded_frames = probe["frames"]
+        container = probe["format"]
+        if not isinstance(streams, list) or not isinstance(decoded_frames, list):
+            raise ValueError("missing stream or frame rows")
+        duration = Fraction(frames, 1) / fps
+        if Fraction(samples, sample_rate) != duration:
+            raise ValueError("prepared video and audio clocks disagree")
+        stream_rows = {}
+        for kind in ("video", "audio"):
+            matching = [row for row in streams if row.get("codec_type") == kind]
+            if len(matching) != 1:
+                raise ValueError(f"expected one {kind} stream")
+            row = matching[0]
+            tick = Fraction(row["time_base"])
+            if tick <= 0:
+                raise ValueError(f"invalid {kind} time base")
+            origin = Fraction(int(row["start_pts"])) * tick
+            tolerance = tick / 2 + Fraction(1, 1_000_000)
+            if abs(origin) > tolerance or abs(Fraction(row["start_time"]) - origin) > tolerance:
+                raise ValueError(f"{kind} stream origin is off the delivery clock")
+            stream_rows[kind] = (row["index"], tick, tolerance)
+
+        for kind, count in (("video", frames), ("audio", samples)):
+            index, tick, tolerance = stream_rows[kind]
+            items = [row for row in decoded_frames if row.get("stream_index") == index]
+            if not items:
+                raise ValueError(f"{kind} presentation frames are missing")
+            elapsed = 0
+            previous: Fraction | None = None
+            for position, row in enumerate(items):
+                stamp = Fraction(int(row["pts"])) * tick
+                expected = Fraction(position, 1) / fps if kind == "video" else Fraction(elapsed, sample_rate)
+                if previous is not None and stamp <= previous:
+                    raise ValueError(f"{kind} presentation timestamps are not increasing")
+                if abs(stamp - expected) > tolerance:
+                    raise ValueError(f"{kind} presentation timestamp differs from delivery clock")
+                previous = stamp
+                if kind == "audio":
+                    block = int(row["nb_samples"])
+                    if block <= 0:
+                        raise ValueError("audio presentation block is empty")
+                    elapsed += block
+            if (len(items) if kind == "video" else elapsed) != count:
+                raise ValueError(f"{kind} presentation extent differs from delivery clock")
+            end = previous + (Fraction(1, 1) / fps if kind == "video" else Fraction(int(items[-1]["nb_samples"]), sample_rate))
+            if abs(end - duration) > tolerance:
+                raise ValueError(f"{kind} presentation endpoint differs from delivery clock")
+
+        format_tolerance = max(stream_rows["video"][2], stream_rows["audio"][2])
+        if (abs(Fraction(container["start_time"])) > format_tolerance
+                or abs(Fraction(container["duration"]) - duration) > format_tolerance):
+            raise ValueError("container presentation duration differs from delivery clock")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
+        raise VerificationError(f"candidate presentation clock is invalid: {exc}") from exc
+
+
 def _verify_audio_conversion_evidence(
     composition: Mapping[str, Any], method: Mapping[str, Any], *,
     sample_rate: int, channels: int, samples: int, fps: Any,
@@ -315,6 +392,9 @@ def _verify_exact_candidate(
         _verify_full_decoded_extent(
             candidate_path, root, frames=frames, width=width, height=height,
             samples=samples, channels=channels, sample_rate=sample_rate,
+        )
+        _verify_presentation_clock(
+            candidate_path, frames=frames, fps=fps, samples=samples, sample_rate=sample_rate,
         )
         candidate_decoded_digests = {
             "composed_video_rgba_sha256": _sha256(candidate_video),

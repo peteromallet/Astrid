@@ -542,6 +542,46 @@ def test_exact_verification_rejects_short_or_corrupt_candidate_after_digest_refr
         verify_candidate(preparation=preparation, composition=composition, source=source)
 
 
+@pytest.mark.parametrize("offset", ["1", "-1"])
+def test_exact_verification_rejects_shifted_video_presentation_after_digest_refresh(
+    tmp_path: Path, offset: str,
+) -> None:
+    source = tmp_path / "source.mkv"
+    generated = tmp_path / "generated.mkv"
+    _media(source, colour="blue", tone=440)
+    _media(generated, colour="red", tone=880)
+    preparation = prepare_request(
+        _request(), asset_map={"source.mkv": str(source)}, fps=24, width=4,
+        height=2, sample_rate=48000,
+    )
+    composition = compose_candidate(
+        preparation=preparation, generated=generated, source=source,
+        out_dir=tmp_path / "composition",
+    )
+    assert verify_candidate(preparation=preparation, composition=composition, source=source)["status"] == "verified"
+    original = Path(str(composition["candidate"]["path"]))
+    shifted = tmp_path / "shifted.mkv"
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-i", str(original), "-itsoffset", offset, "-i", str(original),
+         "-map", "1:v:0", "-map", "0:a:0", "-c", "copy", str(shifted)],
+        check=True,
+    )
+    probe = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_streams", "-show_entries",
+         "stream=codec_type,start_pts,time_base", "-of", "json", str(shifted)],
+        check=True, capture_output=True, text=True,
+    ).stdout)
+    origins = {
+        row["codec_type"]: Fraction(row["start_pts"]) * Fraction(row["time_base"])
+        for row in probe["streams"] if row["codec_type"] in {"video", "audio"}
+    }
+    assert abs(origins["video"] - origins["audio"]) >= Fraction(9, 10)
+    _refresh_candidate(composition, shifted)
+    with pytest.raises(VerificationError, match="presentation clock"):
+        verify_candidate(preparation=preparation, composition=composition, source=source)
+
+
 @pytest.mark.parametrize(("stream", "filter_args"), [
     ("video", ["-vf", "tpad=stop_mode=clone:stop=1"]),
     ("audio", ["-af", "apad=pad_len=2000"]),

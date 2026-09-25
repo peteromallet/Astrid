@@ -47,14 +47,21 @@ def render_timeline_baseline(
         raise BaselineError("baseline members do not match the normalized timeline")
     records = {str(row.get("asset")): row for row in preparation.get("assets", []) if isinstance(row, Mapping)}
     fps, sample_rate = _exact_clock(artifact)
-    if fps != 24 or sample_rate != 48000:
-        raise BaselineError("H3 baseline requires 24 fps and 48 kHz")
     delivery_frames, height, width = artifact.video_shape
     channels, delivery_samples = artifact.audio_shape
-    target_frames = native_frames or delivery_frames
+    if native_frames is not None and (fps != 24 or sample_rate != 48000 or channels != 2):
+        raise BaselineError("H3 native baseline requires 24 fps, 48 kHz, and stereo audio")
+
+    def frame_sample(frame: int) -> int:
+        sample = frame * sample_rate / fps
+        if sample.denominator != 1:
+            raise BaselineError(f"frame {frame} is not representable on the prepared audio clock")
+        return sample.numerator
+
+    target_frames = delivery_frames if native_frames is None else native_frames
     if target_frames < delivery_frames:
         raise BaselineError("native baseline is shorter than delivery")
-    target_samples = max(delivery_samples, target_frames * sample_rate // 24)
+    target_samples = delivery_samples if native_frames is None else max(delivery_samples, frame_sample(target_frames))
     destination.mkdir(parents=True, exist_ok=True)
     video_path = destination / "baseline.rgba"
     audio_path = destination / "baseline.s32le"
@@ -105,12 +112,12 @@ def render_timeline_baseline(
                     _decode_exact_video(path, decoded, frames=count, width=width, height=height, fps=fps, start_frame=start)
                     with decoded.open("rb") as stream:
                         video_map[at * frame_bytes:(at + count) * frame_bytes] = stream.read()
-                    source_sample = start * sample_rate // 24
-                    placed_sample = at * sample_rate // 24
-                    audio_count = count * sample_rate // 24
+                    source_sample = frame_sample(start)
+                    placed_sample = frame_sample(at)
+                    audio_count = frame_sample(end) - source_sample
                 elif item["modality"] == "audio":
                     source_sample = start
-                    placed_sample = at * sample_rate // 24
+                    placed_sample = frame_sample(at)
                     audio_count = end - start
                 else:
                     continue

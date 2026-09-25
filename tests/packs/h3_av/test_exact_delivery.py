@@ -5,11 +5,13 @@ import hashlib
 import shutil
 import subprocess
 import zipfile
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from astrid.packs.h3_av.src.compose import compose_candidate
+from astrid.packs.h3_av.src.baseline import BaselineError, render_timeline_baseline
+from astrid.packs.h3_av.src.compose import CompositionError, _decode_exact_audio, _decode_exact_video, compose_candidate
 from astrid.packs.h3_av.src.masks import PreparedAVMask, load_prepared_av_mask
 from astrid.packs.h3_av.src.prepare import prepare_request
 from astrid.packs.h3_av.src.request import normalize_request
@@ -46,13 +48,13 @@ def _request() -> object:
     )
 
 
-def _media(path: Path, *, colour: str, tone: int, channels: int = 2, sample_rate: int = 48000) -> None:
+def _media(path: Path, *, colour: str, tone: int, channels: int = 2, sample_rate: int = 48000, duration: int = 1) -> None:
     subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", f"color=c={colour}:s=4x2:r=24",
             "-f", "lavfi", "-i", f"sine=frequency={tone}:sample_rate={sample_rate}",
-            "-t", "1", "-c:v", "ffv1", "-pix_fmt", "rgba", "-c:a", "pcm_s32le", "-ar", str(sample_rate),
+            "-t", str(duration), "-c:v", "ffv1", "-pix_fmt", "rgba", "-c:a", "pcm_s32le", "-ar", str(sample_rate),
             "-ac", str(channels), str(path),
         ],
         check=True,
@@ -391,6 +393,64 @@ def test_exact_cpu_delivery_supports_mono_44100_decoded_domain(tmp_path: Path) -
     assert composition["delivery_contract"]["baseline_representation"]["audio"]["sample_rate"] == 44100
     assert composition["delivery_contract"]["baseline_representation"]["audio"]["channels"] == 1
     assert report["preservation"]["audio_mismatches"] == 0
+    wrong_channels = tmp_path / "generated-stereo.mkv"
+    _media(wrong_channels, colour="red", tone=880, channels=2, sample_rate=44100)
+    with pytest.raises(CompositionError, match="audio format"):
+        compose_candidate(
+            preparation=preparation, generated=wrong_channels, source=source,
+            out_dir=tmp_path / "wrong-channels",
+        )
+
+
+@pytest.mark.parametrize("sample_rate", [44100, 48000])
+def test_timeline_baseline_preserves_placed_ranges_and_native_padding(tmp_path: Path, sample_rate: int) -> None:
+    source = tmp_path / "source.mkv"
+    other = tmp_path / "other.mkv"
+    _media(source, colour="blue", tone=440, sample_rate=sample_rate, duration=2)
+    _media(other, colour="blue", tone=880, sample_rate=sample_rate, duration=2)
+    request = normalize_request({
+        "version": 2,
+        "prompt": "Place the second source second before the first.",
+        "duration": 2,
+        "media": [
+            {"id": "late", "asset": "source.mkv", "role": "timeline", "modality": "video",
+             "at": {"frame": 0}, "range": [1, 2]},
+            {"id": "early", "asset": "source.mkv", "role": "timeline", "modality": "video",
+             "at": {"frame": 24}, "range": [0, 1]},
+        ],
+    })
+    preparation = prepare_request(
+        request, asset_map={"source.mkv": str(source)}, fps=24, width=4, height=2, sample_rate=sample_rate,
+    )
+    artifact = load_prepared_av_mask(preparation["prepared_av_mask"])
+    video, audio = render_timeline_baseline(preparation, artifact, tmp_path / "baseline", primary_source=source)
+
+    expected_video: list[bytes] = []
+    expected_audio: list[bytes] = []
+    for start in (24, 0):
+        video_part = tmp_path / f"expected-{start}.rgba"
+        audio_part = tmp_path / f"expected-{start}.s32le"
+        _decode_exact_video(source, video_part, frames=24, width=4, height=2, fps=Fraction(24), start_frame=start)
+        _decode_exact_audio(
+            source, audio_part, samples=sample_rate, sample_rate=sample_rate, channels=2,
+            start_sample=start * sample_rate // 24,
+        )
+        expected_video.append(video_part.read_bytes())
+        expected_audio.append(audio_part.read_bytes())
+    assert video.read_bytes() == b"".join(expected_video)
+    assert audio.read_bytes() == b"".join(expected_audio)
+
+    with pytest.raises(BaselineError, match="failed identity check"):
+        render_timeline_baseline(preparation, artifact, tmp_path / "wrong-source", primary_source=other)
+    if sample_rate == 48000:
+        native_video, native_audio = render_timeline_baseline(
+            preparation, artifact, tmp_path / "native", native_frames=56,
+        )
+        assert native_video.read_bytes() == video.read_bytes() + bytes(8 * 4 * 2 * 4)
+        assert native_audio.read_bytes() == audio.read_bytes() + bytes(16000 * 2 * 4)
+    else:
+        with pytest.raises(BaselineError, match="native baseline requires"):
+            render_timeline_baseline(preparation, artifact, tmp_path / "native", native_frames=56)
 
 
 def test_exact_verification_rejects_short_or_corrupt_candidate_after_digest_refresh(tmp_path: Path) -> None:

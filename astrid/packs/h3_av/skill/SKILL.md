@@ -71,6 +71,13 @@ resolver supplies a mask. Audio intervals are independent of video intervals;
 “voice only” requires a real stem/separation input and is not inferred from a
 video mask.
 
+An edit-level `hard` flag is not a supported regional-edit control. The request
+is rejected before preparation rather than accepting and dropping the flag.
+This does not remove exact-preservation work: when the body, pose, or frame
+identity must stay fixed, use the authoritative protected-baseline/in-painting
+path described below. Use extension for a newly generated suffix or other
+changes where motion and pose may vary.
+
 For native continuation, the protected prefix is authoritative and the
 generated suffix is explicit. For continuation plus a spatial mask, provide a
 suffix baseline or an explicit policy; the compiler never silently freezes the

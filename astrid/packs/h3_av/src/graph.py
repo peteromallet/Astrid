@@ -349,6 +349,7 @@ def _reference_port_plan(
         "audio": "ref_audios.ref_audio_",
     }
     plan: list[dict[str, Any]] = []
+    loader_by_semantics: dict[tuple[str, ...], str] = {}
     if reserved_audio > H3_REFERENCE_CAPACITIES[prefixes["audio"]]:
         raise GraphBindingError(
             "pinned MiniMaxH3ReferenceToVideo supports at most 3 combined timeline/reference audio inputs"
@@ -368,8 +369,16 @@ def _reference_port_plan(
                 f"pinned MiniMaxH3ReferenceToVideo supports at most {capacity} {label} references"
             )
         counts[modality] += 1
-        loader = f"c3-reference-{modality}-{occurrence_index}"
         member = _asset_member(str(reference["asset"]), asset_members)
+        semantics = (
+            str(reference["asset"]), modality,
+            _canonical(reference.get("resolved_range")).decode("utf-8"),
+        )
+        if modality == "audio":
+            semantics = (*semantics, str(reference["id"]))
+        loader = loader_by_semantics.setdefault(
+            semantics, f"c3-reference-{modality}-{occurrence_index}"
+        )
         row = {
             "occurrence_index": occurrence_index,
             "id": str(reference["id"]),
@@ -846,16 +855,23 @@ def _materialize_executable_graph(
     loaders: dict[str, tuple[str, str, str | None]] = {}
     registered_bindings: set[str] = set()
     binding_modalities: dict[str, str] = {}
+    reference_loader_cache: dict[tuple[str, ...], tuple[str, str, str | None]] = {}
     for index, (reference, port) in enumerate(zip(references, reference_plan, strict=True)):
         binding = str(reference["asset"])
         modality = str(reference["modality"])
         if binding in binding_modalities and binding_modalities[binding] != modality:
             raise GraphBindingError(f"asset binding {binding!r} is reused with incompatible media semantics")
         binding_modalities[binding] = modality
-        loader = _reference_loader(
-            workflow, reference, str(port["asset_member"]), index,
-            binding=binding, register=binding not in registered_bindings,
-        )
+        cache_key = (binding, modality, _canonical(reference.get("resolved_range")).decode("utf-8"))
+        if modality == "audio":
+            cache_key = (*cache_key, str(reference["id"]))
+        loader = reference_loader_cache.get(cache_key)
+        if loader is None:
+            loader = _reference_loader(
+                workflow, reference, str(port["asset_member"]), index,
+                binding=binding, register=binding not in registered_bindings,
+            )
+            reference_loader_cache[cache_key] = loader
         registered_bindings.add(binding)
         loaders[str(reference["id"])] = loader
         modality = reference["modality"]

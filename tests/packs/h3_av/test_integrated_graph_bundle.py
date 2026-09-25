@@ -212,7 +212,17 @@ def test_repeated_reference_binding_reuses_one_real_public_loader(tmp_path: Path
         if edge["from_node"] == "c3-reference-image-0"
         and edge["to_node"] == "110"
     ]
-    assert len(picture_edges) == 2
+    assert {(edge["from_output"], edge["to_input"]) for edge in picture_edges} == {
+        ("0", "ref_images.ref_image_0"),
+        ("0", "ref_images.ref_image_1"),
+    }
+    picture_witnesses = [
+        row for row in binding["inputs"]["reference_edges"]
+        if row["conditioner_input"].startswith("ref_images.")
+    ]
+    assert [row["loader"] for row in picture_witnesses] == [
+        "c3-reference-image-0", "c3-reference-image-0"
+    ]
 
 
 def test_fixture_a_prepares_serializes_reloads_compiles_and_relocates(tmp_path: Path) -> None:

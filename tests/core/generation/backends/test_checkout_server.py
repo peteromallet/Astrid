@@ -457,7 +457,7 @@ def test_generate_rejects_unscoped_fingerprint_override(
 
 
 def test_checkout_server_records_pinned_engine_contract() -> None:
-    assert VIBECOMFY_ENGINE_REVISION == "a6a0cdb493c2f8bea4115740b96ec4c118af7ad1"
+    assert VIBECOMFY_ENGINE_REVISION == "01f38461d633651c8857712b2331650aedaee461"
     assert COMFYUI_VERSION == "0.26.0"
 
 def test_generate_failure_discards_prepared_warmth(

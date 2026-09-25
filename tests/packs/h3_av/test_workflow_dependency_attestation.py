@@ -21,8 +21,6 @@ def test_h3_continuation_workflow_build_reload_exposes_dependency_attestation() 
         envelope = deepcopy(workflow.to_envelope())
         # Runtime pins are retained in the template metadata witness; the
         # public envelope's normalized requirements carries models and packs.
-        runtime = envelope["metadata"]["requirements"]["runtime"]
-        runtime["packages"] = dict(runtime["packages"])
         envelope["requirements"]["models"] = [
             model["name"] for model in envelope["requirements"]["models"]
         ]

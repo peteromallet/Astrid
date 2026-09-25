@@ -175,6 +175,29 @@ def test_public_prepare_rejects_asset_map_without_bundle(tmp_path: Path) -> None
     assert not (tmp_path / "preparation.json").exists()
 
 
+def test_public_compile_rejects_v2_request_with_inconsistent_outer_schema(tmp_path: Path) -> None:
+    from astrid.packs.h3_av.executors.compile.run import main as compile_main
+
+    preparation_path = tmp_path / "preparation.json"
+    preparation_path.write_text(
+        json.dumps(
+            {
+                "kind": "h3_av_preparation",
+                "schema_version": 1,
+                "status": "prepared",
+                "runtime_submission": "eligible",
+                "request": {"version": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="inconsistent preparation schema_version"):
+        compile_main([
+            "--preparation", str(preparation_path),
+            "--out", str(tmp_path / "compiled"),
+        ])
+
+
 def test_compile_definition_revision_changes_nested_identity_without_touching_transform() -> None:
     from astrid.core.execution.executor.folder import load_folder_executor
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from astrid.core._shared.result_manifest import build_manifest, write_manifest
 from astrid.core.pack.entrypoint import guard_canonical_entrypoint, run_pack_main
-from astrid.packs.h3_av.src.compile import compile_preparation
+from astrid.packs.h3_av.src.compile import _is_prepared_v2, compile_preparation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     preparation = json.loads(args.preparation.read_text(encoding="utf-8"))
     if not isinstance(preparation, dict):
         raise ValueError("preparation must be a JSON object")
-    if preparation.get("schema_version") == 2 and args.input_bundle is None:
+    prepared_v2 = _is_prepared_v2(preparation)
+    if prepared_v2 and preparation.get("schema_version") != 2:
+        raise ValueError(
+            "h3_av.compile rejects a v2 request with an inconsistent preparation schema_version"
+        )
+    if prepared_v2 and args.input_bundle is None:
         raise ValueError("h3_av.compile requires the managed --input-bundle for v2 preparation")
     result = compile_preparation(preparation, out_dir=args.out, input_bundle=args.input_bundle)
     if "workflow" not in result:

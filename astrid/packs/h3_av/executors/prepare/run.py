@@ -38,12 +38,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("prepare result manifest is a symlink")
         result_manifest_path.unlink()
     request = load_request(args.request)
-    asset_map = None
     if args.asset_map:
-        raw = json.loads(args.asset_map.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in raw.items()):
-            raise ValueError("asset map must be a JSON object of string ids to string paths")
-        asset_map = raw
+        raise ValueError("h3_av.prepare --asset-map is unsupported; import declared assets as a managed --input-bundle")
     if args.input_bundle:
         asset_map, identities = materialize_input_bundle(
             request, args.input_bundle, args.out.parent / ".input-assets"

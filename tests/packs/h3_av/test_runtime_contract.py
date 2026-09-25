@@ -94,8 +94,10 @@ def test_transform_command_forwards_execution_request_and_keeps_default(tmp_path
 
 def test_transform_reaches_default_canonical_sdk_before_prepare(monkeypatch, tmp_path: Path) -> None:
     import astrid.packs.h3_av.orchestrators.transform.run as transform
+    from astrid.packs.h3_av.src.input_bundle import build_input_bundle
 
     order: list[str] = []
+    child_inputs: list[dict[str, object]] = []
 
     class Client:
         def __enter__(self):
@@ -104,8 +106,9 @@ def test_transform_reaches_default_canonical_sdk_before_prepare(monkeypatch, tmp
         def __exit__(self, *_args):
             return None
 
-        def invoke_result(self, capability_id: str, **_kwargs):
+        def invoke_result(self, capability_id: str, **kwargs):
             order.append(f"invoke:{capability_id}")
+            child_inputs.append(kwargs["inputs"])
             return SimpleNamespace(ok=False, error="stop after first admission boundary")
 
     def open_default(cls, **kwargs):
@@ -114,23 +117,19 @@ def test_transform_reaches_default_canonical_sdk_before_prepare(monkeypatch, tmp
         return Client()
 
     monkeypatch.setattr(transform.AstridClient, "open_from_launcher", classmethod(open_default))
-    monkeypatch.setattr(transform, "_json_mapping", lambda _path: {})
-    monkeypatch.setattr(transform, "normalize_request", lambda _value: {})
-
-    def build_bundle(_request, _asset_map, path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"fixture bundle")
-        return path
-
-    monkeypatch.setattr(transform, "build_input_bundle", build_bundle)
-    monkeypatch.setattr(transform, "bundle_digest", lambda _path: "fixture-digest")
+    request = _request()
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request.value), encoding="utf-8")
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fixture source")
+    bundle = build_input_bundle(request, {"source": source}, tmp_path / "input-bundle.zip")
     monkeypatch.setattr(
         transform, "_import_runtime_file",
-        lambda *_args, **_kwargs: {"object_id": "managed-bundle", "filename": "h3-input-bundle.zip"},
+        lambda *_args, **kwargs: {"object_id": kwargs["filename"], "filename": kwargs["filename"]},
     )
     args = SimpleNamespace(
         out=tmp_path / "out", dry_run=False, execution_request=None,
-        request=tmp_path / "request.json", asset_map=tmp_path / "assets.json",
+        request=request_path, asset_map=bundle,
         project="fixture-project",
     )
 
@@ -138,6 +137,42 @@ def test_transform_reaches_default_canonical_sdk_before_prepare(monkeypatch, tmp
         run_transform(args)
 
     assert order == ["sdk-open-from-launcher", "invoke:h3_av.prepare"]
+    assert child_inputs == [{
+        "request": {"object_id": "request.json", "filename": "request.json"},
+        "input_bundle": {"object_id": "h3-input-bundle.zip", "filename": "h3-input-bundle.zip"},
+    }]
+
+
+@pytest.mark.parametrize("label", ["B", "E", "F", "X"])
+def test_transform_rejects_legacy_asset_maps_before_child_client(label: str, monkeypatch, tmp_path: Path) -> None:
+    import astrid.packs.h3_av.orchestrators.transform.run as transform
+    from tests.packs.h3_av.test_request_contract import FIXTURES
+
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(FIXTURES[label]()), encoding="utf-8")
+    asset_map = tmp_path / "asset-map.json"
+    asset_map.write_text(json.dumps({"source": "/caller/source.mp4"}), encoding="utf-8")
+    monkeypatch.setattr(transform.AstridClient, "open_from_launcher", lambda: pytest.fail("child client opened"))
+    with pytest.raises(RuntimeError, match="prebuilt managed input bundle; JSON asset-map paths are unsupported"):
+        run_transform(SimpleNamespace(
+            out=tmp_path / "out", dry_run=False, execution_request="",
+            request=request, asset_map=asset_map, project=None,
+        ))
+
+
+def test_public_prepare_rejects_asset_map_without_bundle(tmp_path: Path) -> None:
+    from astrid.packs.h3_av.executors.prepare.run import main as prepare_main
+
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(_request().value), encoding="utf-8")
+    asset_map = tmp_path / "asset-map.json"
+    asset_map.write_text(json.dumps({"source": "/caller/source.mp4"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="import declared assets as a managed --input-bundle"):
+        prepare_main([
+            "--request", str(request), "--asset-map", str(asset_map),
+            "--out", str(tmp_path / "preparation.json"),
+        ])
+    assert not (tmp_path / "preparation.json").exists()
 
 
 def test_compile_definition_revision_changes_nested_identity_without_touching_transform() -> None:

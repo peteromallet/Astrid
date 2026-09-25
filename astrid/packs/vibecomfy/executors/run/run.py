@@ -214,14 +214,26 @@ def _stage_managed_assets(
         readiness_profile=readiness_profile,
         output_root=output_root,
     )
-    # Preserve the executor's existing return contract: scalar task inputs
-    # remain supplied through --workflow-inputs, while this helper returns
-    # only staged media basenames.  The canonical manifest has still been
-    # fully validated and resolved above.
-    return {
+    staged = {
         str(record["binding"]): Path(str(record["member"])).name
         for record in resolved.manifest["assets"]
     }
+    lineage = resolved.manifest.get("lineage", {})
+    if "h3_av_executable_bindings" not in lineage:
+        if {"prepared_video_mask", "prepared_audio_mask"} <= set(staged):
+            raise ValueError("managed H3 archive is missing executable workflow bindings")
+        # Older and non-H3 archives retain their original binding contract.
+        return staged
+    executable = lineage["h3_av_executable_bindings"]
+    if not isinstance(executable, dict) or not executable or any(
+        not isinstance(socket, str) or not socket or not isinstance(binding, str)
+        or binding not in staged for socket, binding in executable.items()
+    ):
+        raise ValueError("managed H3 executable bindings are malformed")
+    selected = {socket: staged[binding] for socket, binding in executable.items()}
+    if resolved.manifest.get("workflow_inputs") != selected:
+        raise ValueError("managed H3 executable bindings disagree with workflow inputs")
+    return selected
 
 
 def _materialize_managed_generation_result(

@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from typing import Any, Mapping
 
 from astrid.core.pack.entrypoint import guard_canonical_entrypoint, run_pack_main
 from astrid.sdk import AstridClient
-from astrid.packs.h3_av.src.input_bundle import build_input_bundle, bundle_digest
+from astrid.packs.h3_av.src.input_bundle import bundle_digest, materialize_input_bundle
 from astrid.packs.h3_av.src.output_contract import (
     generation_intent_from_contract,
     validate_output_contract,
@@ -585,20 +586,31 @@ def run_transform(args: argparse.Namespace) -> dict[str, Any]:
     execution_request_path = Path(args.execution_request) if args.execution_request else None
     execution_request = _json_mapping(execution_request_path) if execution_request_path else None
     request_value = _json_mapping(args.request)
-    asset_map = _json_mapping(args.asset_map)
     request_model = normalize_request(request_value)
-    input_bundle_path = build_input_bundle(
-        request_model,
-        asset_map,
-        root / "00-input" / "h3-input-bundle.zip",
+    # The public file port retains its historical CLI name, but only a
+    # prebuilt managed bundle is admissible here. Local asset-map paths cannot
+    # be transported into an already running orchestrator safely.
+    if not zipfile.is_zipfile(args.asset_map):
+        raise RuntimeError("h3_av.transform --asset-map requires a prebuilt managed input bundle; JSON asset-map paths are unsupported")
+    original_digest = bundle_digest(args.asset_map)
+    input_bundle_path = root / "00-input" / "h3-input-bundle.zip"
+    input_bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(args.asset_map, input_bundle_path)
+    if bundle_digest(input_bundle_path) != original_digest:
+        raise RuntimeError("managed input bundle changed while entering h3_av.transform")
+    staged_assets, _ = materialize_input_bundle(
+        request_model, input_bundle_path, root / "00-input" / "staged-assets"
     )
     with AstridClient.open_from_launcher() as client:
+        request_descriptor = _import_runtime_file(
+            client, project=args.project, path=args.request, filename="request.json"
+        )
         input_bundle_descriptor = _import_runtime_file(
             client, project=args.project, path=input_bundle_path, filename="h3-input-bundle.zip"
         )
         prepared = _invoke(
             client, "h3_av.prepare",
-            inputs={"request": str(args.request), "input_bundle": input_bundle_descriptor},
+            inputs={"request": request_descriptor, "input_bundle": input_bundle_descriptor},
             out=root / "01-prepare", project=args.project,
         )
         preparation_path, preparation_row = _materialize_output(client, prepared, "preparation", root / "01-prepare")
@@ -654,7 +666,7 @@ def run_transform(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(source_spec, Mapping):
             source_asset = source_spec["asset"]
             source_record = next(item for item in preparation["assets"] if item["asset"] == source_asset)
-            source_path = Path(source_record["path"]).expanduser().resolve()
+            source_path = Path(staged_assets[source_asset]).resolve()
             if "sha256" in source_record and hashlib.sha256(source_path.read_bytes()).hexdigest() != source_record["sha256"]:
                 raise RuntimeError("authoritative source changed after preparation")
         runtime_provenance = {

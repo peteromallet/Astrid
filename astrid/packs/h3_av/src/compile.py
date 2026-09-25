@@ -129,6 +129,7 @@ def _write_asset_bundle(
     *,
     workflow_inputs: Mapping[str, Any] | None = None,
     lineage: Mapping[str, Any] | None = None,
+    executable_bindings: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     try:
         manifest = build_asset_manifest(
@@ -138,6 +139,10 @@ def _write_asset_bundle(
         )
     except AssetManifestError as exc:
         raise CompilationError(str(exc)) from exc
+    if executable_bindings is not None:
+        # Archive bindings identify custody members. Only this explicit map
+        # identifies public sockets on the pruned executable graph.
+        manifest["lineage"] = {"h3_av_executable_bindings": dict(executable_bindings)}
     payloads: list[tuple[str, bytes]] = []
     seen_members: set[str] = set()
     for record in manifest["assets"]:
@@ -177,6 +182,43 @@ def _member_by_binding(manifest: Mapping[str, Any]) -> dict[str, str]:
     if not isinstance(records, list):
         raise CompilationError("managed asset manifest is malformed")
     return {str(record["binding"]): PurePosixPath(str(record["member"])).name for record in records}
+
+
+def _executable_media_bindings(
+    envelope: Mapping[str, Any], members: Mapping[str, str], *, baseline_binding: str | None,
+) -> dict[str, str]:
+    """Bind archived members only to surviving public media loader sockets."""
+
+    public = envelope.get("inputs")
+    if not isinstance(public, Mapping):
+        raise CompilationError("H3 executable graph has no public input contract")
+    result: dict[str, str] = {}
+    for name, row in public.items():
+        if not isinstance(row, Mapping):
+            raise CompilationError(f"H3 public input {name!r} is malformed")
+        if row.get("media_semantics") not in {"image", "video", "audio"}:
+            continue
+        value = row.get("value")
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise CompilationError("H3 public media input has no member identity")
+        if name == "source_video" and baseline_binding is not None:
+            binding = baseline_binding
+        elif name in members:
+            binding = name
+        else:
+            matches = [binding for binding, member in members.items() if member == Path(value).name]
+            if len(matches) != 1:
+                raise CompilationError(f"H3 public media input {name!r} has no unique archived member")
+            binding = matches[0]
+        if members[binding] != Path(value).name:
+            raise CompilationError(f"H3 public media input {name!r} points at a different archived member")
+        result[name] = binding
+    for mask in ("prepared_video_mask", "prepared_audio_mask"):
+        if mask in members and result.get(mask) != mask:
+            raise CompilationError(f"H3 executable graph does not bind {mask} to its loader")
+    if baseline_binding is not None and result.get("source_video") != baseline_binding:
+        raise CompilationError("H3 source baseline is not bound to the source_video loader")
+    return result
 
 
 def _asset_bindings(request: H3Request, assets: Mapping[str, Path], *, include_masks: bool = False) -> tuple[dict[str, Path], dict[str, str]]:
@@ -662,13 +704,12 @@ def _compile_prepared_v2(preparation: Mapping[str, Any], destination: Path) -> d
             raise CompilationError(str(exc)) from exc
     # These are compilation provenance, not public graph inputs.  Keep their
     # witnesses in graph_binding/prepared_artifact metadata below.
-    workflow_inputs: dict[str, Any] = {}
-    asset_manifest = _write_asset_bundle(
-        destination / "managed-assets.zip",
-        assets,
-        workflow_inputs=workflow_inputs,
-        lineage={"prepared_input": preparation.get("request_digest")},
-    )
+    # Determine member names before graph construction; the final archive is
+    # written once the graph has revealed which media loaders survived pruning.
+    try:
+        asset_manifest = build_asset_manifest(assets)
+    except AssetManifestError as exc:
+        raise CompilationError(str(exc)) from exc
     members = _member_by_binding(asset_manifest)
     asset_members = {asset_id: members[asset_id] for asset_id in _prepared_asset_paths(preparation) if asset_id in members}
     mask_members = {
@@ -684,6 +725,17 @@ def _compile_prepared_v2(preparation: Mapping[str, Any], destination: Path) -> d
         )
     except GraphBindingError as exc:
         raise CompilationError(str(exc)) from exc
+    executable_bindings = _executable_media_bindings(
+        graph_binding["executable_graph"]["envelope"], members,
+        baseline_binding=baseline_binding,
+    )
+    executable_inputs = {socket: members[binding] for socket, binding in executable_bindings.items()}
+    asset_manifest = _write_asset_bundle(
+        destination / "managed-assets.zip", assets,
+        workflow_inputs=executable_inputs,
+        executable_bindings=executable_bindings,
+    )
+    workflow_inputs: dict[str, Any] = {}
     graph_path = destination / "graph.vibe.json"
     graph_envelope = graph_binding["executable_graph"]["envelope"]
     graph_path.write_text(json.dumps(graph_envelope, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")

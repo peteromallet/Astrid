@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -104,6 +105,89 @@ def test_public_prepare_and_compile_use_staged_bundle_after_caller_asset_changes
         assert len(source_members) == 1
         assert archive.read(source_members[0]) == b"managed original source"
     assert compiled["workflow_inputs"]["source_video"] == Path(source_members[0]).name
+
+
+def test_relocated_source_edit_invokes_only_staged_executable_inputs(tmp_path: Path) -> None:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is required for the source baseline")
+    from vibecomfy.workflow import VibeWorkflow
+    from astrid.packs.h3_av.executors.compile.run import main as compile_main
+    from astrid.packs.h3_av.executors.prepare.run import main as prepare_main
+    from astrid.packs.vibecomfy.executors.run.run import _stage_managed_assets
+    from astrid.packs.vibecomfy.invocation_preflight import preflight_invocation
+
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    source = caller / "source.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=blue:s=32x32:r=24:d=1",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=1",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-ac", "2", "-c:a", "aac", str(source),
+    ], check=True)
+    raw_request = {
+        "version": 2, "prompt": "Edit the source", "duration": 1,
+        "media": [{
+            "id": "source", "asset": "source.mp4", "role": "timeline",
+            "modality": "video", "at": {"frame": 0}, "range": [0, 1],
+            "edit": [{"stream": "video", "during": [0, 0.5], "mask": {"full_frame": True}}],
+        }],
+        "settings": {},
+    }
+    request = normalize_request(raw_request)
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(raw_request), encoding="utf-8")
+    bundle = build_input_bundle(request, {"source.mp4": source}, tmp_path / "input-bundle.zip")
+    dimensions = tmp_path / "dimensions.json"
+    dimensions.write_text(json.dumps({"frames": 1, "height": 2, "width": 2}), encoding="utf-8")
+    preparation = tmp_path / "prepare" / "preparation.json"
+    assert prepare_main([
+        "--request", str(request_path), "--input-bundle", str(bundle),
+        "--width", "32", "--height", "32", "--target-model-dimensions", str(dimensions),
+        "--out", str(preparation),
+    ]) == 0
+    shutil.rmtree(caller)
+    compilation_dir = tmp_path / "compiled"
+    assert compile_main([
+        "--preparation", str(preparation), "--input-bundle", str(bundle),
+        "--out", str(compilation_dir),
+    ]) == 0
+    compilation = json.loads((compilation_dir / "compilation.json").read_text(encoding="utf-8"))
+    manifest = compilation["managed_assets"]["manifest"]
+    custody = {row["binding"] for row in manifest["assets"]}
+    selected = manifest["lineage"]["h3_av_executable_bindings"]
+    assert {"source.mp4", "prepared_source_baseline", "prepared_video_mask", "prepared_audio_mask"} <= custody
+    assert selected["source_video"] == "prepared_source_baseline"
+    assert "source.mp4" not in selected
+    staged = _stage_managed_assets(
+        str(compilation_dir / "managed-assets.zip"),
+        readiness_profile=None, output_root=tmp_path / "worker",
+    )
+    assert compilation["workflow_inputs"] == {}
+    assert staged == manifest["workflow_inputs"]
+    envelope = json.loads((compilation_dir / "graph.vibe.json").read_text(encoding="utf-8"))
+    assert set(staged) <= set(envelope["inputs"])
+    api = VibeWorkflow.from_envelope(envelope).compile("api", run_inputs=staged)
+    assert api["99"]["inputs"]["video"] == staged["source_video"]
+    assert api["c3-video-mask-loader"]["inputs"]["video"] == staged["prepared_video_mask"]
+    assert api["c3-audio-mask-loader"]["inputs"]["video"] == staged["prepared_audio_mask"]
+    receipt = preflight_invocation(
+        compilation_dir / "graph.vibe.json", run_inputs=staged,
+        source_video_path=tmp_path / "worker" / "engine-input" / staged["source_video"],
+        expected_source_node="99", expected_source_field="video", phase="worker-staged",
+    )
+    assert receipt["run_inputs"] == staged
+    unbound = tmp_path / "unbound-managed-assets.zip"
+    with zipfile.ZipFile(compilation_dir / "managed-assets.zip") as original, zipfile.ZipFile(unbound, "w") as archive:
+        for name in original.namelist():
+            payload = original.read(name)
+            if name == "manifest.json":
+                missing_bindings = dict(json.loads(payload))
+                missing_bindings.pop("lineage")
+                payload = json.dumps(missing_bindings).encode("utf-8")
+            archive.writestr(name, payload)
+    with pytest.raises(ValueError, match="missing executable workflow bindings"):
+        _stage_managed_assets(str(unbound), readiness_profile=None, output_root=tmp_path / "unbound-worker")
 
 
 def _normalized_v2_request():

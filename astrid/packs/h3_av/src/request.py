@@ -79,6 +79,8 @@ def _number(value: Any, path: str, *, minimum: float | None = None, exclusive: b
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise H3RequestError(f"{path} must be a number")
     result = float(value)
+    if not math.isfinite(result):
+        raise H3RequestError(f"{path} must be finite")
     if minimum is not None and (result <= minimum if exclusive else result < minimum):
         operator = ">" if exclusive else ">="
         raise H3RequestError(f"{path} must be {operator} {minimum}")
@@ -507,13 +509,17 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
         if identifier is not None:
             occurrence["id"] = identifier
         if modality is not None:
-            model_counts[modality] += 1
-            label = {"image": "Picture", "video": "Video", "audio": "Audio"}[modality]
-            occurrence.update({"modality": modality, "model_tag": f"<{label} {model_counts[modality]}>"})
+            occurrence["modality"] = modality
+            if role == "reference":
+                model_counts[modality] += 1
+                label = {"image": "Picture", "video": "Video", "audio": "Audio"}[modality]
+                occurrence["model_tag"] = f"<{label} {model_counts[modality]}>"
         else:
             occurrence["inspection"] = "deferred"
         if "range" in item:
             occurrence["range"], occurrence["resolved_range"] = _v2_interval(item["range"], f"{path}.range", "frames" if modality != "audio" else "samples")
+            if role == "reference" and modality != "video":
+                raise H3RequestError(f"{path}.range is unsupported for {modality or 'unresolved'} references")
         if role == "timeline":
             if "at" not in item:
                 raise H3RequestError(f"{path}.at is required for timeline media")

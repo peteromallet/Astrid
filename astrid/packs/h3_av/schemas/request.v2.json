@@ -39,13 +39,13 @@
       "properties": {
         "id": {"type": "string", "minLength": 1}, "asset": {"$ref": "#/$defs/asset"},
         "role": {"enum": ["timeline", "reference"]}, "modality": {"enum": ["image", "video", "audio"]},
-        "at": {"$ref": "#/$defs/at"}, "range": {"$ref": "#/$defs/interval"},
+        "at": {"$ref": "#/$defs/at"}, "range": {"$ref": "#/$defs/interval", "description": "For references, only video ranges are supported; they select a 24 fps aligned loader window. Image and audio reference ranges are rejected."},
         "edit": {"type": "array", "items": {"$ref": "#/$defs/edit"}}, "audio": {"type": "boolean"}, "hard": {"type": "boolean"}, "latent_pin": {"type": "boolean"}
       }
     },
     "settings": {
       "type": "object", "additionalProperties": false,
-      "properties": {"model": {"type": "string"}, "steps": {"type": "integer", "minimum": 1, "maximum": 200}, "sampler": {"type": "string"}, "seed": {"type": "integer", "minimum": 0}, "guidance_scale": {"type": "number", "minimum": 0}, "guidance": {"type": "number", "minimum": 0}}
+      "properties": {"model": {"type": "string"}, "steps": {"type": "integer", "minimum": 1, "maximum": 200}, "sampler": {"type": "string"}, "seed": {"type": "integer", "minimum": 0}, "guidance_scale": {"type": "number", "minimum": 0, "description": "Supported H3 turbo LoRA strength control (LoraLoaderModelOnly.strength_model), not classifier-free guidance."}, "guidance": {"type": "number", "minimum": 0, "description": "Alias for guidance_scale; do not supply both."}}
     }
   }
 }

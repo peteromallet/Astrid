@@ -346,6 +346,53 @@ def test_reference_order_duplicates_and_each_edge_are_identity_checked() -> None
             validate_h3_graph_binding(mutated)
 
 
+def test_mixed_reference_windows_keep_tags_ports_and_paired_audio_distinct() -> None:
+    raw = FIXTURES["A"]()
+    raw["media"] = [
+        {"id": "look", "asset": "look.png", "role": "reference", "modality": "image"},
+        {"id": "silent", "asset": "clip.mp4", "role": "reference", "modality": "video", "audio": False, "range": [1, 2]},
+        {"id": "voiced", "asset": "clip.mp4", "role": "reference", "modality": "video", "audio": True, "range": [3, 4]},
+        {"id": "voice", "asset": "voice.wav", "role": "reference", "modality": "audio"},
+        {"id": "second", "asset": "second.png", "role": "reference", "modality": "image"},
+    ]
+    binding = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    rows = binding["inputs"]["reference_edges"]
+    assert [(row["id"], row["model_tag"], row["conditioner_input"]) for row in rows] == [
+        ("look", "<Picture 1>", "ref_images.ref_image_0"),
+        ("silent", "<Video 1>", "ref_videos.ref_video_0"),
+        ("voiced", "<Video 2>", "ref_videos.ref_video_1"),
+        ("voice", "<Audio 1>", "ref_audios.ref_audio_0"),
+        ("second", "<Picture 2>", "ref_images.ref_image_1"),
+    ]
+    assert rows[1]["loader"] != rows[2]["loader"]
+    assert rows[1]["resolved_range"] == [24, 48]
+    assert rows[2]["resolved_range"] == [72, 96]
+    assert "paired_audio_input" not in rows[1]
+    assert rows[2]["paired_audio_input"] == "ref_video_audios.ref_video_audio_1"
+    nodes = {node["id"]: node for node in binding["executable_graph"]["nodes"]}
+    assert [(nodes[row["loader"]]["inputs"]["start_time"], nodes[row["loader"]]["inputs"]["frame_load_cap"]) for row in rows[1:3]] == [(1, 24), (3, 24)]
+    altered = copy.deepcopy(binding)
+    altered_nodes = {node["id"]: node for node in altered["executable_graph"]["nodes"]}
+    altered_nodes[rows[2]["loader"]]["inputs"]["start_time"] = 0
+    with pytest.raises(GraphBindingError, match="video window"):
+        validate_h3_graph_binding(altered)
+
+
+@pytest.mark.parametrize("field", ["guidance_scale", "guidance"])
+def test_guidance_is_bound_to_existing_lora_strength(field: str) -> None:
+    raw = FIXTURES["A"]()
+    raw["settings"][field] = 0.4
+    binding = build_h3_graph_binding(_prepared(normalize_request(raw)))
+    nodes = {node["id"]: node for node in binding["executable_graph"]["nodes"]}
+    assert nodes["935"]["inputs"]["strength_model"] == 0.4
+    assert binding["executable_graph"]["compiled_api"]["935"]["inputs"]["strength_model"] == 0.4
+    altered = copy.deepcopy(binding)
+    altered_nodes = {node["id"]: node for node in altered["executable_graph"]["nodes"]}
+    altered_nodes["935"]["inputs"]["strength_model"] = 0.95
+    with pytest.raises(GraphBindingError, match="guidance_scale"):
+        validate_h3_graph_binding(altered)
+
+
 def test_wrong_missing_and_duplicate_output_descriptors_are_rejected() -> None:
     binding = build_h3_graph_binding(_prepared(normalize_request(FIXTURES["A"]())))
     for outputs in (

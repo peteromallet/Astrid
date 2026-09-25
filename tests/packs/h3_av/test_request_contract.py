@@ -239,6 +239,47 @@ def test_a_four_references_are_ordered_guidance_and_one_output() -> None:
     assert normalized["output_count"] == 1
 
 
+def test_reference_tags_are_numbered_by_reference_modality_only() -> None:
+    raw = base_request()
+    raw["media"] = [
+        media("placed.png", "timeline", "image", id="placed", at={"frame": 0}),
+        media("look.png", "reference", "image", id="look"),
+        media("clip.mp4", "reference", "video", id="clip", audio=True, range=[1, 2]),
+        media("voice.wav", "reference", "audio", id="voice"),
+        media("second.png", "reference", "image", id="second"),
+    ]
+    normalized = normalize_request(raw).value
+    assert "model_tag" not in normalized["media"][0]
+    assert normalized["model_tags"] == {
+        "look": "<Picture 1>", "clip": "<Video 1>",
+        "voice": "<Audio 1>", "second": "<Picture 2>",
+    }
+    assert normalized["media"][2]["range"] == [1, 2]
+    assert normalized["media"][2]["resolved_range"] == [24, 48]
+    assert normalized["media"][2]["audio"] is True
+
+
+@pytest.mark.parametrize("modality,asset", [("image", "look.png"), ("audio", "voice.wav")])
+def test_reference_window_without_a_graph_trim_is_rejected(modality: str, asset: str) -> None:
+    raw = base_request()
+    raw["media"] = [media(asset, "reference", modality, range=[1, 2])]
+    with pytest.raises(H3RequestError, match="media\\[0\\]\\.range is unsupported"):
+        normalize_request(raw)
+
+
+@pytest.mark.parametrize("field", ["guidance_scale", "guidance"])
+def test_guidance_alias_normalizes_and_invalid_values_fail(field: str) -> None:
+    raw = _fixture_a()
+    raw["settings"][field] = 0.4
+    assert normalize_request(raw).value["settings"]["guidance_scale"] == 0.4
+    raw["settings"][field] = -1
+    with pytest.raises(H3RequestError, match="settings.guidance_scale"):
+        normalize_request(raw)
+    raw["settings"][field] = float("nan")
+    with pytest.raises(H3RequestError, match="finite"):
+        normalize_request(raw)
+
+
 @pytest.mark.parametrize("label", tuple(FIXTURES))
 def test_named_fixture_semantics_are_explicit(label: str) -> None:
     normalized = normalize_request(FIXTURES[label]()).value
@@ -296,12 +337,12 @@ def test_named_fixture_semantics_are_explicit(label: str) -> None:
 
 FIXTURE_DIGESTS = {
     "A": "952f07e531e26cc49d6de3918c9c5d7489963e63a1fa4a83722a7025e01e0b1c",
-    "B": "8651c0c5a8501e4dd5a149ab50659af601152821fdd9c7e81469253a9453b64f",
-    "C": "4fdd9ca7d5f22744577e77dbf991dd15e9bf7cf5aa8d6cd5d5f997cf160ac201",
-    "D": "74c6c818e66e3ab0549a0e49461c669a984eea18bd326a8c2b6ce7b941d36699",
-    "E": "a5aeb9945fbcd077d354a2c14f278e6b8776a559bbbfe17b0349a61e23a801b2",
-    "F": "325d084ce126a673542f8e6986cd83e73d7860ed22e458c1dba0142c77c3ab9b",
-    "X": "b304547d8bafefa1e2fa4afbf4bb516d26d624ed1dfd788cdbdcb2e43a6b0b71",
+    "B": "5ab4a2be7683deb91647dda2aeb7ff0eb0b810611ab61da656d823ccf1f70272",
+    "C": "cc9420184637064342008a4b05945faeed6918918cdfbc2a8bd7dcf76ddafd61",
+    "D": "a44fdabb31902162c2fa7b931e41c52e025ab2aaca06b89570b97efb4081fd34",
+    "E": "6ac66ad2468be4d15dd8c8dad375f26beae3257c89166a42d2c4694a426a728b",
+    "F": "96b681ae2e94fe1f02745a355c00c5495af0c3c038264d8f9ccfe26fc3a17879",
+    "X": "ff5ab601c67cf3aa0d707c4cfcfa695a98a515f00d2a6e2bedfa3e2fba818ce3",
 }
 
 

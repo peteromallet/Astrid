@@ -327,6 +327,8 @@ def _reference_bindings(request: H3Request) -> list[dict[str, Any]]:
                 "modality": modality,
                 "audio": item.get("audio", True) if modality == "video" else modality == "audio",
                 "model_tag": item.get("model_tag"),
+                "range": item.get("range"),
+                "resolved_range": item.get("resolved_range"),
             }
         )
     return result
@@ -371,6 +373,8 @@ def _reference_port_plan(
             "asset_member": member,
             "modality": modality,
             "model_tag": reference.get("model_tag"),
+            "range": reference.get("range"),
+            "resolved_range": reference.get("resolved_range"),
             "loader": loader,
             "loader_output": "0",
             "conditioner": "110",
@@ -671,6 +675,7 @@ def _reference_loader(
     index: int,
     *,
     binding: str,
+    register: bool = True,
 ) -> tuple[str, str, str | None]:
     """Create one real loader for a reference and return its image/audio ports."""
 
@@ -678,27 +683,32 @@ def _reference_loader(
     if modality == "image":
         node_id = f"c3-reference-image-{index}"
         _add_node(workflow, "LoadImage", node_id, image=member)
-        _register_media_loader(workflow, binding, node_id, "image", member, "image")
+        if register:
+            _register_media_loader(workflow, binding, node_id, "image", member, "image")
         return node_id, "0", None
     if modality == "video":
         node_id = f"c3-reference-video-{index}"
+        window = reference.get("resolved_range")
+        start_frame, end_frame = (window if window is not None else (0, 0))
         _add_node(
             workflow,
             "VHS_LoadVideoFFmpeg",
             node_id,
             video=member,
             force_rate=24,
-            frame_load_cap=0,
+            frame_load_cap=end_frame - start_frame if window is not None else 0,
             custom_width=0,
             custom_height=0,
-            start_time=0,
+            start_time=start_frame / 24,
             format="AnimateDiff",
         )
-        _register_media_loader(workflow, binding, node_id, "video", member, "video")
-        return node_id, "0", "2" if reference.get("audio", True) else None
+        if register:
+            _register_media_loader(workflow, binding, node_id, "video", member, "video")
+        return node_id, "0", "2"
     node_id = f"c3-reference-audio-{index}"
     _add_node(workflow, "VHS_LoadAudio", node_id, audio=member)
-    _register_media_loader(workflow, binding, node_id, "audio", member, "audio")
+    if register:
+        _register_media_loader(workflow, binding, node_id, "audio", member, "audio")
     return node_id, "0", "0"
 
 
@@ -709,21 +719,25 @@ def _timeline_loader(
     index: int,
     *,
     binding: str,
+    register: bool = True,
 ) -> tuple[str, str, str | None]:
     modality = str(item.get("modality"))
     if modality == "image":
         node_id = f"c3-timeline-image-{index}"
         _add_node(workflow, "LoadImage", node_id, image=member)
-        _register_media_loader(workflow, binding, node_id, "image", member, "image")
+        if register:
+            _register_media_loader(workflow, binding, node_id, "image", member, "image")
         return node_id, "0", None
     if modality == "video":
         node_id = f"c3-timeline-video-{index}"
         _add_node(workflow, "VHS_LoadVideoFFmpeg", node_id, video=member, force_rate=24, frame_load_cap=0)
-        _register_media_loader(workflow, binding, node_id, "video", member, "video")
+        if register:
+            _register_media_loader(workflow, binding, node_id, "video", member, "video")
         return node_id, "0", "2"
     node_id = f"c3-timeline-audio-{index}"
     _add_node(workflow, "VHS_LoadAudio", node_id, audio=member)
-    _register_media_loader(workflow, binding, node_id, "audio", member, "audio")
+    if register:
+        _register_media_loader(workflow, binding, node_id, "audio", member, "audio")
     return node_id, "0", "0"
 
 
@@ -795,6 +809,7 @@ def _materialize_executable_graph(
     workflow.set_input("seed", int(settings.get("seed", workflow.inputs["seed"].value)))
     workflow.set_input("steps", int(settings.get("steps", workflow.inputs["steps"].value)))
     workflow.nodes["937"].inputs["sampler_name"] = str(settings.get("sampler", workflow.nodes["937"].inputs.get("sampler_name", "res_multistep")))
+    workflow.nodes["935"].inputs["strength_model"] = float(settings["guidance_scale"])
 
     if branch in {"source_free", "audio_only", "source_backed_v2v"}:
         for target in ("110.width", "110.height", "110.length"):
@@ -810,17 +825,20 @@ def _materialize_executable_graph(
         )
 
     loaders: dict[str, tuple[str, str, str | None]] = {}
-    managed_loaders: dict[str, tuple[str, str, str | None, str]] = {}
+    managed_loaders: dict[tuple[str, str, tuple[int, int] | None], tuple[str, str, str | None]] = {}
+    registered_bindings: set[str] = set()
+    binding_modalities: dict[str, str] = {}
     for index, (reference, port) in enumerate(zip(references, reference_plan, strict=True)):
         binding = str(reference["asset"])
         modality = str(reference["modality"])
-        cached = managed_loaders.get(binding)
+        if binding in binding_modalities and binding_modalities[binding] != modality:
+            raise GraphBindingError(f"asset binding {binding!r} is reused with incompatible media semantics")
+        binding_modalities[binding] = modality
+        window = tuple(reference["resolved_range"]) if reference.get("resolved_range") is not None else None
+        cache_key = (binding, modality, window)
+        cached = managed_loaders.get(cache_key)
         if cached is not None:
-            if cached[3] != modality:
-                raise GraphBindingError(
-                    f"asset binding {binding!r} is reused with incompatible media semantics"
-                )
-            loader = cached[:3]
+            loader = cached
             port["loader"] = loader[0]
             port["loader_output"] = loader[1]
             if loader[2] is not None and reference.get("audio", True):
@@ -832,8 +850,10 @@ def _materialize_executable_graph(
                 str(port["asset_member"]),
                 index,
                 binding=binding,
+                register=binding not in registered_bindings,
             )
-            managed_loaders[binding] = (*loader, modality)
+            managed_loaders[cache_key] = loader
+            registered_bindings.add(binding)
         loaders[str(reference["id"])] = loader
         modality = reference["modality"]
         primary_output = loader[2] or "0" if modality == "audio" else loader[1]
@@ -850,19 +870,20 @@ def _materialize_executable_graph(
     for index, item in enumerate(source_items):
         binding = str(item["asset"])
         modality = str(item["modality"])
-        cached = managed_loaders.get(binding)
+        if binding in binding_modalities and binding_modalities[binding] != modality:
+            raise GraphBindingError(f"asset binding {binding!r} is reused with incompatible media semantics")
+        binding_modalities[binding] = modality
+        cached = managed_loaders.get((binding, modality, None))
         if cached is not None:
-            if cached[3] != modality:
-                raise GraphBindingError(
-                    f"asset binding {binding!r} is reused with incompatible media semantics"
-                )
-            loader = cached[:3]
+            loader = cached
         else:
             member = _asset_member(binding, asset_members)
             loader = _timeline_loader(
-                workflow, item, member, index, binding=binding
+                workflow, item, member, index, binding=binding,
+                register=binding not in registered_bindings,
             )
-            managed_loaders[binding] = (*loader, modality)
+            managed_loaders[(binding, modality, None)] = loader
+            registered_bindings.add(binding)
         timeline_loaders[str(item.get("id", item["occurrence_id"]))] = loader
     audio_timeline = [item for item in source_items if item.get("modality") == "audio"]
     for index, item in enumerate(audio_timeline):
@@ -1088,10 +1109,18 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
         raise GraphBindingError("H3 executable graph evidence is malformed")
     expected: set[tuple[str, str, str, str]] = set()
     node_by_id = {str(node.get("id")): node for node in nodes if isinstance(node, Mapping)}
+    settings = _mapping(inputs.get("settings"), "inputs.settings")
+    guidance = settings.get("guidance_scale")
+    lora = node_by_id.get("935")
+    lora_inputs = lora.get("inputs") if isinstance(lora, Mapping) else None
+    compiled_lora = compiled.get("935")
+    compiled_lora_inputs = compiled_lora.get("inputs") if isinstance(compiled_lora, Mapping) else None
+    if not isinstance(lora_inputs, Mapping) or not isinstance(compiled_lora_inputs, Mapping) or lora_inputs.get("strength_model") != guidance or compiled_lora_inputs.get("strength_model") != guidance:
+        raise GraphBindingError("guidance_scale is not bound to the H3 LoRA strength control")
     for index, (reference, row) in enumerate(zip(references, plan, strict=True)):
         if not isinstance(reference, Mapping) or not isinstance(row, Mapping):
             raise GraphBindingError(f"reference binding {index} is malformed")
-        for field in ("id", "asset", "modality", "model_tag"):
+        for field in ("id", "asset", "modality", "model_tag", "range", "resolved_range"):
             if row.get(field) != reference.get(field):
                 raise GraphBindingError(f"reference binding {index} changed {field}")
         loader = str(row.get("loader"))
@@ -1109,6 +1138,11 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
         asset_field = {"image": "image", "video": "video", "audio": "audio"}[str(reference["modality"])]
         if loader_inputs.get(asset_field) != row.get("asset_member"):
             raise GraphBindingError(f"reference binding {index} asset identity changed")
+        if reference["modality"] == "video":
+            window = reference.get("resolved_range")
+            start, end = (window if window is not None else (0, 0))
+            if loader_inputs.get("start_time") != start / 24 or loader_inputs.get("frame_load_cap") != (end - start if window is not None else 0):
+                raise GraphBindingError(f"reference binding {index} video window changed")
     if not isinstance(audio_baselines, list):
         raise GraphBindingError("timeline audio baseline bindings must be an array")
     for index, row in enumerate(audio_baselines):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import Mock
@@ -11,6 +12,14 @@ from astrid.packs.h3_av.src.prepare import prepare_request
 from astrid.packs.h3_av.src.request import normalize_request
 from astrid.packs.vibecomfy.executors.run import run
 from astrid.packs.vibecomfy.executors.run.run import _stage_managed_assets
+
+
+def _readiness_profile(tmp_path: Path) -> tuple[str, str]:
+    profile_path = tmp_path / "readiness-profile.json"
+    profile_bytes = json.dumps({"vibecomfy_session": {}}).encode("utf-8")
+    profile_path.write_bytes(profile_bytes)
+    profile_hash = "sha256:" + hashlib.sha256(profile_bytes).hexdigest()
+    return str(profile_path), profile_hash
 
 
 def test_compiler_archive_stages_to_comfy_input(tmp_path: Path) -> None:
@@ -60,11 +69,14 @@ def test_run_accepts_matching_workflow_and_managed_asset_binding(
     monkeypatch.setattr("astrid.packs.vibecomfy.invocation_preflight.preflight_invocation", preflight)
     managed_run = Mock(return_value=(engine_output,))
     monkeypatch.setattr("astrid.packs.vibecomfy.production_engine.run_workflow_path", managed_run)
+    readiness_profile_path, readiness_profile_hash = _readiness_profile(tmp_path)
 
     run._run_and_settle(
         workflow,
         tmp_path / "run",
         task_identity="task-1",
+        readiness_profile_path=readiness_profile_path,
+        readiness_profile_hash=readiness_profile_hash,
         managed_assets=str(tmp_path / "managed-assets.zip"),
         workflow_inputs=json.dumps({"source_video": "source.mp4"}),
     )
@@ -79,12 +91,15 @@ def test_run_rejects_different_workflow_and_managed_asset_binding(
     tmp_path: Path, monkeypatch,
 ) -> None:
     monkeypatch.setattr(run, "_stage_managed_assets", lambda *_args, **_kwargs: {"source_video": "staged.mp4"})
+    readiness_profile_path, readiness_profile_hash = _readiness_profile(tmp_path)
 
     with pytest.raises(ValueError, match="managed assets conflict with workflow inputs: source_video"):
         run._run_and_settle(
             tmp_path / "workflow.py",
             tmp_path / "run",
             task_identity="task-1",
+            readiness_profile_path=readiness_profile_path,
+            readiness_profile_hash=readiness_profile_hash,
             managed_assets=str(tmp_path / "managed-assets.zip"),
             workflow_inputs=json.dumps({"source_video": "different.mp4"}),
         )

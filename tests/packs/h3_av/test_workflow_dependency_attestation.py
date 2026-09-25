@@ -19,11 +19,10 @@ def test_h3_continuation_workflow_build_reload_exposes_dependency_attestation() 
     for template in (continuation, continuation_refs):
         workflow = template.build()
         envelope = deepcopy(workflow.to_envelope())
-        # The installed VibeComfy serializer emits package pins as pairs,
-        # while its strict reload decoder expects a mapping.
-        envelope["requirements"]["runtime"]["packages"] = dict(
-            envelope["requirements"]["runtime"]["packages"]
-        )
+        # Runtime pins are retained in the template metadata witness; the
+        # public envelope's normalized requirements carries models and packs.
+        runtime = envelope["metadata"]["requirements"]["runtime"]
+        runtime["packages"] = dict(runtime["packages"])
         envelope["requirements"]["models"] = [
             model["name"] for model in envelope["requirements"]["models"]
         ]

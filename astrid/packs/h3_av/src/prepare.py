@@ -251,7 +251,7 @@ def _baseline_interval(item: Mapping[str, Any], *, frames: int, samples: int, fp
     raise PreparationError(f"timeline baseline {occurrence!r} has unsupported modality {modality!r}")
 
 
-def _require_full_baseline(ranges: list[list[int]], *, length: int, domain: str) -> list[list[int]]:
+def _validate_baseline(ranges: list[list[int]], *, length: int, domain: str, require_full: bool) -> list[list[int]]:
     if not ranges:
         raise PreparationError(f"{domain} baseline coverage is missing")
     ordered = sorted(ranges)
@@ -261,7 +261,7 @@ def _require_full_baseline(ranges: list[list[int]], *, length: int, domain: str)
             raise PreparationError(f"{domain} baseline coverage is ambiguous because intervals overlap")
         previous_end = end
     merged = _merge_int_ranges(ranges, length)
-    if merged != [[0, length]]:
+    if require_full and merged != [[0, length]]:
         raise PreparationError(f"{domain} baseline coverage is short or does not cover the output")
     return merged
 
@@ -308,6 +308,7 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
     has_video_baseline = any(item["role"] == "timeline" and item.get("modality") == "video" for item in media)
     has_audio_timeline = any(item["role"] == "timeline" and item.get("modality") == "audio" for item in media)
     has_baseline = has_video_baseline or has_audio_timeline
+    has_explicit_edits = any(item["role"] == "timeline" and item.get("edit") for item in media)
     for item in media:
         at = int(item.get("resolved_at", {}).get("value", 0)) if item["role"] == "timeline" else 0
         if item["role"] == "timeline":
@@ -370,9 +371,9 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                                 audio[channel][sample] = 1
                     audio_coverage.append([start, end])
     if has_baseline:
-        video_coverage = _require_full_baseline(baseline_video, length=frames, domain="video") if has_video_baseline else [[0, frames]]
+        video_coverage = _validate_baseline(baseline_video, length=frames, domain="video", require_full=not has_explicit_edits) if has_video_baseline else [[0, frames]]
         audio_members = baseline_audio_from_video + baseline_audio
-        audio_coverage = _require_full_baseline(audio_members, length=samples, domain="audio") if audio_members else [[0, samples]]
+        audio_coverage = _validate_baseline(audio_members, length=samples, domain="audio", require_full=not has_explicit_edits) if audio_members else [[0, samples]]
         if video_coverage != [[0, frames]] and not has_video_baseline:
             video_coverage = [[0, frames]]
         # Uncovered delivery positions were initialized as generated above.

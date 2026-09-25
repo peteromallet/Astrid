@@ -13,7 +13,7 @@ inputs:
     description: preparation.json emitted by h3_av.prepare.
   - name: input_bundle
     type: file
-    required: false
+    required: true
     description: Hash-verified managed bundle of request-declared input assets.
 outputs:
   - name: compilation
@@ -67,7 +67,7 @@ command:
   input_args:
     - input: input_bundle
       flag: --input-bundle
-      optional: true
+      optional: false
 cache:
   mode: none
 isolation:

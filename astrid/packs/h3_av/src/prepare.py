@@ -357,7 +357,7 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                         declared = mask.get("shape")
                         if declared is not None and declared != {"frames": len(moving), "height": height, "width": width}:
                             raise PreparationError("declared mask shape does not match the supplied raster")
-                        mask_range = mask.get("range", [0, len(moving)])
+                        mask_range = mask.get("resolved_range", mask.get("range", [0, len(moving)]))
                         if not isinstance(mask_range, (list, tuple)) or len(mask_range) != 2 or any(type(value) is not int for value in mask_range):
                             raise PreparationError("video mask range must be an integer half-open frame interval")
                         mask_start, mask_end = mask_range
@@ -393,9 +393,13 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                         raise PreparationError("preserve audio edit is not covered by an authoritative baseline")
                     audio_coverage.append([start, end])
     if has_baseline:
-        video_coverage = _validate_baseline(baseline_video, length=frames, domain="video", require_full=not has_explicit_edits) if has_video_baseline else [[0, frames]]
+        # A continuation tail is an explicit generation region.  Ordinary
+        # source-backed edits still require a complete authoritative baseline;
+        # callers opt into a shorter source with continuation=true.
+        require_full_baseline = not has_explicit_edits and not bool(request.value.get("continuation", False))
+        video_coverage = _validate_baseline(baseline_video, length=frames, domain="video", require_full=require_full_baseline) if has_video_baseline else [[0, frames]]
         audio_members = baseline_audio_from_video + baseline_audio
-        audio_coverage = _validate_baseline(audio_members, length=samples, domain="audio", require_full=not has_explicit_edits) if audio_members else [[0, samples]]
+        audio_coverage = _validate_baseline(audio_members, length=samples, domain="audio", require_full=require_full_baseline) if audio_members else [[0, samples]]
         if video_coverage != [[0, frames]] and not has_video_baseline:
             video_coverage = [[0, frames]]
         # Uncovered delivery positions were initialized as generated above.

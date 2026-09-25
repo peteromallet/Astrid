@@ -427,7 +427,20 @@ def _v2_mask(value: Any, path: str, asset_modalities: Mapping[str, str] | None) 
     else:
         result.update(_v2_geometry(item, path))
     if "range" in item:
-        result["range"], _ = _v2_interval(item["range"], f"{path}.range", "frames")
+        # Mask rasters are indexed by their own frame array, not by the
+        # audiovisual seconds clock.  Keep this contract explicit: a mask
+        # range is an integer half-open [frame_start, frame_end] interval.
+        mask_range = item["range"]
+        if (
+            not isinstance(mask_range, (list, tuple))
+            or len(mask_range) != 2
+            or any(type(value) is not int for value in mask_range)
+            or mask_range[0] < 0
+            or mask_range[1] <= mask_range[0]
+        ):
+            raise H3RequestError(f"{path}.range must be a non-negative integer frame interval")
+        result["range"] = [mask_range[0], mask_range[1]]
+        result["resolved_range"] = [mask_range[0], mask_range[1]]
     if "shape" in item:
         shape = _object(item["shape"], f"{path}.shape") or {}
         _unknown(shape, {"frames", "height", "width"}, f"{path}.shape")
@@ -479,7 +492,7 @@ def _v2_settings(value: Any) -> dict[str, Any]:
 
 
 def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str] | None = None) -> H3Request:
-    _unknown(raw, {"version", "prompt", "duration", "media", "settings"}, "request")
+    _unknown(raw, {"version", "prompt", "duration", "media", "settings", "continuation"}, "request")
     if raw.get("version") != 2:
         raise H3RequestError("version must be 1 or 2")
     prompt = _nonblank(raw.get("prompt"), "prompt")
@@ -490,9 +503,12 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
     if duration == 0:
         raise H3RequestError("duration must be > 0 when supplied")
     settings = _v2_settings(raw.get("settings", {}))
+    continuation = raw.get("continuation", False)
+    if type(continuation) is not bool:
+        raise H3RequestError("continuation must be boolean")
     ids: set[str] = set()
     occurrences: list[dict[str, Any]] = []
-    model_counts = {"image": 0, "video": 0, "audio": 0}
+    model_counts = {"image": 0, "video": 0}
     for index, raw_item in enumerate(media_raw):
         path = f"media[{index}]"
         item = _object(raw_item, path) or {}
@@ -518,9 +534,9 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
             occurrence["id"] = identifier
         if modality is not None:
             occurrence["modality"] = modality
-            if role == "reference":
+            if role == "reference" and modality != "audio":
                 model_counts[modality] += 1
-                label = {"image": "Picture", "video": "Video", "audio": "Audio"}[modality]
+                label = {"image": "Picture", "video": "Video"}[modality]
                 occurrence["model_tag"] = f"<{label} {model_counts[modality]}>"
         else:
             occurrence["inspection"] = "deferred"
@@ -560,6 +576,10 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
                     action = "preserve"
                 if action not in {"generate", "preserve"}:
                     raise H3RequestError(f"{edit_path}.action must be generate or preserve")
+                if "hard" in edit:
+                    raise H3RequestError(f"{edit_path}.hard is unsupported; use the timeline item's hard anchor")
+                if stream == "audio" and "mask" in edit:
+                    raise H3RequestError(f"{edit_path}.mask is unsupported for audio; use channels or a prepared audio scope")
                 if "text" in edit and "dialogue" in edit:
                     raise H3RequestError(f"{edit_path} cannot contain both text and dialogue")
                 if "during" in edit:
@@ -599,6 +619,22 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
             elif modality == "video":
                 occurrence["audio"] = True
         occurrences.append(occurrence)
+
+    # The native conditioner consumes paired video audio before ref_audios.
+    # Timeline audio occupies the first ref_audios slots, followed by audio
+    # references, regardless of the request's interleaved media order.
+    paired_audio_count = sum(
+        item["role"] == "reference" and item.get("modality") == "video" and item["audio"]
+        for item in occurrences
+    )
+    paired_audio_count += sum(
+        item["role"] == "timeline" and item.get("modality") == "audio"
+        for item in occurrences
+    )
+    for item in occurrences:
+        if item["role"] == "reference" and item.get("modality") == "audio":
+            paired_audio_count += 1
+            item["model_tag"] = f"<Audio {paired_audio_count}>"
 
     by_id = {item.get("id", item["occurrence_id"]): item for item in occurrences}
     placement_keys: set[int] = set()
@@ -646,6 +682,7 @@ def _normalize_v2(raw: Mapping[str, Any], *, asset_modalities: Mapping[str, str]
         "duration": duration,
         "media": occurrences,
         "settings": settings,
+        "continuation": continuation,
         "profile": _V2_PROFILE["id"],
         "output_count": 1,
         "model_tags": {item["occurrence_id"]: item["model_tag"] for item in occurrences if "model_tag" in item},
@@ -741,12 +778,9 @@ def read_prepared_request(
                                 clock = Fraction(_V2_PROFILE["sample_rate"]) if edit.get("stream") == "audio" else _V2_PROFILE["fps"]
                                 projected_edit["during"] = [_v2_fraction_text(Fraction(tick, 1) / clock) for tick in ticks]
                         mask = projected_edit.get("mask")
-                        if isinstance(mask, Mapping) and isinstance(mask.get("range"), (list, tuple)) and len(mask["range"]) == 2:
-                            mask_range = [_v2_fraction(part, f"media[{index}].edit.mask.range") for part in mask["range"]]
-                            mask_ticks = [round(part * _V2_PROFILE["fps"]) for part in mask_range]
+                        if isinstance(mask, Mapping):
                             projected_edit["mask"] = {
-                                **dict(mask),
-                                "range": [_v2_fraction_text(Fraction(tick, 1) / _V2_PROFILE["fps"]) for tick in mask_ticks],
+                                key: value for key, value in mask.items() if key != "resolved_range"
                             }
                         projected_edit.pop("resolved", None)
                         projected_edits.append(projected_edit)

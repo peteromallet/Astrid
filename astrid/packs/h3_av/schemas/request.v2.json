@@ -10,7 +10,8 @@
     "prompt": {"type": "string", "minLength": 1},
     "duration": {"type": ["number", "string"], "exclusiveMinimum": 0},
     "media": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/media"}},
-    "settings": {"$ref": "#/$defs/settings"}
+    "settings": {"$ref": "#/$defs/settings"},
+    "continuation": {"type": "boolean", "description": "Allow an explicitly shorter authoritative source prefix; uncovered delivery tail is generated."}
   },
   "$defs": {
     "asset": {
@@ -31,7 +32,7 @@
       "properties": {
         "stream": {"enum": ["video", "audio"]}, "during": {"$ref": "#/$defs/interval"},
         "mask": {}, "guides": {}, "text": {"type": "string"}, "dialogue": {"type": "string"},
-        "channels": {}, "action": {"enum": ["generate", "preserve"]}, "keep": {"type": "boolean"}, "hard": {"type": "boolean"}
+        "channels": {}, "action": {"enum": ["generate", "preserve"]}, "keep": {"type": "boolean"}
       }
     },
     "media": {

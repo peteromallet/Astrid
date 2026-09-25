@@ -32,7 +32,9 @@ from astrid.packs.h3_av.src.receipt import write_retrieval_receipt
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a bounded H3 audiovisual transform.")
     parser.add_argument("--request", type=Path, required=True)
-    parser.add_argument("--asset-map", type=Path, required=True)
+    # --asset-map remains a short-lived compatibility alias for callers that
+    # already pass a managed ZIP; it is not a JSON-path transport anymore.
+    parser.add_argument("--input-bundle", "--asset-map", dest="input_bundle", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--project")
     parser.add_argument("--execution-request", default="")
@@ -576,11 +578,16 @@ def _invoke(client: Any, capability_id: str, *, inputs: Mapping[str, Any], out: 
 def run_transform(args: argparse.Namespace) -> dict[str, Any]:
     root = args.out.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
+    input_bundle = getattr(args, "input_bundle", None) or getattr(args, "asset_map", None)
+    if not isinstance(input_bundle, Path):
+        input_bundle = Path(input_bundle) if input_bundle else None
+    if input_bundle is None:
+        raise RuntimeError("h3_av.transform requires a managed --input-bundle")
     if args.dry_run:
         return {
             "status": "planned",
             "request": str(args.request.resolve()),
-            "asset_map": str(args.asset_map.resolve()),
+            "input_bundle": str(input_bundle.resolve()),
             "stages": ["h3_av.prepare", "h3_av.compile", "vibecomfy.validate", "vibecomfy.run", "h3_av.compose", "h3_av.verify"],
         }
     execution_request_path = Path(args.execution_request) if args.execution_request else None
@@ -590,12 +597,12 @@ def run_transform(args: argparse.Namespace) -> dict[str, Any]:
     # The public file port retains its historical CLI name, but only a
     # prebuilt managed bundle is admissible here. Local asset-map paths cannot
     # be transported into an already running orchestrator safely.
-    if not zipfile.is_zipfile(args.asset_map):
-        raise RuntimeError("h3_av.transform --asset-map requires a prebuilt managed input bundle; JSON asset-map paths are unsupported")
-    original_digest = bundle_digest(args.asset_map)
+    if not zipfile.is_zipfile(input_bundle):
+        raise RuntimeError("h3_av.transform --input-bundle requires a prebuilt managed input bundle; JSON asset-map paths are unsupported")
+    original_digest = bundle_digest(input_bundle)
     input_bundle_path = root / "00-input" / "h3-input-bundle.zip"
     input_bundle_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(args.asset_map, input_bundle_path)
+    shutil.copyfile(input_bundle, input_bundle_path)
     if bundle_digest(input_bundle_path) != original_digest:
         raise RuntimeError("managed input bundle changed while entering h3_av.transform")
     staged_assets, _ = materialize_input_bundle(

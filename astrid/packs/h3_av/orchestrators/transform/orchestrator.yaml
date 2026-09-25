@@ -2,7 +2,7 @@ schema_version: 1
 id: h3_av.transform
 name: Transform with H3 audiovisual continuation
 kind: built_in
-version: 0.1.0
+version: 0.1.1
 short_description: Prepare, compile, validate, run, compose, and verify one bounded H3 continuation.
 description: Coordinates pack executors and VibeComfy through SDK capability invocation; it creates no second task authority.
 keywords: [h3, minimax, continuation, vibecomfy, runpod]
@@ -11,10 +11,10 @@ inputs:
     type: file
     required: true
     description: H3 audiovisual request v1 JSON/YAML document.
-  - name: asset_map
+  - name: input_bundle
     type: file
     required: true
-    description: JSON map from request asset ids to runtime-managed local input paths.
+    description: Hash-verified managed ZIP containing exactly the request-declared assets.
   - name: execution_request
     type: file
     required: false
@@ -38,7 +38,7 @@ runtime:
       - --request
       - "{request}"
       - --asset-map
-      - "{asset_map}"
+      - "{input_bundle}"
       - --execution-request
       - "{execution_request}"
       - --out

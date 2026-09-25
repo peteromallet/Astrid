@@ -68,7 +68,7 @@ def test_transform_command_forwards_execution_request_and_keeps_default(tmp_path
             out=tmp_path / "out",
             inputs={
                 "request": "request.json",
-                "asset_map": "assets.json",
+                "input_bundle": "assets.zip",
                 "execution_request": str(execution_request),
             },
         ),
@@ -80,7 +80,7 @@ def test_transform_command_forwards_execution_request_and_keeps_default(tmp_path
         OrchestratorRunRequest(
             orchestrator_id="h3_av.transform",
             out=tmp_path / "out",
-            inputs={"request": "request.json", "asset_map": "assets.json"},
+            inputs={"request": "request.json", "input_bundle": "assets.zip"},
         ),
         registry,
     )
@@ -182,7 +182,7 @@ def test_compile_definition_revision_changes_nested_identity_without_touching_tr
     compile_definition = load_folder_executor(pack_root / "executors/compile")
     assert compile_definition.version == "0.1.1"
     transform_text = (pack_root / "orchestrators/transform/orchestrator.yaml").read_text(encoding="utf-8")
-    assert "version: 0.1.0" in transform_text
+    assert "version: 0.1.1" in transform_text
 
 
 def test_managed_output_retrieval_reads_object_and_verifies_digest(tmp_path: Path) -> None:

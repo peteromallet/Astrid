@@ -11,10 +11,6 @@ inputs:
     type: file
     required: true
     description: Normalized H3 request v1 or v2 JSON/YAML document.
-  - name: asset_map
-    type: file
-    required: false
-    description: Optional JSON object mapping managed asset ids to local files.
   - name: input_bundle
     type: file
     required: false
@@ -59,9 +55,6 @@ command:
     - "--out"
     - "{out}/preparation.json"
   input_args:
-    - input: asset_map
-      flag: "--asset-map"
-      optional: true
     - input: input_bundle
       flag: "--input-bundle"
       optional: true

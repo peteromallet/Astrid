@@ -17,7 +17,8 @@ from astrid.packs.h3_av.src.graph import (
 )
 from astrid.packs.h3_av.src.kernel import H3KernelContractError, classify_anchors, validate_final_sampler_state
 from astrid.packs.h3_av.src.prepare import prepare_request
-from astrid.packs.h3_av.src.request import normalize_request
+from astrid.packs.h3_av.src.input_bundle import build_input_bundle, bundle_digest
+from astrid.packs.h3_av.src.request import normalize_request, read_prepared_request
 from tests.packs.h3_av.test_request_contract import FIXTURE_DIGESTS, FIXTURES
 
 
@@ -361,7 +362,7 @@ def test_mixed_reference_windows_keep_tags_ports_and_paired_audio_distinct() -> 
         ("look", "<Picture 1>", "ref_images.ref_image_0"),
         ("silent", "<Video 1>", "ref_videos.ref_video_0"),
         ("voiced", "<Video 2>", "ref_videos.ref_video_1"),
-        ("voice", "<Audio 1>", "ref_audios.ref_audio_0"),
+        ("voice", "<Audio 2>", "ref_audios.ref_audio_0"),
         ("second", "<Picture 2>", "ref_images.ref_image_1"),
     ]
     assert rows[1]["loader"] != rows[2]["loader"]
@@ -382,9 +383,9 @@ def test_every_emitted_vhs_loader_uses_pinned_inputs_in_compiled_api() -> None:
     binding = build_h3_graph_binding(_prepared(_request(edits=True)))
     graph = binding["executable_graph"]
     native_video = {"video", "force_rate", "custom_width", "custom_height", "frame_load_cap", "start_time", "format"}
-    native_audio = {"audio_file", "seek_seconds", "duration"}
+    native_audio = {"audio", "start_time", "duration"}
     for node in graph["nodes"]:
-        if node["class_type"] not in {"VHS_LoadVideoFFmpeg", "VHS_LoadAudio"}:
+        if node["class_type"] not in {"VHS_LoadVideoFFmpeg", "VHS_LoadAudioUpload"}:
             continue
         required = native_video if node["class_type"] == "VHS_LoadVideoFFmpeg" else native_audio
         assert required <= node["inputs"].keys(), node["id"]
@@ -402,8 +403,53 @@ def test_every_emitted_vhs_loader_uses_pinned_inputs_in_compiled_api() -> None:
                 assert node["inputs"]["force_rate"] == (40 if node["id"] == "c3-audio-mask-loader" else 24)
             else:
                 assert node["inputs"]["format"] == "AnimateDiff"
-        if node["class_type"] == "VHS_LoadAudio":
-            assert "audio" not in node["inputs"]
+        if node["class_type"] == "VHS_LoadAudioUpload":
+            assert "audio_file" not in node["inputs"]
+
+
+def test_staged_audio_basename_uses_pinned_upload_schema_and_managed_socket() -> None:
+    import vibecomfy
+
+    schema_path = Path(vibecomfy.__file__).parent / "porting/cache/object_info/ComfyUI-VideoHelperSuite@runpod-snapshot.json"
+    pinned = json.loads(schema_path.read_text())["VHS_LoadAudioUpload"]
+    assert set(pinned["inputs"]["required"]) == {"audio"}
+    assert set(pinned["inputs"]["optional"]) == {"start_time", "duration"}
+    assert pinned["outputs"][0]["type"] == "AUDIO"
+
+    raw = FIXTURES["C"]()
+    request = normalize_request(raw)
+    binding = build_h3_graph_binding(
+        _prepared(request),
+        asset_members={"source-c.wav": "staged-source.wav", "voice-c.wav": "staged-voice.wav"},
+    )
+    graph = binding["executable_graph"]
+    for row in [*binding["inputs"]["audio_baselines"], *binding["inputs"]["reference_edges"]]:
+        node = graph["compiled_api"][row["loader"]]
+        assert node["class_type"] == pinned["name"]
+        assert set(node["inputs"]) == {"audio", "start_time", "duration"}
+        assert node["inputs"]["audio"] == row["asset_member"]
+        assert node["inputs"]["audio"] in {"staged-source.wav", "staged-voice.wav"}
+        managed = graph["envelope"]["inputs"][row["asset"]]
+        assert managed["node_id"] == row["loader"]
+        assert managed["field"] == "audio"
+        assert managed["value"] == managed["default"] == row["asset_member"]
+        assert managed["media_semantics"] == "audio"
+    assert len(graph["outputs"]) == 1
+    validate_h3_graph_binding(binding)
+
+    altered = copy.deepcopy(binding)
+    altered["executable_graph"]["compiled_api"]["c3-timeline-audio-0"]["inputs"]["audio"] = "wrong.wav"
+    with pytest.raises(GraphBindingError, match="timeline loader witness.*audio"):
+        validate_h3_graph_binding(altered)
+    altered = copy.deepcopy(binding)
+    reference_loader = binding["inputs"]["reference_edges"][0]["loader"]
+    altered["executable_graph"]["compiled_api"][reference_loader]["class_type"] = "VHS_LoadAudio"
+    with pytest.raises(GraphBindingError, match="upload audio loader class"):
+        validate_h3_graph_binding(altered)
+    altered = copy.deepcopy(binding)
+    altered["executable_graph"]["compiled_api"]["110"]["inputs"]["ref_audios.ref_audio_1"][1] = 1
+    with pytest.raises(GraphBindingError, match="compiled H3 graph reference input"):
+        validate_h3_graph_binding(altered)
 
 
 def test_motion_guide_target_follows_edit_interval_and_placement() -> None:
@@ -452,14 +498,14 @@ def test_audio_source_range_changes_compiled_loader_and_reused_audio_has_distinc
         baseline = graph["inputs"]["audio_baselines"][0]
         assert rows[0]["loader"] != baseline["loader"]
         compiled = graph["executable_graph"]["compiled_api"]
-        assert compiled[baseline["loader"]]["inputs"]["seek_seconds"] == seek
+        assert compiled[baseline["loader"]]["inputs"]["start_time"] == seek
         assert compiled[baseline["loader"]]["inputs"]["duration"] == duration
-        assert compiled[rows[0]["loader"]]["inputs"]["seek_seconds"] == 0
+        assert compiled[rows[0]["loader"]]["inputs"]["start_time"] == 0
         validate_h3_graph_binding(graph)
     assert second["inputs"]["timeline_loaders"][0]["resolved_range"] == [48000, 720000]
     changed = copy.deepcopy(second)
-    changed["executable_graph"]["compiled_api"]["c3-timeline-audio-0"]["inputs"]["seek_seconds"] = 0
-    with pytest.raises(GraphBindingError, match="timeline loader witness.*seek_seconds"):
+    changed["executable_graph"]["compiled_api"]["c3-timeline-audio-0"]["inputs"]["start_time"] = 0
+    with pytest.raises(GraphBindingError, match="timeline loader witness.*start_time"):
         validate_h3_graph_binding(changed)
 
 
@@ -469,8 +515,9 @@ def test_repeated_audio_reference_asset_keeps_occurrence_edges_distinct() -> Non
     binding = build_h3_graph_binding(_prepared(normalize_request(raw)))
     rows = binding["inputs"]["reference_edges"]
     assert [row["conditioner_input"] for row in rows] == ["ref_audios.ref_audio_1", "ref_audios.ref_audio_2"]
-    assert rows[0]["loader"] != rows[1]["loader"]
+    assert rows[0]["loader"] == rows[1]["loader"]
     assert rows[0]["asset_member"] == rows[1]["asset_member"]
+    assert rows[0]["conditioner_input"] != rows[1]["conditioner_input"]
     validate_h3_graph_binding(binding)
 
 
@@ -683,10 +730,16 @@ def test_compile_relocation_keeps_graph_identity_and_pinned_lineage(tmp_path: Pa
 
 def test_compile_executor_publishes_graph_boundary_outputs(tmp_path: Path) -> None:
     preparation = _real_prepared_for_compile(tmp_path)
+    request = read_prepared_request(
+        preparation["request"], preparation["request_digest"], require_normalized_v2=True
+    )
+    asset_map = {str(row["asset"]): str(row["path"]) for row in preparation["assets"]}
+    bundle = build_input_bundle(request, asset_map, tmp_path / "input-bundle.zip")
+    preparation["input_bundle_sha256"] = bundle_digest(bundle)
     preparation_path = tmp_path / "preparation.json"
     preparation_path.write_text(json.dumps(preparation), encoding="utf-8")
     output = tmp_path / "compiled"
-    assert compile_executor_main(["--preparation", str(preparation_path), "--out", str(output)]) == 0
+    assert compile_executor_main(["--preparation", str(preparation_path), "--input-bundle", str(bundle), "--out", str(output)]) == 0
     assert (output / "compilation.json").is_file()
     assert (output / "graph_binding.json").is_file()
     assert (output / "managed-assets.zip").is_file()

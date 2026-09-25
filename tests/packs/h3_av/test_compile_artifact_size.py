@@ -28,6 +28,7 @@ from astrid.packs.h3_av.src.graph import (
 )
 from astrid.packs.h3_av.src.masks import load_prepared_av_mask
 from astrid.packs.h3_av.src.prepare import prepare_request
+from astrid.packs.h3_av.src.input_bundle import build_input_bundle, bundle_digest
 from astrid.packs.h3_av.src.request import normalize_request
 from astrid.packs.h3_av.src.compile import _member_by_binding
 from tests.packs.h3_av.test_integrated_graph_bundle import _prepared_fixture_a
@@ -74,9 +75,12 @@ def full_a_compile(tmp_path_factory):
     assert preparation["request_digest"] == FIXTURE_DIGESTS["A"]
     preparation_path = tmp_path / "preparation.json"
     preparation_path.write_text(json.dumps(preparation, sort_keys=True), encoding="utf-8")
+    input_bundle = build_input_bundle(request, asset_map, tmp_path / "input-bundle.zip")
+    preparation["input_bundle_sha256"] = bundle_digest(input_bundle)
+    preparation_path.write_text(json.dumps(preparation, sort_keys=True), encoding="utf-8")
     attempt = tmp_path / "attempt"
     output_root = attempt / "outputs"
-    compile_executor_main(["--preparation", str(preparation_path), "--out", str(output_root)])
+    compile_executor_main(["--preparation", str(preparation_path), "--input-bundle", str(input_bundle), "--out", str(output_root)])
     artifact = load_prepared_av_mask(output_root / "prepared-av-mask.json")
     assert artifact.to_manifest()["video"]["payload"]["shape"] == _FULL_A_VIDEO_SHAPE
     assert artifact.to_manifest()["audio"]["payload"]["shape"] == _FULL_A_AUDIO_SHAPE

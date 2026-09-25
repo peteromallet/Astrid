@@ -374,8 +374,6 @@ def _reference_port_plan(
             str(reference["asset"]), modality,
             _canonical(reference.get("resolved_range")).decode("utf-8"),
         )
-        if modality == "audio":
-            semantics = (*semantics, str(reference["id"]))
         loader = loader_by_semantics.setdefault(
             semantics, f"c3-reference-{modality}-{occurrence_index}"
         )
@@ -698,11 +696,11 @@ def _video_loader_inputs(
 
 
 def _audio_loader_inputs(member: str, *, window: Sequence[int] | None = None) -> dict[str, Any]:
-    """Pinned VHS_LoadAudio uses audio_file, seek_seconds and duration."""
+    """Pinned upload-aware loader resolves audio under Comfy's input directory."""
     start, end = window if window is not None else (0, 0)
     return {
-        "audio_file": member,
-        "seek_seconds": start / 48000,
+        "audio": member,
+        "start_time": start / 48000,
         "duration": (end - start) / 48000 if window is not None else 0,
     }
 
@@ -733,9 +731,9 @@ def _reference_loader(
             _register_media_loader(workflow, binding, node_id, "video", member, "video")
         return node_id, "0", "2"
     node_id = f"c3-reference-audio-{index}"
-    _add_node(workflow, "VHS_LoadAudio", node_id, **_audio_loader_inputs(member))
+    _add_node(workflow, "VHS_LoadAudioUpload", node_id, **_audio_loader_inputs(member))
     if register:
-        _register_media_loader(workflow, binding, node_id, "audio_file", member, "audio")
+        _register_media_loader(workflow, binding, node_id, "audio", member, "audio")
     return node_id, "0", "0"
 
 
@@ -762,9 +760,9 @@ def _timeline_loader(
             _register_media_loader(workflow, binding, node_id, "video", member, "video")
         return node_id, "0", "2"
     node_id = f"c3-timeline-audio-{index}"
-    _add_node(workflow, "VHS_LoadAudio", node_id, **_audio_loader_inputs(member, window=item.get("resolved_range")))
+    _add_node(workflow, "VHS_LoadAudioUpload", node_id, **_audio_loader_inputs(member, window=item.get("resolved_range")))
     if register:
-        _register_media_loader(workflow, binding, node_id, "audio_file", member, "audio")
+        _register_media_loader(workflow, binding, node_id, "audio", member, "audio")
     return node_id, "0", "0"
 
 
@@ -863,8 +861,6 @@ def _materialize_executable_graph(
             raise GraphBindingError(f"asset binding {binding!r} is reused with incompatible media semantics")
         binding_modalities[binding] = modality
         cache_key = (binding, modality, _canonical(reference.get("resolved_range")).decode("utf-8"))
-        if modality == "audio":
-            cache_key = (*cache_key, str(reference["id"]))
         loader = reference_loader_cache.get(cache_key)
         if loader is None:
             loader = _reference_loader(
@@ -1164,7 +1160,15 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
         loader_inputs = loader_node.get("inputs")
         if not isinstance(loader_inputs, Mapping):
             raise GraphBindingError(f"reference binding {index} loader inputs are missing")
-        asset_field = {"image": "image", "video": "video", "audio": "audio_file"}[str(reference["modality"])]
+        if reference["modality"] == "audio":
+            compiled_loader = compiled.get(loader)
+            if (loader_node.get("class_type") != "VHS_LoadAudioUpload"
+                or not isinstance(compiled_loader, Mapping)
+                or compiled_loader.get("class_type") != "VHS_LoadAudioUpload"):
+                raise GraphBindingError(f"reference binding {index} upload audio loader class changed")
+            if compiled_loader.get("inputs") != loader_inputs:
+                raise GraphBindingError(f"reference binding {index} compiled upload audio inputs changed")
+        asset_field = {"image": "image", "video": "video", "audio": "audio"}[str(reference["modality"])]
         if loader_inputs.get(asset_field) != row.get("asset_member"):
             raise GraphBindingError(f"reference binding {index} asset identity changed")
         if reference["modality"] == "video":
@@ -1184,7 +1188,7 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(row, Mapping) or row.get("role") != "timeline" or row.get("occurrence_id") != row.get("id"):
             raise GraphBindingError(f"timeline loader witness {index} has invalid occurrence identity")
         modality = row.get("modality")
-        expected_class = {"image": "LoadImage", "video": "VHS_LoadVideoFFmpeg", "audio": "VHS_LoadAudio"}.get(modality) if isinstance(modality, str) else None
+        expected_class = {"image": "LoadImage", "video": "VHS_LoadVideoFFmpeg", "audio": "VHS_LoadAudioUpload"}.get(modality) if isinstance(modality, str) else None
         loader = str(row.get("loader"))
         node = node_by_id.get(loader)
         compiled_node = compiled.get(loader)
@@ -1229,10 +1233,10 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
         output = str(row.get("loader_output"))
         expected.add((loader, output, "110", port))
         loader_node = node_by_id.get(loader)
-        if not isinstance(loader_node, Mapping) or loader_node.get("class_type") != "VHS_LoadAudio":
+        if not isinstance(loader_node, Mapping) or loader_node.get("class_type") != "VHS_LoadAudioUpload":
             raise GraphBindingError(f"timeline audio baseline {index} loader is missing")
         loader_inputs = loader_node.get("inputs")
-        if not isinstance(loader_inputs, Mapping) or loader_inputs.get("audio_file") != row.get("asset_member"):
+        if not isinstance(loader_inputs, Mapping) or loader_inputs.get("audio") != row.get("asset_member"):
             raise GraphBindingError(f"timeline audio baseline {index} managed asset identity changed")
         if any(loader_inputs.get(key) != value for key, value in _audio_loader_inputs(str(row["asset_member"]), window=row.get("resolved_range")).items()):
             raise GraphBindingError(f"timeline audio baseline {index} source window changed")
@@ -1246,9 +1250,9 @@ def validate_h3_graph_binding(value: Mapping[str, Any]) -> dict[str, Any]:
     if actual != expected:
         raise GraphBindingError("serialized H3 graph reference edges do not match the normalized request")
     compiled_inputs = compiled.get("110", {}).get("inputs", {}) if isinstance(compiled.get("110"), Mapping) else {}
-    for loader, _, _, port in expected:
+    for loader, output, _, port in expected:
         link = compiled_inputs.get(port) if isinstance(compiled_inputs, Mapping) else None
-        if not isinstance(link, list) or len(link) != 2 or str(link[0]) != loader:
+        if not isinstance(link, list) or len(link) != 2 or str(link[0]) != loader or str(link[1]) != output:
             raise GraphBindingError(f"compiled H3 graph reference input 110.{port} is missing or changed")
     if not isinstance(outputs, list) or len(outputs) != 1 or outputs[0].get("expected_cardinality") != "one":
         raise GraphBindingError("serialized H3 graph must declare one AV output")

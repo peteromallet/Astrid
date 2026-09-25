@@ -257,7 +257,7 @@ def test_a_four_references_are_ordered_guidance_and_one_output() -> None:
     assert normalized["output_count"] == 1
 
 
-def test_reference_tags_are_numbered_by_reference_modality_only() -> None:
+def test_reference_tags_follow_native_paired_then_standalone_audio_order() -> None:
     raw = base_request()
     raw["media"] = [
         media("placed.png", "timeline", "image", id="placed", at={"frame": 0}),
@@ -270,11 +270,64 @@ def test_reference_tags_are_numbered_by_reference_modality_only() -> None:
     assert "model_tag" not in normalized["media"][0]
     assert normalized["model_tags"] == {
         "look": "<Picture 1>", "clip": "<Video 1>",
-        "voice": "<Audio 1>", "second": "<Picture 2>",
+        "voice": "<Audio 2>", "second": "<Picture 2>",
     }
     assert normalized["media"][2]["range"] == [1, 2]
     assert normalized["media"][2]["resolved_range"] == [24, 48]
     assert normalized["media"][2]["audio"] is True
+
+
+def test_audio_masks_and_edit_level_hard_are_rejected_before_normalization_loss() -> None:
+    for edit in (
+        {"stream": "audio", "during": [0, 1], "mask": {"full_frame": True}},
+        {"stream": "video", "during": [0, 1], "hard": True},
+    ):
+        raw = base_request()
+        raw["media"] = [media("source.mp4", "timeline", "video", id="source", at={"frame": 0}, edit=[edit])]
+        with pytest.raises(H3RequestError, match="unsupported"):
+            normalize_request(raw)
+
+
+def test_mask_ranges_are_explicit_raster_frame_intervals() -> None:
+    raw = base_request()
+    raw["media"] = [
+        media(
+            "source.mp4", "timeline", "video", id="source", at={"frame": 0},
+            range=[0, 1], edit=[{"stream": "video", "during": [0, 1], "mask": {
+                "asset": "moving.json", "range": [1, 3],
+            }}],
+        )
+    ]
+    normalized = normalize_request(raw)
+    mask = normalized.value["media"][0]["edit"][0]["mask"]
+    assert mask["range"] == [1, 3]
+    assert mask["resolved_range"] == [1, 3]
+
+
+def test_audio_tags_skip_silent_videos_and_precede_standalone_order() -> None:
+    raw = base_request()
+    raw["media"] = [
+        media("first.wav", "reference", "audio", id="first"),
+        media("silent.mp4", "reference", "video", id="silent", audio=False),
+        media("paired.mp4", "reference", "video", id="paired", audio=True),
+        media("second.wav", "reference", "audio", id="second"),
+    ]
+    normalized = normalize_request(raw)
+    assert normalized.value["model_tags"] == {
+        "first": "<Audio 2>", "silent": "<Video 1>",
+        "paired": "<Video 2>", "second": "<Audio 3>",
+    }
+    assert read_prepared_request(normalized.value, normalized.digest, require_normalized_v2=True) == normalized
+    altered = json.loads(json.dumps(normalized.value))
+    altered["media"][0]["model_tag"] = "<Audio 1>"
+    with pytest.raises(H3RequestError, match="contradictory derived fields"):
+        read_prepared_request(altered, normalized.digest, require_normalized_v2=True)
+
+
+def test_timeline_audio_occupies_native_audio_slot_before_reference() -> None:
+    normalized = normalize_request(_fixture_c())
+    assert normalized.value["model_tags"]["voice-c"] == "<Audio 2>"
+    assert "model_tag" not in normalized.value["media"][0]
 
 
 @pytest.mark.parametrize("modality,asset", [("image", "look.png"), ("audio", "voice.wav")])
@@ -354,13 +407,13 @@ def test_named_fixture_semantics_are_explicit(label: str) -> None:
 
 
 FIXTURE_DIGESTS = {
-    "A": "952f07e531e26cc49d6de3918c9c5d7489963e63a1fa4a83722a7025e01e0b1c",
-    "B": "5ab4a2be7683deb91647dda2aeb7ff0eb0b810611ab61da656d823ccf1f70272",
-    "C": "cc9420184637064342008a4b05945faeed6918918cdfbc2a8bd7dcf76ddafd61",
-    "D": "a44fdabb31902162c2fa7b931e41c52e025ab2aaca06b89570b97efb4081fd34",
-    "E": "6ac66ad2468be4d15dd8c8dad375f26beae3257c89166a42d2c4694a426a728b",
-    "F": "96b681ae2e94fe1f02745a355c00c5495af0c3c038264d8f9ccfe26fc3a17879",
-    "X": "ff5ab601c67cf3aa0d707c4cfcfa695a98a515f00d2a6e2bedfa3e2fba818ce3",
+    "A": "300cfd88cf1fc28ad7725a6a2e1174bbd387f79999974e5cd65e977dc0d31ac9",
+    "B": "7dfc0b2c76f1f041cce5cc24378b63e8c8c5028c441645ccaf3ebe563cc612dd",
+    "C": "cd3bccd0fa845b78a0f1b4c0d67de50443840fb5f283ed4063c49c458c898938",
+    "D": "5ec17796acd7d566f5d3d6d5e9d8c9fbe7c2e6838d43efa19990fc3739287708",
+    "E": "67e6c60759437fa8e0b22023aac0053d176fe41e7fff700aab66c9dcd1e9998b",
+    "F": "f51f97ae928f59203dc4e26df5003bcefe47319b533dc1ed65854314dffa9405",
+    "X": "a22358e56e52d0812a181f783f46fc8850113a50d9f5553b87707a440a1848f4",
 }
 
 

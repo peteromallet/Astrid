@@ -35,7 +35,7 @@ def _request() -> object:
     )
 
 
-def _source_only_request(*, source_range: list[float] | None = None, include_range: bool = True) -> object:
+def _source_only_request(*, source_range: list[float] | None = None, include_range: bool = True, continuation: bool = False) -> object:
     source: dict[str, object] = {
         "id": "source",
         "asset": "source.mp4",
@@ -51,6 +51,7 @@ def _source_only_request(*, source_range: list[float] | None = None, include_ran
             "version": 2,
             "prompt": "A source-only audiovisual baseline.",
             "duration": 1,
+            "continuation": continuation,
             "media": [source],
             "settings": {"steps": 8, "seed": 4},
         }
@@ -96,6 +97,18 @@ def test_source_only_normalized_extent_covers_full_video_and_audio_domains(tmp_p
     assert artifact.audio_coverage == ((0, 48000),)
     assert artifact.mapping["baseline_identity"]["kind"] == "source"
     assert artifact.mapping["baseline_identity"]["digest"] == artifact.source_baseline_digest
+
+
+def test_explicit_continuation_allows_a_short_authoritative_prefix(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"immutable baseline")
+    preparation = prepare_request(
+        _source_only_request(source_range=[0, 0.5], continuation=True),
+        asset_map={"source.mp4": str(source)}, width=2, height=2,
+    )
+    artifact = load_prepared_av_mask(preparation["prepared_av_mask"])
+    assert artifact.video_coverage == ((0, 12),)
+    assert artifact.audio_coverage == ((0, 24000),)
 
 
 @pytest.mark.parametrize(

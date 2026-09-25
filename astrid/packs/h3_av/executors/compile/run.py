@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     preparation = json.loads(args.preparation.read_text(encoding="utf-8"))
     if not isinstance(preparation, dict):
         raise ValueError("preparation must be a JSON object")
+    if preparation.get("schema_version") == 2 and args.input_bundle is None:
+        raise ValueError("h3_av.compile requires the managed --input-bundle for v2 preparation")
     result = compile_preparation(preparation, out_dir=args.out, input_bundle=args.input_bundle)
     if "workflow" not in result:
         # The generalized v2 boundary emits one shared graph manifest rather

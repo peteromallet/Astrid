@@ -22,7 +22,14 @@ from astrid.core.contracts.binding import (
     expand_command,
 )
 
-from .execution_request import ExecutionRequest, ExecutionRequestError, normalize_execution_request
+from .execution_request import (
+    ExecutionRequest,
+    ExecutionRequestError,
+    merge_execution_input_manifest,
+    merge_execution_request_inputs,
+    normalize_execution_request,
+    reject_caller_execution_binding,
+)
 
 from ._module import _sdk_module
 from .exceptions import (
@@ -32,6 +39,7 @@ from .exceptions import (
     CapabilityPreconditionError,
     CapabilityValidationError,
     UnsupportedCapabilityError,
+    _redact_message,
     _sdk_error_from_exception,
 )
 from .results import DiscoveryResult, InvocationResult, _json_safe, _json_safe_mapping
@@ -441,6 +449,87 @@ def _manifest_dry_run_result(
         "preview": preview,
         "ok": True,
     }, True
+
+
+def _invoke_local_orchestrator(
+    capability: Any,
+    *,
+    project: str | None,
+    inputs: Mapping[str, Any],
+    outputs: Mapping[str, Any] | None,
+    out: Path | str | None,
+    brief: Path | str | None,
+    python_exec: str | None,
+    verbose: bool,
+    orchestrator_args: tuple[str, ...],
+) -> InvocationResult:
+    """Run a parent orchestrator through the public SDK boundary.
+
+    Parent orchestrators are launchers, not Runtime executor registrations.
+    Their child executor calls still use the connected Runtime client from
+    the orchestrator process.  Sending the parent itself to Runtime task
+    admission would require the GenericPackHost to claim a second capability
+    class and would lose the caller's local output root.
+    """
+    from astrid.core.execution.orchestrator.runner import (
+        OrchestratorRunRequest,
+        run_orchestrator,
+    )
+
+    request = OrchestratorRunRequest(
+        orchestrator_id=str(capability.id),
+        out=out,
+        project=project,
+        inputs=dict(inputs),
+        outputs=dict(outputs or {}),
+        brief=brief,
+        python_exec=python_exec,
+        verbose=verbose,
+        # The public SDK has already resolved an explicit project and an
+        # output root.  Mark it as resolved so the runner can retain the
+        # caller-owned output directory while the child receives the project
+        # identity through its normal environment/arguments.
+        project_was_auto_resolved=True,
+        invocation="sdk",
+        run_root=out,
+        orchestrator_args=tuple(orchestrator_args),
+    )
+    result = run_orchestrator(request)
+    raw_result = _normalize_orchestrator_result(result)
+    raw_result["dispatch"] = "public_sdk_local_orchestrator"
+    raw_result["kernel_run_id"] = None
+    raw_result["kernel_task_id"] = None
+    raw_result["kernel_attempt_id"] = None
+    error = None
+    if not result.ok:
+        errors = raw_result.get("errors")
+        message = (
+            str(errors[0].get("message"))
+            if isinstance(errors, list) and errors and isinstance(errors[0], Mapping)
+            else f"orchestrator {capability.id!r} failed"
+        )
+        error = {
+            "code": "orchestrator_runtime",
+            "message": message,
+            "sdk_error": "OrchestratorRunnerError",
+            "sdk_category": "runtime",
+        }
+    return InvocationResult(
+        capability_id=capability.id,
+        capability_type=capability.capability_type,
+        native_kind=capability.native_kind,
+        ok=bool(result.ok),
+        error=error,
+        manifest_path=None,
+        raw_result=raw_result,
+        run_id=None,
+        run_root=str(Path(out).expanduser().resolve()) if out not in (None, "") else None,
+        outputs=_json_safe_mapping(dict(result.outputs or {})),
+        executor_version=None,
+        kernel_run_id=None,
+        kernel_task_id=None,
+        kernel_attempt_id=None,
+    )
 
 
 def _manifest_preview_command(
@@ -1752,6 +1841,10 @@ def _kernel_invoke(
     project: str | None,
     inputs: Mapping[str, Any] | None,
     outputs: Mapping[str, Any] | None,
+    out: Path | str | None = None,
+    brief: Path | str | None = None,
+    python_exec: str | None = None,
+    orchestrator_args: tuple[str, ...] = (),
     extra_pack_roots: tuple[str, ...] = (),
     idempotency_context: Mapping[str, Any] | None = None,
     admission_metadata: Mapping[str, Any] | None = None,
@@ -1770,6 +1863,12 @@ def _kernel_invoke(
     the runtime admission request.
     """
     del registry
+
+    try:
+        reject_caller_execution_binding(execution_request, None)
+        execution_request = normalize_execution_request(execution_request)
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
 
     request_inputs = dict(inputs or {})
     # Runtime workers expand the manifest command directly and therefore do
@@ -1793,6 +1892,74 @@ def _kernel_invoke(
         "outputs": _json_safe_mapping(dict(outputs or {})),
         "extra_pack_roots": list(extra_pack_roots),
     }
+    if capability.capability_type == "orchestrator":
+        # These are runner-owned fields, not creative inputs.  Keep them in
+        # the admitted spec so a live Runtime worker can reconstruct the same
+        # OrchestratorRunRequest that the dry-run command preview validated.
+        if out not in (None, ""):
+            spec["out"] = str(out)
+        if brief not in (None, ""):
+            spec["brief"] = str(brief)
+        if python_exec not in (None, ""):
+            spec["python_exec"] = str(python_exec)
+        spec["orchestrator_args"] = [str(value) for value in orchestrator_args]
+    try:
+        spec = merge_execution_request_inputs(execution_request, spec)
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
+    if str(capability.id) == "vibecomfy.run":
+        # Canonical sibling/source invocations use the same preflight as the
+        # direct remote task route.  Convert request-owned descriptors into the
+        # preflight view when callers supplied only the frozen request, and do
+        # this before any task admission or worker work.
+        canonical_names = {"python", "companion", "source", "source_video"}
+        contract_inputs = (
+            execution_request.get("inputs", [])
+            if isinstance(execution_request, Mapping)
+            else []
+        )
+        preflight_inputs = dict(request_inputs)
+        if isinstance(contract_inputs, list):
+            for item in contract_inputs:
+                if not isinstance(item, Mapping) or not isinstance(item.get("name"), str):
+                    continue
+                preflight_inputs.setdefault(
+                    str(item["name"]),
+                    {
+                        "object_id": item.get("object_id"),
+                        "digest": item.get("digest") or item.get("object_id"),
+                        "filename": item.get("filename"),
+                    },
+                )
+        if (
+            canonical_names & set(preflight_inputs)
+            or isinstance(execution_request, Mapping)
+            and "workflow" in execution_request
+        ):
+            from .remote import _vibecomfy_invocation_preflight
+
+            # ``invoke_result`` receives the public AstridClient, whose
+            # Runtime object reader lives behind the two SDK composition
+            # layers (AstridClient -> RemoteAstridClient -> WorkspaceClient).
+            # Unwrap both layers before the canonical bundle preflight.  The
+            # old one-layer lookup rejected every real public-client call
+            # before admission, even though the reader was available.
+            remote = getattr(_client, "_remote", _client)
+            transport = getattr(remote, "_transport", remote)
+            if not callable(getattr(transport, "get_object", None)):
+                raise CapabilityValidationError(
+                    "canonical VibeComfy preflight requires the runtime object reader"
+                )
+            try:
+                spec["invocation_preflight"] = _vibecomfy_invocation_preflight(
+                    transport,
+                    {"inputs": preflight_inputs},
+                    strict=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - admission validation boundary
+                raise CapabilityValidationError(
+                    f"VibeComfy invocation preflight failed: {exc}"
+                ) from exc
     if str(capability.id) == "generation.generate_image_codex":
         # Bounded host profiles consume typed params as their single input
         # authority, including the ordered CAS descriptors.
@@ -1803,12 +1970,37 @@ def _kernel_invoke(
         # Keep the transparent estimate out of capability inputs: it is task
         # admission evidence, not an executor-authored input.
         spec["admission_metadata"] = _json_safe_mapping(dict(admission_metadata))
-    if execution_request is not None:
-        spec["execution_request"] = dict(execution_request)
     # Managed renders authorize their snapshot registry media at admission:
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
     input_manifest: list[str] = []
+    input_digests: list[dict[str, str]] = []
+    # File ports are Runtime-owned CAS inputs on the task path.  Keep the
+    # digest in both the explicit input-digest witness and the authorization
+    # manifest; otherwise a remote GenericPackHost can see the descriptor but
+    # is correctly forbidden from fetching it.  This was especially easy to
+    # miss for VibeComfy's canonical sibling bundle and managed source video.
+    file_input_names = {
+        str(port.name)
+        for port in (getattr(capability, "inputs", ()) or ())
+        if getattr(port, "name", None)
+        and str(getattr(port, "type", "")).lower() == "file"
+    }
+    for name in sorted(file_input_names):
+        value = spec.get("inputs", request_inputs).get(name)
+        if value is None:
+            continue
+        from astrid.core.execution.managed_inputs import managed_file_digest
+
+        try:
+            canonical = managed_file_digest(value, name)
+        except ValueError as exc:
+            raise CapabilityValidationError(str(exc)) from exc
+        if canonical not in input_manifest:
+            input_manifest.append(canonical)
+        input_digests.append({"name": name, "digest": canonical})
+    if input_digests:
+        spec["input_digests"] = input_digests
     if str(capability.id) == "generation.generate_image_codex":
         for name in ("image_ref", "style_ref", "brand_ref"):
             reference = request_inputs.get(name)
@@ -1946,23 +2138,13 @@ def _kernel_invoke(
                 )
             input_manifest.append(transcript_input["digest"])
 
-    idempotency_material: dict[str, Any] = {
-        "spec": spec,
-        "input_object_ids": sorted(input_manifest),
-        "storage_estimate": dict(storage_estimate or {}),
-    }
-    if generation_intent is not None:
-        idempotency_material["generation_intent"] = _json_safe_mapping(
-            dict(generation_intent)
+    try:
+        input_manifest = merge_execution_input_manifest(
+            execution_request,
+            input_manifest,
         )
-    idempotency_key = hashlib.sha256(
-        json.dumps(
-            idempotency_material,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
 
     if _client is None:
         raise CapabilityInvocationError(
@@ -1980,7 +2162,10 @@ def _kernel_invoke(
         "capability": str(capability.id),
         "spec": spec,
         "input_manifest": input_manifest,
-        "idempotency_key": idempotency_key,
+        # RemoteTasks owns the completed admission (including the selected
+        # capability digest and normalized execution request). Derive the key
+        # there so every field Runtime compares participates in replay identity.
+        "deterministic_idempotency": True,
         "storage_estimate": dict(storage_estimate) if storage_estimate is not None else None,
     }
     if generation_intent is not None:
@@ -2505,6 +2690,22 @@ def invoke(
             kernel_attempt_id=None,
         )
 
+    if capability.capability_type == "orchestrator":
+        # The Runtime task registry is the executor/worker surface.  A
+        # parent orchestrator is the public launcher that coordinates those
+        # registered child tasks and owns the caller's output directory.
+        return _invoke_local_orchestrator(
+            capability,
+            project=project,
+            inputs=request_inputs,
+            outputs=outputs,
+            out=out,
+            brief=brief,
+            python_exec=python_exec,
+            verbose=verbose,
+            orchestrator_args=tuple(orchestrator_args),
+        )
+
     # Project requirements were resolved above. Public knowledge reads may
     # enter the same runtime admission path without a project association.
     kernel_capability_version: str | None = None
@@ -2515,6 +2716,7 @@ def invoke(
         kernel_capability_version = executor_definition_digest(executor_registry.get(capability.id))
         invocation_authority_context = dict(invocation_authority_context or {})
         invocation_authority_context["executor_version"] = kernel_capability_version
+    kr = kt = ka = ""
     try:
         # Keep the private seam backwards-compatible for callers that replace
         # it with a narrow test double, while still forwarding an explicitly
@@ -2526,6 +2728,10 @@ def invoke(
             "project": project,
             "inputs": request_inputs,
             "outputs": outputs,
+            "out": out,
+            "brief": brief,
+            "python_exec": python_exec,
+            "orchestrator_args": tuple(orchestrator_args),
             "extra_pack_roots": extra_pack_roots,
             "idempotency_context": invocation_authority_context,
             "admission_metadata": invocation_admission_metadata,
@@ -2624,7 +2830,15 @@ def invoke(
         if mapped is not None:
             raise mapped from exc
         raise CapabilityInvocationError(
-            f"failed to invoke {capability.capability_type} {capability.id!r}"
+            f"failed to invoke {capability.capability_type} {capability.id!r}: "
+            f"{type(exc).__name__}: {_redact_message(str(exc))}",
+            details={
+                "cause_type": type(exc).__name__,
+                "cause_message": _redact_message(str(exc)),
+                "kernel_run_id": kr if isinstance(kr, str) and kr else None,
+                "kernel_task_id": kt if isinstance(kt, str) and kt else None,
+                "kernel_attempt_id": ka if isinstance(ka, str) and ka else None,
+            },
         ) from exc
 
 
@@ -2656,7 +2870,9 @@ def invoke_result(
         }
         details = getattr(exc, "details", None)
         if isinstance(details, Mapping) and details:
-            error["validation"] = _json_safe(dict(details))
+            error["details"] = _json_safe(dict(details))
+            if category == "validation":
+                error["validation"] = _json_safe(dict(details))
         return InvocationResult(
             capability_id=capability_id,
             capability_type=kind if kind in ("executor", "orchestrator") else "executor",
@@ -2664,4 +2880,8 @@ def invoke_result(
             ok=False,
             error=error,
             raw_result={"ok": False, "error": error},
+            run_id=details.get("kernel_run_id") if isinstance(details, Mapping) else None,
+            kernel_run_id=details.get("kernel_run_id") if isinstance(details, Mapping) else None,
+            kernel_task_id=details.get("kernel_task_id") if isinstance(details, Mapping) else None,
+            kernel_attempt_id=details.get("kernel_attempt_id") if isinstance(details, Mapping) else None,
         )

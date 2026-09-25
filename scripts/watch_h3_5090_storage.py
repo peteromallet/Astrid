@@ -588,13 +588,38 @@ BASE=__BASE__
 TEST=__TEST__
 SRC=__SRC__
 PY=\"$BASE/runtime/venv/bin/python\"
-mkdir -p \"$TEST/support/astrid-host\" \"$TEST/attempts\" \"$TEST/astrid-output\" __SUPPORT_ROOT__
-# The release venv is immutable here.  The source checkout is bound through
-# PYTHONPATH and its digest is attested below; silently ignoring a failed pip
-# install would create a different, unverifiable runtime.
+SUPPORT_ROOT=__SUPPORT_ROOT__
+BOOT_MANIFEST=__BOOT_MANIFEST__
+EXPECTED_BOOT_HASH=__BOOT_HASH__
+mkdir -p \"$TEST/support/astrid-host\" \"$TEST/attempts\" \"$TEST/astrid-output\" \"$SUPPORT_ROOT\"
+# Bind the uploaded source before any Astrid/VibeComfy probe.  The release
+# venv does not install the sibling source checkout as a package, and probing
+# first would turn an environment mistake into a misleading host failure.
 export BASE TEST
 export PYTHONPATH=\"$SRC:$BASE/runtime/vibecomfy:$BASE/runtime/ComfyUI\"
 export VIBECOMFY_HEADLESS=1
+# The launcher owns provisioning; GenericPackHost remains fail-closed and only
+# consumes an existing manifest. Perform the same lexical/symlink/hash checks
+# synchronously before backgrounding the worker, so bootstrap failures cannot
+# degrade into a readiness timeout.
+\"$PY\" - \"$BOOT_MANIFEST\" \"$SUPPORT_ROOT\" \"$EXPECTED_BOOT_HASH\" <<'PY'
+import sys
+from pathlib import Path
+
+from astrid.core._shared.boot_manifest import load_boot_manifest_hash, validate_manifest_path
+
+manifest = validate_manifest_path(Path(sys.argv[1]), Path(sys.argv[2]))
+actual = load_boot_manifest_hash(manifest, support_root=Path(sys.argv[2]))
+expected = sys.argv[3]
+actual = actual.removeprefix("sha256:").lower()
+expected = expected.removeprefix("sha256:").lower()
+if len(actual) != 64 or len(expected) != 64 or actual != expected:
+    raise SystemExit(f\"boot manifest hash mismatch: expected {expected}, got {actual}\")
+print(f\"boot-manifest-ready {manifest} {actual}\")
+PY
+# The release venv is immutable here.  The source checkout is bound through
+# PYTHONPATH and its digest is attested below; silently ignoring a failed pip
+# install would create a different, unverifiable runtime.
 # The release image can omit Astrid's small schema-validator closure.  Install
 # only these packages with --no-deps, so Torch/CUDA cannot be changed.
 /usr/bin/uv pip install -q --python \"$PY\" --no-deps \\
@@ -683,10 +708,10 @@ PROFILE_HASH=$(sha256sum \"$TEST/hc03-readiness.json\" | cut -d' ' -f1)
 nohup env PYTHONPATH=\"$PYTHONPATH\" \"$PY\" -m astrid.core.execution.generic_host run \\
   --pack-root \"$SRC/astrid/packs/vibecomfy\" --runtime-endpoint http://127.0.0.1:__REMOTE_PORT__ \\
   --credential-file __CREDENTIAL__ --executor-id astrid-pack-host \\
-  --max-concurrency 1 --register --poll-seconds 1 --attempt-root \"$TEST/attempts\" \\
+  --max-concurrency 1 --register --poll-seconds 1 --attempt-base \"$TEST/attempts\" \\
   --ready-file \"$TEST/generic-host.ready.json\" --source-checkout \"$SRC\" \\
-  --support-root __SUPPORT_ROOT__ --boot-manifest-path __BOOT_MANIFEST__ \\
-  --boot-manifest-hash __BOOT_HASH__ --readiness-profile-path \"$TEST/hc03-readiness.json\" \\
+  --support-root \"$SUPPORT_ROOT\" --boot-manifest-path \"$BOOT_MANIFEST\" \\
+  --boot-manifest-hash \"$EXPECTED_BOOT_HASH\" --readiness-profile-path \"$TEST/hc03-readiness.json\" \\
   --readiness-profile-hash \"sha256:$PROFILE_HASH\" > \"$TEST/generic-host.log\" 2>&1 < /dev/null &
 echo $! > \"$TEST/generic-host.pid\"
 """
@@ -739,6 +764,28 @@ echo $! > \"$TEST/generic-host.pid\"
                     )
                     if live_rc == 0:
                         return {**receipt, "status": "host_ready", "ready_marker": marker}
+            # A bootstrap failure happens before the ready marker is written.
+            # Observe the child PID while waiting so the caller gets the real
+            # startup error immediately instead of a 300-second timeout.
+            try:
+                pid_attrs = sftp.stat(TEST + "/generic-host.pid")
+                if pid_attrs.st_mtime >= setup_started - 2:
+                    with sftp.open(TEST + "/generic-host.pid", "r") as stream:
+                        child_pid = int(stream.read().decode("utf-8").strip())
+                    live_rc, _live_out, _live_err = remote_exec(
+                        client, f"kill -0 {child_pid}", 10
+                    )
+                    if live_rc != 0:
+                        for name in ("generic-host.log", "generic-host-failure-tail.txt"):
+                            try:
+                                with sftp.open(TEST + "/" + name, "r") as stream:
+                                    receipt["remote_" + name.replace(".", "_")] = stream.read().decode("utf-8", errors="replace")[-12000:]
+                            except OSError:
+                                pass
+                        receipt["status"] = "host_bootstrap_failed"
+                        return receipt
+            except (OSError, TypeError, ValueError):
+                pass
         time.sleep(1)
     with client.open_sftp() as sftp:
         for name in ("generic-host.log", "generic-host-failure-tail.txt"):

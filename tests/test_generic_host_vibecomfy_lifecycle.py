@@ -131,6 +131,9 @@ def test_generic_host_run_task_keeps_same_resident_identity_warm(tmp_path: Path,
         task = _task(task_id, digest)
         runtime.tasks[task_id] = task
         assert host.run_task(task, lease_token=f"lease-{task_id}")["task"]["status"] == "completed"
+    observed_binding = runtime.settlements[0][2]["result"]["managed_tool_session"]["binding"]
+    assert observed_binding["launch_generation"] == "process-a"
+    assert observed_binding["engine_birth_id"] == "comfy-a"
     assert "release:capacity_replacement" not in events[: events.index("old-child-exited")]
     release_index = events.index("release:capacity_replacement")
     assert events.index("old-child-exited") < release_index
@@ -140,7 +143,7 @@ def test_generic_host_run_task_keeps_same_resident_identity_warm(tmp_path: Path,
     host.managed_tool_session.close()
 
 
-def test_generic_host_pip_embedded_route_does_not_require_hc03(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generic_host_run_registration_fails_closed_without_readiness_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     digest, data = _install_fixture(tmp_path)
     runtime = FakeRuntime()
     runtime.get_object = lambda requested: data  # type: ignore[method-assign]
@@ -150,5 +153,6 @@ def test_generic_host_pip_embedded_route_does_not_require_hc03(tmp_path: Path, m
     host.discover()
     task = _task("pip-embedded", digest)
     runtime.tasks["pip-embedded"] = task
-    assert host.run_task(task, lease_token="lease-pip")["task"]["status"] == "completed"
-    assert runtime.settlements[0][2]["result"]["managed_tool_session"]["capability"]["residency_support"] == "unsupported"
+    with pytest.raises(generic_host.HostError, match="unavailable.*readiness profile"):
+        host.run_task(task, lease_token="lease-pip")
+    assert runtime.settlements == []

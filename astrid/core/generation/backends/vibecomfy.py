@@ -358,6 +358,14 @@ def _canonical_sha256(value: object) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
 def vibecomfy_warmth_hint(
     *,
     session_id: str,
@@ -1003,6 +1011,7 @@ class VibeComfyEngine:
                         completion.get("completed") is True
                         and completion.get("status") in {"success", "completed"}
                     )
+                    or completion.get("acknowledged") is True
                 )
                 if not completion_observed:
                     errors.append(
@@ -1171,7 +1180,11 @@ class VibeComfyEngine:
                 if len(raw) > 64 * 1024:
                     raise ValueError(f"checkout_server {path} response is too large")
                 if not raw:
-                    return {}
+                    # ComfyUI's control endpoints commonly acknowledge a
+                    # successful POST with an empty 2xx body. Preserve that
+                    # transport-level completion evidence so managed release
+                    # can distinguish it from an unknown payload.
+                    return {"acknowledged": True}
                 try:
                     return json.loads(raw.decode("utf-8"))
                 except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1485,14 +1498,28 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 raise ValueError("checkout_server session source revision does not match")
             if registry["source_content_digest"].read_text(encoding="utf-8").strip() != source_content_digest:
                 raise ValueError("checkout_server session source content digest does not match")
+            config_bytes = registry["config"].read_bytes()
             config_digest_observed = "sha256:" + hashlib.sha256(
-                registry["config"].read_bytes()
+                config_bytes
             ).hexdigest()
             if config_digest_observed != config_digest:
                 raise ValueError("checkout_server session configuration digest does not match")
+            session_config = json.loads(config_bytes.decode("utf-8"))
             marker = json.loads(registry["launch"].read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("checkout_server session registry is unreadable") from exc
+        if not isinstance(session_config, Mapping):
+            raise ValueError("checkout_server session configuration is malformed")
+        session_output_directory: Path | None = None
+        configured_output_directory = session_config.get("output_directory")
+        if configured_output_directory is None:
+            raise ValueError(
+                "checkout_server session configuration lacks its host-owned output_directory"
+            )
+        session_output_directory = _strict_absolute_directory(
+            configured_output_directory,
+            "vibecomfy_session.output_directory",
+        )
         if not isinstance(marker, Mapping):
             raise ValueError("checkout_server launch marker is malformed")
         if (
@@ -1537,6 +1564,11 @@ class CheckoutServerAdapter(VibeComfyBackend):
             "source_content_digest": source_content_digest,
             "config_digest": config_digest,
             "model_bytes_digest": model_bytes_digest,
+            "output_directory": (
+                str(session_output_directory)
+                if session_output_directory is not None
+                else None
+            ),
         }
         adapter._host_profile = hc03_profile
         adapter._bound_model_id = model_name
@@ -1999,6 +2031,7 @@ class CheckoutServerAdapter(VibeComfyBackend):
         *,
         task_identity: str | None = None,
         attempt_identity: str | None = None,
+        run_inputs: Mapping[str, Any] | None = None,
     ) -> list[Path]:
         """Compile one canonical workflow, run it, and custody private outputs."""
         if self._bound_fingerprint is None or self._bound_warmth_identity is None:
@@ -2068,42 +2101,103 @@ class CheckoutServerAdapter(VibeComfyBackend):
                     raise ValueError(
                         "checkout_server attested model root must be an absolute path"
                     )
-            approved = bundle.compile(
-                schema_provider=target_schema,
-                models_root=models_root,
-            )
+            compile_kwargs: dict[str, Any] = {
+                "schema_provider": target_schema,
+                "models_root": models_root,
+            }
+            if run_inputs is not None:
+                if not isinstance(run_inputs, Mapping):
+                    raise ValueError("checkout_server workflow run inputs must be an object")
+                compile_kwargs["run_inputs"] = dict(run_inputs)
+            approved = bundle.compile(**compile_kwargs)
             model_bytes_digest = self._engine._validate_model_bytes_digest(
                 self._bound_host_model_digest()
             )
+            from vibecomfy.runtime.session import SessionConfig
+
+            config_values: dict[str, Any] = {}
+            workflow_config = (
+                metadata.get("comfy_configuration")
+                if isinstance(metadata, Mapping)
+                else None
+            )
+            if isinstance(workflow_config, Mapping):
+                config_values.update(dict(workflow_config))
+            # The running Comfy process owns its output root. Carry that
+            # manager-verified fact into every external runtime invocation so
+            # artifact verification can recognize a shared RunPod filesystem
+            # and probe the actual file before delivery. A workflow may not
+            # redirect a host-owned checkout session to an arbitrary directory.
+            host_output_directory = self._host_session.get("output_directory")
+            if not isinstance(host_output_directory, str) or not host_output_directory:
+                raise ValueError(
+                    "checkout_server has no verified host-owned output directory"
+                )
+            configured_workflow_output = config_values.get("output_directory")
+            if (
+                configured_workflow_output is not None
+                and Path(str(configured_workflow_output)).expanduser().resolve()
+                != Path(host_output_directory).resolve()
+            ):
+                raise ValueError(
+                    "checkout_server workflow output_directory does not match "
+                    "the host-owned Comfy session output directory"
+                )
+            config_values["output_directory"] = host_output_directory
+            if task_identity is not None:
+                config_values["task_id"] = task_identity
+            if attempt_identity is not None:
+                config_values["attempt_id"] = attempt_identity
+            runtime_config = SessionConfig.from_dict(config_values)
+
+            # VibeComfy's dynamic environment layer normally has precedence
+            # over SessionConfig.extra. Reject a conflicting environment root
+            # and freeze the verified host root into the effective environment
+            # for this invocation so the two artifact-resolution paths cannot
+            # disagree.
+            environment_key = "VIBECOMFY_COMFY_CONFIGURATION"
+            previous_environment_configuration = os.environ.get(environment_key)
+            environment_values: dict[str, Any] = {}
+            if previous_environment_configuration:
+                try:
+                    parsed_environment = json.loads(previous_environment_configuration)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "checkout_server environment configuration is not valid JSON"
+                    ) from exc
+                if not isinstance(parsed_environment, dict):
+                    raise ValueError(
+                        "checkout_server environment configuration must be an object"
+                    )
+                environment_values.update(parsed_environment)
+            configured_environment_output = environment_values.get("output_directory")
+            if (
+                configured_environment_output is not None
+                and Path(str(configured_environment_output)).expanduser().resolve()
+                != Path(host_output_directory).resolve()
+            ):
+                raise ValueError(
+                    "checkout_server environment output_directory does not match "
+                    "the host-owned Comfy session output directory"
+                )
+            environment_values["output_directory"] = host_output_directory
+
             self.warm_session(
                 self._bound_fingerprint,
                 self._bound_warmth_identity,
                 runtime_instance_id=self._runtime_instance_id,
                 model_bytes_digest=model_bytes_digest,
             )
-            runtime_config = None
-            if task_identity is not None or attempt_identity is not None:
-                from vibecomfy.runtime.session import SessionConfig
-
-                config_values: dict[str, Any] = {}
-                workflow_config = (
-                    metadata.get("comfy_configuration")
-                    if isinstance(metadata, Mapping)
-                    else None
+            try:
+                os.environ[environment_key] = json.dumps(
+                    environment_values, sort_keys=True, separators=(",", ":")
                 )
-                if isinstance(workflow_config, Mapping):
-                    config_values.update(dict(workflow_config))
-                # Host-issued identity augments the workflow's runtime
-                # configuration.  It must not replace settings such as the
-                # output directory when an explicit server owns execution.
-                if task_identity is not None:
-                    config_values["task_id"] = task_identity
-                if attempt_identity is not None:
-                    config_values["attempt_id"] = attempt_identity
-                runtime_config = SessionConfig.from_dict(
-                    config_values
-                )
-            result = self._run_workflow((approved, bundle), config=runtime_config)
+                result = self._run_workflow((approved, bundle), config=runtime_config)
+            finally:
+                if previous_environment_configuration is None:
+                    os.environ.pop(environment_key, None)
+                else:
+                    os.environ[environment_key] = previous_environment_configuration
             outputs = self._collect_outputs(result, destination)
             self._last_run_result = result
             return outputs
@@ -2200,6 +2294,19 @@ class CheckoutServerAdapter(VibeComfyBackend):
                 while destination.exists():
                     destination = out_dir / f"{stem}_{counter}{suffix}"
                     counter += 1
+            expected_shared_digest: str | None = None
+            if output_type == "output" and self._host_session is not None:
+                host_output_directory = self._host_session.get("output_directory")
+                if isinstance(host_output_directory, str):
+                    shared_root = Path(host_output_directory).resolve(strict=True)
+                    shared_path = (shared_root / subfolder / filename).resolve(strict=True)
+                    try:
+                        shared_path.relative_to(shared_root)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "checkout_server output descriptor escaped the host-owned output directory"
+                        ) from exc
+                    expected_shared_digest = _file_sha256(shared_path)
             temporary_path: Path | None = None
             try:
                 with _open_checkout_http(request, timeout=30.0) as response:
@@ -2218,6 +2325,14 @@ class CheckoutServerAdapter(VibeComfyBackend):
                         os.fsync(temporary.fileno())
                 os.replace(temporary_path, destination)
                 temporary_path = None
+                if (
+                    expected_shared_digest is not None
+                    and _file_sha256(destination) != expected_shared_digest
+                ):
+                    destination.unlink(missing_ok=True)
+                    raise ValueError(
+                        f"checkout_server downloaded output {filename!r} changed during custody"
+                    )
             except (OSError, urllib_error.URLError) as exc:
                 raise ValueError(
                     f"checkout_server could not download output {filename!r}"

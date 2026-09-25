@@ -1018,6 +1018,3543 @@
    "required_env": [],
    "required_binaries": ["node"],
    "required_packages": []
+  },
+  {
+   "id": "h3_av.prepare",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 preparation helper; offline request/mask preparation is source-backed and ffmpeg/ffprobe readiness is explicit. It does not claim GPU or model readiness.",
+   "adapter_family": "cpu",
+   "resource_keys": ["cpu"],
+   "required_env": [],
+   "required_binaries": ["ffmpeg", "ffprobe"],
+   "required_packages": []
+  },
+  {
+   "id": "h3_av.compile",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 compilation helper; graph/bundle compilation is source-backed and ffmpeg/ffprobe/readiness is explicit. It does not claim GPU or model readiness.",
+   "adapter_family": "cpu",
+   "resource_keys": ["cpu"],
+   "required_env": [],
+   "required_binaries": ["ffmpeg", "ffprobe"],
+   "required_packages": ["vibecomfy"]
+  },
+  {
+   "id": "h3_av.compose",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 composition helper; media composition is source-backed and ffmpeg/ffprobe readiness is explicit. It does not claim GPU or model readiness.",
+   "adapter_family": "cpu",
+   "resource_keys": ["cpu"],
+   "required_env": [],
+   "required_binaries": ["ffmpeg", "ffprobe"],
+   "required_packages": []
+  },
+  {
+   "id": "h3_av.verify",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 verification helper; media custody verification is source-backed and ffmpeg/ffprobe readiness is explicit. It does not claim GPU or model readiness.",
+   "adapter_family": "cpu",
+   "resource_keys": ["cpu"],
+   "required_env": [],
+   "required_binaries": ["ffmpeg", "ffprobe"],
+   "required_packages": []
   }
- ]
+ ],
+ "source_census": {
+ "content_sha256": "ccaa170194ca1352830bba472797ececd362c2a40eae99ccd59d0219ab80835c",
+ "executor_inventory": [
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "blender.render",
+   "reason": "Runs Blender locally or through an external render host and does not yet write the universal result manifest.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "comfy_wrap.run",
+   "reason": "Runs ComfyUI workflows through external VibeComfy/ComfyUI tooling requiring GPU.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "discord_local.command",
+   "reason": "Optional Discord-local executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.arrange",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.boundary_candidates",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.editor_review",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.human_notes",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.human_review",
+   "reason": "Interactive HTTP review server for human-gate approval with no stable output artifact.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.inspect_cut",
+   "reason": "Read-only inspection tool for cut run directories with no produced artifact.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.quality_zones",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.quote_scout",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.refine",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.scenes",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.script_pipeline",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.shots",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.transcribe",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.triage",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "editorial.validate",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "fal.fal_foley",
+   "reason": "fal.ai hunyuan-video-foley model requiring FAL_KEY API token and external GPU infrastructure.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "fal.h3_video",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "foley.foley_review",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "foley.tile_video",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_audio",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_image",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_image_cloud_i2i",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_image_codex",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_image_edit",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_image_openai",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_image_upscale",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "generation.generate_video",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "h3_av.compile",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "h3_av.compose",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "h3_av.prepare",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "h3_av.verify",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.contribute",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.get_item",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.ingest_article",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.ingest_workflow",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.ingest_youtube",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.refresh_media",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "hivemind.search",
+   "reason": "Optional Hivemind executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "iteration.assemble",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "iteration.experiment_import",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "iteration.experiment_prepare",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "iteration.experiment_review",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "iteration.prepare",
+   "reason": "Retired thread/sidecar iteration preparation executor.",
+   "result_contract": "manifest",
+   "source": "historical: astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "media.clip_extract",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "media.gif_search",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "media.speech_repair_lavasr",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "moirae.moirae",
+   "reason": "External Moirae screenplay-to-video tool requiring paid API access and GPU infrastructure.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "historical_only",
+   "disposition": "unsupported",
+   "executable": false,
+   "id": "reigh.open_in_reigh",
+   "reason": "Retired Reigh bridge executor; external integration is not shipped.",
+   "result_contract": "exempted",
+   "source": "historical: astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "historical_only",
+   "disposition": "unsupported",
+   "executable": false,
+   "id": "reigh.publish",
+   "reason": "Retired Reigh publishing executor; external integration is not shipped.",
+   "result_contract": "exempted",
+   "source": "historical: astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "historical_only",
+   "disposition": "unsupported",
+   "executable": false,
+   "id": "reigh.reigh_data",
+   "reason": "Retired Reigh data executor; external integration is not shipped.",
+   "result_contract": "exempted",
+   "source": "historical: astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "historical_only",
+   "disposition": "unsupported",
+   "executable": false,
+   "id": "reigh.spatial_audio_page",
+   "reason": "Retired Reigh spatial-audio executor; external integration is not shipped.",
+   "result_contract": "manifest",
+   "source": "historical: astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "rendering.assemble_timeline",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "rendering.html_canvas_effect",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "rendering.render",
+   "reason": "Renders brief timeline to video through Remotion with GPU-accelerated rendering.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "rendering.sprite_sheet",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "rendering.timeline_storyboard",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "rendering.timeline_visualize",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "runpod.exec",
+   "reason": "Executes scripts on provisioned RunPod GPU pods requiring paid RunPod account.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "runpod.provision",
+   "reason": "Provisions RunPod GPU pods requiring paid RunPod account.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "runpod.pull",
+   "reason": "Pulls remote artifacts from RunPod pods via SSH requiring paid RunPod account.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "runpod.session",
+   "reason": "Composite provision-exec-download-teardown RunPod session requiring paid account.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "runpod.teardown",
+   "reason": "Terminates RunPod pods requiring paid RunPod account.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "seedance_local.reference_video",
+   "reason": "Optional Seedance-local executor declared by config/astrid-beta-capabilities.json; no bundled executor manifest is installed in this checkout.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "stream_content.clip_candidates",
+   "reason": "Writes ranked clip-candidate JSON but does not yet emit a universal result manifest.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "stream_content.segment_map",
+   "reason": "Writes segment-map JSON but does not yet emit a universal result manifest.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "training.asset_cache",
+   "reason": "Retired persistent URL asset-cache executor.",
+   "result_contract": "exempted",
+   "source": "historical: astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "training.pool_build",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "training.pool_merge",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "training.search_loras",
+   "reason": "Searches Hugging Face Hub for LoRA adapters requiring HF_TOKEN/HUGGING_FACE_HUB_TOKEN.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "typed_timeline.map",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "understanding.audio_understand",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "understanding.scene_describe",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "understanding.understand",
+   "reason": "Dispatch router delegating to paid audio/visual/video understanding executors (OpenAI, etc.).",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "understanding.video_understand",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "understanding.visual_understand",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.character_animation",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.edit",
+   "reason": "Edits VibeComfy workflows through external VibeComfy CLI; outputs stay with the external tool.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.import",
+   "reason": "Imports workflows through the external VibeComfy porting service; the canonical bundle outputs are settled without a universal result manifest.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.inspect",
+   "reason": "Inspects VibeComfy workflows through external VibeComfy CLI with no Astrid result receipt.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.run",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.validate",
+   "reason": "Validates VibeComfy workflows through external VibeComfy CLI.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "vibecomfy.video_enhance",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "video_editing.cut",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "wan2gp.generate_video",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "wan2gp.validate_settings",
+   "reason": "Compiles and validates Wan2GP settings without producing a media artifact.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "youtube.upload",
+   "reason": "Uploads finished video to YouTube via Zapier integration requiring paid API access.",
+   "result_contract": "exempted",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  },
+  {
+   "discovery_status": "discovered",
+   "disposition": "advertised",
+   "id": "youtube.youtube_audio",
+   "result_contract": "manifest",
+   "source": "astrid/core/contracts/output_result_exemptions.json"
+  }
+ ],
+ "historical_pack_labels": [
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_scene",
+   "pack": "blender",
+   "source": "astrid/packs/blender/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_workflow",
+   "pack": "comfy_wrap",
+   "source": "astrid/packs/comfy_wrap/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "arrange_clips",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "collect_human_review",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "detect_scenes",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_script",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "grade_quality_zones",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "ingest_human_notes",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": "editorial.inspect_cut",
+   "disposition": "advertised",
+   "label": "inspect_cut",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "refine_arrangement",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_editor_review",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "scout_quotes",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "slice_shots",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "transcribe_audio",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "validate_cut",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_spatial_viewer",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "orchestrate_spatial_foley",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "review_foley",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": "foley.tile_video",
+   "disposition": "advertised",
+   "label": "tile_video",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_audio",
+   "disposition": "advertised",
+   "label": "generate_audio",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image",
+   "disposition": "advertised",
+   "label": "generate_image",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_cloud_i2i",
+   "disposition": "advertised",
+   "label": "generate_image_cloud_i2i",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_edit",
+   "disposition": "advertised",
+   "label": "generate_image_edit",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_openai",
+   "disposition": "advertised",
+   "label": "generate_image_openai",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_upscale",
+   "disposition": "advertised",
+   "label": "generate_image_upscale",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_video",
+   "disposition": "advertised",
+   "label": "generate_video",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "compile_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "compose_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "prepare_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "verify_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "assemble_iteration_timeline",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.collect_runtime_provenance",
+   "disposition": "replaced",
+   "equivalent_to": "iteration.collect_runtime_provenance",
+   "executable": false,
+   "label": "collect_thread_provenance",
+   "pack": "iteration",
+   "reason": "Replaced by runtime-owned provenance collection.",
+   "source": "historical: astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "emit_render_adapter",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.experiment_import",
+   "disposition": "advertised",
+   "label": "experiment_import",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.experiment_prepare",
+   "disposition": "advertised",
+   "label": "experiment_prepare",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.experiment_review",
+   "disposition": "advertised",
+   "label": "experiment_review",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "experiment_review_session",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "retired",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "prepare_iteration",
+   "pack": "iteration",
+   "reason": "Retired with the thread/sidecar iteration preparation authority.",
+   "source": "historical: astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "score_iteration_quality",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_model_trends_chart",
+   "pack": "local",
+   "source": "astrid/packs/local/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_neon_orbit_card",
+   "pack": "local",
+   "source": "astrid/packs/local/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_text_card",
+   "pack": "local",
+   "source": "astrid/packs/local/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "download_remote_media",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "extract_clip",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "repair_speech",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "search_gifs",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "trim_video",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "produce_terminal_video",
+   "pack": "moirae",
+   "source": "astrid/packs/moirae/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_screenplay",
+   "pack": "moirae",
+   "source": "astrid/packs/moirae/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unsupported",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "build_spatial_audio_page",
+   "pack": "reigh",
+   "reason": "Reigh integration pack is not shipped in the current checkout.",
+   "source": "historical: astrid/packs/reigh/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unsupported",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "fetch_reigh_data",
+   "pack": "reigh",
+   "reason": "Reigh integration pack is not shipped in the current checkout.",
+   "source": "historical: astrid/packs/reigh/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unsupported",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "open_in_reigh",
+   "pack": "reigh",
+   "reason": "Reigh bridge authority was retired and is not shipped.",
+   "source": "historical: astrid/packs/reigh/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unsupported",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "publish_timeline",
+   "pack": "reigh",
+   "reason": "Reigh publishing authority was retired and is not shipped.",
+   "source": "historical: astrid/packs/reigh/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_sprite_sheet",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_timeline",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "scaffold_html_canvas_effect",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": "rendering.timeline_visualize",
+   "disposition": "advertised",
+   "label": "timeline_visualize",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "exec_on_pod",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "provision_pod",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "pull_artifacts",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_pod_session",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "teardown_pod",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "distill_stream_content",
+   "pack": "stream_content",
+   "source": "astrid/packs/stream_content/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "map_stream_segments",
+   "pack": "stream_content",
+   "source": "astrid/packs/stream_content/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "score_clip_candidates",
+   "pack": "stream_content",
+   "source": "astrid/packs/stream_content/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_clip_pool",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_dataset",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "retired",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "manage_asset_cache",
+   "pack": "training",
+   "reason": "Retired with the persistent URL asset-cache authority.",
+   "source": "historical: astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "merge_clip_pool",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_training",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": "training.search_loras",
+   "disposition": "advertised",
+   "label": "search_loras",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": "typed_timeline.map",
+   "disposition": "advertised",
+   "label": "map",
+   "pack": "typed_timeline",
+   "source": "astrid/packs/typed_timeline/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "retired",
+   "equivalent_to": null,
+   "executable": false,
+   "label": "typed_timeline.render",
+   "pack": "typed_timeline",
+   "reason": "Retired typed-timeline render route; rendering is runtime-owned.",
+   "source": "historical: astrid/packs/typed_timeline/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "describe_scene",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_audio",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_image",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_media",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_video",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": "vibecomfy.character_animation",
+   "disposition": "advertised",
+   "label": "character_animation",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "edit_workflow_ir",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "import_workflow",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "inspect_workflow_ir",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_workflow",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "validate_workflow",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": "vibecomfy.video_enhance",
+   "disposition": "advertised",
+   "label": "video_enhance",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "animate_image",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "assemble_event_talk",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_timeline",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_logo_grid",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "make_thumbnails",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_iteration_video",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_hype_pipeline",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "vary_image_grid",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": "wan2gp.generate_video",
+   "disposition": "advertised",
+   "label": "generate_video",
+   "pack": "wan2gp",
+   "source": "astrid/packs/wan2gp/pack.yaml"
+  },
+  {
+   "canonical_id": "wan2gp.validate_settings",
+   "disposition": "advertised",
+   "label": "validate_settings",
+   "pack": "wan2gp",
+   "source": "astrid/packs/wan2gp/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "download_youtube_audio",
+   "pack": "youtube",
+   "source": "astrid/packs/youtube/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "download_youtube_video",
+   "pack": "youtube",
+   "source": "astrid/packs/youtube/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "upload_youtube_video",
+   "pack": "youtube",
+   "source": "astrid/packs/youtube/pack.yaml"
+  }
+ ],
+ "label_bindings": [
+  {
+   "canonical_id": "h3_av.prepare",
+   "kind": "executor",
+   "label": "prepare_transform",
+   "manifest": "astrid/packs/h3_av/executors/prepare/executor.yaml",
+   "pack": "h3_av"
+  },
+  {
+   "canonical_id": "h3_av.compile",
+   "kind": "executor",
+   "label": "compile_transform",
+   "manifest": "astrid/packs/h3_av/executors/compile/executor.yaml",
+   "pack": "h3_av"
+  },
+  {
+   "canonical_id": "h3_av.compose",
+   "kind": "executor",
+   "label": "compose_transform",
+   "manifest": "astrid/packs/h3_av/executors/compose/executor.yaml",
+   "pack": "h3_av"
+  },
+  {
+   "canonical_id": "h3_av.verify",
+   "kind": "executor",
+   "label": "verify_transform",
+   "manifest": "astrid/packs/h3_av/executors/verify/executor.yaml",
+   "pack": "h3_av"
+  },
+  {
+   "canonical_id": "h3_av.transform",
+   "kind": "orchestrator",
+   "label": "transform",
+   "manifest": "astrid/packs/h3_av/orchestrators/transform/orchestrator.yaml",
+   "pack": "h3_av"
+  }
+ ],
+ "legacy_ids": [
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.animate_character",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.annotated_image_edit",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.edit_video_orchestrator",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.flux_klein_edit",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.image_inpaint",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.image_upscale",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.individual_travel_segment",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.join_clips_orchestrator",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.qwen_image",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.qwen_image_2512",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.qwen_image_edit",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.qwen_image_style",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.travel_orchestrator",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.travel_stitch",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.video_enhance",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.wan_2_2_i2v",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "wgp",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.wan_2_2_t2i",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.z_image_turbo",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  },
+  {
+   "binding": "vibecomfy",
+   "discovery_status": "historical_only",
+   "disposition": "retired",
+   "executable": false,
+   "id": "reigh.z_image_turbo_i2i",
+   "reason": "Removed legacy Reigh registry entry; retained for census only.",
+   "source": "historical: astrid/core/integrations/reigh/capabilities.py"
+  }
+ ],
+ "manifest_witnesses": [
+  {
+   "path": "astrid/packs/blender/pack.yaml",
+   "sha256": "e63ffd50160fa3fddbc6e023011364cc5bb433d7c424636af6eb03c6e87d8448"
+  },
+  {
+   "path": "astrid/packs/comfy_wrap/pack.yaml",
+   "sha256": "697188ea719199227d252b0ab8533f1b87e129d8849676cdbc77358cffb368ab"
+  },
+  {
+   "path": "astrid/packs/editorial/pack.yaml",
+   "sha256": "6e170175eb985578a545ea4eb6780674c0d4bcac759b7a12ef9f603810226fea"
+  },
+  {
+   "path": "astrid/packs/fal/pack.yaml",
+   "sha256": "cf97b46b7382b57ad1a99c82602eba7ef5ca9ad307beed76ea2ccf388420ea18"
+  },
+  {
+   "path": "astrid/packs/foley/pack.yaml",
+   "sha256": "46ee651fc1e3f6a2b8a730c09f87b0bb2e5dd95e676a221a146493112a4798c2"
+  },
+  {
+   "path": "astrid/packs/generation/pack.yaml",
+   "sha256": "2e642b5857b57d0e9469bfff3123b34536ba10a27b99785e9dae47f2f822684c"
+  },
+  {
+   "path": "astrid/packs/h3_av/executors/compile/executor.yaml",
+   "sha256": "ec0d854da02661233f256a0aabc27cd51448a220227025a735caf439335dff1d"
+  },
+  {
+   "path": "astrid/packs/h3_av/executors/compose/executor.yaml",
+   "sha256": "125f22d8349e5b52409615989a95a5ad2474705d8393799f68de41add90a394a"
+  },
+  {
+   "path": "astrid/packs/h3_av/executors/prepare/executor.yaml",
+   "sha256": "9318d04fd7a12bd1b191c87af2e5c7e4b4ffbc25576b16e0f81b1fdef868a2e6"
+  },
+  {
+   "path": "astrid/packs/h3_av/executors/verify/executor.yaml",
+   "sha256": "d14d98ca531a357a4583e2d13a752e88da51494b0a4372097c6c7ac688be00ca"
+  },
+  {
+   "path": "astrid/packs/h3_av/orchestrators/transform/orchestrator.yaml",
+   "sha256": "62eadd959215f3d5604af54e829c54e563d6a43cf6625e54ee313dc29946230f"
+  },
+  {
+   "path": "astrid/packs/h3_av/pack.yaml",
+   "sha256": "20df56cdf6ec1386e96d124dc6e94d5eb139489a45c6a5541561a27d0738474c"
+  },
+  {
+   "path": "astrid/packs/iteration/pack.yaml",
+   "sha256": "ff36a474125d792de99470a2bb586a0429042f1087f36810afc94f7a2d9f5477"
+  },
+  {
+   "path": "astrid/packs/local/pack.yaml",
+   "sha256": "c464113117afbd9fdab8b07fc3f26c2b0b16e62f068acc3675111815bc7e023a"
+  },
+  {
+   "path": "astrid/packs/media/pack.yaml",
+   "sha256": "2c4649de4574b8e6c9868215ef4ff7d78dee86f3dddad8b7d816e1d12a62c9df"
+  },
+  {
+   "path": "astrid/packs/moirae/pack.yaml",
+   "sha256": "0a72dc035d38e88edd167df590c92fd3720873ae1c6c294d4b4cada327330353"
+  },
+  {
+   "path": "astrid/packs/rendering/pack.yaml",
+   "sha256": "b8bc225bac3e7d82569b7caca24412c9ce2d80d0068440b026505fe8ef123b4f"
+  },
+  {
+   "path": "astrid/packs/runpod/pack.yaml",
+   "sha256": "7a110beb1468c4ba14879c6960da101b36b7cf1685a6a237602fe37af43ea737"
+  },
+  {
+   "path": "astrid/packs/stream_content/pack.yaml",
+   "sha256": "10977dcf398d8c6c515e1a931c373448d6c579fade4bdf58d7d81ec98f74bd15"
+  },
+  {
+   "path": "astrid/packs/training/pack.yaml",
+   "sha256": "2da84f1d87adbcb329bc00d180c84aaade69c0927d94a5ab3a3dcbc8394b09a2"
+  },
+  {
+   "path": "astrid/packs/typed_timeline/pack.yaml",
+   "sha256": "449fc6061ac13c77981cc657ae5abe872fd3d79f4574ddc0065e13357c944c9c"
+  },
+  {
+   "path": "astrid/packs/understanding/pack.yaml",
+   "sha256": "aace0830ca003561684286735a3c3ea49061de415e09d69e1e8d4cef7b0fc6c9"
+  },
+  {
+   "path": "astrid/packs/vibecomfy/pack.yaml",
+   "sha256": "ca6acee6089bbebff68c5b1db7231f8fadcf68be59ad4d57f547258f3a5ce045"
+  },
+  {
+   "path": "astrid/packs/video_editing/pack.yaml",
+   "sha256": "3ae3740e1145fe68e79605b45e244fae234f494481a161d9e6b203b7f19a7b26"
+  },
+  {
+   "path": "astrid/packs/wan2gp/pack.yaml",
+   "sha256": "a99d2f69d3270e6aa54a549cab21e5863ae334cddd66da618e6ede1b8f0b599a"
+  },
+  {
+   "path": "astrid/packs/youtube/pack.yaml",
+   "sha256": "af4cada3bb599378ba33b63c40a59923176f9bcdbbe406da5de758e54e593171"
+  }
+ ],
+ "matrix_inventory": [
+  {
+   "adapter_family": "render",
+   "disposition": "optional",
+   "evidence_reason": "Optional local Blender integration; retained with truthful binary preflight.",
+   "id": "blender.render",
+   "required_binaries": [
+    "blender",
+    "ffmpeg"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "local_generation",
+   "disposition": "optional",
+   "evidence_reason": "Optional local-generation wrapper; retained with truthful VibeComfy preflight.",
+   "id": "comfy_wrap.run",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "gpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional personal Discord adapter; retained with truthful binary preflight.",
+   "id": "discord_local.command",
+   "required_binaries": [
+    "node"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.arrange",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.boundary_candidates",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.editor_review",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.human_notes",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.human_review",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.inspect_cut",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.quality_zones",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.quote_scout",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.refine",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.scenes",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional provider-backed editorial path; retained with truthful preflight.",
+   "id": "editorial.script_pipeline",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.shots",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional credential-backed transcription; retained with truthful preflight.",
+   "id": "editorial.transcribe",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.triage",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/editorial capability covered by the generic host.",
+   "id": "editorial.validate",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional hosted FAL integration; retained with truthful credential preflight.",
+   "id": "fal.fal_foley",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional hosted FAL integration; retained with truthful credential preflight.",
+   "id": "fal.h3_video",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/media capability covered by the generic host.",
+   "id": "foley.foley_review",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/media capability covered by the generic host.",
+   "id": "foley.tile_video",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required generation facade; provider readiness is credential-gated.",
+   "id": "generation.generate_audio",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY",
+    "WAVESPEED_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required image-generation facade; provider readiness is credential-gated.",
+   "id": "generation.generate_image",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Narrow z-image cloud i2i capability with an enforced whole-task storage envelope; provider readiness is credential-gated.",
+   "id": "generation.generate_image_cloud_i2i",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Bounded canonical Codex image profile with ordered CAS references and ChatGPT CLI authentication.",
+   "id": "generation.generate_image_codex",
+   "required_binaries": [
+    "codex"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Unified bounded cloud image-edit capability with source-only Qwen, source-only Klein, and source-plus-mask Qwen inpaint profiles under one typed CAS/storage envelope; provider readiness is credential-gated.",
+   "id": "generation.generate_image_edit",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required GPT image facade; OpenAI credential readiness is explicit.",
+   "id": "generation.generate_image_openai",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Bounded SeedVR2 image-upscale capability with project-CAS source custody and provider readiness gated by FAL_KEY.",
+   "id": "generation.generate_image_upscale",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required video-generation facade; provider readiness is credential-gated.",
+   "id": "generation.generate_video",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 compilation helper; graph/bundle compilation is source-backed and ffmpeg/ffprobe/readiness is explicit. It does not claim GPU or model readiness.",
+   "id": "h3_av.compile",
+   "required_binaries": [
+    "ffmpeg",
+    "ffprobe"
+   ],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 composition helper; media composition is source-backed and ffmpeg/ffprobe readiness is explicit. It does not claim GPU or model readiness.",
+   "id": "h3_av.compose",
+   "required_binaries": [
+    "ffmpeg",
+    "ffprobe"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 preparation helper; offline request/mask preparation is source-backed and ffmpeg/ffprobe readiness is explicit. It does not claim GPU or model readiness.",
+   "id": "h3_av.prepare",
+   "required_binaries": [
+    "ffmpeg",
+    "ffprobe"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "optional",
+   "evidence_reason": "Experimental CPU H3 verification helper; media custody verification is source-backed and ffmpeg/ffprobe readiness is explicit. It does not claim GPU or model readiness.",
+   "id": "h3_av.verify",
+   "required_binaries": [
+    "ffmpeg",
+    "ffprobe"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind contribution route; provider readiness is credential-gated.",
+   "id": "hivemind.contribute",
+   "required_binaries": [],
+   "required_env": [
+    "HIVEMIND_CONTRIBUTOR_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional read-only Hivemind item retrieval through the public corpus API.",
+   "id": "hivemind.get_item",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind article ingestion route; provider readiness is credential-gated.",
+   "id": "hivemind.ingest_article",
+   "required_binaries": [],
+   "required_env": [
+    "HIVEMIND_CONTRIBUTOR_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind workflow ingestion route; provider readiness is credential-gated.",
+   "id": "hivemind.ingest_workflow",
+   "required_binaries": [],
+   "required_env": [
+    "HIVEMIND_CONTRIBUTOR_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind YouTube ingestion route; provider and yt-dlp readiness are explicit.",
+   "id": "hivemind.ingest_youtube",
+   "required_binaries": [
+    "yt-dlp"
+   ],
+   "required_env": [
+    "HIVEMIND_CONTRIBUTOR_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional Hivemind Discord media refresh route through the public API.",
+   "id": "hivemind.refresh_media",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional read-only Hivemind corpus search through the public API.",
+   "id": "hivemind.search",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/iteration capability covered by the generic host.",
+   "id": "iteration.assemble",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/iteration capability covered by the generic host.",
+   "id": "iteration.experiment_import",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/iteration capability covered by the generic host.",
+   "id": "iteration.experiment_prepare",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/iteration capability covered by the generic host.",
+   "id": "iteration.experiment_review",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Required local FFmpeg media capability; binary preflight is explicit.",
+   "id": "media.clip_extract",
+   "required_binaries": [
+    "ffmpeg"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional network-backed media search; retained with truthful preflight.",
+   "id": "media.gif_search",
+   "required_binaries": [],
+   "required_env": [
+    "GIPHY_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional hosted speech repair; retained with truthful preflight.",
+   "id": "media.speech_repair_lavasr",
+   "required_binaries": [
+    "ffmpeg",
+    "ffprobe"
+   ],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "optional",
+   "evidence_reason": "Optional terminal-video capability; retained with truthful binary preflight.",
+   "id": "moirae.moirae",
+   "required_binaries": [
+    "asciinema",
+    "agg",
+    "ffmpeg"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "render",
+   "disposition": "required",
+   "evidence_reason": "Built-in canonical timeline assembly proposal path covered by the generic host.",
+   "id": "rendering.assemble_timeline",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "render",
+   "disposition": "required",
+   "evidence_reason": "Current-machine render family capability covered by the generic host.",
+   "id": "rendering.html_canvas_effect",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "render",
+   "disposition": "required",
+   "evidence_reason": "Required managed rendering path; Node/Remotion/FFmpeg readiness is explicit.",
+   "id": "rendering.render",
+   "required_binaries": [
+    "node",
+    "ffmpeg"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "requires_remotion": true,
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "render",
+   "disposition": "optional",
+   "evidence_reason": "Optional render variant; retained with truthful binary preflight.",
+   "id": "rendering.sprite_sheet",
+   "required_binaries": [
+    "ffmpeg"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "render",
+   "disposition": "required",
+   "evidence_reason": "Current-machine render family capability covered by the generic host.",
+   "id": "rendering.timeline_storyboard",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "render",
+   "disposition": "required",
+   "evidence_reason": "Current-machine render family capability covered by the generic host.",
+   "id": "rendering.timeline_visualize",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "render"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional remote execution integration; excluded from local beta readiness.",
+   "id": "runpod.exec",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional remote execution integration; excluded from local beta readiness.",
+   "id": "runpod.provision",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional remote execution integration; excluded from local beta readiness.",
+   "id": "runpod.pull",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional remote execution integration; excluded from local beta readiness.",
+   "id": "runpod.session",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional remote execution integration; excluded from local beta readiness.",
+   "id": "runpod.teardown",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional hosted FAL integration; retained with truthful credential preflight.",
+   "id": "seedance_local.reference_video",
+   "required_binaries": [],
+   "required_env": [
+    "FAL_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/media analysis capability covered by the generic host.",
+   "id": "stream_content.clip_candidates",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/media analysis capability covered by the generic host.",
+   "id": "stream_content.segment_map",
+   "required_binaries": [
+    "ffmpeg",
+    "ffprobe",
+    "tesseract"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/training utility capability covered by the generic host.",
+   "id": "training.pool_build",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/training utility capability covered by the generic host.",
+   "id": "training.pool_merge",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required model-search facade; Hugging Face credentials are explicit when used.",
+   "id": "training.search_loras",
+   "required_binaries": [],
+   "required_env": [
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/timeline utility capability covered by the generic host.",
+   "id": "typed_timeline.map",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required provider-backed analysis facade; credential readiness is explicit.",
+   "id": "understanding.audio_understand",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required provider-backed analysis facade; credential readiness is explicit.",
+   "id": "understanding.scene_describe",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required provider-backed analysis facade; credential readiness is explicit.",
+   "id": "understanding.understand",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required provider-backed analysis facade; credential readiness is explicit.",
+   "id": "understanding.video_understand",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "required",
+   "evidence_reason": "Required provider-backed analysis facade; credential readiness is explicit.",
+   "id": "understanding.visual_understand",
+   "required_binaries": [],
+   "required_env": [
+    "OPENAI_API_KEY"
+   ],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  },
+  {
+   "adapter_family": "local_generation",
+   "disposition": "optional",
+   "evidence_reason": "CPU-admitted bounded Wan Animate profile; mode=animate, two CAS media inputs, and exposed controls bind to the pinned ready graph. GPU execution/output proof remains open.",
+   "id": "vibecomfy.character_animation",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "gpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Required CPU-only canonical workflow edit path; typed successor transitions over admitted bundles.",
+   "id": "vibecomfy.edit",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Required canonical workflow origin path; CPU-only import and bundle inspection.",
+   "id": "vibecomfy.import",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Required CPU-only canonical workflow inspection path; read-only IR projection over admitted artifacts.",
+   "id": "vibecomfy.inspect",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "local_generation",
+   "disposition": "required",
+   "evidence_reason": "Required supported local-generation profile; VibeComfy readiness is explicit.",
+   "id": "vibecomfy.run",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "gpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Required CPU-only canonical workflow validation path; VibeComfy readiness is explicit.",
+   "id": "vibecomfy.validate",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "local_generation",
+   "disposition": "optional",
+   "evidence_reason": "CPU-admitted bounded video-upscale profile; source audio/FPS and scale controls bind to the pinned ready graph. Interpolation, color correction, non-maximum quality, and GPU output proof remain fail-closed/open.",
+   "id": "vibecomfy.video_enhance",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [
+    "vibecomfy"
+   ],
+   "resource_keys": [
+    "gpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "required",
+   "evidence_reason": "Current-machine CPU/video editing capability covered by the generic host.",
+   "id": "video_editing.cut",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "local_generation",
+   "disposition": "optional",
+   "evidence_reason": "Optional native Wan2GP worker capability; the pinned engine is disclosed by the executor and runs only on a configured worker.",
+   "id": "wan2gp.generate_video",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "gpu"
+   ]
+  },
+  {
+   "adapter_family": "local_generation",
+   "disposition": "optional",
+   "evidence_reason": "Optional native Wan2GP settings validation; compilation is available without engine execution.",
+   "id": "wan2gp.validate_settings",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "gpu"
+   ]
+  },
+  {
+   "adapter_family": "cpu",
+   "disposition": "optional",
+   "evidence_reason": "Optional external publishing integration; not required for local beta.",
+   "id": "youtube.upload",
+   "required_binaries": [],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "cpu"
+   ]
+  },
+  {
+   "adapter_family": "provider",
+   "disposition": "optional",
+   "evidence_reason": "Optional external media import integration; retained with truthful binary preflight.",
+   "id": "youtube.youtube_audio",
+   "required_binaries": [
+    "yt-dlp",
+    "ffmpeg"
+   ],
+   "required_env": [],
+   "required_packages": [],
+   "resource_keys": [
+    "provider"
+   ]
+  }
+ ],
+ "pack_labels": [
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_scene",
+   "pack": "blender",
+   "source": "astrid/packs/blender/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_workflow",
+   "pack": "comfy_wrap",
+   "source": "astrid/packs/comfy_wrap/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "arrange_clips",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "collect_human_review",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "detect_scenes",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_script",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "grade_quality_zones",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "ingest_human_notes",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": "editorial.inspect_cut",
+   "disposition": "advertised",
+   "label": "inspect_cut",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "refine_arrangement",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_editor_review",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "scout_quotes",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "slice_shots",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "transcribe_audio",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "validate_cut",
+   "pack": "editorial",
+   "source": "astrid/packs/editorial/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_clip_foley",
+   "pack": "fal",
+   "source": "astrid/packs/fal/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_h3_video",
+   "pack": "fal",
+   "source": "astrid/packs/fal/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_spatial_viewer",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "orchestrate_spatial_foley",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "review_foley",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": "foley.tile_video",
+   "disposition": "advertised",
+   "label": "tile_video",
+   "pack": "foley",
+   "source": "astrid/packs/foley/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_audio",
+   "disposition": "advertised",
+   "label": "generate_audio",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image",
+   "disposition": "advertised",
+   "label": "generate_image",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_cloud_i2i",
+   "disposition": "advertised",
+   "label": "generate_image_cloud_i2i",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_edit",
+   "disposition": "advertised",
+   "label": "generate_image_edit",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_openai",
+   "disposition": "advertised",
+   "label": "generate_image_openai",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_image_upscale",
+   "disposition": "advertised",
+   "label": "generate_image_upscale",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": "generation.generate_video",
+   "disposition": "advertised",
+   "label": "generate_video",
+   "pack": "generation",
+   "source": "astrid/packs/generation/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "compile_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "compose_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "prepare_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "verify_transform",
+   "pack": "h3_av",
+   "source": "astrid/packs/h3_av/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "assemble_iteration_timeline",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "collect_runtime_provenance",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "emit_render_adapter",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.experiment_import",
+   "disposition": "advertised",
+   "label": "experiment_import",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.experiment_prepare",
+   "disposition": "advertised",
+   "label": "experiment_prepare",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": "iteration.experiment_review",
+   "disposition": "advertised",
+   "label": "experiment_review",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "experiment_review_session",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "score_iteration_quality",
+   "pack": "iteration",
+   "source": "astrid/packs/iteration/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_model_trends_chart",
+   "pack": "local",
+   "source": "astrid/packs/local/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_neon_orbit_card",
+   "pack": "local",
+   "source": "astrid/packs/local/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_text_card",
+   "pack": "local",
+   "source": "astrid/packs/local/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "download_remote_media",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "extract_clip",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "repair_speech",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "search_gifs",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "trim_video",
+   "pack": "media",
+   "source": "astrid/packs/media/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "produce_terminal_video",
+   "pack": "moirae",
+   "source": "astrid/packs/moirae/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_screenplay",
+   "pack": "moirae",
+   "source": "astrid/packs/moirae/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_sprite_sheet",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_timeline",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "scaffold_html_canvas_effect",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": "rendering.timeline_visualize",
+   "disposition": "advertised",
+   "label": "timeline_visualize",
+   "pack": "rendering",
+   "source": "astrid/packs/rendering/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "exec_on_pod",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "provision_pod",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "pull_artifacts",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_pod_session",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "teardown_pod",
+   "pack": "runpod",
+   "source": "astrid/packs/runpod/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "distill_stream_content",
+   "pack": "stream_content",
+   "source": "astrid/packs/stream_content/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "map_stream_segments",
+   "pack": "stream_content",
+   "source": "astrid/packs/stream_content/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "score_clip_candidates",
+   "pack": "stream_content",
+   "source": "astrid/packs/stream_content/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_clip_pool",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_dataset",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "merge_clip_pool",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_training",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": "training.search_loras",
+   "disposition": "advertised",
+   "label": "search_loras",
+   "pack": "training",
+   "source": "astrid/packs/training/pack.yaml"
+  },
+  {
+   "canonical_id": "typed_timeline.map",
+   "disposition": "advertised",
+   "label": "map",
+   "pack": "typed_timeline",
+   "source": "astrid/packs/typed_timeline/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "describe_scene",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_audio",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_image",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_media",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "understand_video",
+   "pack": "understanding",
+   "source": "astrid/packs/understanding/pack.yaml"
+  },
+  {
+   "canonical_id": "vibecomfy.character_animation",
+   "disposition": "advertised",
+   "label": "character_animation",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "edit_workflow_ir",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "import_workflow",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "inspect_workflow_ir",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_workflow",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "validate_workflow",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": "vibecomfy.video_enhance",
+   "disposition": "advertised",
+   "label": "video_enhance",
+   "pack": "vibecomfy",
+   "source": "astrid/packs/vibecomfy/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "animate_image",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "assemble_event_talk",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "build_timeline",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "generate_logo_grid",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "make_thumbnails",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "render_iteration_video",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "run_hype_pipeline",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "vary_image_grid",
+   "pack": "video_editing",
+   "source": "astrid/packs/video_editing/pack.yaml"
+  },
+  {
+   "canonical_id": "wan2gp.generate_video",
+   "disposition": "advertised",
+   "label": "generate_video",
+   "pack": "wan2gp",
+   "source": "astrid/packs/wan2gp/pack.yaml"
+  },
+  {
+   "canonical_id": "wan2gp.validate_settings",
+   "disposition": "advertised",
+   "label": "validate_settings",
+   "pack": "wan2gp",
+   "source": "astrid/packs/wan2gp/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "download_youtube_audio",
+   "pack": "youtube",
+   "source": "astrid/packs/youtube/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "download_youtube_video",
+   "pack": "youtube",
+   "source": "astrid/packs/youtube/pack.yaml"
+  },
+  {
+   "canonical_id": null,
+   "disposition": "unmapped_source_label",
+   "label": "upload_youtube_video",
+   "pack": "youtube",
+   "source": "astrid/packs/youtube/pack.yaml"
+  }
+ ],
+ "result_contract_snapshot": {
+  "path": "astrid/core/contracts/output_result_exemptions.json",
+  "sha256": "7d392b55049494265a4017a077548bf701d0aec5fd07bb84de0c8793e2974d54"
+ },
+ "schema_version": 1
+}
 }

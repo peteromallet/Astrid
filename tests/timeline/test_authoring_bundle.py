@@ -11,6 +11,7 @@ import pytest
 from astrid.core.timeline.authoring_bundle import (
     AuthoringBundleError,
     UnsupportedAuthoringEditError,
+    approve_authoring_candidate,
     authoring_contract,
     authoring_media_inventory,
     compile_authoring_candidate,
@@ -20,6 +21,7 @@ from astrid.core.timeline.authoring_bundle import (
     open_authoring_bundle,
     preview_authoring_candidate,
     publish_authoring_candidate,
+    promote_approved_authoring_candidate,
     validate_authoring_candidate,
 )
 from astrid.core.timeline.shot_composition_projection import (
@@ -361,6 +363,178 @@ def test_publish_uses_one_compilation_and_returns_complete_mapping():
     assert writer.calls[0][3] == "candidate-1"
     assert result["publication"]["data"]["new_head"] == writer.calls[0][2]["parent_revision_id"]
     assert set(result["identity_mapping"]["placements"]) == {"occ-1", "occ-2"}
+
+
+def test_approval_is_bound_to_candidate_and_base_revision():
+    parent, shots, timelines = _closure(shared=True)
+    candidate = open_authoring_bundle(
+        parent, shot_revisions=shots, internal_timeline_revisions=timelines
+    )
+    approval = approve_authoring_candidate(
+        candidate, approver="editor-1", approval_id="approval-1"
+    )
+    writer = _Writer()
+
+    changed = copy.deepcopy(candidate)
+    changed["parent"]["config"]["approved-edit"] = True
+    with pytest.raises(AuthoringBundleError, match="stale or does not match"):
+        promote_approved_authoring_candidate(
+            changed, approval, writer, idempotency_key="promote-1"
+        )
+    assert writer.calls == []
+
+    promoted = promote_approved_authoring_candidate(
+        candidate, approval, writer, idempotency_key="promote-1"
+    )
+    assert promoted["approval"]["approval_id"] == "approval-1"
+    assert len(writer.calls) == 1
+
+
+def test_frozen_render_restart_then_approval_promotion_is_single_generation(tmp_path):
+    """Exercise the contract, durable replay, and candidate promotion seam together."""
+    from astrid.core.execution.reconciler import ExecutionReconciler
+    from astrid.core.execution.target_adapter import LocalMachineTargetAdapter
+
+    source = b"deterministically extracted source bytes"
+    source_digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    contract = {
+        "schema_version": 1,
+        "workflow": {
+            "id": "render.authoring-candidate",
+            "contract_digest": "sha256:workflow",
+            "required_bindings": ["source_video"],
+        },
+        "inputs": [
+            {
+                "name": "source_video",
+                "object_id": source_digest,
+                "filename": "source.mp4",
+                "required": True,
+            }
+        ],
+        "target": {"kind": "machine", "id": "local-1"},
+        "retry_policy": {"max_attempts": 2},
+        "checks": {"outputs": ["sha256"]},
+    }
+
+    class Runtime:
+        def __init__(self):
+            self.task = None
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(("create", kwargs))
+            if self.task is None:
+                self.task = {
+                    "task_id": "render-task-1",
+                    "run_id": "render-run-1",
+                    "state": "queued",
+                    "idempotency_key": kwargs["idempotency_key"],
+                    "capability_id": kwargs["capability"],
+                    "spec": {**kwargs["spec"], "execution_request": kwargs["execution_request"]},
+                }
+            return {"task_id": self.task["task_id"], "run_id": self.task["run_id"]}
+
+        def get_task(self, task_id):
+            assert task_id == self.task["task_id"]
+            return dict(self.task)
+
+        def claim(self, **kwargs):
+            self.calls.append(("claim", kwargs))
+            self.task.update({"state": "running", "attempt_id": "render-attempt-1"})
+            return {
+                "task_id": self.task["task_id"],
+                "attempt_id": "render-attempt-1",
+                "lease_id": "render-lease-1",
+                "fence": 1,
+                "runtime_epoch": 1,
+                "idempotency_key": "render-request-1",
+                "capability_id": "render.authoring-candidate",
+                "spec": self.task["spec"],
+            }
+
+        def settle(self, attempt_id, **kwargs):
+            self.calls.append(("settle", kwargs))
+            self.task.update({"state": "completed", "result": {"outputs": kwargs["outputs"]}})
+            return {"ok": True}
+
+        def fail(self, *args, **kwargs):
+            self.calls.append(("fail", kwargs))
+            self.task["state"] = "failed"
+            return {"ok": True}
+
+    runtime = Runtime()
+    adapter = LocalMachineTargetAdapter(
+        {"kind": "machine", "id": "local-1"},
+        observer=lambda: {
+            "kind": "machine",
+            "target_id": "local-1",
+            "live": True,
+            "runtime_epoch": 1,
+            "launch_generation": "launch-1",
+            "process_birth_id": "process-1",
+            "engine_birth_id": "engine-1",
+            "output_root": str(tmp_path),
+        },
+    )
+    render_count = 0
+
+    def execute(_claim, observation):
+        nonlocal render_count
+        render_count += 1
+        output = tmp_path / "render.bin"
+        output.write_bytes(source + b"/rendered")
+        data = output.read_bytes()
+        return {
+            "outputs": [
+                {
+                    "path": output.name,
+                    "content_hash": "sha256:" + hashlib.sha256(data).hexdigest(),
+                    "bytes": len(data),
+                }
+            ],
+            "source_digest": source_digest,
+            "source_filename": "source.mp4",
+            "output_root": observation.output_root,
+        }
+
+    reconciler = ExecutionReconciler(runtime, adapter)
+    first = reconciler.run(
+        contract=contract,
+        project_id="project-1",
+        capability="render.authoring-candidate",
+        spec={"inputs": {}},
+        executor_id="worker-1",
+        execute=execute,
+        idempotency_key="render-request-1",
+    )
+    second = reconciler.run(
+        contract=contract,
+        project_id="project-1",
+        capability="render.authoring-candidate",
+        spec={"inputs": {}},
+        executor_id="worker-1",
+        execute=execute,
+        idempotency_key="render-request-1",
+    )
+
+    assert first.status == "complete"
+    assert second.status == "complete"
+    assert second.phase == "recovery"
+    assert render_count == 1
+    assert [name for name, _ in runtime.calls].count("claim") == 1
+
+    parent, shots, timelines = _closure(shared=True)
+    candidate = open_authoring_bundle(
+        parent, shot_revisions=shots, internal_timeline_revisions=timelines
+    )
+    approval = approve_authoring_candidate(candidate, approver="editor-1", approval_id="approval-render-1")
+    writer = _Writer()
+    promoted = promote_approved_authoring_candidate(
+        candidate, approval, writer, idempotency_key="promote-render-1"
+    )
+    assert promoted["candidate_digest"] == approval["candidate_digest"]
+    assert len(writer.calls) == 1
 
 
 def test_full_authored_field_edits_compile_without_normalizing_opaque_fields():

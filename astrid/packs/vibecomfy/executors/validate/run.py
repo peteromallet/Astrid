@@ -29,6 +29,52 @@ class WorkflowValidationError(ValueError):
     """A VibeComfy workflow could not be validated."""
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise WorkflowValidationError(f"workflow JSON contains duplicate key {key!r}")
+        value[key] = item
+    return value
+
+
+def _load_validation_json(workflow_path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(
+            workflow_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise WorkflowValidationError(f"workflow is not valid UTF-8 JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise WorkflowValidationError("workflow JSON must be an object")
+    return raw
+
+
+def _validation_format(raw: dict[str, Any]) -> str:
+    """Select an admitted JSON format without permitting envelope fallback."""
+    nodes = raw.get("nodes")
+    envelope_markers = {
+        "vibecomfy_format_version",
+        "edges",
+        "compiled_api",
+    }
+    has_envelope_markers = bool(envelope_markers.intersection(raw))
+    if "vibecomfy_format_version" in raw:
+        if nodes is None or isinstance(nodes, list):
+            raise WorkflowValidationError("ambiguous VibeWorkflow envelope/UI JSON")
+        if raw.get("vibecomfy_format_version") != "1.0":
+            raise WorkflowValidationError("unsupported VibeWorkflow envelope version")
+        if not isinstance(nodes, dict) or not isinstance(raw.get("edges"), list):
+            raise WorkflowValidationError("malformed VibeWorkflow envelope structure")
+        return "envelope"
+    if has_envelope_markers:
+        raise WorkflowValidationError("unversioned or ambiguous graph envelope JSON")
+    if isinstance(nodes, list):
+        return "ui"
+    raise WorkflowValidationError("workflow JSON is neither a UI graph nor a VibeWorkflow envelope")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run VibeComfy workflow commands.")
     add_choice_arg(parser, "command", values=("run", "validate"))
@@ -43,10 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _static_ui_validation(workflow_path: Path) -> dict[str, Any]:
     """Validate UI JSON through VibeComfy's static ingestion and IR checks."""
-    from vibecomfy.ingest.loader import load_workflow_json
     from vibecomfy.ingest.normalize import from_ui
 
-    raw = load_workflow_json(workflow_path)
+    raw = _load_validation_json(workflow_path)
+    if _validation_format(raw) != "ui":
+        raise WorkflowValidationError("workflow JSON is not an unambiguous UI graph")
     workflow = from_ui(
         raw,
         source_path=str(workflow_path),
@@ -57,6 +104,51 @@ def _static_ui_validation(workflow_path: Path) -> dict[str, Any]:
         "schema_version": 1,
         "authority": "input_ui_graph",
         "validation_mode": "static_ui_graph",
+        "workflow_id": workflow.id,
+        "status": "ok" if report.ok else "error",
+        "ok": report.ok,
+        "issues": [
+            {
+                "code": issue.code,
+                "message": issue.message,
+                "severity": issue.severity,
+                "detail": issue.detail or {},
+            }
+            for issue in report.issues
+        ],
+        "python_execution_consent": None,
+        "security_gate_audit": [],
+    }
+
+
+def _envelope_validation(workflow_path: Path) -> dict[str, Any]:
+    """Validate a versioned VibeWorkflow envelope without executing it."""
+    from vibecomfy.ingest.normalize import from_envelope
+
+    raw = _load_validation_json(workflow_path)
+    if _validation_format(raw) != "envelope":
+        raise WorkflowValidationError("workflow JSON is not a VibeWorkflow envelope")
+    try:
+        workflow = from_envelope(raw)
+        if workflow.id != raw.get("id"):
+            raise WorkflowValidationError("VibeWorkflow identity does not match its envelope")
+        if workflow.to_envelope() != raw:
+            raise WorkflowValidationError("VibeWorkflow envelope failed exact round-trip validation")
+        report = workflow.validate()
+        if "compiled_api" in raw:
+            embedded_api = raw["compiled_api"]
+            if not isinstance(embedded_api, dict) or workflow.compile("api") != embedded_api:
+                raise WorkflowValidationError(
+                    "stored compiled_api does not match the graph-derived API projection"
+                )
+    except WorkflowValidationError:
+        raise
+    except Exception as exc:
+        raise WorkflowValidationError(f"VibeWorkflow envelope validation failed: {exc}") from exc
+    return {
+        "schema_version": 1,
+        "authority": "vibeworkflow_envelope",
+        "validation_mode": "static_vibeworkflow_envelope",
         "workflow_id": workflow.id,
         "status": "ok" if report.ok else "error",
         "ok": report.ok,
@@ -163,7 +255,12 @@ def main(argv: list[str] | None = None) -> int:
                     args.python_execution_consent,
                     required=False,
                 )
-                report = _static_ui_validation(workflow_path)
+                raw = _load_validation_json(workflow_path)
+                validation_format = _validation_format(raw)
+                if validation_format == "envelope":
+                    report = _envelope_validation(workflow_path)
+                else:
+                    report = _static_ui_validation(workflow_path)
                 report["python_execution_consent"] = (
                     "confirmed" if args.python_execution_consent == "confirmed" else None
                 )

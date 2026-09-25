@@ -11,6 +11,7 @@ from astrid.sdk import autobootstrap
 from astrid.sdk.client import AstridClient
 from astrid.sdk.exceptions import ServiceUnavailableError
 from astrid.sdk.host_bootstrap import _provision_render_runtime_env
+from astrid.sdk.storage_root import resolve_runtime_data_root
 from astrid.sdk.workspace_client import WorkspaceClientError
 from banodoco_workspace_client.contract_metadata import SCHEMA_DIGEST
 
@@ -33,6 +34,8 @@ def test_invalid_admission_budget_is_rejected(monkeypatch, value):
 def _isolated_home(monkeypatch, tmp_path):
     """Keep upgrade-guard tests hermetic around the operator's live home."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # conftest marks pack imports as internal; these tests model external CLI callers.
+    monkeypatch.delenv("ASTRID_INTERNAL_INVOCATION", raising=False)
 
 
 def _runtime_checkout(tmp_path: Path) -> Path:
@@ -311,7 +314,7 @@ def test_installed_runtime_module_is_used_when_console_script_is_off_path(
         "--profile",
         "astrid",
         "--data-root",
-        str(Path(__file__).resolve().parents[2] / ".astrid-data"),
+        str(resolve_runtime_data_root()),
         "--json",
     ]
 
@@ -452,7 +455,7 @@ def test_persisted_source_profile_relaunches_without_environment(monkeypatch, tm
     assert result["status"] == "reconnected"
     assert seen["command"] == [
         str(launcher), "up", "--profile", "astrid", "--data-root",
-        str(Path(__file__).resolve().parents[2] / ".astrid-data"), "--json"
+        str(resolve_runtime_data_root()), "--json"
     ]
 
 
@@ -478,7 +481,7 @@ def test_envless_bootstrap_delegates_missing_profile_to_neutral_launcher(monkeyp
         autobootstrap.ensure_runtime()
     assert seen["command"] == [
         str(launcher), "up", "--profile", "astrid", "--data-root",
-        str(Path(__file__).resolve().parents[2] / ".astrid-data"), "--json"
+        str(resolve_runtime_data_root()), "--json"
     ]
 
 
@@ -527,6 +530,8 @@ def test_sdk_open_uses_explicit_context_without_bootstrap(monkeypatch):
                 "protocol": "workspace.v1",
                 "schema_digest": SCHEMA_DIGEST,
                 "runtime_epoch": 1,
+                "runtime_instance_id": "runtime-instance-1",
+                "runtime_session_id": "runtime-session-1",
             }
 
         def handshake(self, *args):
@@ -541,6 +546,7 @@ def test_sdk_open_uses_explicit_context_without_bootstrap(monkeypatch):
                     "projects:read", "projects:write", "objects:read",
                     "objects:write", "tasks:read", "tasks:write",
                 ],
+                "capabilities": ["execution_binding.targeted.v1"],
             }
 
     monkeypatch.setattr("astrid.sdk.workspace_client.resolve_runtime_connection", resolve)

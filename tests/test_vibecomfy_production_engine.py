@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import subprocess
 import sys
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -177,6 +180,84 @@ def test_canonical_bundle_compiles_through_single_production_boundary(
     bundle.compile.assert_called_once_with()
 
 
+def test_workflow_input_binding_validates_public_input_without_mutating_bundle() -> None:
+    workflow = SimpleNamespace(inputs={"source_video": SimpleNamespace()})
+    bundle = SimpleNamespace(workflow=workflow, require_canonical_authority=Mock())
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(production_engine, "_canonical_bundle_value", lambda _: bundle)
+        assert production_engine._validate_workflow_input_bindings(
+            bundle,
+            {"source_video": "morpheus-speaking.mp4"},
+        ) == {"source_video": "morpheus-speaking.mp4"}
+    finally:
+        monkeypatch.undo()
+
+
+def test_compiler_h3_bundle_loads_and_validates_all_managed_inputs_before_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from astrid.packs.h3_av.src.compile import compile_preparation
+    from astrid.packs.vibecomfy.asset_manifest import AssetManifestError, read_archive, resolve_inputs
+    from tests.packs.h3_av.test_integrated_graph_bundle import _prepared_fixture_a
+
+    preparation, _assets = _prepared_fixture_a(tmp_path)
+    compiled_dir = tmp_path / "compiled"
+    compile_preparation(preparation, out_dir=compiled_dir)
+    workflow_path = compiled_dir / "graph.vibe.json"
+    archive_path = compiled_dir / "managed-assets.zip"
+    archive = read_archive(archive_path)
+    supplied = dict(archive.bindings)
+    assert set(supplied) == {
+        "look-1.png", "look-2.png", "look-3.png", "look-4.png",
+        "prepared_audio_mask", "prepared_video_mask",
+    }
+
+    loaded = production_engine.load_workflow_path(workflow_path, tmp_path / "canonical-load")
+    original_identity = production_engine.loaded_workflow_execution_identity(loaded)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        production_engine,
+        "_run_profile",
+        lambda *args, **kwargs: calls.append(kwargs) or (),
+    )
+    production_engine.run_workflow_path(
+        workflow_path,
+        tmp_path / "profile-boundary",
+        task_identity="cpu-h3-contract",
+        expected_execution_identity=original_identity,
+        workflow_input_bindings=supplied,
+    )
+    assert len(calls) == 1
+    assert calls[0]["run_inputs"] == supplied
+
+    with pytest.raises(production_engine.ProductionEngineError, match="not a declared public input"):
+        production_engine._validate_workflow_input_bindings(
+            loaded.resolved, {**supplied, "graph_binding": "graph_binding.json"}
+        )
+    with pytest.raises(production_engine.ProductionEngineError, match="basename"):
+        production_engine._validate_workflow_input_bindings(
+            loaded.resolved, {**supplied, "look-1.png": "nested/look-1.png"}
+        )
+    with pytest.raises(production_engine.ProductionEngineError, match="basename"):
+        production_engine._validate_workflow_input_bindings(
+            loaded.resolved, {**supplied, "prepared_video_mask": 7}
+        )
+    with pytest.raises(AssetManifestError, match="conflict"):
+        resolve_inputs(archive.manifest, {"look-1.png": "different.png"})
+
+    tampered = tmp_path / "tampered-managed-assets.zip"
+    with zipfile.ZipFile(archive_path) as source_archive:
+        members = [(name, source_archive.read(name)) for name in source_archive.namelist()]
+    altered_member = archive.manifest["assets"][0]["member"]
+    with zipfile.ZipFile(tampered, "w", compression=zipfile.ZIP_DEFLATED) as target_archive:
+        for name, payload in members:
+            target_archive.writestr(name, payload + b"tamper" if name == altered_member else payload)
+    with pytest.raises(AssetManifestError, match="archive|member|integrity"):
+        read_archive(tampered)
+    assert production_engine.loaded_workflow_execution_identity(loaded) == original_identity
+
+
 def test_run_workflow_path_rejects_execution_identity_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -256,6 +337,9 @@ def test_run_executor_rejects_outputs_outside_private_custody(
     workflow.write_text('{"template_id":"image/a","bindings":{}}', encoding="utf-8")
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"image")
+    readiness = tmp_path / "readiness.json"
+    readiness.write_text(json.dumps({"vibecomfy_session": {"session_dir": str(tmp_path), "source_revision": "pinned", "source_content_digest": "sha256:" + "a" * 64}}), encoding="utf-8")
+    readiness_hash = "sha256:" + hashlib.sha256(readiness.read_bytes()).hexdigest()
     monkeypatch.setattr(
         production_engine,
         "run_workflow_path",
@@ -267,6 +351,8 @@ def test_run_executor_rejects_outputs_outside_private_custody(
             workflow,
             tmp_path / "outputs",
             task_identity="task-1",
+            readiness_profile_path=str(readiness),
+            readiness_profile_hash=readiness_hash,
         )
 
 
@@ -425,12 +511,11 @@ def test_pip_embedded_fails_closed_when_embedded_client_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     _isolated_comfy_imports: None,
 ) -> None:
-    monkeypatch.setenv("COMFYUI_PATH", str(tmp_path / "missing-client"))
     monkeypatch.setattr(production_engine, "_EMBEDDED_COMFY_FALLBACKS", ())
 
     with pytest.raises(
         production_engine.ProductionEngineError,
-        match="comfy/client/embedded_comfy_client.py",
+        match="attested pinned ComfyUI tree",
     ):
         production_engine._run_profile(
             object(),
@@ -441,6 +526,25 @@ def test_pip_embedded_fails_closed_when_embedded_client_is_missing(
             task_identity="test-task",
             destination=tmp_path / "outputs",
         )
+
+
+def _pinned_comfy_profile(root: Path) -> dict[str, object]:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "T9 tests"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "t9-tests@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=T9 tests", "-c", "user.email=t9-tests@example.invalid", "commit", "-qm", "fixture"], check=True)
+    revision = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    archive = subprocess.run(["git", "-C", str(root), "archive", "--format=tar", "HEAD"], check=True, capture_output=True).stdout
+    return {
+        "comfyui_candidate": {
+            "root": str(root),
+            "revision": revision,
+            "source_content_digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+        },
+        "launch": {"comfyui_path": str(root)},
+    }
 
 
 def test_pip_embedded_inserts_tree_containing_embedded_client(
@@ -454,10 +558,11 @@ def test_pip_embedded_inserts_tree_containing_embedded_client(
     (root / "comfy" / "__init__.py").write_text("", encoding="utf-8")
     (client.parent / "__init__.py").write_text("", encoding="utf-8")
     client.write_text("class Comfy:\n    pass\n", encoding="utf-8")
+    profile = _pinned_comfy_profile(root)
     monkeypatch.setenv("COMFYUI_PATH", str(root))
     monkeypatch.setattr(production_engine, "_EMBEDDED_COMFY_FALLBACKS", ())
 
-    selected = production_engine._bootstrap_embedded_comfy_client()
+    selected = production_engine._bootstrap_embedded_comfy_client(profile)
 
     assert selected == root.resolve()
     assert sys.path[0] == str(root.resolve())
@@ -477,6 +582,7 @@ def test_pip_embedded_consumes_canonical_bundle_and_pinned_session_config(
     (root / "comfy" / "__init__.py").write_text("", encoding="utf-8")
     (client.parent / "__init__.py").write_text("", encoding="utf-8")
     client.write_text("class Comfy:\n    pass\n", encoding="utf-8")
+    profile = _pinned_comfy_profile(root)
     monkeypatch.setenv("COMFYUI_PATH", str(root))
     monkeypatch.setattr(production_engine, "_EMBEDDED_COMFY_FALLBACKS", ())
 
@@ -502,6 +608,7 @@ def test_pip_embedded_consumes_canonical_bundle_and_pinned_session_config(
         template_id="image/z_image",
         task_identity="task-1",
         destination=tmp_path / "task-out",
+        # The readiness profile is the third positional argument in this API.
     )
 
     assert result == (output.resolve(),)

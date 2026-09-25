@@ -711,13 +711,38 @@ def _command_subprocess_env(
     command_env: Mapping[str, str],
 ) -> dict[str, str]:
     project_env = _project_subprocess_env(request)
+    handoff_names = (
+        "ASTRID_NESTED_RUNTIME_HANDOFF_PATH",
+        "ASTRID_NESTED_RUNTIME_HANDOFF_HASH",
+    )
+    if any(name in command_env or name in project_env for name in handoff_names):
+        raise OrchestratorRunnerError(
+            "orchestrator configuration cannot override the host runtime handoff"
+        )
+    explicit_env = {
+        **command_env,
+        **project_env,
+        "ASTRID_INTERNAL_INVOCATION": "1",
+    }
+    # GenericPackHost constructs this PYTHONPATH from its own checkout,
+    # dependency roots, and source-fenced import roots before launching the
+    # orchestrator worker. Preserve that validated selection for its command
+    # grandchild without making PYTHONPATH a generally inherited variable.
+    if os.environ.get("ASTRID_INTERNAL_INVOCATION") == "1":
+        selected_pythonpath = os.environ.get("PYTHONPATH")
+        if selected_pythonpath:
+            explicit_env["PYTHONPATH"] = selected_pythonpath
+        supplied = [os.environ.get(name) for name in handoff_names]
+        if any(supplied) and not all(supplied):
+            raise OrchestratorRunnerError("host runtime handoff environment is partial")
+        if all(supplied):
+            # Preserve only the two host-issued reference fields across this
+            # second boundary. SDK validation authenticates the issuer and
+            # exact bytes before they can select attach-only behavior.
+            explicit_env.update(dict(zip(handoff_names, (str(value) for value in supplied))))
     return build_child_subprocess_env(
         parent={**os.environ, **project_env},
-        explicit_env={
-            **command_env,
-            **project_env,
-            "ASTRID_INTERNAL_INVOCATION": "1",
-        },
+        explicit_env=explicit_env,
         passthrough=orchestrator.isolation.env_passthrough,
         declared_passthrough=orchestrator.isolation.env_passthrough,
     )

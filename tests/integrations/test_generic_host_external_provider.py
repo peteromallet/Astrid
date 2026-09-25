@@ -8,7 +8,6 @@ import textwrap
 import os
 import socket
 import subprocess
-import sys
 import sysconfig
 import threading
 from types import SimpleNamespace
@@ -25,12 +24,12 @@ from astrid.core.execution.generic_host import (
 )
 from astrid.core.execution.network_broker import ObservableNetworkBroker
 
-RUNTIME = Path("/Users/peteromalley/Documents/reigh-workspace/banodoco-workspace-runtime-fi6-identity-20260905")
-if RUNTIME.is_dir():
-    sys.path.insert(0, str(RUNTIME))
 from banodoco_workspace_client import ApiError, WorkspaceClient
 from runtime_protocol.daemon import RuntimeDaemon
-from tests.helpers.runtime import initialize_runtime_realm
+from tests.helpers.runtime import assert_t9_runtime_selection, initialize_runtime_realm
+
+
+assert_t9_runtime_selection()
 
 
 _RuntimeDaemon = RuntimeDaemon
@@ -52,14 +51,25 @@ def test_output_publication_uses_canonical_cas_with_optional_project(
         return SimpleNamespace(digest="sha256:" + hashlib.sha256(data).hexdigest(), size=len(data))
 
     client = object.__new__(RuntimeProtocolClient)
-    client.generated = SimpleNamespace(ingest_object=ingest_object)
+    client.executor_id = "t8a-test-worker"
+    client._attempt_runtime_epochs = {"attempt-1": 1}
+    client.generated = SimpleNamespace(
+        ingest_object=ingest_object,
+        health=lambda: {"runtime_epoch": 1},
+    )
     client.INLINE_SETTLEMENT_OUTPUTS = inline
     host = GenericPackHost(pack_roots=[], client=client)
     path = tmp_path / "results.json"
     path.write_text('{"results": []}')
     outputs = host._upload_outputs(
-        [{"name": "results", "path": str(path), "artifact_type": "application/json"}],
+        [{"name": "results", "path": str(path), "artifact_type": "application/json", "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}],
         project_id=project_id,
+        run_id="run-1",
+        task_id="task-1",
+        attempt_id="attempt-1",
+        lease_id="lease-1",
+        fence=1,
+        runtime_epoch=1,
     )
     if inline:
         import base64
@@ -74,6 +84,7 @@ def test_output_publication_uses_canonical_cas_with_optional_project(
         "name": "results", "kind": "object", "media_type": "application/json",
         "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
         "size": path.stat().st_size,
+        "filename": "results.json",
     }]
 
 
@@ -81,7 +92,18 @@ def test_output_publication_uses_canonical_cas_with_optional_project(
 def test_output_publication_rejects_malformed_project(tmp_path: Path, project_id) -> None:
     client = object.__new__(RuntimeProtocolClient)
     with pytest.raises(HostError, match="non-empty string or None"):
-        client.upload_object(tmp_path / "unused", project_id=project_id, media_type="text/plain")
+        client.upload_object(
+            tmp_path / "unused",
+            project_id=project_id,
+            media_type="text/plain",
+            run_id="run-1",
+            task_id="task-1",
+            attempt_id="attempt-1",
+            lease_id="lease-1",
+            fence=1,
+            output_key="output-1",
+            output_port="result",
+        )
 
 
 class _TaskRuntime:

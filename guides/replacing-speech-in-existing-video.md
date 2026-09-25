@@ -23,6 +23,12 @@ This is a **MiniMax H3 audio/video inpainting graph**, not a standalone TTS or g
 - The decoder merges generated video inside the video mask and generated audio inside the audio interval, with boundary blending/crossfade controlled by the LanPaint decode node. The source fps is preserved by the wrapper; the H3 duration input is separately rounded to a 24 fps `17k+5` frame grid, so verify the actual output duration and boundary alignment rather than assuming the two time bases are identical.
 - The graph does not promise identity-preserving voice cloning. Context preservation comes from retaining unmasked original audio; generated voice quality, speaker continuity and lip synchronization must be judged from the result.
 
+All H3 inputs also follow the shared [H3 source audiovisual preparation
+contract](matrix-minkhole-extension-video-generation.md#h3-source-audiovisual-preparation-contract).
+The inpainting graph's `17k+5` duration grid is not a substitute for checking
+the decoded source's frame/sample alignment, and the extension validator must
+not be assumed to validate an inpainting mask or dialogue interval.
+
 The graph's public controls are source video, video mask keyframes, audio intervals, prompt, duration, seed, resolution, four model selections and LanPaint steps. The upstream demo's media, masks, prompt and model widgets are examples. In this graph the outer subgraph instance overrides inner loader defaults, and the serialized outer/inner model names differ; preserve the effective outer values or report the conflict explicitly rather than silently selecting the nested defaults. The boundary mapping and model-selection evidence is tabulated in [`review.md`](../runs/matrix-minkhole/planning/comfy-inspection/review.md).
 
 The checked builder/source records these **graph defaults**, which are provenance facts rather than recommended best settings: 16:9 at 0.4 megapixels (`864×480` in the source selector), duration 5 seconds, H3 duration quantization at 24fps, LanPaint sampler steps 5, `euler` sampler, decode blend overlap 7 and audio crossfade 0.02. The effective serialized outer model names are `minimax_h3_fl2va_pruned_fp8_scaled.safetensors`, `qwen3vl_32b_minimax_h3_int8_convrot.safetensors`, `minimax_h3_video_vae_fp16.safetensors`, and `minimax_h3_audio_vae_fp32.safetensors`; verify availability and compatibility before using them.
@@ -41,6 +47,19 @@ The checked builder/source records these **graph defaults**, which are provenanc
 For **new motion after a clip ends**, the same masking principle is a useful experiment: preserve an overlapping prefix and regenerate a later full-frame region. However, this selected AV inpainting graph merges into an existing source canvas; it is not a verified append-video workflow. A proposed test would first prepare a longer canvas, preserve the original prefix, and mask the placeholder suffix in video and, if new sound is wanted, audio. Canvas preparation, duration handling and mask alignment must be validated before this can be called supported. Alternatively, select a dedicated continuation workflow. Judge motion direction and speed, camera movement, identity and sound across the join; a matching boundary frame alone does not prove a smooth continuation.
 
 For a longer dialogue passage, split only at audible phrase boundaries or clean shot boundaries after the short pilot passes. Keep a small unmasked context window around each replacement so the original voice and room tone can bridge the edit, then inspect every join for a change in timbre, loudness, ambience or lip motion. If the passage crosses a reflection or object interaction, finish the dialogue pilot first and carry the accepted audio into a separate tracked visual pass. Do not infer that a successful short inpaint will remain stable across a full scene; extend one passage at a time and retain independent provenance and review evidence.
+
+### Choose extension when the whole shot may continue
+
+If the requirement is not “change this existing body pose” but “start from a
+real speaking clip and generate what happens next,” use the project-specific
+[Matrix Minkhole H3 extension guide](matrix-minkhole-extension-video-generation.md)
+and the pinned Seitanism workflow instead of widening an inpaint mask. The
+extension path preserves a native audiovisual latent edge and can let the
+camera, gesture, and body move after the source clip. It does not guarantee the
+same pose, exact replacement words, or voice identity, so it is not a drop-in
+replacement for the inpaint path. Keep the original audio and final dialogue
+separate until a short extension pilot has passed motion, identity, voice, and
+boundary review.
 
 ### Python review candidate
 

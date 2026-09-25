@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "operation": "generate",
+  "source": null,
+  "output": {"duration": 2},
+  "content": {"prompt": "A calm speaker in a red chair says the exact requested line."},
+  "changes": {"video": [], "audio": []},
+  "references": [],
+  "overrides": {}
+}

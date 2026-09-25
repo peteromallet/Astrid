@@ -1,0 +1,19 @@
+profile: h3_av.native.v1
+workflow: workflows/seitanism_h3_av_extension_repaired
+operations: [edit, continue]
+source_free_generation:
+  status: unsupported
+  reason: no verified source-free H3 graph is exposed by this profile
+fps: 24
+context_frames: 39
+reference_capacity: 2
+reference_binding: keyframe
+audio_mask_resolution: sample-interval
+video_mask_resolution: frame-raster
+runtime:
+  comfy_version: '==0.36.0'
+  torch: '==2.10.0+cu130'
+  cuda: '13.0'
+  sampler_default: res_multistep
+  steps_default: 8
+  resolution: 1024x576

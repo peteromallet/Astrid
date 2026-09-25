@@ -4,15 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-
-RUNTIME = Path("/Users/peteromalley/Documents/reigh-workspace/banodoco-workspace-runtime-fi6-identity-20260905")
-if RUNTIME.is_dir():
-    sys.path.insert(0, str(RUNTIME))
 
 runtime_protocol = pytest.importorskip("runtime_protocol")
 from banodoco_workspace_client import ApiError, WorkspaceClient  # noqa: E402
@@ -20,7 +15,10 @@ from runtime_protocol.daemon import RuntimeDaemon  # noqa: E402
 from runtime_protocol.store import RealmStore  # noqa: E402
 
 from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient  # noqa: E402
-from tests.helpers.runtime import initialize_runtime_realm
+from tests.helpers.runtime import assert_t9_runtime_selection, initialize_runtime_realm
+
+
+assert_t9_runtime_selection()
 
 
 def _digest(value: str) -> str:

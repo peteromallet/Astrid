@@ -6,6 +6,7 @@ second representation or persistence path.
 """
 
 from astrid.core.timeline.authoring_bundle import (
+    approve_authoring_candidate,
     authoring_media_inventory,
     compile_authoring_candidate,
     diff_authoring_candidate,
@@ -14,6 +15,7 @@ from astrid.core.timeline.authoring_bundle import (
     open_authoring_bundle,
     preview_authoring_candidate,
     publish_authoring_candidate,
+    promote_approved_authoring_candidate,
     validate_authoring_candidate,
 )
 
@@ -21,6 +23,7 @@ from .authoring_render_preview import render_authoring_candidate_preview
 
 __all__ = [
     "authoring_media_inventory",
+    "approve_authoring_candidate",
     "compile_authoring_candidate",
     "diff_authoring_candidate",
     "format_authoring_inspection",
@@ -29,5 +32,6 @@ __all__ = [
     "preview_authoring_candidate",
     "render_authoring_candidate_preview",
     "publish_authoring_candidate",
+    "promote_approved_authoring_candidate",
     "validate_authoring_candidate",
 ]

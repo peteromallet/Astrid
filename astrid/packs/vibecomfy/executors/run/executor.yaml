@@ -27,19 +27,33 @@
       "--readiness-profile-path",
       "{readiness_profile_path}",
       "--readiness-profile-hash",
-      "{readiness_profile_hash}"
+      "{readiness_profile_hash}",
+      "--source-video",
+      "{source_video}",
+      "--source-video-node",
+      "{source_video_node}",
+      "--source-video-widget",
+      "{source_video_widget}",
+      "--managed-assets",
+      "{managed_assets}",
+      "--workflow-inputs",
+      "{workflow_inputs}",
+      "--output-contract",
+      "{output_contract}"
     ],
     "env": {
       "VIBECOMFY_HEADLESS": "1"
     }
   },
-  "description": "Run a VibeComfy workflow through the VibeComfy CLI.",
+  "description": "Run a VibeComfy workflow through the VibeComfy CLI with readiness-attested ComfyUI or an explicitly approved T9 CPU model-boundary substitute.",
   "graph": {
     "consumes": [
       "workflow",
       "python",
       "companion",
-      "source"
+      "source",
+      "source_video",
+      "managed_assets"
     ],
     "provides": [
       "vibecomfy_run",
@@ -54,6 +68,48 @@
       "name": "workflow",
       "required": false,
       "type": "file"
+    },
+    {
+      "default": "",
+      "description": "Optional managed source video staged into the Comfy input directory.",
+      "name": "source_video",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "99",
+      "description": "Node id receiving the managed source video basename.",
+      "name": "source_video_node",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "default": "video",
+      "description": "Input field on the source-video node.",
+      "name": "source_video_widget",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "default": "",
+      "description": "Optional deterministic ZIP containing manifest.json and runtime-managed workflow media inputs.",
+      "name": "managed_assets",
+      "required": false,
+      "type": "file"
+    },
+    {
+      "default": "{}",
+      "description": "JSON object of scalar public workflow inputs. Media inputs are supplied by managed_assets.",
+      "name": "workflow_inputs",
+      "required": false,
+      "type": "string"
+    },
+    {
+      "default": "{}",
+      "description": "Validated H3 raw-inference output contract.",
+      "name": "output_contract",
+      "required": false,
+      "type": "string"
     },
     {
       "default": "",

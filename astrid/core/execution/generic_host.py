@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
 import hashlib
 import heapq
 import hmac
@@ -16,6 +17,7 @@ import importlib.util
 import json
 import mimetypes
 import os
+import re
 import secrets as secrets_module
 import shutil
 import signal
@@ -41,6 +43,10 @@ from astrid.core.contracts.binding import (
     expand_command,
 )
 from astrid.core.contracts.errors import AstridError
+from astrid.core.contracts.generation_publication import (
+    GenerationPublicationError,
+    resolve_generation_publication,
+)
 from astrid.core.env_vars import (
     ASTRID_INTERNAL_INVOCATION,
     ASTRID_PACKS_PATH,
@@ -59,6 +65,14 @@ from astrid.core.execution.managed_tool_session import (
 from astrid.core.execution.process_group import (
     _process_snapshot,
     popen_owned_group,
+)
+from astrid.core.execution.host_lane_policy import (
+    CANONICAL_PACK_HOST_MAX_CONCURRENCY,
+    effective_host_capacity,
+)
+from astrid.core.execution.t9_model_substitute import (
+    T9SubstituteError,
+    approved_source as _approved_t9_substitute_source,
 )
 from astrid.core.execution.process_group import (
     group_exists as _owned_group_exists,
@@ -89,6 +103,7 @@ from astrid.core.generation.vibecomfy_dependency import (
 )
 from astrid.core.subprocess_env import build_child_subprocess_env
 from astrid.core.util.secrets import load_local_api_key_with_source
+from astrid.sdk.execution_request import normalize_execution_request
 from astrid.sdk.workspace_client import WorkspaceClientError, validate_runtime_endpoint
 
 if TYPE_CHECKING:
@@ -108,6 +123,10 @@ _VIDEO_SUFFIX_MEDIA_TYPES = {
     ".mov": "video/quicktime",
     ".webm": "video/webm",
     ".mkv": "video/x-matroska",
+}
+_SUFFIX_MEDIA_TYPES = {
+    **_VIDEO_SUFFIX_MEDIA_TYPES,
+    ".wav": "audio/wav",
 }
 
 _SETTLEMENT_OUTPUT_METADATA_FIELDS = (
@@ -144,13 +163,33 @@ def _settlement_media_type(descriptor: Mapping[str, Any]) -> str:
     artifact_type = str(descriptor.get("artifact_type") or "")
     filename = descriptor.get("filename")
     if isinstance(filename, str) and filename:
-        suffix_media_type = _VIDEO_SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
+        suffix_media_type = _SUFFIX_MEDIA_TYPES.get(Path(filename).suffix.lower())
         if suffix_media_type is not None:
             return suffix_media_type
         guessed_media_type = mimetypes.guess_type(filename)[0]
         if guessed_media_type and guessed_media_type.lower() != "application/octet-stream":
             return guessed_media_type
     return artifact_type or "application/octet-stream"
+
+
+def _normalized_sha256(value: Any, *, field: str) -> str:
+    """Return one strict wire digest representation."""
+    if not isinstance(value, str):
+        raise HostError(f"generated output {field} must be a sha256 digest")
+    digest = value.removeprefix("sha256:").lower()
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise HostError(f"generated output {field} must be a sha256 digest")
+    return "sha256:" + digest
+
+
+def _expected_output_identity(descriptor: Mapping[str, Any]) -> tuple[str, int]:
+    """Read the identity established by typed harvest, without recomputing it."""
+    digest_value = descriptor.get("digest", descriptor.get("content_hash"))
+    size_value = descriptor.get("size", descriptor.get("bytes"))
+    digest = _normalized_sha256(digest_value, field="digest")
+    if isinstance(size_value, bool) or not isinstance(size_value, int) or size_value < 0:
+        raise HostError("generated output size must be a non-negative integer")
+    return digest, size_value
 
 
 def _runtime_output_filename(value: str) -> str:
@@ -191,6 +230,19 @@ def _generation_output_port(record: Any, intent: Mapping[str, Any] | None) -> st
     modality = intent.get("modality")
     if modality not in {"image", "video", "audio"}:
         return None
+    try:
+        declared_publication = resolve_generation_publication(
+            getattr(record, "definition", None), capability_type="executor"
+        )
+    except GenerationPublicationError as exc:
+        raise HostError(str(exc)) from exc
+    if declared_publication is not None:
+        if declared_publication.modality != modality:
+            raise HostError(
+                "generation publication declaration modality does not match intent"
+            )
+        return declared_publication.output_port
+
     expected = {"image": "generated_images", "video": "generated_videos", "audio": "generated_audio"}[modality]
     candidates = [
         output.name for output in (getattr(getattr(record, "definition", None), "outputs", ()) or ())
@@ -468,6 +520,94 @@ def _read_readiness_profile_document() -> Mapping[str, Any] | None:
     if not isinstance(profile, Mapping):
         raise HostError("readiness profile is not an object")
     return profile
+
+
+_VIBECOMFY_EXECUTION_ATTESTATION = "_astrid_execution_attestation"
+
+
+def _vibecomfy_execution_attestation(
+    profile: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Project readiness onto stable VibeComfy execution semantics only."""
+    if profile is None:
+        return None
+
+    selected_source: dict[str, str] | None = None
+    session = profile.get("vibecomfy_session")
+    candidate = profile.get("vibecomfy_candidate")
+    comfy = profile.get("comfyui_candidate")
+    if isinstance(session, Mapping):
+        content_digest = session.get("source_content_digest")
+        if not isinstance(content_digest, str) or not re.fullmatch(
+            r"(?:sha256:)?[0-9a-fA-F]{64}", content_digest
+        ):
+            raise HostError("VibeComfy session source content digest is invalid")
+        selected_source = {"content_digest": "sha256:" + content_digest.removeprefix("sha256:").lower()}
+        runtime_profile = "checkout_server"
+    elif isinstance(candidate, Mapping) and candidate.get("kind") == "local_snapshot":
+        content_digest = candidate.get("source_content_digest")
+        if not isinstance(content_digest, str) or not re.fullmatch(
+            r"(?:sha256:)?[0-9a-fA-F]{64}", content_digest
+        ):
+            raise HostError("VibeComfy candidate source content digest is invalid")
+        selected_source = {"content_digest": "sha256:" + content_digest.removeprefix("sha256:").lower()}
+        runtime_profile = "local_snapshot"
+    elif isinstance(comfy, Mapping):
+        content_digest = comfy.get("source_content_digest")
+        if not isinstance(content_digest, str) or not re.fullmatch(
+            r"(?:sha256:)?[0-9a-fA-F]{64}", content_digest
+        ):
+            raise HostError("ComfyUI candidate source content digest is invalid")
+        selected_source = {"content_digest": "sha256:" + content_digest.removeprefix("sha256:").lower()}
+        runtime_profile = "pip_embedded"
+    else:
+        runtime_profile = "t9_cpu_stub"
+
+    attestation: dict[str, Any] = {"schema_version": 1, "runtime_profile": runtime_profile}
+    if selected_source is not None:
+        attestation["selected_source"] = selected_source
+    try:
+        substitute = _approved_t9_substitute_source(profile)
+    except T9SubstituteError as exc:
+        raise HostError(str(exc)) from exc
+    if substitute is not None:
+        attestation["model_boundary"] = {
+            "approved": True,
+            "mode": "deterministic_cpu_model_boundary_v1",
+            "source_sha256": substitute[1],
+        }
+        attestation["runtime_profile"] = "t9_cpu_stub"
+    return attestation
+
+
+def _bind_vibecomfy_execution_attestation(definition: Any) -> Any:
+    """Bind validated execution semantics into the effective definition."""
+    if definition.id != "vibecomfy.run":
+        return definition
+    try:
+        profile = _read_readiness_profile_document()
+        attestation = _vibecomfy_execution_attestation(profile)
+    except (HostError, OSError, T9SubstituteError):
+        # Discovery remains available for diagnostics; preflight will mark an
+        # invalid/missing approval unavailable before registration or claim.
+        attestation = None
+    if attestation is None:
+        return definition
+    metadata = dict(definition.metadata)
+    # This key is reserved to host authority and always replaces pack metadata.
+    metadata[_VIBECOMFY_EXECUTION_ATTESTATION] = attestation
+    return replace(definition, metadata=metadata)
+
+
+def _require_vibecomfy_execution_attestation(
+    definition: Any, profile: Mapping[str, Any] | None
+) -> None:
+    expected = definition.metadata.get(_VIBECOMFY_EXECUTION_ATTESTATION)
+    if not isinstance(expected, Mapping):
+        raise HostError("VibeComfy definition has no validated execution attestation")
+    actual = _vibecomfy_execution_attestation(profile)
+    if actual != expected:
+        raise HostError("VibeComfy readiness execution attestation changed; rediscovery and registration required")
 
 
 def _registration_verified_facts() -> dict[str, dict[str, Any]] | dict[str, Any]:
@@ -755,6 +895,13 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _ack_field(value: Any, name: str) -> Any:
+    """Read a registration acknowledgement field without repr parsing."""
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
 def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
     _signal_owned_group(process, sig)
     return
@@ -1031,13 +1178,22 @@ def _network_sandbox_argv(argv: list[str], attempt: Path, endpoint: str | None) 
 
 def _native_network_command(record: "CapabilityRecord") -> bool:
     """Whether a network-required manifest escapes Python hook observability."""
-    if record.definition.command is None:
+    command = _record_command(record)
+    if command is None:
         return False
     metadata = record.definition.metadata
     if bool(metadata.get("native")) or str(metadata.get("execution_kind", "")).lower() == "native":
         return True
-    first = str(record.definition.command.argv[0] if record.definition.command.argv else "").lower()
+    first = str(command.argv[0] if command.argv else "").lower()
     return first not in {"{python_exec}", sys.executable.lower(), "python", "python3"} and not first.endswith("/python") and not first.endswith("/python3")
+
+
+def _record_command(record: "CapabilityRecord") -> Any | None:
+    """Return the dispatch command for either an executor or orchestrator."""
+    if record.capability_kind == "orchestrator":
+        runtime = getattr(record.definition, "runtime", None)
+        return getattr(runtime, "command", None)
+    return getattr(record.definition, "command", None)
 
 
 def _enforceable_network_gateway(policy: Mapping[str, Any] | None) -> bool:
@@ -1312,6 +1468,161 @@ def _admitted_task_spec(task_data: Mapping[str, Any]) -> Mapping[str, Any]:
     return _admitted_spec_envelope(task_data.get("spec"))
 
 
+def _execution_contract(
+    task_data: Mapping[str, Any],
+    *,
+    runtime_session_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Validate the carried request before the worker spends or opens a session."""
+    envelope = task_data.get("spec")
+    # A small set of legacy in-process callers intentionally provide only the
+    # task identity while exercising capability-level admission guards.  With
+    # no carried contract there is nothing to validate here; preserve that
+    # compatibility path and let the ordinary capability checks continue.
+    if envelope is None:
+        return None
+    if not isinstance(envelope, Mapping):
+        raise HostError("runtime task is missing its immutable spec envelope")
+    request = envelope.get("execution_request")
+    nested = _admitted_spec_envelope(envelope)
+    nested_request = nested.get("execution_request")
+    if request is None:
+        request = nested_request
+    elif nested_request is not None and request != nested_request:
+        raise HostError("runtime task has conflicting execution_request values")
+    if request is None:
+        return None
+    try:
+        normalized = normalize_execution_request(request)
+    except ValueError as exc:
+        raise HostError(f"invalid execution_request: {exc}") from exc
+    if normalized is None or not isinstance(request, Mapping):
+        raise HostError("invalid execution_request")
+    if dict(request) != normalized:
+        raise HostError("runtime task execution_request is not normalized")
+
+    declared = normalized.get("inputs", [])
+    authorized = task_data.get("input_object_ids")
+    if not isinstance(authorized, (list, tuple)):
+        raise HostError("execution_request requires task input_object_ids")
+    def object_id(value: Any) -> str:
+        if not isinstance(value, str):
+            raise HostError("execution_request input object IDs must be strings")
+        return value.removeprefix("sha256:")
+    expected_ids = [object_id(item["object_id"]) for item in declared]
+    actual_ids = [object_id(item) for item in authorized]
+    if len(actual_ids) != len(expected_ids) or set(actual_ids) != set(expected_ids):
+        raise HostError("task input_object_ids do not match execution_request inputs")
+    inputs = nested.get("inputs")
+    if not isinstance(inputs, Mapping):
+        inputs = {}
+    declared_names = {item["name"] for item in declared}
+    for name, descriptor in inputs.items():
+        if isinstance(descriptor, Mapping) and (
+            "digest" in descriptor or "object_id" in descriptor
+        ) and name not in declared_names:
+            raise HostError(f"task spec managed input {name!r} is absent from execution_request")
+    for item in declared:
+        name = item["name"]
+        descriptor = inputs.get(name)
+        if not isinstance(descriptor, Mapping):
+            raise HostError(f"task spec input {name!r} is missing its execution_request descriptor")
+        # ``object_id`` is the canonical managed-object digest.  ``digest``
+        # is an optional repeated witness for callers that want the wire
+        # envelope to spell it out, so its absence must not make an otherwise
+        # valid frozen input unrunnable.
+        digest = descriptor.get("digest") or descriptor.get("object_id")
+        if digest is None:
+            raise HostError(f"task spec input {name!r} is missing its materialization digest")
+        if object_id(digest) != object_id(item["object_id"]):
+            raise HostError(f"task spec input {name!r} disagrees with execution_request object_id")
+        if descriptor.get("object_id") is not None and object_id(descriptor["object_id"]) != object_id(item["object_id"]):
+            raise HostError(f"task spec input {name!r} disagrees with execution_request object_id")
+        if descriptor.get("filename") != item["filename"]:
+            raise HostError(f"task spec input {name!r} disagrees with execution_request filename")
+
+    workflow = normalized.get("workflow")
+    if isinstance(workflow, Mapping):
+        workflow_spec = nested.get("workflow")
+        workflow_id = nested.get("workflow_id")
+        if workflow_id is None and isinstance(workflow_spec, Mapping):
+            workflow_id = workflow_spec.get("id")
+        if workflow_id is None:
+            workflow_id = task_data.get("capability")
+        if workflow_id != workflow["id"]:
+            raise HostError("task spec workflow id disagrees with execution_request")
+        identity = nested.get("workflow_contract_digest")
+        if identity is None and isinstance(workflow_spec, Mapping):
+            identity = workflow_spec.get("contract_digest")
+        if identity != workflow["contract_digest"]:
+            raise HostError("task spec workflow contract digest disagrees with execution_request")
+
+    target = normalized["target"]
+    binding = task_data.get("execution_binding") or task_data.get("placement_binding") or task_data.get("binding")
+    if not isinstance(binding, Mapping):
+        raise HostError("execution_request target requires an observed task binding")
+    if binding.get("status") not in (None, "claimed"):
+        raise HostError("task target binding is not claimed")
+    required_identity = {
+        "task_id": task_data.get("id") or task_data.get("task_id"),
+        "run_id": task_data.get("run_id"),
+        "attempt_id": task_data.get("attempt_id"),
+        "lease_id": task_data.get("lease_id"),
+        "fence": task_data.get("fence"),
+        "executor_id": task_data.get("executor_id"),
+        "runtime_epoch": task_data.get("runtime_epoch"),
+        "capability_id": task_data.get("capability") or task_data.get("capability_id"),
+    }
+    for field, expected in required_identity.items():
+        if expected is not None and binding.get(field) != expected:
+            raise HostError(f"task target binding {field} disagrees with the claimed identity")
+    if not isinstance(binding.get("binding_id"), str) or not binding["binding_id"]:
+        raise HostError("task target binding has no Runtime-issued binding_id")
+    if not isinstance(binding.get("session_id"), str) or not binding["session_id"]:
+        raise HostError("task target binding has no Runtime session identity")
+    expected_session = task_data.get("runtime_session_id") or runtime_session_id
+    if expected_session is not None and binding["session_id"] != expected_session:
+        raise HostError("task target binding session_id disagrees with the Runtime session")
+    resolved_target = binding.get("resolved_target")
+    if not isinstance(resolved_target, Mapping):
+        raise HostError("task target binding has no resolved target identity")
+    kind = target["kind"]
+    if binding.get("target_kind") not in (None, kind) and binding.get("kind") not in (None, kind):
+        raise HostError("task target binding kind disagrees with execution_request")
+    identity_fields = {
+        "default": (),
+        "profile": (("id", "target_id"), ("profile_alias", "target_id")),
+        "machine": (("id", "target_id"), ("machine_id", "target_id")),
+        "runpod": (("pod_id", "pod_id"), ("provider_account_ref", "provider_account_ref")),
+    }[kind]
+    for requested, observed in identity_fields:
+        if requested in target and target[requested] is not None and binding.get(observed) != target[requested]:
+            raise HostError(f"task target binding {observed} disagrees with execution_request")
+    for key in ("profile_revision", "profile_digest", "release_digest"):
+        if key in target and binding.get(key) != target[key]:
+            raise HostError(f"task target binding {key} disagrees with execution_request")
+    for key in ("storage", "mounts"):
+        if key in target and resolved_target.get(key) != target[key]:
+            raise HostError(f"task target binding {key} disagrees with execution_request")
+    return normalized
+
+
+def _contract_queue_age(task_data: Mapping[str, Any]) -> float:
+    for key in ("queued_at", "admitted_at", "created_at"):
+        value = task_data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return max(0.0, time.time() - float(value))
+        if isinstance(value, str):
+            try:
+                stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise HostError(f"runtime task {key} is not a valid timestamp") from exc
+            if stamp.tzinfo is None:
+                raise HostError(f"runtime task {key} must include a timezone")
+            return max(0.0, (datetime.now(timezone.utc) - stamp).total_seconds())
+    raise HostError("execution_request max_queue_seconds requires task admission timestamp")
+
+
 def _assert_fixed_request_scope(record: Any, task_data: Mapping[str, Any]) -> None:
     """Reject task parameters that escape a capability's declared profile."""
     scope = _fixed_request_scope(record.definition.metadata)
@@ -1485,6 +1796,8 @@ def source_checkout_digest(checkout: str | Path) -> str:
     tree (using the same file hashing rules as capability admission).
     """
     pack_root = Path(checkout).expanduser().resolve() / "astrid" / "packs"
+    if not pack_root.is_dir() or pack_root.is_symlink():
+        raise ValueError("source checkout pack root is unavailable")
     if any(path.is_symlink() for path in pack_root.rglob("*")):
         raise ValueError("source checkout pack root contains a symlink")
     return _source_digest(pack_root)
@@ -1618,7 +1931,7 @@ def _attach_pack_metadata(definition: "ExecutorDefinition", executor_root: Path)
 
 @dataclass(frozen=True)
 class CapabilityRecord:
-    definition: ExecutorDefinition
+    definition: Any
     capability_digest: str
     source_digest: str
     source_root: Path
@@ -1627,6 +1940,7 @@ class CapabilityRecord:
     preflight: Mapping[str, Any] = field(default_factory=dict)
     ready: bool = False
     matrix: Mapping[str, Any] = field(default_factory=dict)
+    capability_kind: str = "executor"
 
     @property
     def id(self) -> str:
@@ -1639,11 +1953,17 @@ class CapabilityRecord:
         if isinstance(values, str):
             values = (values,)
         declared = tuple(str(value) for value in (values or ()))
-        adapter = AdapterRegistry.from_matrix(self.definition, self.matrix)
+        adapter = self.adapter
         return tuple(dict.fromkeys((*adapter.resource_keys, *declared)))
 
     @property
     def adapter(self) -> AdapterSpec:
+        # An orchestrator's ``isolation.network`` describes the child
+        # Runtime/SDK boundary it coordinates; it is not provider egress.
+        # Keep that public task path on the local CPU adapter, but give it a
+        # distinct coordination reservation so it can admit child executors.
+        if self.capability_kind == "orchestrator":
+            return AdapterSpec("cpu", (ORCHESTRATION_RESOURCE_KEY,))
         return AdapterRegistry.from_matrix(self.definition, self.matrix)
 
     @property
@@ -1658,6 +1978,7 @@ class CapabilityRecord:
         source_roots = _admitted_source_roots(self.source_root, self.definition)
         return {
             "id": self.id,
+            "capability_kind": self.capability_kind,
             "definition": self.definition.to_dict(),
             "inputs": [port.__dict__ for port in self.definition.inputs],
             "outputs": [output.__dict__ for output in self.definition.outputs],
@@ -1733,6 +2054,10 @@ class RuntimeProtocolClient:
         )
         self.executor_id: str | None = None
         self._runtime_epoch: int | None = None
+        # The runtime epoch is part of the claim fence.  Never replace it with
+        # a freshly observed epoch while an attempt is in flight: a restart
+        # must revoke the old attempt rather than make its lease look current.
+        self._attempt_runtime_epochs: dict[str, int] = {}
         self._heartbeat_session = secrets_module.token_hex(8)
         self._heartbeat_sequence = 0
         self._heartbeat_lock = threading.Lock()
@@ -1758,6 +2083,22 @@ class RuntimeProtocolClient:
         if epoch is None:
             raise HostError("runtime health returned no runtime_epoch")
         return int(epoch)
+
+    @staticmethod
+    def _claim_attempt_id(claim: Any) -> str | None:
+        value = claim.get("attempt_id") if isinstance(claim, Mapping) else getattr(claim, "attempt_id", None)
+        return str(value) if isinstance(value, str) and value else None
+
+    def _claimed_runtime_epoch(self, attempt_id: str) -> int:
+        expected = self._attempt_runtime_epochs.get(str(attempt_id))
+        if expected is None:
+            raise HostError("attempt runtime epoch was not captured at claim")
+        current = self._current_runtime_epoch()
+        if current != expected:
+            raise HostError(
+                "runtime epoch changed after claim; stale attempt is fenced and requires reconciliation"
+            )
+        return expected
 
     def register_executor(self, executor_id: str, *, capabilities: list[Mapping[str, Any]], max_concurrency: int, resource_keys: list[str], source_digest: str | None, dependency_digest: str | None = None, source_epoch: str | None = None, protocol_version: str = "workspace.v1", schema_digest: str | None = None, runtime_epoch: int | None = None, verified_facts: Mapping[str, Any] | None = None):
         # Runtime schema identity is negotiated through health/compatibility;
@@ -1835,7 +2176,7 @@ class RuntimeProtocolClient:
     def heartbeat(self, task_id: str, lease_token: str, *, attempt_id: str | None = None, fence: int | None = None, progress: Mapping[str, Any] | None = None):
         if not attempt_id or fence is None:
             raise HostError("generated heartbeat requires attempt_id and fence")
-        runtime_epoch = self._current_runtime_epoch()
+        runtime_epoch = self._claimed_runtime_epoch(attempt_id)
         # A heartbeat extends the lease and is therefore a new mutation, not a
         # replay of the first pulse.  Reusing one idempotency key here makes a
         # long render appear healthy to the host while the runtime repeatedly
@@ -1859,13 +2200,20 @@ class RuntimeProtocolClient:
     def claim(self, task_id: str, worker_id: str, lease_token: str):
         raise HostError("per-task claim is not a canonical operation; use claim_task")
 
-    def claim_next(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
-        return self.generated.claim_task(
+    def claim_next(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str, target: Mapping[str, Any] | None = None):
+        claim_epoch = self._current_runtime_epoch()
+        claim = self.generated.claim_task(
             executor_id=executor_id,
             capability_ids=capability_ids,
             idempotency_key=idempotency_key,
-            runtime_epoch=self._current_runtime_epoch(),
+            runtime_epoch=claim_epoch,
+            target=target,
         )
+        attempt_id = self._claim_attempt_id(claim)
+        if attempt_id is not None:
+            raw_epoch = claim.get("runtime_epoch") if isinstance(claim, Mapping) else getattr(claim, "runtime_epoch", None)
+            self._attempt_runtime_epochs[attempt_id] = int(raw_epoch if raw_epoch is not None else claim_epoch)
+        return claim
 
     def task(self, task_id: str):
         return self.generated.get_task(task_id)
@@ -1880,7 +2228,7 @@ class RuntimeProtocolClient:
             "outputs": outputs,
             "effect": effect,
             "result": dict(result),
-            "runtime_epoch": self._current_runtime_epoch(),
+            "runtime_epoch": self._claimed_runtime_epoch(attempt_id),
         }
         return self.generated.settle_attempt(
             attempt_id,
@@ -1909,7 +2257,7 @@ class RuntimeProtocolClient:
             lease_id=lease_token,
             fence=int(fence),
             error=payload,
-            runtime_epoch=self._current_runtime_epoch(),
+            runtime_epoch=self._claimed_runtime_epoch(attempt_id),
             idempotency_key=f"fail-{attempt_id}-{fence}",
         )
 
@@ -1962,8 +2310,11 @@ class RuntimeProtocolClient:
     ):
         if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()):
             raise HostError("output upload project_id must be a non-empty string or None")
+        claim_epoch = self._claimed_runtime_epoch(attempt_id)
         if runtime_epoch is None:
-            runtime_epoch = self._current_runtime_epoch()
+            runtime_epoch = claim_epoch
+        elif int(runtime_epoch) != claim_epoch:
+            raise HostError("output upload runtime_epoch does not match the claim fence")
         executor_id = self.executor_id
         if any(
             not isinstance(value, str) or not value
@@ -2022,7 +2373,7 @@ class RuntimeProtocolClient:
             attempt_id,
             lease_id=lease_token,
             fence=int(fence),
-            runtime_epoch=self._current_runtime_epoch(),
+            runtime_epoch=self._claimed_runtime_epoch(attempt_id),
             timeline_id=timeline_id,
             expected_version=int(expected_version),
             config=config,
@@ -2033,6 +2384,50 @@ class RuntimeProtocolClient:
 
 
 _OPTIONAL_EXTERNAL_MATRIX_PREFIXES = ("discord_local.", "hivemind.", "seedance_local.")
+
+# Runtime reservations are deliberately ordinary named resource keys. The
+# coordination lane must not share the exclusive ``cpu`` reservation used by
+# child executors, otherwise a parent that admits a child recreates the
+# original nested-host deadlock.
+ORCHESTRATION_RESOURCE_KEY = "astrid-orchestration"
+_LANE_EXECUTOR = "executor"
+_LANE_ORCHESTRATION = "orchestration"
+_LANE_NAMES = (_LANE_EXECUTOR, _LANE_ORCHESTRATION)
+
+
+def _configured_claim_target() -> dict[str, Any] | None:
+    """Return an explicit target for queue claims when one is configured.
+
+    Targeted task admission creates a Runtime-owned binding, and the claim
+    boundary must repeat the same target so the Runtime can route the task to
+    the intended worker.  Keep this opt-in so existing untargeted hosts retain
+    queue-wide claim behavior.
+    """
+    raw = os.environ.get("ASTRID_EXECUTION_TARGET_JSON", "").strip()
+    if not raw:
+        return None
+    try:
+        target = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise HostError("ASTRID_EXECUTION_TARGET_JSON must be valid JSON") from exc
+    if not isinstance(target, Mapping):
+        raise HostError("ASTRID_EXECUTION_TARGET_JSON must be a JSON object")
+    return dict(target)
+
+
+@dataclass
+class _HostLane:
+    """Independent custody for one bounded host execution lane."""
+
+    name: str
+    managed_tool_session: ManagedToolSession
+    active_processes: set[subprocess.Popen] = field(default_factory=set)
+    process_lock: threading.RLock = field(default_factory=threading.RLock)
+    cleanup_uncertain: bool = False
+    last_cleanup_receipt: dict[str, Any] | None = None
+    vibecomfy_warmth_hint: str | None = None
+    vibecomfy_current_warmth_hint: str | None = None
+    vibecomfy_requested_warmth_hint: str | None = None
 
 
 class GenericPackHost:
@@ -2046,12 +2441,14 @@ class GenericPackHost:
         executor_id: str = "astrid-pack-host",
         max_concurrency: int = 1,
         attempt_root: str | Path | None = None,
+        attempt_base: str | Path | None = None,
         capability_matrix: str | Path | None = None,
         credential_source: Mapping[str, str] | None = None,
         source_inventory_identity: str | None = None,
         boot_manifest_path: str | Path | None = None,
         boot_manifest_hash: str | None = None,
         execution_policy: ExecutionGuardPolicy | None = None,
+        require_capacity_ack: bool = False,
     ):
         configured_roots = [Path(root).expanduser().resolve() for root in pack_roots]
         # ASTRID_PACKS_PATH is an explicit discovery input, never an implicit
@@ -2064,7 +2461,11 @@ class GenericPackHost:
         self.client = client
         self.executor_id = executor_id
         self.max_concurrency = max(1, int(max_concurrency))
+        self.require_capacity_ack = bool(require_capacity_ack)
+        if attempt_root is not None and attempt_base is not None:
+            raise ValueError("attempt_root and attempt_base are mutually exclusive")
         self.attempt_root = Path(attempt_root).expanduser().resolve() if attempt_root else None
+        self.attempt_base = Path(attempt_base).expanduser().resolve() if attempt_base else None
         self.capabilities: dict[str, CapabilityRecord] = {}
         self._registered_digests: dict[str, str] = {}
         self._registered_state: dict[str, dict[str, str]] = {}
@@ -2082,6 +2483,7 @@ class GenericPackHost:
         self.source_epoch = "uninitialized"
         self.source_inventory_identity = str(source_inventory_identity or "")
         self.runtime_state: dict[str, Any] = {}
+        self.nested_handoff_template: dict[str, Any] | None = None
         # The application composition root owns emission.  The host only reads
         # this derived stamp when it prepares completion provenance.
         self.boot_manifest_path = (
@@ -2091,20 +2493,38 @@ class GenericPackHost:
             if boot_manifest_path is not None
             else None
         )
-        self.boot_manifest_hash = boot_manifest_hash
+        if boot_manifest_hash is not None:
+            from astrid.core._shared.boot_manifest import normalize_sha256_digest
+
+            self.boot_manifest_hash = normalize_sha256_digest(
+                boot_manifest_hash, label="boot manifest hash"
+            )
+        else:
+            self.boot_manifest_hash = None
         self.execution_policy = execution_policy or ExecutionGuardPolicy()
         # Provider route grants are intentionally scoped to this host process;
         # their signing key never crosses into a child or runtime payload.
         self._provider_grants = ProviderRouteGrantAuthority()
         self._pending_provider_grants: dict[str, str] = {}
         # Engine-neutral lifecycle custody lives beside, not inside, the
-        # Runtime client.  Adapters are opened explicitly by the execution
-        # path; the host owns shutdown fencing for every opened session.
-        self.managed_tool_session = ManagedToolSession(
-            manager_id=self.executor_id
-        )
-        self._active_processes: set[subprocess.Popen] = set()
-        self._process_lock = threading.RLock()
+        # Runtime client. Each bounded lane gets its own session, process
+        # census, cancellation/cleanup state, and warmth hint. The executor
+        # alias preserves the single-lane test/embedding surface.
+        self._lanes = {
+            name: _HostLane(
+                name=name,
+                managed_tool_session=ManagedToolSession(
+                    manager_id=f"{self.executor_id}:{name}"
+                ),
+            )
+            for name in _LANE_NAMES
+        }
+        self.managed_tool_session = self._lanes[_LANE_EXECUTOR].managed_tool_session
+        self._active_processes = self._lanes[_LANE_EXECUTOR].active_processes
+        self._process_lock = self._lanes[_LANE_EXECUTOR].process_lock
+        self._lane_local = threading.local()
+        self._parallel_enabled = False
+        self._registration_lock = threading.RLock()
         self._shutdown = threading.Event()
         # An unregistered host must retain the existing claim-loop failure
         # semantics. register() arms the first refresh after success.
@@ -2119,27 +2539,72 @@ class GenericPackHost:
         self._vibecomfy_current_warmth_hint: str | None = None
         self._vibecomfy_requested_warmth_hint: str | None = None
 
+    def _lane_state(self, lane: str | None = None) -> _HostLane:
+        name = lane or getattr(self._lane_local, "name", _LANE_EXECUTOR)
+        try:
+            return self._lanes[str(name)]
+        except KeyError as exc:
+            raise HostError(f"unsupported generic-host lane {name!r}") from exc
+
+    def _set_lane(self, lane: str) -> None:
+        self._lane_state(lane)
+        self._lane_local.name = lane
+
+    def _lane_attempt_base(self, lane: str | None = None) -> Path | None:
+        if self.attempt_base is None:
+            return None
+        if not self._parallel_enabled:
+            return self.attempt_base
+        return self.attempt_base / self._lane_state(lane).name
+
+    def _allocate_attempt_root(self, task_id: str, attempt_id: str) -> Path:
+        """Allocate the filesystem namespace for one claimed attempt."""
+        attempt_base = self._lane_attempt_base()
+        if attempt_base is not None:
+            attempt_base.mkdir(parents=True, exist_ok=True)
+            if attempt_base.is_symlink() or not attempt_base.is_dir():
+                raise HostError("attempt_base must be an absolute non-symlink directory")
+            root = attempt_base / f"{task_id}-{attempt_id}"
+            if root.exists() or root.is_symlink():
+                raise HostError(f"attempt-base allocation already exists: {root.name}")
+            root.mkdir()
+            return root.resolve()
+        root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     @property
     def last_cleanup_receipt(self) -> dict[str, Any] | None:
-        return dict(self._last_cleanup_receipt) if self._last_cleanup_receipt is not None else None
+        receipts = [
+            lane.last_cleanup_receipt
+            for lane in self._lanes.values()
+            if lane.last_cleanup_receipt is not None
+        ]
+        if not receipts:
+            return None
+        return dict(receipts[-1])
 
     def _cleanup_ephemeral_attempt_or_latch(self, root: Path) -> None:
         """Delete one owned root, latching uncertainty if observation fails."""
+        lane = self._lane_state()
         try:
             _cleanup_ephemeral_attempt(root)
         except Exception as exc:
+            lane.cleanup_uncertain = True
             self._cleanup_uncertain = True
-            self._last_cleanup_receipt = {
+            lane.last_cleanup_receipt = {
                 "path": str(root),
                 "intended_disposition": "deleted",
                 "status": "uncertain",
                 "errors": [str(exc)],
             }
+            self._last_cleanup_receipt = lane.last_cleanup_receipt
             raise
 
     def _track_process(self, process: subprocess.Popen) -> None:
-        with self._process_lock:
-            self._active_processes.add(process)
+        lane = self._lane_state()
+        with lane.process_lock:
+            lane.active_processes.add(process)
         # A signal can arrive between Popen and registration in the set.  Do
         # not let that small window leave an owned child running after host
         # shutdown has begun.
@@ -2147,22 +2612,24 @@ class GenericPackHost:
             _terminate_process_group(process)
 
     def _untrack_process(self, process: subprocess.Popen) -> None:
-        with self._process_lock:
-            self._active_processes.discard(process)
+        lane = self._lane_state()
+        with lane.process_lock:
+            lane.active_processes.discard(process)
 
     def shutdown(self) -> None:
         """Stop the host and every currently owned capability process."""
         self._shutdown.set()
-        self.managed_tool_session.close(reason="host_shutdown")
-        with self._process_lock:
-            active = tuple(self._active_processes)
-        for process in active:
-            try:
-                _terminate_process_group(process, grace_seconds=1.0)
-            except (OSError, subprocess.SubprocessError):
-                # The process may have exited between the census and cleanup;
-                # the group helper is deliberately best effort at shutdown.
-                pass
+        for lane in self._lanes.values():
+            lane.managed_tool_session.close(reason="host_shutdown")
+            with lane.process_lock:
+                active = tuple(lane.active_processes)
+            for process in active:
+                try:
+                    _terminate_process_group(process, grace_seconds=1.0)
+                except (OSError, subprocess.SubprocessError):
+                    # The process may have exited between the census and
+                    # cleanup; the group helper is deliberately best effort.
+                    pass
     def boot_manifest_provenance(self) -> dict[str, str] | None:
         """Return completion provenance for the root-owned manifest stamp."""
         if self.boot_manifest_path is None:
@@ -2173,7 +2640,11 @@ class GenericPackHost:
             self.boot_manifest_path,
             support_root=self.boot_manifest_path.parents[1],
         )
-        if self.boot_manifest_hash and stamped_manifest_hash != self.boot_manifest_hash:
+        from astrid.core._shared.boot_manifest import normalize_sha256_digest
+
+        if self.boot_manifest_hash and normalize_sha256_digest(
+            stamped_manifest_hash, label="stamped boot manifest hash"
+        ) != self.boot_manifest_hash:
             raise HostError("boot manifest changed after host startup")
         return {
             "kind": "astrid.boot_manifest",
@@ -2241,6 +2712,15 @@ class GenericPackHost:
                     # neighboring packs.  The manifest report records the reason.
                     continue
                 definition = _attach_pack_metadata(definition, executor_root)
+                definition = _bind_vibecomfy_execution_attestation(definition)
+                try:
+                    resolve_generation_publication(
+                        definition, capability_type="executor"
+                    )
+                except GenerationPublicationError as exc:
+                    raise HostError(
+                        f"invalid generation_publication declaration for {definition.id!r}: {exc}"
+                    ) from exc
                 manifest = next((executor_root / name for name in ("executor.yaml", "executor.yml", "executor.json") if (executor_root / name).is_file()), None)
                 matrix_entry = self.matrix.get(definition.id, {})
                 source_roots = _admitted_source_roots(executor_root, definition)
@@ -2268,7 +2748,47 @@ class GenericPackHost:
             key: CapabilityRecord(**{**record.__dict__, "dependency_digest": _dependency_digest(record.definition, records)})
             for key, record in records.items()
         }
+        # Orchestrators are public task capabilities too.  Keep them in the
+        # same host registration and admission census as executors, while
+        # leaving the executor capability matrix authoritative for executor
+        # rows only.
+        from astrid.core.execution.orchestrator.folder import (
+            discover_folder_orchestrator_roots,
+            load_folder_orchestrator,
+        )
+
+        for root in self.pack_roots:
+            for orchestrator_root in discover_folder_orchestrator_roots(root):
+                try:
+                    definition = load_folder_orchestrator(orchestrator_root)
+                except (OSError, ValueError):
+                    continue
+                definition = _attach_pack_metadata(definition, orchestrator_root)
+                source_roots = _admitted_source_roots(orchestrator_root, definition)
+                child_digests = {
+                    child: records[child].capability_digest
+                    for child in (*definition.child_executors, *definition.child_orchestrators)
+                    if child in records
+                }
+                dependency_digest = _canonical_digest({
+                    "child_executors": child_digests,
+                    "requirements": sorted(str(value) for value in (definition.isolation.requirements or ())),
+                })
+                records[definition.id] = CapabilityRecord(
+                    definition=definition,
+                    capability_digest=_capability_digest(definition.to_dict()),
+                    source_digest=_source_digest_for_roots(source_roots),
+                    source_root=orchestrator_root,
+                    dependency_digest=dependency_digest,
+                    manifest_path=orchestrator_root / "orchestrator.yaml",
+                    matrix={},
+                    capability_kind="orchestrator",
+                )
         self.capabilities = records
+        self._parallel_enabled = bool(
+            self.max_concurrency >= 2
+            and any(record.capability_kind == "orchestrator" for record in records.values())
+        )
         root = self.pack_roots[0] if self.pack_roots else Path.cwd()
         self.source_epoch = _canonical_digest({
             "vcs_revision": _vcs_revision(root),
@@ -2345,6 +2865,54 @@ class GenericPackHost:
         updated: dict[str, CapabilityRecord] = dict(self.capabilities)
         for record in selected:
             checks: dict[str, Any] = {"source": record.source_root.is_dir(), "definition": True}
+            if record.id == "vibecomfy.run":
+                try:
+                    profile = _read_readiness_profile_document()
+                    if profile is None:
+                        raise HostError("VibeComfy readiness profile is required")
+                    _require_vibecomfy_execution_attestation(record.definition, profile)
+                    checks["execution_attestation"] = {
+                        "ok": True,
+                        "identity": dict(
+                            record.definition.metadata[
+                                _VIBECOMFY_EXECUTION_ATTESTATION
+                            ]
+                        ),
+                    }
+                    session = profile.get("vibecomfy_session")
+                    substitute = _approved_t9_substitute_source(profile)
+                    if isinstance(session, Mapping):
+                        if not all(isinstance(session.get(key), str) and session.get(key) for key in ("session_dir", "source_revision", "source_content_digest")):
+                            raise HostError("checkout_server readiness lacks pinned session identity")
+                        checks["vibecomfy_runtime"] = {"ok": True, "profile": "checkout_server"}
+                    elif substitute is not None:
+                        checks["vibecomfy_runtime"] = {"ok": True, "profile": "t9_cpu_stub", "source_sha256": substitute[1]}
+                    else:
+                        comfy = profile.get("comfyui_candidate")
+                        launch = profile.get("launch")
+                        root = comfy.get("root") if isinstance(comfy, Mapping) else None
+                        revision = comfy.get("revision") if isinstance(comfy, Mapping) else None
+                        digest = comfy.get("source_content_digest") if isinstance(comfy, Mapping) else None
+                        configured = launch.get("comfyui_path") if isinstance(launch, Mapping) else None
+                        if not all(isinstance(value, str) and value for value in (root, revision, digest, configured)):
+                            raise HostError("pip_embedded requires an attested pinned ComfyUI tree and explicit COMFYUI_PATH")
+                        comfy_root = Path(root).expanduser()
+                        if not comfy_root.is_absolute() or comfy_root.is_symlink() or not (comfy_root / "comfy/client/embedded_comfy_client.py").is_file() or Path(configured).expanduser().resolve() != comfy_root.resolve():
+                            raise HostError("pip_embedded COMFYUI_PATH does not match the attested ComfyUI tree")
+                        if not re.fullmatch(r"(?:sha256:)?[0-9a-fA-F]{64}", digest):
+                            raise HostError("pip_embedded readiness source_content_digest is invalid")
+                        try:
+                            actual_revision = subprocess.run(["git", "-C", str(comfy_root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, timeout=5).stdout.strip()
+                            archive = subprocess.run(["git", "-C", str(comfy_root), "archive", "--format=tar", "HEAD"], check=True, capture_output=True, timeout=10).stdout
+                            clean = subprocess.run(["git", "-C", str(comfy_root), "diff", "--quiet", "HEAD", "--"], check=False, capture_output=True, timeout=5).returncode == 0
+                        except (OSError, subprocess.SubprocessError) as exc:
+                            raise HostError("attested ComfyUI tree identity could not be verified") from exc
+                        archive_digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+                        if actual_revision != revision or archive_digest != "sha256:" + digest.removeprefix("sha256:") or not clean:
+                            raise HostError("ComfyUI tree does not match its pinned readiness identity")
+                        checks["vibecomfy_runtime"] = {"ok": True, "profile": "pip_embedded", "revision": revision}
+                except (HostError, T9SubstituteError, OSError) as exc:
+                    checks["vibecomfy_runtime"] = {"ok": False, "reason": str(exc)}
             adapter = record.adapter
             matrix_binaries = tuple(str(binary) for binary in record.matrix.get("required_binaries", ()))
             binary_requirements = tuple(dict.fromkeys((*record.definition.isolation.binaries, *matrix_binaries, *adapter.required_binaries)))
@@ -2432,10 +3000,17 @@ class GenericPackHost:
         self.capabilities = updated
         return tuple(updated[key] for key in sorted(updated) if capability_id is None or key == capability_id)
 
-    def register(self, *, deliberate: bool = False) -> dict[str, Any]:
+    def register(
+        self,
+        *,
+        deliberate: bool = False,
+        before_registration: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         if not self.capabilities:
             self.discover()
         self.preflight()
+        if before_registration is not None:
+            before_registration()
         state = {
             key: {
                 "capability_digest": record.capability_digest,
@@ -2469,7 +3044,11 @@ class GenericPackHost:
             self._registered_digests = {key: record.capability_digest for key, record in self.capabilities.items()}
             self._registered_state = state
             self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
-            return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready and not _is_withdrawn(r)], "withdrawn_capabilities": removed}
+            capacity = effective_host_capacity(
+                self.max_concurrency,
+                parallel_lanes_enabled=self._parallel_enabled,
+            )
+            return {"executor_id": self.executor_id, "capabilities": [r.manifest() for r in self.capabilities.values()], "ready": [r.id for r in self.capabilities.values() if r.ready and not _is_withdrawn(r)], "withdrawn_capabilities": removed, "effective_capacity": capacity}
         # Publish capability admission metadata before advertising the executor.
         # A real runtime must be able to validate a task against the exact
         # definition digest/source-derived readiness before it can claim work.
@@ -2524,6 +3103,31 @@ class GenericPackHost:
             registration = self.client.register_executor(
                 self.executor_id, **registration_kwargs
             )
+            acknowledged_capacity = _ack_field(registration, "max_concurrency")
+            acknowledged_resources = _ack_field(registration, "resource_keys")
+            if self.require_capacity_ack and (
+                isinstance(acknowledged_capacity, bool)
+                or not isinstance(acknowledged_capacity, int)
+                or acknowledged_capacity != self.max_concurrency
+                or not isinstance(acknowledged_resources, (list, tuple))
+                or sorted(set(acknowledged_resources)) != all_keys
+            ):
+                raise HostRegistrationError(
+                    "Runtime executor registration acknowledgement does not match effective host capacity/resources",
+                    code="executor_capacity_ack_mismatch",
+                )
+            effective_capacity = effective_host_capacity(
+                acknowledged_capacity
+                if isinstance(acknowledged_capacity, int)
+                and not isinstance(acknowledged_capacity, bool)
+                else self.max_concurrency,
+                parallel_lanes_enabled=self._parallel_enabled,
+                resource_keys=(
+                    acknowledged_resources
+                    if isinstance(acknowledged_resources, (list, tuple))
+                    else all_keys
+                ),
+            )
             # Removed capabilities cannot be expressed by the current
             # executor-registration payload.  Withdraw them only after the
             # replacement executor state is committed, so failure is
@@ -2552,7 +3156,7 @@ class GenericPackHost:
         self._registered_state = state
         self._registered_runtime_state = {**runtime_state, "source_epoch": self.source_epoch}
         self._registration_refresh_deadline = time.monotonic() + _EXECUTOR_REFRESH_SECONDS
-        return {"registration": registration, "capabilities": [r.manifest() for r in self.capabilities.values()], "withdrawn_capabilities": removed}
+        return {"registration": registration, "capabilities": [r.manifest() for r in self.capabilities.values()], "withdrawn_capabilities": removed, "effective_capacity": effective_capacity}
 
     def _renew_executor_registration(self) -> None:
         """Refresh runtime executor liveness without replaying a receipt."""
@@ -2615,6 +3219,8 @@ class GenericPackHost:
             "protocol": getattr(health, "protocol", None),
             "schema_digest": getattr(health, "schema_digest", None),
             "runtime_epoch": getattr(health, "runtime_epoch", None),
+            "runtime_instance_id": getattr(health, "runtime_instance_id", None),
+            "runtime_session_id": getattr(health, "runtime_session_id", None),
         }
         actual_protocol = str(value.get("protocol", ""))
         actual_schema = str(value.get("schema_digest", ""))
@@ -2637,6 +3243,7 @@ class GenericPackHost:
             "protocol": actual_protocol,
             "schema_digest": actual_schema,
             "runtime_epoch": runtime_epoch,
+            "runtime_session_id": value.get("runtime_session_id"),
             "runtime_instance_id": value.get("runtime_instance_id") or value.get("instance_id"),
             "coordinator_epoch": value.get("coordinator_epoch"),
         }
@@ -2965,7 +3572,7 @@ class GenericPackHost:
         }
         for name, value in list(values.items()):
             digest = (
-                value.get("digest")
+                (value.get("digest") or value.get("object_id"))
                 if isinstance(value, Mapping)
                 else (
                     value
@@ -3001,6 +3608,21 @@ class GenericPackHost:
                     materialized_objects[str(digest).removeprefix("sha256:")] = str(destination)
                     continue
                 input_name = Path("theme.json") if str(name) == "theme" else Path(str(name))
+                # Preserve a managed file object's safe filename when the
+                # capability consumes it as a normal file port.  The logical
+                # port name (for example ``source_video``) is not necessarily
+                # a usable media suffix; losing ``.mp4`` here makes downstream
+                # Comfy loaders reject an otherwise valid managed object.
+                if str(name) in file_input_names and isinstance(value, Mapping):
+                    raw_filename = value.get("filename")
+                    if (
+                        isinstance(raw_filename, str)
+                        and raw_filename
+                        and Path(raw_filename).name == raw_filename
+                        and not Path(raw_filename).is_absolute()
+                        and ".." not in Path(raw_filename).parts
+                    ):
+                        input_name = Path(raw_filename)
                 if str(name) in cas_names:
                     filename = value.get("filename") if isinstance(value, Mapping) else None
                     if not isinstance(filename, str) or not filename or Path(filename).name != filename:
@@ -3509,6 +4131,7 @@ class GenericPackHost:
                 "filename": result.path.name,
                 "artifact_type": "image/jpeg",
                 "media_type": "image/jpeg",
+                "digest": thumbnail_digest,
                 "size": result.path.stat().st_size,
                 "role": "thumbnail",
                 "durability": "durable",
@@ -3565,6 +4188,9 @@ class GenericPackHost:
             # its normal route-registration environment in its own process.
             explicit["VIBECOMFY_HEADLESS"] = "1"
             profile = _read_readiness_profile_document()
+            if profile is None:
+                raise HostError("VibeComfy execution requires a verified readiness profile")
+            _require_vibecomfy_execution_attestation(record.definition, profile)
             session = profile.get("vibecomfy_session") if isinstance(profile, Mapping) else None
             if isinstance(session, Mapping):
                 explicit["ASTRID_VIBECOMFY_SESSION_OWNERSHIP_ATTESTED"] = "1"
@@ -3586,13 +4212,27 @@ class GenericPackHost:
                     explicit["ASTRID_VIBECOMFY_CANDIDATE_KIND"] = "local_snapshot"
                     explicit["ASTRID_VIBECOMFY_CANDIDATE_REVISION"] = revision
                     explicit["ASTRID_VIBECOMFY_CANDIDATE_CONTENT_DIGEST"] = content_digest
-            if self._vibecomfy_requested_warmth_hint:
+            substitute = _approved_t9_substitute_source(profile)
+            if substitute is not None:
+                explicit["ASTRID_T9_MODEL_SUBSTITUTE_SOURCE"] = str(substitute[0])
+                explicit["ASTRID_T9_MODEL_SUBSTITUTE_SHA256"] = substitute[1]
+                explicit["ASTRID_T9_MODEL_SUBSTITUTE_MARKER"] = str(attempt / "t9-model-substitute-activated.json")
+                explicit["ASTRID_T9_MODEL_SUBSTITUTE_CALLS"] = str(attempt / "t9-model-substitute-calls.jsonl")
+            elif not isinstance(session, Mapping):
+                comfy = profile.get("comfyui_candidate")
+                launch = profile.get("launch")
+                root = comfy.get("root") if isinstance(comfy, Mapping) else None
+                configured = launch.get("comfyui_path") if isinstance(launch, Mapping) else None
+                if not isinstance(root, str) or not isinstance(configured, str) or Path(root).expanduser().resolve() != Path(configured).expanduser().resolve():
+                    raise HostError("pip_embedded requires an explicitly verified COMFYUI_PATH")
+                explicit["COMFYUI_PATH"] = str(Path(configured).expanduser().resolve())
+            if self._lane_state().vibecomfy_requested_warmth_hint:
                 from astrid.core.generation.backends.vibecomfy import (
                     VIBECOMFY_WARMTH_HINT_ENV,
                 )
 
                 explicit[VIBECOMFY_WARMTH_HINT_ENV] = (
-                    self._vibecomfy_requested_warmth_hint
+                    self._lane_state().vibecomfy_requested_warmth_hint
                 )
         explicit.update({
             name: value
@@ -3632,23 +4272,29 @@ class GenericPackHost:
             declared_secrets=declared_secrets,
         )
         policy = network_broker.policy if network_broker is not None else (dict(network_policy) if network_policy is not None else _network_policy(record))
-        if policy is not None:
+        t9_substitute_requested = bool(explicit.get("ASTRID_T9_MODEL_SUBSTITUTE_SOURCE"))
+        if policy is not None or t9_substitute_requested:
             hook_root = attempt / ".astrid-network-hook"
             hook_root.mkdir(parents=True, exist_ok=True)
-            (hook_root / "sitecustomize.py").write_text(
-                "from astrid.core.execution.network_policy import install_from_environment\ninstall_from_environment()\n",
-                encoding="utf-8",
-            )
+            hook_lines: list[str] = []
+            if policy is not None:
+                hook_lines.extend(("from astrid.core.execution.network_policy import install_from_environment", "install_from_environment()"))
+            if t9_substitute_requested:
+                hook_lines.extend(("from astrid.core.execution.t9_model_substitute import activate_from_environment", "activate_from_environment()"))
+            (hook_root / "sitecustomize.py").write_text("\n".join(hook_lines) + "\n", encoding="utf-8")
+        if policy is not None or t9_substitute_requested:
             evidence_path = attempt / "network-evidence.json"
-            env["ASTRID_NETWORK_POLICY"] = json.dumps(policy, sort_keys=True, separators=(",", ":"))
-            env["ASTRID_NETWORK_EVIDENCE"] = str(evidence_path)
+            if policy is not None:
+                env["ASTRID_NETWORK_POLICY"] = json.dumps(policy, sort_keys=True, separators=(",", ":"))
+                env["ASTRID_NETWORK_EVIDENCE"] = str(evidence_path)
             # Only the broker authentication token crosses the process
             # boundary.  The host/broker evidence signing key never does.
             if network_broker is not None:
                 env["ASTRID_NETWORK_BROKER_TOKEN"] = network_broker.auth_token
-            env["ASTRID_NETWORK_ADMISSION"] = json.dumps(dict(admission or {}), sort_keys=True, separators=(",", ":"))
+            if policy is not None:
+                env["ASTRID_NETWORK_ADMISSION"] = json.dumps(dict(admission or {}), sort_keys=True, separators=(",", ":"))
             env["PYTHONPATH"] = str(hook_root) + os.pathsep + env.get("PYTHONPATH", "")
-            proxy = policy.get("proxy")
+            proxy = policy.get("proxy") if policy is not None else None
             if isinstance(proxy, str) and proxy:
                 parsed_proxy = urlsplit(proxy)
                 if parsed_proxy.username or parsed_proxy.password:
@@ -3657,13 +4303,13 @@ class GenericPackHost:
                 # manifest proxy may be used by the child.
                 for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
                     env[key] = proxy
-                no_proxy = policy.get("no_proxy")
+                no_proxy = policy.get("no_proxy") if policy is not None else None
                 if no_proxy:
                     env["NO_PROXY"] = str(no_proxy)
                 # Native provider wrappers consume an explicit, host-issued
                 # name rather than trusting ambient proxy variables.
                 env["ASTRID_BROKER_PROXY"] = proxy
-            broker = policy.get("broker")
+            broker = policy.get("broker") if policy is not None else None
             if isinstance(broker, Mapping) and broker.get("evidence_path"):
                 env["ASTRID_NETWORK_BROKER_EVIDENCE"] = str(broker["evidence_path"])
         return env, secrets
@@ -3784,12 +4430,19 @@ class GenericPackHost:
                     f"generated outputs collide on managed filename {filename!r}"
                 )
             seen_filenames.add(filename)
+            expected_digest, expected_size = _expected_output_identity(descriptor)
             media_type = _settlement_media_type({**descriptor, "filename": filename})
+            data = path.read_bytes()
+            actual_digest = "sha256:" + hashlib.sha256(data).hexdigest()
+            actual_size = len(data)
+            if actual_digest != expected_digest or actual_size != expected_size:
+                raise HostError(
+                    f"generated output {descriptor.get('name')!r} changed after harvest"
+                )
             if inline:
-                data = path.read_bytes()
-                descriptor["digest"] = "sha256:" + hashlib.sha256(data).hexdigest()
+                descriptor["digest"] = expected_digest
                 descriptor["media_type"] = media_type
-                descriptor["size"] = len(data)
+                descriptor["size"] = expected_size
                 descriptor["kind"] = "object"
                 descriptor["data_base64"] = base64.b64encode(data).decode("ascii")
                 # Result-manifest metadata (ordinal/role/primary) is local
@@ -3846,16 +4499,24 @@ class GenericPackHost:
                 if runtime_epoch is not None:
                     upload_kwargs["runtime_epoch"] = runtime_epoch
             object_row = upload_object(path, **upload_kwargs)
-            digest = getattr(object_row, "digest", None)
-            if not digest:
-                raise HostError("generated object upload returned no canonical digest")
+            digest = _normalized_sha256(
+                getattr(object_row, "digest", None),
+                field="uploaded digest",
+            )
+            raw_size = getattr(object_row, "size", None)
+            if isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
+                raise HostError("generated object upload returned no canonical size")
+            if digest != expected_digest or raw_size != expected_size:
+                raise HostError(
+                    f"generated output {descriptor.get('name')!r} upload identity disagrees with harvest"
+                )
             uploaded_row = {
                 "name": descriptor.get("name"),
                 "kind": "object",
                 "filename": filename,
                 "media_type": media_type,
-                "digest": digest,
-                "size": int(getattr(object_row, "size", descriptor.get("size", 0))),
+                "digest": expected_digest,
+                "size": expected_size,
                 **{
                     field: descriptor[field]
                     for field in (
@@ -3885,7 +4546,7 @@ class GenericPackHost:
         Built-in pipeline steps and command capabilities are both runnable from
         an attempt directory alone.
         """
-        command = record.definition.command
+        command = _record_command(record)
         if command is None:
             raise HostError(f"capability {record.id!r} has no dispatchable command")
         attempt_output_root = (attempt / "outputs").resolve()
@@ -4105,6 +4766,25 @@ class GenericPackHost:
             _verify_admitted_source(admission)
         request_path = attempt_path / ".astrid-capability-request.json"
         result_path = attempt_path / ".astrid-capability-result.json"
+        nested_handoff_path: Path | None = None
+        nested_handoff_hash: str | None = None
+        if isinstance(self.nested_handoff_template, Mapping):
+            from astrid.core.execution.process_group import _process_snapshot
+
+            issuer = _process_snapshot().get(os.getpid())
+            if issuer is None:
+                raise HostError("generic host process identity is unavailable for nested SDK handoff")
+            nested_handoff = {
+                **dict(self.nested_handoff_template),
+                "issuer_pid": issuer.pid,
+                "issuer_birth_id": issuer.birth,
+                "attempt_id": str(attempt_path.name),
+            }
+            nested_handoff_path = attempt_path / ".astrid-runtime-handoff.json"
+            handoff_bytes = json.dumps(nested_handoff, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            nested_handoff_path.write_bytes(handoff_bytes)
+            nested_handoff_path.chmod(0o600)
+            nested_handoff_hash = "sha256:" + hashlib.sha256(handoff_bytes).hexdigest()
         payload = {
             "capability_kind": capability_kind,
             "capability_id": capability_id,
@@ -4118,6 +4798,13 @@ class GenericPackHost:
             explicit_env={ASTRID_INTERNAL_INVOCATION: "1"},
         ))
         env[ASTRID_INTERNAL_INVOCATION] = "1"
+        if nested_handoff_path is not None and nested_handoff_hash is not None:
+            from astrid.sdk.host_bootstrap import NESTED_HANDOFF_HASH_ENV, NESTED_HANDOFF_PATH_ENV
+
+            # These names are reserved to the supervising host. Manifest and
+            # project env cannot replace the host-issued attempt reference.
+            env[NESTED_HANDOFF_PATH_ENV] = str(nested_handoff_path)
+            env[NESTED_HANDOFF_HASH_ENV] = nested_handoff_hash
         # The attempt directory is the child cwd; the host worker itself uses
         # this checkout, while external source-pack imports use only the
         # explicitly admitted import parents validated against source roots.
@@ -4315,8 +5002,11 @@ class GenericPackHost:
         fence: int | None = None,
         keep_attempt: bool = False,
         provider_route_grant: str | None = None,
+        lane: str | None = None,
     ) -> Mapping[str, Any]:
-        if self._cleanup_uncertain:
+        lane_state = self._lane_state(lane)
+        lane_name = lane_state.name
+        if self._cleanup_uncertain or lane_state.cleanup_uncertain:
             raise HostError("generic host admissions are blocked by cleanup uncertainty")
         if self.client is None:
             raise HostError("runtime client is required to execute a task")
@@ -4390,6 +5080,21 @@ class GenericPackHost:
 
         try:
             _assert_fixed_request_scope(record, task_data)
+            execution_contract = _execution_contract(
+                task_data,
+                runtime_session_id=self.runtime_state.get("runtime_session_id"),
+            )
+            contract_limits = execution_contract.get("limits", {}) if execution_contract else {}
+            queue_limit = contract_limits.get("max_queue_seconds")
+            if queue_limit is not None and _contract_queue_age(task_data) > queue_limit:
+                raise HostError("execution_request max_queue_seconds exceeded before execution")
+            claim_epoch = task_data.get("runtime_epoch", self.runtime_state.get("runtime_epoch"))
+            if execution_contract is not None:
+                if isinstance(claim_epoch, bool) or not isinstance(claim_epoch, int) or claim_epoch < 1:
+                    raise HostError("execution_request requires a claimed runtime_epoch")
+                observed_epoch = self.runtime_state.get("runtime_epoch")
+                if observed_epoch is not None and observed_epoch != claim_epoch:
+                    raise HostError("claimed runtime_epoch disagrees with observed runtime")
             storage_estimate = _task_storage_estimate(task_data)
             if record.definition.metadata.get("storage_estimate_required"):
                 if storage_estimate is None:
@@ -4423,10 +5128,17 @@ class GenericPackHost:
             raise HostError(str(exc)) from exc
         spec = task_data.get("spec", {})
         authorized_input_object_ids = task_data.get("input_object_ids")
-        ephemeral_attempt_root = self.attempt_root is None
-        root = self.attempt_root or Path(tempfile.mkdtemp(prefix=f"astrid-attempt-{task_id}-")).resolve()
-        root.mkdir(parents=True, exist_ok=True)
+        ephemeral_attempt_root = self.attempt_root is None and self.attempt_base is None
+        # ``attempt_root`` is intentionally an exact caller-owned spool for
+        # debug/single-attempt callers. Long-lived hosts use ``attempt_base``
+        # so sequential tasks get isolated namespaces.
+        root = self._allocate_attempt_root(task_id, attempt_id)
         execution_deadline = self.execution_policy.deadline_from_now()
+        runtime_limit = contract_limits.get("max_runtime_seconds")
+        if runtime_limit is not None:
+            execution_deadline = min(execution_deadline, time.monotonic() + runtime_limit)
+        collection_limit = contract_limits.get("collection_seconds")
+        collection_deadline: float | None = None
         warm_receipt = self.execution_policy.warm_expectation()
         evidence_receipt: dict[str, Any] | None = None
         deadline_exceeded = False
@@ -4461,7 +5173,7 @@ class GenericPackHost:
         cancel_signal = threading.Event()
         managed_adapter = _ManagedTaskAdapter(
             cancel_signal,
-            process_census=lambda: bool(self._active_processes),
+            process_census=lambda: bool(lane_state.active_processes),
         )
         runtime_instance_id = str(
             self.runtime_state.get("runtime_instance_id")
@@ -4473,10 +5185,11 @@ class GenericPackHost:
             or getattr(getattr(self.client, "generated", None), "endpoint", None)
             or "runtime://local"
         )
+        host_birth_id = process_birth_identity()
         managed_binding = SessionBinding(
             session_id=f"{capability_id}:{task_id}",
             runtime_instance_id=runtime_instance_id,
-            process_birth_id=process_birth_identity(),
+            process_birth_id=host_birth_id,
             endpoint=runtime_endpoint,
             source_digest=record.source_digest,
             config_digest=_canonical_digest(
@@ -4486,6 +5199,9 @@ class GenericPackHost:
                     "interpreter": str(Path(sys.executable).resolve()),
                 }
             ),
+            runtime_epoch=claim_epoch if isinstance(claim_epoch, int) and not isinstance(claim_epoch, bool) else None,
+            launch_generation=str(self.runtime_state.get("launch_generation") or host_birth_id),
+            engine_birth_id=host_birth_id,
         )
         managed_capability = CapabilityDescriptor(
             capability_id=capability_id,
@@ -4513,13 +5229,16 @@ class GenericPackHost:
         execution_identity = ""
         model_id = "vibecomfy.run"
         template_id = "vibecomfy.run"
-        self._vibecomfy_current_warmth_hint = None
-        self._vibecomfy_requested_warmth_hint = None
+        lane_state.vibecomfy_current_warmth_hint = None
+        lane_state.vibecomfy_requested_warmth_hint = None
 
         def cancelled():
             nonlocal deadline_exceeded, evidence_cap_exceeded
             nonlocal evidence_failure_receipt
-            if self.execution_policy.deadline_expired(execution_deadline):
+            if self.execution_policy.deadline_expired(execution_deadline) or (
+                collection_deadline is not None
+                and self.execution_policy.deadline_expired(collection_deadline)
+            ):
                 deadline_exceeded = True
                 cancel_signal.set()
                 return True
@@ -4820,12 +5539,12 @@ class GenericPackHost:
                 # owner restart mutates the in-memory HC-03 session binding
                 # after verifying the fresh registry; re-read that binding
                 # before any new adapter/session object is admitted.
-                current_binding = self.managed_tool_session.current_binding
+                current_binding = lane_state.managed_tool_session.current_binding
                 if (
                     current_binding is not None
                     and current_binding.execution_identity != stable_session_identity
                 ):
-                    self.managed_tool_session.release(reason="capacity_replacement")
+                    lane_state.managed_tool_session.release(reason="capacity_replacement")
                     readiness_profile = _read_readiness_profile_document()
                     refreshed_session = (
                         readiness_profile.get("vibecomfy_session")
@@ -4886,6 +5605,8 @@ class GenericPackHost:
                 session_endpoint = str(vibe_session.get("server_url") or "")
                 session_source = str(vibe_session.get("source_revision") or "")
                 session_config = str(vibe_session.get("config_digest") or "")
+                if execution_contract is not None and not vibe_session.get("comfy_process_birth_id"):
+                    raise HostError("execution_request requires observed VibeComfy engine birth identity")
                 managed_binding = SessionBinding(
                     session_id=session_id,
                     runtime_instance_id=str(
@@ -4898,6 +5619,9 @@ class GenericPackHost:
                     source_digest=session_source,
                     config_digest=session_config,
                     execution_identity=stable_session_identity,
+                    runtime_epoch=claim_epoch if isinstance(claim_epoch, int) and not isinstance(claim_epoch, bool) else None,
+                    launch_generation=str(vibe_session.get("launch_generation") or session_birth),
+                    engine_birth_id=str(vibe_session.get("comfy_process_birth_id") or session_birth),
                 )
                 managed_adapter = _ManagedVibeSessionAdapter(checkout_adapter)
                 from astrid.core.generation.backends.vibecomfy import vibecomfy_warmth_hint
@@ -4916,20 +5640,20 @@ class GenericPackHost:
                     ),
                     config_digest=str(vibe_session.get("config_digest") or ""),
                 )
-                self._vibecomfy_current_warmth_hint = current_warmth_hint
-                self._vibecomfy_requested_warmth_hint = (
+                lane_state.vibecomfy_current_warmth_hint = current_warmth_hint
+                lane_state.vibecomfy_requested_warmth_hint = (
                     current_warmth_hint
-                    if self._vibecomfy_warmth_hint == current_warmth_hint
+                    if lane_state.vibecomfy_warmth_hint == current_warmth_hint
                     else None
                 )
-            self.managed_tool_session.open(
+            lane_state.managed_tool_session.open(
                 capability=managed_capability,
                 binding=managed_binding,
                 adapter=managed_adapter,
             )
             managed_opened = True
-            self.managed_tool_session.observe(managed_binding)
-            managed_token = self.managed_tool_session.admit(
+            lane_state.managed_tool_session.observe(managed_binding)
+            managed_token = lane_state.managed_tool_session.admit(
                 capability_id=capability_id,
                 invocation_id=f"{task_id}:{attempt_id}:{fence}",
             )
@@ -4967,7 +5691,16 @@ class GenericPackHost:
                     handle_guard_abort()
                     cancelled_attempt = True
                     return {"task_id": task_id, "status": "cancelled", "cancelled": True}
-                if record.definition.command is not None:
+                orchestrator_args: tuple[str, ...] = ()
+                if record.capability_kind == "orchestrator":
+                    admitted_spec = _admitted_task_spec(task_data)
+                    raw_orchestrator_args = admitted_spec.get("orchestrator_args", ())
+                    if not isinstance(raw_orchestrator_args, (list, tuple)) or any(
+                        not isinstance(value, str) for value in raw_orchestrator_args
+                    ):
+                        raise HostError("orchestrator_args must be a list of strings")
+                    orchestrator_args = tuple(raw_orchestrator_args)
+                if record.capability_kind == "executor" and _record_command(record) is not None:
                     result = self._run_command_definition(
                         record,
                         inputs,
@@ -5006,7 +5739,7 @@ class GenericPackHost:
                     worker_env, worker_secrets = self._child_environment(record, root, admission=worker_admission, network_broker=network_broker)
                     try:
                         result = self.invoke_capability(
-                            capability_kind="executor",
+                            capability_kind=record.capability_kind,
                             capability_id=capability_id,
                             request={
                                 "out": str(output_root),
@@ -5017,6 +5750,11 @@ class GenericPackHost:
                                 "run_id": task_id,
                                 "run_root": str(root),
                                 "invocation": "runtime",
+                                **(
+                                    {"orchestrator_args": orchestrator_args}
+                                    if record.capability_kind == "orchestrator"
+                                    else {}
+                                ),
                             },
                             attempt=root,
                             cancelled=cancelled,
@@ -5032,6 +5770,8 @@ class GenericPackHost:
                 # The outer run_task finally owns lease-pump shutdown and
                 # cleanup; this boundary only preserves child env cleanup.
                 pass
+            if collection_limit is not None:
+                collection_deadline = time.monotonic() + collection_limit
             # The periodic lease pump may not get another turn after a fast
             # command writes its terminal checkpoint. Persist that final
             # checkpoint before harvesting and settling so a completed task
@@ -5180,7 +5920,11 @@ class GenericPackHost:
                 payload["thumbnail_diagnostics"] = thumbnail_diagnostics
             network_evidence = self._network_evidence(
                 root,
-                admission=worker_admission if record.definition.command is None else network_admission,
+                admission=(
+                    worker_admission
+                    if record.capability_kind == "orchestrator" or _record_command(record) is None
+                    else network_admission
+                ),
                 # Provider egress requires host-owned signed broker evidence.
                 # A local-generation adapter may have ``isolation.network``
                 # solely because it talks to the host-owned Comfy daemon on
@@ -5207,7 +5951,11 @@ class GenericPackHost:
                 retained_owner = "generic-pack-host"
             payload["execution_guards"] = {
                 "evidence": evidence_receipt,
-                "deadline_seconds": self.execution_policy.deadline_seconds,
+                "deadline_seconds": min(
+                    self.execution_policy.deadline_seconds,
+                    runtime_limit if runtime_limit is not None else self.execution_policy.deadline_seconds,
+                ),
+                "collection_seconds": collection_limit,
                 "warm_expectation": warm_receipt,
                 "evidence_budget": {
                     "run_observed_bytes": self.execution_policy.evidence_budget.charged_bytes,
@@ -5238,8 +5986,8 @@ class GenericPackHost:
             # Re-observe the actual engine session after output custody and
             # immediately before consuming the manager token.  A session
             # restart or identity change cannot become a Runtime settlement.
-            self.managed_tool_session.observe(managed_binding)
-            managed_envelope = self.managed_tool_session.settle(
+            lane_state.managed_tool_session.observe(managed_binding)
+            managed_envelope = lane_state.managed_tool_session.settle(
                 managed_token,
                 result_evidence={
                     "generation": managed_token.generation,
@@ -5259,10 +6007,10 @@ class GenericPackHost:
                 fence=fence,
             )
             settled = True
-            if capability_id == "vibecomfy.run" and self._vibecomfy_current_warmth_hint:
+            if capability_id == "vibecomfy.run" and lane_state.vibecomfy_current_warmth_hint:
                 # The hint becomes reusable only after the Runtime settlement
                 # and managed-session observation both succeeded.
-                self._vibecomfy_warmth_hint = self._vibecomfy_current_warmth_hint
+                lane_state.vibecomfy_warmth_hint = lane_state.vibecomfy_current_warmth_hint
             return settlement
         except HostCancelled:
             handle_guard_abort()
@@ -5318,7 +6066,7 @@ class GenericPackHost:
             if managed_token is not None and not managed_settled:
                 if deadline_exceeded or cancelled_attempt or cancel_signal.is_set() or self._shutdown.is_set():
                     try:
-                        self.managed_tool_session.cancel(
+                        lane_state.managed_tool_session.cancel(
                             managed_token,
                             outcome="confirmed",
                         )
@@ -5327,12 +6075,12 @@ class GenericPackHost:
                         # A missing or stale token is already a fail-closed
                         # condition; release below preserves the poisoned slot.
                         try:
-                            self.managed_tool_session.fence(reason="cancel_unconfirmed")
+                            lane_state.managed_tool_session.fence(reason="cancel_unconfirmed")
                         except Exception as fence_exc:
                             cleanup_errors.append(f"managed fence: {fence_exc}")
                 else:
                     try:
-                        self.managed_tool_session.fence(reason="task_failed")
+                        lane_state.managed_tool_session.fence(reason="task_failed")
                     except Exception as exc:
                         cleanup_errors.append(f"managed fence: {exc}")
             if managed_opened:
@@ -5343,11 +6091,11 @@ class GenericPackHost:
                 )
                 if not retain_persistent_session:
                     if capability_id == "vibecomfy.run":
-                        self._vibecomfy_warmth_hint = None
-                        self._vibecomfy_current_warmth_hint = None
-                        self._vibecomfy_requested_warmth_hint = None
+                        lane_state.vibecomfy_warmth_hint = None
+                        lane_state.vibecomfy_current_warmth_hint = None
+                        lane_state.vibecomfy_requested_warmth_hint = None
                     try:
-                        self.managed_tool_session.release(
+                        lane_state.managed_tool_session.release(
                             reason=(
                                 "task_settled"
                                 if managed_settled
@@ -5359,9 +6107,9 @@ class GenericPackHost:
                     except Exception as exc:
                         cleanup_errors.append(f"managed release: {exc}")
             if capability_id == "vibecomfy.run" and not settled:
-                self._vibecomfy_warmth_hint = None
-                self._vibecomfy_current_warmth_hint = None
-                self._vibecomfy_requested_warmth_hint = None
+                lane_state.vibecomfy_warmth_hint = None
+                lane_state.vibecomfy_current_warmth_hint = None
+                lane_state.vibecomfy_requested_warmth_hint = None
             if capability_id == "generation.generate_image_codex":
                 # A force-killed child cannot run its credential finally.
                 # Scrub before retaining any attempt evidence as well.
@@ -5412,7 +6160,9 @@ class GenericPackHost:
                     cleanup_errors.append(f"caller-owned attempt disappeared: {root}")
             if cleanup_errors:
                 cleanup_receipt.update({"status": "uncertain", "errors": list(cleanup_errors)})
+                lane_state.cleanup_uncertain = True
                 self._cleanup_uncertain = True
+            lane_state.last_cleanup_receipt = cleanup_receipt
             self._last_cleanup_receipt = cleanup_receipt
             if cleanup_errors:
                 raise HostError("owned cleanup incomplete: " + "; ".join(cleanup_errors))
@@ -5442,9 +6192,11 @@ class GenericPackHost:
                 raise HostError("runtime cancellation lacks an attempt/fence operation") from exc
             return operation(task_id)
 
-    def claim_once(self) -> Mapping[str, Any] | None:
+    def claim_once(self, *, lane: str | None = None) -> Mapping[str, Any] | None:
         """Claim and execute one queued task through the generated boundary."""
-        if self._cleanup_uncertain:
+        lane_state = self._lane_state(lane)
+        lane_name = lane_state.name
+        if self._cleanup_uncertain or lane_state.cleanup_uncertain:
             raise HostError("generic host admissions are blocked by cleanup uncertainty")
         if self._shutdown.is_set():
             return None
@@ -5466,14 +6218,31 @@ class GenericPackHost:
         capability_ids = sorted(
             record.id
             for record in ready_records
-            if record.ready and not _is_withdrawn(record)
+            if (
+                record.ready
+                and not _is_withdrawn(record)
+                and (
+                    not self._parallel_enabled
+                    or lane is None
+                    or (
+                        lane_name == _LANE_ORCHESTRATION
+                        and record.capability_kind == "orchestrator"
+                    )
+                    or (
+                        lane_name == _LANE_EXECUTOR
+                        and record.capability_kind == "executor"
+                    )
+                )
+            )
         )
         if not capability_ids:
             return None
+        claim_target = _configured_claim_target()
         claim = claim_next(
             executor_id=self.executor_id,
             capability_ids=capability_ids,
             idempotency_key=f"claim-{self.executor_id}-{time.time_ns()}",
+            target=claim_target,
         )
         if claim is None:
             return None
@@ -5485,11 +6254,16 @@ class GenericPackHost:
             "lease_id": getattr(claim, "lease_id", None),
             "fence": getattr(claim, "fence", None),
             "runtime_epoch": getattr(claim, "runtime_epoch", None),
+            "executor_id": getattr(claim, "executor_id", None),
             "input_object_ids": list(getattr(claim, "input_object_ids", ()) or ()),
             "spec": getattr(claim, "spec", None),
             "project_id": getattr(claim, "project_id", None),
             "expected_effect": getattr(claim, "expected_effect", None),
             "generation_intent": getattr(claim, "generation_intent", None),
+            "execution_binding": getattr(claim, "execution_binding", None),
+            "queued_at": getattr(claim, "queued_at", None),
+            "admitted_at": getattr(claim, "admitted_at", None),
+            "created_at": getattr(claim, "created_at", None),
         }
         if not claim_data.get("task_id"):
             raise HostError("generated claim operation returned no task_id")
@@ -5525,13 +6299,57 @@ class GenericPackHost:
                 "spec": getattr(task, "spec", claim_data.get("spec") or {}),
                 "expected_effect": getattr(task, "expected_effect", claim_data.get("expected_effect")),
                 "generation_intent": getattr(task, "generation_intent", claim_data.get("generation_intent")),
+                "execution_binding": getattr(task, "execution_binding", claim_data.get("execution_binding")),
                 "storage_estimate": getattr(task, "storage_estimate", claim_data.get("storage_estimate")),
                 "required_facts": getattr(task, "required_facts", claim_data.get("required_facts")),
+                "queued_at": getattr(task, "queued_at", None),
+                "admitted_at": getattr(task, "admitted_at", None),
+                "created_at": getattr(task, "created_at", None),
             }
+        def fail_claim_handoff(reason: str) -> None:
+            try:
+                self.client.fail(
+                    task_id, lease_id, reason, retryable=False,
+                    attempt_id=attempt_id, fence=int(fence),
+                )
+            except Exception as exc:
+                raise HostError("claim handoff failure could not be recorded") from exc
+            raise HostError(reason)
+
+        if task_data.get("id") not in (None, task_id):
+            fail_claim_handoff("claimed task_id disagrees with task read")
+        claim_spec = claim_data.get("spec")
+        read_spec = task_data.get("spec")
+        if isinstance(claim_spec, Mapping) and isinstance(read_spec, Mapping):
+            claim_nested = claim_spec.get("spec")
+            read_nested = read_spec.get("spec")
+            claim_request = claim_spec.get("execution_request") or (
+                claim_nested.get("execution_request") if isinstance(claim_nested, Mapping) else None
+            )
+            read_request = read_spec.get("execution_request") or (
+                read_nested.get("execution_request") if isinstance(read_nested, Mapping) else None
+            )
+            if claim_request != read_request and (claim_request is not None or read_request is not None):
+                fail_claim_handoff("claim and task read disagree on execution_request")
+            if claim_request is not None:
+                claim_ids = claim_data.get("input_object_ids")
+                read_ids = task_data.get("input_object_ids")
+                if claim_ids is not None and read_ids is not None and (
+                    not isinstance(claim_ids, (list, tuple))
+                    or not isinstance(read_ids, (list, tuple))
+                    or list(claim_ids) != list(read_ids)
+                ):
+                    fail_claim_handoff("claim and task read disagree on input_object_ids")
+        claim_binding = claim_data.get("execution_binding") or claim_data.get("placement_binding") or claim_data.get("binding")
+        read_binding = task_data.get("execution_binding") or task_data.get("placement_binding") or task_data.get("binding")
+        if claim_binding is not None and read_binding is not None and claim_binding != read_binding:
+            fail_claim_handoff("claim and task read disagree on execution binding")
         task_data.update(
             {
                 "id": task_id,
                 "attempt_id": claim_data.get("attempt_id"),
+                "lease_id": claim_data.get("lease_id"),
+                "executor_id": claim_data.get("executor_id") or getattr(self, "executor_id", None),
                 "fence": claim_data.get("fence"),
             }
         )
@@ -5539,6 +6357,11 @@ class GenericPackHost:
             task_data["project_id"] = claim_data["project_id"]
         if claim_data.get("runtime_epoch") is not None:
             task_data["runtime_epoch"] = claim_data["runtime_epoch"]
+        if claim_binding is not None:
+            task_data["execution_binding"] = claim_binding
+        for timestamp_key in ("queued_at", "admitted_at", "created_at"):
+            if claim_data.get(timestamp_key) is not None:
+                task_data[timestamp_key] = claim_data[timestamp_key]
         if claim_data.get("input_object_ids") is not None:
             task_data["input_object_ids"] = claim_data["input_object_ids"]
         # The claim response is the execution snapshot.  Preserve it over
@@ -5590,10 +6413,96 @@ class GenericPackHost:
             attempt_id=attempt_id,
             fence=int(fence),
             provider_route_grant=provider_route_grant,
+            lane=lane_name,
         )
+
+    def _run_parallel_lanes(
+        self,
+        *,
+        poll_seconds: float,
+        max_tasks: int | None,
+    ) -> list[Mapping[str, Any]]:
+        """Run one serial claim/execution loop per supervised host lane.
+
+        Runtime remains the authority for admission and reservations. Each
+        lane only claims after its local slot is free, and each worker executes
+        the claim synchronously before releasing that slot; no leased task is
+        queued inside the host.
+        """
+        results: list[Mapping[str, Any]] = []
+        results_lock = threading.Lock()
+        stop_claiming = threading.Event()
+        threads: list[threading.Thread] = []
+
+        def worker(lane_name: str) -> None:
+            self._set_lane(lane_name)
+            consecutive_claim_failures = 0
+            while not self._shutdown.is_set() and not stop_claiming.is_set():
+                with results_lock:
+                    if max_tasks is not None and len(results) >= max_tasks:
+                        stop_claiming.set()
+                        break
+                try:
+                    result = self.claim_once(lane=lane_name)
+                except Exception as exc:
+                    consecutive_claim_failures += 1
+                    if consecutive_claim_failures == 1 or not (
+                        consecutive_claim_failures & (consecutive_claim_failures - 1)
+                    ):
+                        print(
+                            f"generic host {lane_name} lane claim failed "
+                            f"({consecutive_claim_failures} consecutive): "
+                            f"{type(exc).__name__}: {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    base_delay = max(0.05, float(poll_seconds))
+                    delay = min(
+                        30.0,
+                        base_delay * (2 ** min(consecutive_claim_failures - 1, 10)),
+                    )
+                    self._shutdown.wait(delay)
+                    continue
+                consecutive_claim_failures = 0
+                if result is not None:
+                    with results_lock:
+                        results.append(result)
+                        if max_tasks is not None and len(results) >= max_tasks:
+                            stop_claiming.set()
+                    continue
+                if self._shutdown.is_set() or stop_claiming.is_set():
+                    break
+                self._shutdown.wait(max(0.0, float(poll_seconds)))
+
+        for lane_name in (_LANE_ORCHESTRATION, _LANE_EXECUTOR):
+            thread = threading.Thread(
+                target=worker,
+                args=(lane_name,),
+                name=f"astrid-generic-host-{lane_name}",
+                daemon=True,
+            )
+            threads.append(thread)
+            thread.start()
+
+        try:
+            while any(thread.is_alive() for thread in threads):
+                if time.monotonic() >= self._registration_refresh_deadline:
+                    with self._registration_lock:
+                        if time.monotonic() >= self._registration_refresh_deadline:
+                            self._renew_executor_registration()
+                time.sleep(0.05)
+        finally:
+            for thread in threads:
+                thread.join(timeout=2.0)
+        return results
 
     def run(self, *, once: bool = False, poll_seconds: float = 1.0, max_tasks: int | None = None) -> list[Mapping[str, Any]]:
         """Run the bounded worker claim loop; ``once`` is the test-friendly form."""
+        if self._parallel_enabled and not once:
+            return self._run_parallel_lanes(
+                poll_seconds=poll_seconds,
+                max_tasks=max_tasks,
+            )
         results: list[Mapping[str, Any]] = []
         consecutive_claim_failures = 0
         while not self._shutdown.is_set() and (max_tasks is None or len(results) < max_tasks):
@@ -5705,13 +6614,16 @@ def _compose_cli_boot_manifest(
     try:
         from astrid.core._shared.boot_manifest import (
             load_boot_manifest_hash,
+            normalize_sha256_digest,
             validate_manifest_path,
         )
         manifest_path = validate_manifest_path(args.boot_manifest_path, args.support_root)
         digest = load_boot_manifest_hash(
             manifest_path, support_root=args.support_root
         )
-        if args.boot_manifest_hash is not None and args.boot_manifest_hash != digest:
+        if args.boot_manifest_hash is not None and normalize_sha256_digest(
+            args.boot_manifest_hash, label="boot manifest hash"
+        ) != normalize_sha256_digest(digest, label="stamped boot manifest hash"):
             raise RuntimeError("boot manifest hash does not match the existing manifest")
     except (OSError, RuntimeError) as exc:
         parser.error(f"boot manifest composition failed: {exc}")
@@ -5729,6 +6641,17 @@ def _write_ready_marker(path: Path, payload: Mapping[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _effective_cli_max_concurrency(command: str | None, configured: int | None) -> int:
+    """Choose the CLI policy default; canonical worker loops own two lanes."""
+    if configured is not None:
+        return configured
+    return (
+        CANONICAL_PACK_HOST_MAX_CONCURRENCY
+        if command == "run"
+        else 1
+    )
+
+
 def _cli() -> int:
 
     parser = argparse.ArgumentParser(prog="astrid-generic-host")
@@ -5737,8 +6660,9 @@ def _cli() -> int:
     parser.add_argument("--runtime-endpoint")
     parser.add_argument("--credential-file", help="owner-only file containing the worker bearer credential")
     parser.add_argument("--executor-id", default="astrid-pack-host")
-    parser.add_argument("--max-concurrency", type=int, default=1)
+    parser.add_argument("--max-concurrency", type=int, default=None)
     parser.add_argument("--attempt-root")
+    parser.add_argument("--attempt-base", help="host-owned base directory; allocate one isolated child per task attempt")
     parser.add_argument("--capability-matrix")
     parser.add_argument("--register", action="store_true")
     parser.add_argument("--run-task")
@@ -5751,6 +6675,7 @@ def _cli() -> int:
     parser.add_argument("--max-frame-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--ready-file", help="write host registration/readiness metadata before entering the claim loop")
     parser.add_argument("--source-checkout", help="absolute source checkout bound to this host")
+    parser.add_argument("--source-checkout-digest", help="expected lowercase SHA-256 digest of the source checkout pack tree")
     parser.add_argument("--support-root", help="absolute runtime support directory bound to this host")
     parser.add_argument("--runtime-instance-id", help="runtime instance identity bound to this host")
     parser.add_argument("--source-inventory-identity", help="verified managed source inventory identity bound to this host")
@@ -5759,6 +6684,31 @@ def _cli() -> int:
     parser.add_argument("--readiness-profile-path", help="Worker-published HC-03 readiness profile")
     parser.add_argument("--readiness-profile-hash", help="expected SHA-256 hash of the readiness profile")
     args = parser.parse_args()
+    if (args.source_checkout is None) != (args.source_checkout_digest is None):
+        parser.error("--source-checkout and --source-checkout-digest must be supplied together")
+    source_checkout = None
+    verified_source_checkout_digest = None
+    if args.source_checkout is not None:
+        source_checkout = Path(args.source_checkout).expanduser()
+        if not source_checkout.is_absolute() or source_checkout.is_symlink() or not source_checkout.is_dir():
+            parser.error("--source-checkout must be an absolute non-symlink directory")
+        expected_digest = args.source_checkout_digest
+        if not isinstance(expected_digest, str) or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
+            parser.error("--source-checkout-digest must be 64 lowercase hexadecimal characters")
+        try:
+            verified_source_checkout_digest = source_checkout_digest(source_checkout)
+        except (OSError, ValueError) as exc:
+            parser.error(f"source checkout verification failed: {exc}")
+        if not hmac.compare_digest(verified_source_checkout_digest, expected_digest):
+            parser.error("--source-checkout-digest does not match the source checkout")
+    # The canonical worker loop must preserve one orchestration slot while an
+    # admitted child uses the serial executor slot. One-off task and supervisor
+    # modes remain deliberately serial by default.
+    args.max_concurrency = _effective_cli_max_concurrency(
+        args.command, args.max_concurrency
+    )
+    if args.attempt_root and args.attempt_base:
+        parser.error("--attempt-root and --attempt-base are mutually exclusive")
     if (args.readiness_profile_path is None) != (args.readiness_profile_hash is None):
         parser.error("--readiness-profile-path and --readiness-profile-hash must be supplied together")
     if args.readiness_profile_path is not None:
@@ -5804,6 +6754,20 @@ def _cli() -> int:
                 os.environ["ASTRID_VIBECOMFY_CANDIDATE_KIND"] = "local_snapshot"
                 os.environ["ASTRID_VIBECOMFY_CANDIDATE_REVISION"] = revision
                 os.environ["ASTRID_VIBECOMFY_CANDIDATE_CONTENT_DIGEST"] = content_digest
+    else:
+        # A profile-free host must not inherit readiness or candidate bindings
+        # from the launcher that happened to invoke it.
+        for name in (
+            "ASTRID_HOST_READINESS_PROFILE_PATH",
+            "ASTRID_HOST_READINESS_PROFILE_HASH",
+            VIBECOMFY_ATTESTED_REVISION_ENV,
+            VIBECOMFY_ATTESTED_CONTENT_DIGEST_ENV,
+            "ASTRID_VIBECOMFY_MODELS_ROOT",
+            "ASTRID_VIBECOMFY_CANDIDATE_KIND",
+            "ASTRID_VIBECOMFY_CANDIDATE_REVISION",
+            "ASTRID_VIBECOMFY_CANDIDATE_CONTENT_DIGEST",
+        ):
+            os.environ.pop(name, None)
     ready_path = Path(args.ready_file).expanduser() if args.ready_file else None
     if ready_path is not None and (not ready_path.is_absolute() or ready_path.is_symlink()):
         parser.error("--ready-file must be an absolute non-symlink path")
@@ -5828,7 +6792,9 @@ def _cli() -> int:
         client=client,
         executor_id=args.executor_id,
         max_concurrency=args.max_concurrency,
+        require_capacity_ack=args.command == "run",
         attempt_root=args.attempt_root,
+        attempt_base=args.attempt_base,
         capability_matrix=args.capability_matrix,
         source_inventory_identity=args.source_inventory_identity,
         boot_manifest_path=boot_manifest,
@@ -5836,12 +6802,20 @@ def _cli() -> int:
     )
     host.discover()
     host.preflight()
-    if args.source_checkout:
-        source_checkout = Path(args.source_checkout).expanduser()
-        if not source_checkout.is_absolute() or source_checkout.is_symlink() or not source_checkout.is_dir():
-            parser.error("--source-checkout must be an absolute non-symlink directory")
-    else:
-        source_checkout = None
+    def verify_source_checkout_unchanged() -> None:
+        if source_checkout is None or verified_source_checkout_digest is None:
+            return
+        try:
+            observed = source_checkout_digest(source_checkout)
+        except (OSError, ValueError) as exc:
+            raise HostError(f"source checkout verification failed after preflight: {exc}") from exc
+        if not hmac.compare_digest(observed, verified_source_checkout_digest):
+            raise HostError("source checkout changed during host startup")
+
+    try:
+        verify_source_checkout_unchanged()
+    except HostError as exc:
+        parser.error(str(exc))
     if args.support_root:
         support_root = Path(args.support_root).expanduser()
         if not support_root.is_absolute() or support_root.is_symlink() or not support_root.is_dir():
@@ -5857,7 +6831,7 @@ def _cli() -> int:
     registration = None
     if args.register or not args.run_task:
         try:
-            registration = host.register() if args.register else {"capabilities": [record.manifest() for record in host.capabilities.values()]}
+            registration = host.register(before_registration=verify_source_checkout_unchanged) if args.register else {"capabilities": [record.manifest() for record in host.capabilities.values()]}
         except Exception as exc:
             code = str(getattr(exc, "code", "host_registration_failed"))[:128]
             request_id = str(getattr(exc, "request_id", ""))[:128]
@@ -5886,6 +6860,14 @@ def _cli() -> int:
             return 1
         print(json.dumps(registration, indent=2, sort_keys=True, default=_json_safe))
     if ready_path is not None:
+        vibecomfy_record = host.capabilities.get("vibecomfy.run")
+        vibecomfy_attestation = (
+            vibecomfy_record.definition.metadata.get(
+                _VIBECOMFY_EXECUTION_ATTESTATION
+            )
+            if vibecomfy_record is not None
+            else None
+        )
         ready_payload = {
             "status": "ready",
             "python_executable": os.path.abspath(sys.executable),
@@ -5897,20 +6879,60 @@ def _cli() -> int:
             "ready_capabilities": sorted(record.id for record in host.capabilities.values() if record.ready),
             "unready_capabilities": sorted(record.id for record in host.capabilities.values() if not record.ready),
             "registration": registration,
+            "effective_capacity": (
+                dict(registration["effective_capacity"])
+                if isinstance(registration, Mapping)
+                and isinstance(registration.get("effective_capacity"), Mapping)
+                else None
+            ),
             "ready_file": str(ready_path),
             "credential_file": str(credential_path) if credential_path else None,
             "support_root": str(support_root) if support_root else None,
             "source_checkout": str(source_checkout) if source_checkout else None,
-            "source_checkout_digest": source_checkout_digest(source_checkout) if source_checkout else None,
+            "source_checkout_digest": verified_source_checkout_digest,
             "source_inventory_identity": host.source_inventory_identity,
             "boot_manifest_path": str(boot_manifest),
             "boot_manifest_hash": boot_manifest_hash,
+            "readiness_profile_path": (
+                str(Path(args.readiness_profile_path).expanduser())
+                if args.readiness_profile_path is not None
+                else None
+            ),
+            "readiness_profile_hash": args.readiness_profile_hash,
+            "vibecomfy_execution_attestation": (
+                dict(vibecomfy_attestation)
+                if isinstance(vibecomfy_attestation, Mapping)
+                else None
+            ),
             "source_epoch": host.source_epoch,
             "runtime_instance_id": args.runtime_instance_id,
             "runtime_epoch": host.runtime_state.get("runtime_epoch"),
             "schema_digest": host.runtime_state.get("schema_digest"),
         }
         _write_ready_marker(ready_path, ready_payload)
+        # Freeze the host-validated identity once registration and both lane
+        # acknowledgements are published. Each admitted child gets its own
+        # owner-only reference to this exact host incarnation.
+        host.nested_handoff_template = {
+            "schema_version": 1,
+            "support_root": ready_payload["support_root"],
+            "endpoint": ready_payload["endpoint"],
+            "runtime_instance_id": ready_payload["runtime_instance_id"],
+            "runtime_epoch": ready_payload["runtime_epoch"],
+            "schema_digest": ready_payload["schema_digest"],
+            "ready_file": ready_payload["ready_file"],
+            "executor_id": ready_payload["executor_id"],
+            "source_checkout": ready_payload["source_checkout"],
+            "source_checkout_digest": ready_payload["source_checkout_digest"],
+            "source_inventory_identity": ready_payload["source_inventory_identity"],
+            "boot_manifest_path": ready_payload["boot_manifest_path"],
+            "boot_manifest_hash": ready_payload["boot_manifest_hash"],
+            "readiness_profile_path": ready_payload["readiness_profile_path"],
+            "readiness_profile_hash": ready_payload["readiness_profile_hash"],
+            "vibecomfy_execution_attestation": ready_payload["vibecomfy_execution_attestation"],
+            "effective_capacity": ready_payload["effective_capacity"],
+            "python_executable": ready_payload["python_executable"],
+        }
     if args.run_task:
         if client is None or not args.lease_token:
             parser.error("--run-task requires --runtime-endpoint, --credential-file, and --lease-token")
@@ -5920,7 +6942,7 @@ def _cli() -> int:
         if client is None:
             parser.error("run requires --runtime-endpoint and --credential-file")
         if not args.register:
-            host.register()
+            host.register(before_registration=verify_source_checkout_unchanged)
         print(json.dumps(host.run(once=args.once, poll_seconds=args.poll_seconds, max_tasks=args.max_tasks), indent=2, sort_keys=True, default=str))
     if args.command == "supervise":
         if client is None:

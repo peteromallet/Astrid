@@ -218,6 +218,14 @@ Start the worker before submitting the task, in this order:
    worker credential on the pod's container disk at
    `/tmp/astrid-pack-host.token` with mode `0600`; do not use the volume copy
    when its permissions are group/world-readable.
+   The launcher must provision the support root and place the boot manifest
+   inside that root before starting the worker. Immediately before any
+   `nohup`, `&`, or process spawn, synchronously run the same
+   `validate_manifest_path()` and `load_boot_manifest_hash()` checks used by
+   the host, including the existing-directory, non-symlink, containment, and
+   expected-digest checks. A missing root, a manifest outside it, or a digest
+   mismatch is a launcher failure and must be reported immediately; it must
+   not become a readiness timeout.
 3. Start exactly one generic host with the canonical identity and capability:
 
    ```bash
@@ -227,7 +235,7 @@ Start the worker before submitting the task, in this order:
      --credential-file /tmp/astrid-pack-host.token \
      --executor-id astrid-pack-host --max-concurrency 1 \
      --register --poll-seconds 1 \
-     --attempt-root "$JOB/attempts" \
+     --attempt-base "$JOB/attempts" \
      --ready-file "$JOB/generic-host.ready.json" \
      --source-checkout "$SRC" \
      --support-root /tmp/astrid-host \
@@ -240,9 +248,79 @@ Start the worker before submitting the task, in this order:
    The shell variables are the fresh staging paths and hashes from the
    uploaded release. Only one worker may use `astrid-pack-host` at a time;
    pause a local worker with that identity while the RunPod worker is active.
+   `--attempt-base` is the long-lived-worker form: the host allocates a fresh
+   child directory for every claimed task attempt. Use `--attempt-root` only
+   when intentionally running one exact debug attempt; it is caller-owned and
+   is reused by subsequent tasks.
 4. Wait for the Runtime capability row `vibecomfy.run` to become `ready`.
    A ready file only proves that the process started; it is not registration
    proof. Submit the task only after the live capability digest is visible.
+
+### Mandatory invocation preflight
+
+There is one more gate between live capability readiness and `tasks create`.
+For a canonical VibeComfy run, the task must carry the complete sibling bundle
+and filename-bearing managed asset descriptors. Astrid's SDK runs the shared
+CPU-only invocation preflight at this boundary and fails closed before task
+admission when the configured VibeComfy environment is unavailable or the
+invocation is not executable.
+
+Run this admission command from the Astrid virtualenv with the VibeComfy
+checkout explicitly importable. VibeComfy is a sibling checkout in the normal
+development layout, so relying on whichever `python3` happens to be first on
+`PATH` can produce a false preflight failure (`No module named vibecomfy`) before
+the task is even admitted:
+
+```bash
+export ASTRID_PYTHON=/absolute/path/to/Astrid/.venv/bin/python
+export VIBECOMFY_CHECKOUT=/absolute/path/to/vibecomfy
+export PYTHONPATH="$VIBECOMFY_CHECKOUT${PYTHONPATH:+:$PYTHONPATH}"
+export VIBECOMFY_HEADLESS=1
+"$ASTRID_PYTHON" -m astrid tasks create ...
+```
+
+The command must fail before admission if that import check cannot pass; do not
+work around it by submitting directly to ComfyUI or by omitting the canonical
+task route. Treat the import environment as part of the local admission
+preflight and record it with the task receipt.
+
+The preflight validates the exact Python/companion/source digests, loads the
+pair, compiles the task-bound public inputs, checks the active prompt, ignores
+disconnected helper branches, rejects reachable blank media fields, and checks
+the H3 source audiovisual timing contract. The `source_video` descriptor must
+retain its real safe filename (including `.mp4` or `.mov`); the logical port
+name is not a media filename. Do not submit only a digest list and expect the
+worker to infer these names.
+
+The worker repeats the same checks after materialization, using the actual
+staged basename and bytes, before model/session warm-up or Comfy queue
+submission. This second check is required because collision-safe staging can
+change a basename and because raw Runtime callers can bypass the SDK helper.
+The receipt is bound to the bundle and asset digests, filenames, run inputs,
+prompt, and measured source media; it is evidence of preparation, not proof of
+successful generation.
+
+There is a separate delivery contract after the GPU run. A qualified
+checkout-server profile must include the manager-owned Comfy `output_directory`
+and the worker must bind that exact directory into the external runtime before
+warm-up. Conflicting workflow or `VIBECOMFY_COMFY_CONFIGURATION` output roots
+are rejected. After Comfy reports success, the worker resolves the declared
+descriptor under that root, verifies the actual media and its decode, downloads
+it into private Astrid custody, checks the private copy against the producer
+bytes, and only then settles success. A Comfy prompt id, `/view` URL, or
+decodable file on the pod is not by itself a managed output.
+
+These are three distinct validation boundaries:
+
+1. **Admission:** validate the canonical bundle, staged asset descriptors,
+   source audiovisual timing, and delivery-readiness contract before accepting
+   the task.
+2. **Worker pre-GPU:** repeat the checks against the bytes staged on the pod,
+   revalidate the owned session and effective output root, then warm the model
+   and queue Comfy.
+3. **Post-generation:** resolve, decode, custody, hash-check, and settle the
+   final media. If delivery fails after generation, keep the attempt failed or
+   incomplete; never retroactively mark it successful from a Comfy log alone.
 
 Create the task through Astrid, rather than calling ComfyUI directly. Put the
 generation intent at the admission level. Its `metadata` object is the light
@@ -257,8 +335,19 @@ is publication metadata, not an H3 adapter.
 # managed workflow object before running this command.
 cat > /tmp/task-spec.json <<'JSON'
 {
-  "inputs": {"workflow": {"digest": "sha256:<workflow-object>"}},
-  "input_digests": [{"name": "workflow", "digest": "sha256:<workflow-object>"}]
+  "inputs": {
+    "python": {"digest": "sha256:<workflow.py-object>", "object_id": "sha256:<workflow.py-object>", "filename": "workflow.py"},
+    "companion": {"digest": "sha256:<companion-object>", "object_id": "sha256:<companion-object>", "filename": "workflow.vibe.json"},
+    "source": {"digest": "sha256:<source.json-object>", "object_id": "sha256:<source.json-object>", "filename": "source.json"},
+    "source_video": {"digest": "sha256:<source-video-object>", "object_id": "sha256:<source-video-object>", "filename": "speaking-prefix.mov"},
+    "prompt": "<exact prompt encoded in the canonical workflow>"
+  },
+  "input_digests": [
+    {"name": "python", "digest": "sha256:<workflow.py-object>"},
+    {"name": "companion", "digest": "sha256:<companion-object>"},
+    {"name": "source", "digest": "sha256:<source.json-object>"},
+    {"name": "source_video", "digest": "sha256:<source-video-object>"}
+  ]
 }
 JSON
 
@@ -419,7 +508,7 @@ initialization, and terminates an allocated pod that fails that preflight.
 It leaves a passing pod running and prints a secret-free lifecycle handle.
 
 ```bash
-python Astrid/scripts/claim_runpod_5090_backup.py \
+.venv/bin/python scripts/claim_runpod_5090_backup.py \
   --gpu-type "NVIDIA GeForce RTX 5090" \
   --storage-name backup \
   --container-disk-gb 200 \

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astrid.dev/schemas/h3-av/request.v1.json",
+  "title": "H3 audiovisual transformation request v1 (source-backed)",
+  "description": "The H3 AV pack admits source-backed edit and continuation requests only. Source-free operation=generate is not admitted until a packaged executable graph exposes a verified route.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "operation", "content", "changes", "references", "overrides"],
+  "properties": {
+    "version": {"const": 1},
+    "operation": {"enum": ["edit", "continue"]},
+    "source": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["asset"],
+      "properties": {
+        "asset": {"type": "string", "minLength": 1},
+        "range": {"$ref": "#/$defs/range"}
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"duration": {"type": "number", "exclusiveMinimum": 0}}
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt"],
+      "properties": {"prompt": {"type": "string", "minLength": 1}}
+    },
+    "changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video", "audio"],
+      "properties": {
+        "video": {"type": "array", "items": {"$ref": "#/$defs/video_change"}},
+        "audio": {"type": "array", "items": {"$ref": "#/$defs/audio_change"}}
+      }
+    },
+    "references": {"type": "array", "items": {"$ref": "#/$defs/reference"}},
+    "overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {"type": "string"},
+        "steps": {"type": "integer", "minimum": 1, "maximum": 200},
+        "seed": {"type": "integer", "minimum": 0},
+        "sampler": {"type": "string"},
+        "guidance": {"type": "number", "minimum": 0}
+      }
+    }
+  },
+  "$defs": {
+    "range": {
+      "type": "array",
+      "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "exclusiveMinimum": 0}],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset", "purpose"],
+      "properties": {
+        "asset": {"type": "string", "minLength": 1},
+        "purpose": {"enum": ["appearance", "motion", "pose", "keyframe", "audio", "style"]}
+      }
+    },
+    "area": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "full_frame": {"const": true},
+        "mask_asset": {"type": "string", "minLength": 1},
+        "subjects": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "rectangle": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+        "polygon": {"type": "array", "minItems": 3, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}}
+      }
+    },
+    "video_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["during", "area", "action"],
+      "properties": {
+        "during": {"$ref": "#/$defs/range"},
+        "area": {"$ref": "#/$defs/area"},
+        "action": {"enum": ["generate", "preserve"]},
+        "mask_asset": {"type": "string"}
+      }
+    },
+    "audio_change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["during", "action"],
+      "properties": {
+        "during": {"$ref": "#/$defs/range"},
+        "action": {"enum": ["generate", "preserve"]},
+        "dialogue": {"type": "string"},
+        "mask_asset": {"type": "string"},
+        "stem": {"enum": ["mix", "voice", "effects", "music"]}
+      }
+    }
+  }
+}

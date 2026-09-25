@@ -7,6 +7,8 @@ import hashlib
 import importlib
 import json
 import os
+import re
+import subprocess
 import shutil
 import signal
 import sys
@@ -105,26 +107,54 @@ def _profile_comfyui_version_requirement(hc03_profile: Any) -> str | None:
     return declared.strip()
 
 
-def _bootstrap_embedded_comfy_client() -> Path:
+def _bootstrap_embedded_comfy_client(hc03_profile: Any = None) -> Path:
     """Select and import the embedded-client ComfyUI tree for pip execution."""
-    candidates: list[str | Path] = []
-    configured = os.environ.get("COMFYUI_PATH")
-    if configured:
-        candidates.append(configured)
-    candidates.extend(_EMBEDDED_COMFY_FALLBACKS)
-
-    root: Path | None = None
-    for raw in candidates:
-        candidate = Path(raw).expanduser().resolve()
-        if (candidate / _EMBEDDED_COMFY_CLIENT).is_file():
-            root = candidate
-            break
-    if root is None:
+    candidate = hc03_profile.get("comfyui_candidate") if isinstance(hc03_profile, Mapping) else None
+    launch = hc03_profile.get("launch") if isinstance(hc03_profile, Mapping) else None
+    raw_root = candidate.get("root") if isinstance(candidate, Mapping) else None
+    revision = candidate.get("revision") if isinstance(candidate, Mapping) else None
+    content_digest = candidate.get("source_content_digest") if isinstance(candidate, Mapping) else None
+    configured = launch.get("comfyui_path") if isinstance(launch, Mapping) else None
+    if not all(isinstance(value, str) and value.strip() for value in (raw_root, revision, content_digest, configured)):
         raise ProductionEngineError(
-            "pip_embedded requires a ComfyUI tree containing "
-            "comfy/client/embedded_comfy_client.py; set COMFYUI_PATH or install "
-            "the embedded checkout at /root/b06-t04/comfyui-embedded"
+            "pip_embedded requires an attested pinned ComfyUI tree and explicit verified COMFYUI_PATH"
         )
+    if not re.fullmatch(r"(?:sha256:)?[0-9a-fA-F]{64}", content_digest):
+        raise ProductionEngineError("pip_embedded readiness has an invalid ComfyUI source hash")
+    root = Path(raw_root).expanduser()
+    environment_root = os.environ.get("COMFYUI_PATH")
+    if not root.is_absolute() or root.is_symlink() or not isinstance(environment_root, str) or not environment_root:
+        raise ProductionEngineError("pip_embedded requires explicit verified COMFYUI_PATH")
+    root = root.resolve()
+    if Path(configured).expanduser().resolve() != root or Path(environment_root).expanduser().resolve() != root:
+        raise ProductionEngineError("COMFYUI_PATH does not match the attested pinned ComfyUI tree")
+    if not (root / _EMBEDDED_COMFY_CLIENT).is_file():
+        raise ProductionEngineError("attested ComfyUI tree lacks comfy/client/embedded_comfy_client.py")
+    try:
+        actual_revision = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        archive = subprocess.run(
+            ["git", "-C", str(root), "archive", "--format=tar", "HEAD"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+        clean = subprocess.run(
+            ["git", "-C", str(root), "diff", "--quiet", "HEAD", "--"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ProductionEngineError("attested ComfyUI tree revision could not be verified") from exc
+    archive_digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+    if actual_revision != revision or archive_digest != "sha256:" + content_digest.removeprefix("sha256:") or not clean:
+        raise ProductionEngineError("ComfyUI tree does not match its pinned readiness identity")
 
     root_string = str(root)
     sys.path[:] = [entry for entry in sys.path if entry != root_string]
@@ -531,10 +561,70 @@ def _profile_id(value: Any) -> str:
     return profile_id
 
 
-def _canonical_bundle(resolved: Any) -> tuple[Any, Any]:
-    """Return the only workflow form admitted by the selected Vibe runtime."""
+def _canonical_bundle(
+    resolved: Any,
+    *,
+    run_inputs: Mapping[str, Any] | None = None,
+) -> tuple[Any, Any]:
+    """Return the approved projection and canonical bundle for one run.
+
+    Runtime inputs belong in the detached approval record.  They must never be
+    written into ``bundle.workflow`` after the bundle revision has been
+    established: doing so makes the revision fence reject an otherwise valid
+    invocation.
+    """
     bundle = _canonical_bundle_value(resolved)
-    return bundle.compile(), bundle
+    if run_inputs is None:
+        return bundle.compile(), bundle
+    if not isinstance(run_inputs, Mapping):
+        raise ProductionEngineError("workflow run inputs must be an object")
+    return bundle.compile(run_inputs=dict(run_inputs)), bundle
+
+
+def _validate_workflow_input_bindings(
+    resolved: Any,
+    bindings: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate task-owned public inputs without changing the sealed bundle."""
+    if bindings is None:
+        return None
+    if not isinstance(bindings, Mapping):
+        raise ProductionEngineError("workflow input bindings must be an object")
+    bundle = _canonical_bundle_value(resolved)
+    workflow = getattr(bundle, "workflow", None)
+    public_inputs = getattr(workflow, "inputs", None)
+    if not isinstance(public_inputs, Mapping):
+        raise ProductionEngineError("canonical workflow has no public input map")
+    validated: dict[str, Any] = {}
+    for name, value in bindings.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ProductionEngineError("workflow run input names must be non-empty strings")
+        if name not in public_inputs:
+            raise ProductionEngineError(
+                f"workflow run input {name!r} is not a declared public input"
+            )
+        input_type = str(getattr(public_inputs[name], "type", "") or "").upper()
+        media = str(getattr(public_inputs[name], "media_semantics", "") or "").lower()
+        if media in {"image", "video", "audio", "mask"}:
+            if not isinstance(value, str) or not value.strip() or Path(value).name != value:
+                raise ProductionEngineError(
+                    f"workflow media input {name!r} must be a non-empty basename"
+                )
+        elif input_type in {"INT", "INTEGER"}:
+            if type(value) is not int:
+                raise ProductionEngineError(f"workflow input {name!r} must be an integer")
+        elif input_type in {"FLOAT", "NUMBER"}:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ProductionEngineError(f"workflow input {name!r} must be numeric")
+        elif input_type in {"BOOLEAN", "BOOL"}:
+            if type(value) is not bool:
+                raise ProductionEngineError(f"workflow input {name!r} must be a boolean")
+        elif not isinstance(value, (str, int, float, bool)) or isinstance(value, bool) and input_type not in {"BOOLEAN", "BOOL"}:
+            raise ProductionEngineError(
+                f"workflow input {name!r} must be a JSON scalar"
+            )
+        validated[name] = value
+    return validated
 
 
 def _embedded_session_config(
@@ -598,6 +688,7 @@ def _embedded_session_config(
             "disable_known_models": True,
             "runtime_root": str((destination / ".vibecomfy-runtime").resolve()),
             "cwd": str(comfy_root.resolve()),
+            "input_directory": str((destination / "engine-input").resolve()),
             "port": None,
             "warm_policy": "never",
             "quiet_schema_degradation": False,
@@ -674,12 +765,19 @@ def _run_profile_result(
     task_identity: str,
     destination: Path,
     attempt_identity: str | None = None,
+    run_inputs: Mapping[str, Any] | None = None,
 ) -> ProductionRunResult:
     if profile_id == "pip_embedded":
-        comfy_root = _bootstrap_embedded_comfy_client()
+        comfy_root = _bootstrap_embedded_comfy_client(hc03_profile)
         from vibecomfy.runtime.run import run_embedded_sync
 
-        record, bundle = _canonical_bundle(resolved)
+        if run_inputs is None:
+            # Keep the lightweight test doubles and older internal callers on
+            # the zero-argument seam; real task inputs take the approval path
+            # below and are recorded in the detached projection.
+            record, bundle = _canonical_bundle(resolved)
+        else:
+            record, bundle = _canonical_bundle(resolved, run_inputs=run_inputs)
         previous_warm = os.environ.get("VIBECOMFY_WARM")
         previous_warn_only = os.environ.get("VIBECOMFY_SCHEMA_WARN_ONLY")
         previous_configuration = os.environ.get("VIBECOMFY_COMFY_CONFIGURATION")
@@ -739,6 +837,10 @@ def _run_profile_result(
         for raw in raw_outputs:
             outputs.append(Path(raw).resolve(strict=True))
         return _result_from_runtime_result(result, tuple(outputs))
+    if profile_id == "t9_cpu_stub":
+        raise ProductionEngineError(
+            "T9 deterministic substitute was not active at the model boundary; refusing real model execution"
+        )
 
     if not isinstance(hc03_profile, Mapping):
         raise ProductionEngineError("checkout_server lacks its verified HC-03 profile")
@@ -770,6 +872,7 @@ def _run_profile_result(
                     destination,
                     task_identity=task_identity,
                     attempt_identity=attempt_identity,
+                    run_inputs=run_inputs,
                 )
             )
             return _result_from_runtime_result(
@@ -791,6 +894,7 @@ def _run_profile(
     task_identity: str,
     destination: Path,
     attempt_identity: str | None = None,
+    run_inputs: Mapping[str, Any] | None = None,
 ) -> tuple[Path, ...]:
     """Compatibility projection for callers that only need output paths."""
     global _LAST_PRODUCTION_RESULT
@@ -803,6 +907,7 @@ def _run_profile(
         task_identity=task_identity,
         destination=destination,
         attempt_identity=attempt_identity,
+        run_inputs=run_inputs,
     )
     return _LAST_PRODUCTION_RESULT.outputs
 
@@ -818,6 +923,7 @@ def run_workflow_path(
     hc03_profile: Any = None,
     expected_execution_identity: str | None = None,
     attempt_identity: str | None = None,
+    workflow_input_bindings: Mapping[str, Any] | None = None,
 ) -> tuple[Path, ...]:
     """Run a file workflow through the reviewed production-engine path.
 
@@ -840,6 +946,9 @@ def run_workflow_path(
         actual_identity = loaded_workflow_execution_identity(loaded, hc03_profile)
         if actual_identity != expected_execution_identity:
             raise ProductionEngineError("workflow execution identity changed before launch")
+    run_inputs = _validate_workflow_input_bindings(
+        loaded.resolved, workflow_input_bindings
+    )
     global _LAST_PRODUCTION_RESULT
     _LAST_PRODUCTION_RESULT = None
     profile_kwargs: dict[str, Any] = {}
@@ -854,6 +963,7 @@ def run_workflow_path(
         task_identity=task_identity,
         destination=destination_path,
         **profile_kwargs,
+        run_inputs=run_inputs,
     )
     return outputs
 
@@ -869,6 +979,7 @@ def run_workflow_result_path(
     hc03_profile: Any = None,
     expected_execution_identity: str | None = None,
     attempt_identity: str | None = None,
+    workflow_input_bindings: Mapping[str, Any] | None = None,
 ) -> ProductionRunResult:
     """Run a workflow while retaining the producer result envelope.
 
@@ -889,6 +1000,8 @@ def run_workflow_result_path(
         kwargs["template_id"] = template_id
     if attempt_identity is not None:
         kwargs["attempt_identity"] = attempt_identity
+    if workflow_input_bindings is not None:
+        kwargs["workflow_input_bindings"] = workflow_input_bindings
     outputs = run_workflow_path(
         workflow_path,
         destination,
@@ -929,6 +1042,7 @@ def execute(request_path: str | Path, out: str | Path, result_path: str | Path) 
         template_id=template_id,
         task_identity=task_identity,
         destination=destination,
+        run_inputs=request.get("run_inputs"),
     )
     outputs: list[str] = []
     for index, raw in enumerate(raw_outputs):

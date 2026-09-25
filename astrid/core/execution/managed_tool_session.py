@@ -86,6 +86,9 @@ class SessionBinding:
     source_digest: str
     config_digest: str
     execution_identity: str = ""
+    runtime_epoch: int | None = None
+    launch_generation: str = ""
+    engine_birth_id: str = ""
 
     def __post_init__(self) -> None:
         for name in (
@@ -98,9 +101,15 @@ class SessionBinding:
         ):
             if not getattr(self, name).strip():
                 raise ValueError(f"managed session {name} must be non-empty")
+        if self.runtime_epoch is not None and (
+            isinstance(self.runtime_epoch, bool)
+            or not isinstance(self.runtime_epoch, int)
+            or self.runtime_epoch < 1
+        ):
+            raise ValueError("managed session runtime_epoch must be a positive integer")
 
     @property
-    def identity_key(self) -> tuple[str, str, str, str, str, str, str]:
+    def identity_key(self) -> tuple[Any, ...]:
         return (
             self.session_id,
             self.runtime_instance_id,
@@ -109,10 +118,13 @@ class SessionBinding:
             self.source_digest,
             self.config_digest,
             self.execution_identity,
+            self.runtime_epoch,
+            self.launch_generation,
+            self.engine_birth_id,
         )
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, str | int]:
+        value: dict[str, str | int] = {
             "session_id": self.session_id,
             "runtime_instance_id": self.runtime_instance_id,
             "process_birth_id": self.process_birth_id,
@@ -121,6 +133,13 @@ class SessionBinding:
             "config_digest": self.config_digest,
             "execution_identity": self.execution_identity,
         }
+        if self.runtime_epoch is not None:
+            value["runtime_epoch"] = self.runtime_epoch
+        if self.launch_generation:
+            value["launch_generation"] = self.launch_generation
+        if self.engine_birth_id:
+            value["engine_birth_id"] = self.engine_birth_id
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +151,7 @@ class AdmissionToken:
     capability_id: str
     invocation_id: str
     generation: int
-    binding_identity: tuple[str, str, str, str, str, str]
+    binding_identity: tuple[Any, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,0 +1,55 @@
+schema_version: 1
+id: h3_av.transform
+name: Transform with H3 audiovisual continuation
+kind: built_in
+version: 0.1.0
+short_description: Prepare, compile, validate, run, compose, and verify one bounded H3 continuation.
+description: Coordinates pack executors and VibeComfy through SDK capability invocation; it creates no second task authority.
+keywords: [h3, minimax, continuation, vibecomfy, runpod]
+inputs:
+  - name: request
+    type: file
+    required: true
+    description: H3 audiovisual request v1 JSON/YAML document.
+  - name: asset_map
+    type: file
+    required: true
+    description: JSON map from request asset ids to runtime-managed local input paths.
+  - name: execution_request
+    type: file
+    required: false
+    description: Optional normalized target/lifecycle request for the VibeComfy child.
+child_executors:
+  - h3_av.prepare
+  - h3_av.compile
+  - vibecomfy.validate
+  - vibecomfy.run
+  - h3_av.compose
+  - h3_av.verify
+child_orchestrators: []
+runtime:
+  kind: command
+  command:
+    argv:
+      - "{python_exec}"
+      - -m
+      - astrid.packs.h3_av.orchestrators.transform.run
+      - --request
+      - "{request}"
+      - --asset-map
+      - "{asset_map}"
+      - --out
+      - "{out}"
+      - "{orchestrator_args}"
+cache:
+  mode: none
+isolation:
+  mode: subprocess
+  network: true
+  requirements: [vibecomfy]
+docs:
+  stage: STAGE.md
+metadata:
+  runtime_entrypoint: main
+  runtime_file: run.py
+  runtime_module: astrid.packs.h3_av.orchestrators.transform.run

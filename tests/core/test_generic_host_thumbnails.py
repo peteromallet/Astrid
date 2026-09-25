@@ -4,6 +4,7 @@ import hashlib
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, PngImagePlugin
@@ -65,6 +66,11 @@ def test_generation_thumbnail_output_for_image_preserves_creative_contract(
     assert thumbnail["role"] == "thumbnail"
     assert thumbnail["media_type"] == "image/jpeg"
     assert thumbnail["durability"] == "durable"
+    thumbnail_bytes = Path(str(thumbnail["path"])).read_bytes()
+    thumbnail_digest = "sha256:" + hashlib.sha256(thumbnail_bytes).hexdigest()
+    assert thumbnail["digest"] == thumbnail_digest
+    assert len(str(thumbnail["digest"])) == 71
+    assert all(char in "0123456789abcdef" for char in str(thumbnail["digest"])[7:])
     assert "is_primary" not in thumbnail
     assert Path(str(thumbnail["path"])).is_file()
     assert thumbnail["provenance"] == {
@@ -75,6 +81,16 @@ def test_generation_thumbnail_output_for_image_preserves_creative_contract(
     }
     assert creative["ordinal"] == 0
     assert creative["selector"] == {"group_key": "main", "variant_key": "original"}
+
+    host.client = SimpleNamespace(
+        INLINE_SETTLEMENT_OUTPUTS=False,
+        upload_object=lambda path, **_kwargs: SimpleNamespace(
+            digest="sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+            size=path.stat().st_size,
+        ),
+    )
+    settled = host._upload_outputs(thumbnails, project_id="project-1")
+    assert settled[0]["digest"] == thumbnail_digest
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required")

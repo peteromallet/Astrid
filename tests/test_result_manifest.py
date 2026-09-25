@@ -309,8 +309,13 @@ def test_output_result_registry_conformance_covers_default_registry() -> None:
         "hivemind.search",
         "seedance_local.reference_video",
     }
-    assert listed_ids - registry_ids == external_ids
-    assert external_ids.isdisjoint(registry_ids)
+    # The nine external contracts are always explicit in both the matrix and
+    # the exemption registry.  A managed optional pack may also be installed
+    # in the local operator environment, so registry discovery can contain a
+    # subset of these IDs without changing their source-backed identity.
+    assert external_ids <= listed_ids
+    assert external_ids <= exempted_ids
+    assert listed_ids - registry_ids == external_ids - registry_ids
     for executor_id in external_ids:
         assert payload["exemptions"][executor_id]["reasons"] == ["external-escape-hatch"]
 
@@ -355,6 +360,23 @@ def test_output_result_registry_explicitly_covers_understanding_trio() -> None:
         assert definition.outputs == ()
         assert definition.metadata.get("output_result_manifest") is True
         assert executor_id in non_exempt_ids
+
+
+def test_h3_cpu_helpers_are_truthful_result_manifest_adopters() -> None:
+    registry = load_default_registry()
+    payload = json.loads(Path("astrid/core/contracts/output_result_exemptions.json").read_text(encoding="utf-8"))
+    non_exempt_ids = set(payload["non_exempt"])
+    expected_ports = {
+        "h3_av.prepare": {"preparation"},
+        "h3_av.compile": {"compilation", "managed_assets", "python", "companion", "source", "graph_binding", "graph"},
+        "h3_av.compose": {"candidate", "composition"},
+        "h3_av.verify": {"verified_candidate", "verification"},
+    }
+    for executor_id, ports in expected_ports.items():
+        definition = registry.get(executor_id)
+        assert executor_id in non_exempt_ids
+        assert definition.metadata.get("output_result_manifest") is True
+        assert {output.name for output in definition.outputs} == ports
 
 
 # ---------------------------------------------------------------------------

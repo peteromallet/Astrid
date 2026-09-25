@@ -1,0 +1,87 @@
+schema_version: 1
+id: h3_av.prepare
+name: Prepare H3 audiovisual request
+kind: built_in
+version: 0.1.0
+short_description: Normalize an H3 audiovisual request into masks and asset evidence.
+description: Build deterministic video/audio delivery permissions and an attempt-local preparation manifest without submitting a runtime job.
+keywords: [h3, video, audio, mask, prepare]
+inputs:
+  - name: request
+    type: file
+    required: true
+    description: Normalized H3 request v1 or v2 JSON/YAML document.
+  - name: asset_map
+    type: file
+    required: false
+    description: Optional JSON object mapping managed asset ids to local files.
+  - name: fps
+    type: number
+    required: false
+    default: 24
+  - name: width
+    type: integer
+    required: false
+    default: 1024
+  - name: height
+    type: integer
+    required: false
+    default: 576
+  - name: sample_rate
+    type: integer
+    required: false
+    default: 48000
+  - name: target_model_dimensions
+    type: file
+    required: false
+    description: Optional JSON object with positive H3 model frames/height/width.
+  - name: channel_layout
+    type: string
+    required: false
+    default: stereo
+outputs:
+  - name: preparation
+    type: file
+    path_template: "{out}/preparation.json"
+    artifact_type: h3_av/preparation
+    description: Deterministic request, asset, and mask schedule manifest.
+command:
+  argv:
+    - "{python_exec}"
+    - "-m"
+    - astrid.packs.h3_av.executors.prepare.run
+    - "--request"
+    - "{request}"
+    - "--out"
+    - "{out}/preparation.json"
+  input_args:
+    - input: asset_map
+      flag: "--asset-map"
+      optional: true
+    - input: fps
+      flag: "--fps"
+      optional: true
+    - input: width
+      flag: "--width"
+      optional: true
+    - input: height
+      flag: "--height"
+      optional: true
+    - input: sample_rate
+      flag: "--sample-rate"
+      optional: true
+    - input: target_model_dimensions
+      flag: "--target-model-dimensions"
+      optional: true
+    - input: channel_layout
+      flag: "--channel-layout"
+      optional: true
+cache:
+  mode: none
+isolation:
+  mode: subprocess
+  network: false
+metadata:
+  output_result_manifest: true
+  runtime_module: astrid.packs.h3_av.executors.prepare.run
+  runtime_file: run.py

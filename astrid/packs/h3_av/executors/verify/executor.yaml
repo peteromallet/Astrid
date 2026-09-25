@@ -1,0 +1,72 @@
+schema_version: 1
+id: h3_av.verify
+name: Verify H3 audiovisual candidate
+kind: built_in
+version: 0.1.0
+short_description: Verify H3 artifact custody and protected-source evidence.
+description: Fail closed when a candidate, preparation, composition, or preservation claim is missing or contradictory.
+keywords: [h3, video, audio, verify, preservation, evidence]
+inputs:
+  - name: preparation
+    type: file
+    required: true
+    description: Preparation manifest produced by h3_av.prepare.
+  - name: composition
+    type: file
+    required: true
+    description: Composition manifest produced by h3_av.compose.
+  - name: candidate
+    type: file
+    required: true
+    description: Managed candidate object produced by h3_av.compose.
+  - name: input_bundle
+    type: file
+    required: false
+    description: Hash-verified portable preparation/baseline/anchor dependency bundle.
+  - name: source
+    type: file
+    required: false
+    description: Source media required for exact whole-file preservation verification.
+outputs:
+  - name: verified_candidate
+    type: file
+    path_template: "{out}/verified-candidate.mkv"
+    artifact_type: video/x-matroska
+    description: Exact verified candidate and the sole generation-publication result.
+  - name: verification
+    type: file
+    path_template: "{out}/verification.json"
+    artifact_type: h3_av/verification
+command:
+  argv:
+    - "{python_exec}"
+    - "-m"
+    - astrid.packs.h3_av.executors.verify.run
+    - "--preparation"
+    - "{preparation}"
+    - "--composition"
+    - "{composition}"
+    - "--out"
+    - "{out}"
+    - "--candidate"
+    - "{candidate}"
+  input_args:
+    - input: source
+      flag: "--source"
+      optional: true
+    - input: input_bundle
+      flag: "--input-bundle"
+      optional: true
+cache:
+  mode: none
+isolation:
+  mode: subprocess
+  network: false
+metadata:
+  output_result_manifest: true
+  generation_publication:
+    version: 1
+    modality: video
+    output_port: verified_candidate
+  runtime_module: astrid.packs.h3_av.executors.verify.run
+  runtime_file: run.py

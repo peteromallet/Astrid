@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import mimetypes
+import hashlib
+import json
+import re
+import tempfile
 import uuid
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -11,10 +15,215 @@ from typing import Any, Mapping
 from astrid.core.receipts.contract import CommandReceipt
 
 from .contracts import DomainResult, ErrorObject
+from .capability_selection import select_capability_row
 from .pagination import page_pair, paged_rows
 from .workspace_client import WorkspaceClient, WorkspaceClientError
 
-from .execution_request import ExecutionRequest, ExecutionRequestError, normalize_execution_request
+from .execution_request import (
+    ExecutionRequest,
+    ExecutionRequestError,
+    merge_execution_input_manifest,
+    merge_execution_request_inputs,
+    normalize_execution_request,
+    reject_caller_execution_binding,
+    require_targeted_execution_binding_support,
+)
+
+
+def _vibecomfy_invocation_preflight(
+    client: WorkspaceClient,
+    spec: Mapping[str, Any],
+    *,
+    strict: bool = False,
+) -> dict[str, Any] | None:
+    """Validate a complete canonical VibeComfy task before admission.
+
+    Older non-canonical VibeComfy tasks (for example import/edit tasks) do not
+    enter this path. Once a task declares any canonical sibling member, the
+    full bundle and its task-bound source asset are required and validated.
+    """
+    raw_inputs = spec.get("inputs")
+    if not isinstance(raw_inputs, Mapping):
+        if strict:
+            raise ValueError("canonical VibeComfy task requires an input manifest")
+        return None
+    inputs = dict(raw_inputs)
+    canonical_names = ("python", "companion", "source")
+    if not any(name in inputs for name in canonical_names):
+        if strict:
+            raise ValueError("canonical VibeComfy task is missing bundle members")
+        return None
+    missing = [name for name in canonical_names if name not in inputs]
+    if missing:
+        raise ValueError(
+            "canonical VibeComfy task is missing bundle members: "
+            + ", ".join(missing)
+        )
+
+    def descriptor(name: str) -> tuple[str, str, str]:
+        value = inputs[name]
+        if not isinstance(value, Mapping):
+            raise ValueError(f"VibeComfy input {name!r} must be a digest descriptor")
+        # ``object_id`` is the canonical immutable CAS identity; ``digest``
+        # is an optional repeated witness in the request stencil.  Admission
+        # must accept the canonical object-id-only spelling and derive the
+        # witness before reading or compiling the bundle.
+        digest = str(value.get("digest") or value.get("object_id") or "")
+        object_id = str(value.get("object_id") or digest)
+        normalized = digest.removeprefix("sha256:")
+        if (
+            not digest.startswith("sha256:")
+            or len(normalized) != 64
+            or any(char not in "0123456789abcdef" for char in normalized)
+            or object_id != digest
+        ):
+            raise ValueError(
+                f"VibeComfy input {name!r} must have matching sha256 digest/object_id"
+            )
+        filename = value.get("filename")
+        if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+            raise ValueError(f"VibeComfy input {name!r} requires a safe filename")
+        return digest, filename, normalized
+
+    descriptors = {name: descriptor(name) for name in canonical_names}
+    source_descriptor = None
+    if "source_video" in inputs:
+        source_descriptor = descriptor("source_video")
+    managed_descriptor = None
+    if "managed_assets" in inputs:
+        managed_descriptor = descriptor("managed_assets")
+
+    def read_object(digest: str, name: str) -> bytes:
+        response = client.get_object(digest)
+        if isinstance(response, (bytes, bytearray)):
+            data = bytes(response)
+        else:
+            data = (
+                response.get("data")
+                if isinstance(response, Mapping)
+                else getattr(response, "data", None)
+            )
+        if not isinstance(data, bytes):
+            raise ValueError(f"VibeComfy preflight could not read managed object {name!r}")
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != digest.removeprefix("sha256:"):
+            raise ValueError(f"VibeComfy preflight hash mismatch for {name!r}")
+        return data
+
+    with tempfile.TemporaryDirectory(prefix="astrid-vibecomfy-preflight-") as raw_root:
+        root = Path(raw_root)
+        paths = {
+            "python": root / "workflow.py",
+            "companion": root / "workflow.vibe.json",
+            "source": root / "source.json",
+        }
+        for name, path in paths.items():
+            path.write_bytes(read_object(descriptors[name][0], name))
+        source_video_path = None
+        run_inputs: dict[str, Any] = {}
+        managed_manifest: dict[str, Any] | None = None
+        managed_members: dict[str, bytes] = {}
+        if managed_descriptor is not None:
+            from astrid.packs.vibecomfy.asset_manifest import (
+                AssetManifestError,
+                read_archive_bytes,
+                resolve_inputs,
+            )
+
+            try:
+                resolved = read_archive_bytes(
+                    read_object(managed_descriptor[0], "managed_assets")
+                )
+            except AssetManifestError as exc:
+                raise ValueError(str(exc)) from exc
+            managed_manifest = resolved.manifest
+            managed_members = resolved.members
+            supplied_workflow_inputs: dict[str, Any] = {}
+            raw_workflow_inputs = inputs.get("workflow_inputs")
+            if isinstance(raw_workflow_inputs, str):
+                try:
+                    decoded_workflow_inputs = json.loads(raw_workflow_inputs or "{}")
+                except json.JSONDecodeError as exc:
+                    raise ValueError("workflow_inputs must be valid JSON") from exc
+                if not isinstance(decoded_workflow_inputs, Mapping):
+                    raise ValueError("workflow_inputs must be a JSON object")
+                supplied_workflow_inputs = dict(decoded_workflow_inputs)
+            elif isinstance(raw_workflow_inputs, Mapping):
+                supplied_workflow_inputs = dict(raw_workflow_inputs)
+            try:
+                run_inputs = resolve_inputs(managed_manifest, supplied_workflow_inputs)
+            except AssetManifestError as exc:
+                raise ValueError(str(exc)) from exc
+        managed_source_digest = next(
+            (
+                "sha256:" + str(record["sha256"])
+                for record in (managed_manifest or {}).get("assets", [])
+                if isinstance(record, Mapping) and record.get("binding") == "source_video"
+            ),
+            None,
+        )
+        if source_descriptor is not None:
+            source_video_path = root / source_descriptor[1]
+            source_video_path.write_bytes(read_object(source_descriptor[0], "source_video"))
+            if managed_source_digest is not None and source_descriptor[0] != managed_source_digest:
+                raise ValueError("managed assets conflict with workflow inputs: source_video")
+            if "source_video" not in run_inputs:
+                run_inputs["source_video"] = source_descriptor[1]
+        elif "source_video" in run_inputs:
+            source_member = str(run_inputs["source_video"])
+            managed_member = next(
+                (name for name in managed_members if Path(name).name == source_member),
+                None,
+            )
+            if managed_member is None:
+                raise ValueError("managed assets source_video binding is missing its member")
+            source_video_path = root / source_member
+            source_video_path.write_bytes(managed_members[managed_member])
+        from astrid.packs.vibecomfy.invocation_preflight import preflight_invocation
+
+        receipt = preflight_invocation(
+            paths["python"],
+            run_inputs=run_inputs,
+            expected_prompt=(
+                str(inputs["prompt"])
+                if isinstance(inputs.get("prompt"), str) and inputs["prompt"].strip()
+                else (
+                    str(run_inputs["prompt"])
+                    if isinstance(run_inputs.get("prompt"), str) and run_inputs["prompt"].strip()
+                    else None
+                )
+            ),
+            source_video_path=source_video_path,
+            expected_source_digest=(
+                source_descriptor[0]
+                if source_descriptor is not None
+                else managed_source_digest
+            ),
+            phase="submission",
+        )
+        receipt["members"] = {
+            name: {"digest": digest, "filename": filename}
+            for name, (digest, filename, _normalized) in descriptors.items()
+        }
+        if source_descriptor is not None:
+            receipt["members"]["source_video"] = {
+                "digest": source_descriptor[0],
+                "filename": source_descriptor[1],
+            }
+        if managed_descriptor is not None:
+            receipt["members"]["managed_assets"] = {
+                "digest": managed_descriptor[0],
+                "filename": managed_descriptor[1],
+            }
+        receipt["input_manifest"] = sorted(
+            descriptor[0] for descriptor in descriptors.values()
+        ) + ([source_descriptor[0]] if source_descriptor is not None else []) + (
+            [managed_descriptor[0]] if managed_descriptor is not None else []
+        )
+        receipt["resolved_workflow_inputs"] = run_inputs
+        if managed_manifest is not None:
+            receipt["managed_asset_manifest"] = managed_manifest
+        return receipt
 
 
 def _full_mapping(value: Any) -> dict[str, Any] | None:
@@ -39,6 +248,58 @@ def _source_task_id(value: Any) -> str | None:
         if isinstance(nested, str) and nested:
             return nested
     return None
+
+
+def _prepare_execution_admission(
+    client: WorkspaceClient,
+    *,
+    execution_request: ExecutionRequest | Mapping[str, Any] | None,
+    spec: Mapping[str, Any],
+    supplied_input_object_ids: list[str] | tuple[str, ...] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any], list[str]]:
+    """Run the common request/binding/manifest fence for every task route."""
+
+    reject_caller_execution_binding(execution_request, spec)
+    normalized_request = normalize_execution_request(execution_request)
+    if normalized_request is not None:
+        require_targeted_execution_binding_support(client)
+    submitted_spec = merge_execution_request_inputs(normalized_request, spec)
+    admitted_manifest = merge_execution_input_manifest(
+        normalized_request,
+        supplied_input_object_ids,
+    )
+    return normalized_request, submitted_spec, admitted_manifest
+
+
+def _task_admission_idempotency_key(
+    *,
+    capability_id: str,
+    capability_digest: str,
+    project_id: str | None,
+    spec: Mapping[str, Any],
+    input_object_ids: list[str],
+    execution_request: Mapping[str, Any] | None,
+    storage_estimate: Mapping[str, Any] | None = None,
+    settlement_effect: Mapping[str, Any] | None = None,
+    generation_intent: Mapping[str, Any] | None = None,
+) -> str:
+    """Derive stable identity from the finalized payload sent to admission."""
+    material = {
+        "version": 2,
+        "capability_id": capability_id,
+        "capability_digest": capability_digest,
+        "project_id": project_id,
+        "spec": dict(spec),
+        "input_object_ids": list(input_object_ids),
+        "execution_request": dict(execution_request) if execution_request is not None else None,
+        "storage_estimate": dict(storage_estimate) if storage_estimate is not None else None,
+        "settlement_effect": dict(settlement_effect) if settlement_effect is not None else None,
+        "generation_intent": dict(generation_intent) if generation_intent is not None else None,
+    }
+    payload = json.dumps(
+        material, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 class _RemoteFamily:
@@ -85,6 +346,7 @@ class _RemoteFamily:
             elif operation == "get_run": value = self._client.get_run(*args, **kwargs)
             elif operation == "get_task": value = self._client.get_task(*args, **kwargs)
             elif operation == "get_timeline": value = self._client.get_timeline(*args, **kwargs)
+            elif operation == "fail_attempt": value = self._client.fail_attempt(*args, **kwargs)
             elif operation == "head_object": value = self._client.head_object(*args, **kwargs)
             elif operation == "ingest_project_object": value = self._client.ingest_project_object(*args, **kwargs)
             elif operation == "link_references": value = self._client.link_references(*args, **kwargs)
@@ -762,14 +1024,23 @@ class RemoteTasks(_RemoteFamily):
         generation_intent: Mapping[str, Any] | None = None,
         execution_request: ExecutionRequest | Mapping[str, Any] | None = None,
     ):
-        key = idempotency_key or uuid.uuid4().hex
+        key = idempotency_key
         try:
-            normalized_request = normalize_execution_request(execution_request)
+            normalized_request, submitted_spec, admitted_manifest = _prepare_execution_admission(
+                self._client,
+                execution_request=execution_request,
+                spec=spec,
+                supplied_input_object_ids=input_manifest,
+            )
         except ExecutionRequestError as exc:
             return DomainResult.failure(
                 ErrorObject("validation_error", str(exc), {"field": "execution_request"}),
-                idempotency_key=key,
+                idempotency_key=key or "",
             )
+        # The runtime's merged capability catalog can place a live executor
+        # registration beyond the first page of the static catalog. Fetch a
+        # wide page so admission sees the live ready definition and can still
+        # prefer it over an unavailable static duplicate.
         capabilities = paged_rows(self._client.list_capabilities, limit=50)
         if capabilities is None:
             return DomainResult.failure(
@@ -778,20 +1049,9 @@ class RemoteTasks(_RemoteFamily):
                     "runtime capability listing returned an invalid page",
                     {},
                 ),
-                idempotency_key=key,
+                idempotency_key=key or "",
             )
-        matching = [
-            item
-            for item in capabilities
-            if isinstance(item, Mapping) and item.get("capability_id") == capability
-        ]
-        # Multiple executors can advertise the same capability. Prefer a live
-        # ready registration over an unavailable static/local registration;
-        # otherwise a stale first row can mask a healthy RunPod worker.
-        match = next(
-            (item for item in matching if item.get("status") == "ready"),
-            matching[0] if matching else None,
-        )
+        match = select_capability_row(capabilities, capability)
         if match is None:
             return DomainResult.failure(
                 ErrorObject(
@@ -799,7 +1059,7 @@ class RemoteTasks(_RemoteFamily):
                     "capability is not registered",
                     {"capability_id": capability},
                 ),
-                idempotency_key=key,
+                idempotency_key=key or "",
             )
         if (
             project_id
@@ -816,14 +1076,36 @@ class RemoteTasks(_RemoteFamily):
                 return DomainResult.failure(ErrorObject("protocol_error", "project lookup returned no canonical id", {}))
             project_id = canonical_id
             settlement_effect = {**settlement_effect, "target_id": canonical_id}
+        if capability == "vibecomfy.run":
+            try:
+                preflight_receipt = _vibecomfy_invocation_preflight(
+                    self._client,
+                    submitted_spec,
+                    strict=(
+                        isinstance(normalized_request, Mapping)
+                        and "workflow" in normalized_request
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - normalize admission boundary
+                return DomainResult.failure(
+                    ErrorObject(
+                        "validation_error",
+                        "vibecomfy invocation preflight failed",
+                        {"reason": str(exc)},
+                    ),
+                    idempotency_key=key or "",
+                )
+            if preflight_receipt is not None:
+                submitted_spec["invocation_preflight"] = preflight_receipt
         admission = {
-            "key": key,
             "capability_id": capability,
-            "capability_digest": str(match["definition_digest"]),
-            "input_object_ids": input_manifest or [],
+            "capability_digest": str(
+                capability_digest or match["definition_digest"]
+            ),
+            "input_object_ids": admitted_manifest,
             "idempotency_key": key,
             "project_id": project_id,
-            "spec": spec,
+            "spec": submitted_spec,
             "settlement_effect": settlement_effect,
             "storage_estimate": storage_estimate,
         }
@@ -831,9 +1113,38 @@ class RemoteTasks(_RemoteFamily):
             admission["generation_intent"] = generation_intent
         if normalized_request is not None:
             admission["execution_request"] = normalized_request
-        return self._typed("admit_task", **admission)
-    def claim(self, *, executor_id: str, capability_ids: list[str], idempotency_key: str):
-        return self._typed("claim_task", key=idempotency_key, executor_id=executor_id, capability_ids=capability_ids, idempotency_key=idempotency_key)
+        if key is None:
+            key = _task_admission_idempotency_key(
+                capability_id=capability,
+                capability_digest=admission["capability_digest"],
+                project_id=project_id,
+                spec=submitted_spec,
+                input_object_ids=admitted_manifest,
+                execution_request=normalized_request,
+                storage_estimate=storage_estimate,
+                settlement_effect=settlement_effect,
+                generation_intent=generation_intent,
+            )
+            admission["idempotency_key"] = key
+        return self._typed("admit_task", key=key, **admission)
+    def claim(
+        self,
+        *,
+        executor_id: str,
+        capability_ids: list[str],
+        idempotency_key: str,
+        runtime_epoch: int | None = None,
+        target: Mapping[str, Any] | None = None,
+    ):
+        return self._typed(
+            "claim_task",
+            key=idempotency_key,
+            executor_id=executor_id,
+            capability_ids=capability_ids,
+            runtime_epoch=runtime_epoch,
+            target=target,
+            idempotency_key=idempotency_key,
+        )
     def settle(
         self,
         attempt_id: str,
@@ -852,6 +1163,34 @@ class RemoteTasks(_RemoteFamily):
         if effect is not None:
             settlement["effect"] = effect
         return self._typed("settle_attempt", attempt_id, settlement, key=idempotency_key, idempotency_key=idempotency_key)
+    def fail(
+        self,
+        task_id: str,
+        lease_id: str,
+        error: str,
+        *,
+        retryable: bool = False,
+        attempt_id: str,
+        fence: int,
+        runtime_epoch: int,
+        failure_diagnostic: Mapping[str, Any] | None = None,
+    ):
+        payload: dict[str, Any] = {
+            "message": str(error),
+            "retryable": bool(retryable),
+        }
+        if failure_diagnostic is not None:
+            payload["diagnostic"] = dict(failure_diagnostic)
+        return self._typed(
+            "fail_attempt",
+            attempt_id,
+            key=f"fail-{attempt_id}-{int(fence)}",
+            lease_id=lease_id,
+            fence=int(fence),
+            error=payload,
+            runtime_epoch=int(runtime_epoch),
+            idempotency_key=f"fail-{attempt_id}-{int(fence)}",
+        )
     def publish_timeline_render(self, attempt_id: str, publication: Mapping[str, Any], *, idempotency_key: str):
         """Use the Runtime publication checkpoint with a typed wire body."""
         if not isinstance(publication, Mapping):
@@ -1380,45 +1719,81 @@ class RemoteAstridClient:
         *,
         project_id: str,
         spec: Mapping[str, Any],
+        capability_digest: str | None = None,
         input_object_ids: list[str] | None = None,
         idempotency_key: str | None = None,
         settlement_effect: Mapping[str, Any] | None = None,
         execution_request: ExecutionRequest | Mapping[str, Any] | None = None,
     ):
         capability_id = str(capability_id)
-        key = idempotency_key or uuid.uuid4().hex
+        key = idempotency_key
         try:
-            normalized_request = normalize_execution_request(execution_request)
+            normalized_request, submitted_spec, admitted_manifest = _prepare_execution_admission(
+                self._transport,
+                execution_request=execution_request,
+                spec=spec,
+                supplied_input_object_ids=input_object_ids,
+            )
         except ExecutionRequestError as exc:
             return DomainResult.failure(
                 ErrorObject("validation_error", str(exc), {"field": "execution_request"}),
-                idempotency_key=key,
+                idempotency_key=key or "",
             )
         capabilities = paged_rows(self._transport.list_capabilities, limit=50)
         if capabilities is None:
             return DomainResult.failure(
                 ErrorObject("protocol_error", "runtime capability listing returned an invalid page", {}),
-                idempotency_key=key,
+                idempotency_key=key or "",
             )
-        capability = next(
-            (item for item in capabilities if isinstance(item, Mapping) and item.get("capability_id") == capability_id),
-            None,
-        )
+        capability = select_capability_row(capabilities, capability_id)
         if capability is None:
             return DomainResult.failure(
                 ErrorObject("not_found", "capability is not registered", {"capability_id": capability_id}),
-                idempotency_key=key,
+                idempotency_key=key or "",
             )
+        if capability_id == "vibecomfy.run":
+            try:
+                preflight_receipt = _vibecomfy_invocation_preflight(
+                    self._transport,
+                    submitted_spec,
+                    strict=(
+                        isinstance(normalized_request, Mapping)
+                        and "workflow" in normalized_request
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - normalize admission boundary
+                return DomainResult.failure(
+                    ErrorObject(
+                        "validation_error",
+                        "vibecomfy invocation preflight failed",
+                        {"reason": str(exc)},
+                    ),
+                    idempotency_key=key or "",
+                )
+            if preflight_receipt is not None:
+                submitted_spec["invocation_preflight"] = preflight_receipt
         admission = {
-            "key": key,
             "capability_id": capability_id,
-            "capability_digest": capability["definition_digest"],
-            "input_object_ids": list(input_object_ids or []),
+            "capability_digest": str(
+                capability_digest or capability["definition_digest"]
+            ),
+            "input_object_ids": admitted_manifest,
             "idempotency_key": key,
             "project_id": project_id,
-            "spec": spec,
+            "spec": submitted_spec,
             "settlement_effect": settlement_effect,
         }
         if normalized_request is not None:
             admission["execution_request"] = normalized_request
-        return self.tasks._typed("admit_task", **admission)
+        if key is None:
+            key = _task_admission_idempotency_key(
+                capability_id=capability_id,
+                capability_digest=admission["capability_digest"],
+                project_id=project_id,
+                spec=submitted_spec,
+                input_object_ids=admitted_manifest,
+                execution_request=normalized_request,
+                settlement_effect=settlement_effect,
+            )
+            admission["idempotency_key"] = key
+        return self.tasks._typed("admit_task", key=key, **admission)

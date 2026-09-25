@@ -27,14 +27,6 @@ from astrid.core.execution.generic_host import GenericPackHost
 ROOT = Path(__file__).resolve().parents[2]
 PACKS = ROOT / "astrid" / "packs"
 MATRIX = ROOT / "config" / "astrid-beta-capabilities.json"
-RUNTIME_CHECKOUT = Path(
-    os.environ.get(
-        "ASTRID_STAGE1_RUNTIME_CHECKOUT",
-        str(ROOT.parent / "Runtime"),
-    )
-)
-RUNTIME_PYTHON = RUNTIME_CHECKOUT / "packages" / "python"
-
 # These selectors are the durable proofs for the shared host boundary.  A
 # family proof is intentionally not claimed as business-level proof for every
 # pack: each pack remains in the exact discovered census and its digest is
@@ -116,10 +108,30 @@ def _run_proofs(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
     results: dict[str, dict[str, Any]] = {}
     proof_env = os.environ.copy()
+    source_manifest = proof_env.get("BANODOCO_LOCAL_SOURCE_MANIFEST", "").strip()
+    if source_manifest:
+        profile = json.loads(Path(source_manifest).read_text(encoding="utf-8"))
+        runtime_checkout = Path(str(profile["runtime_checkout"])).expanduser().resolve()
+        revision = subprocess.run(
+            ["git", "-C", str(runtime_checkout), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if revision.returncode != 0:
+            raise AssertionError(
+                f"T9 Runtime checkout is not a Git source: {runtime_checkout}"
+            )
+        proof_env["ASTRID_STAGE1_RUNTIME_CHECKOUT"] = str(runtime_checkout)
+        proof_env["ASTRID_STAGE1_RUNTIME_COMMIT"] = revision.stdout.strip()
+    for inherited_launcher_setting in (
+        "BANODOCO_LOCAL_DATA_ROOT",
+        "BANODOCO_LOCAL_HOME",
+        "BANODOCO_LOCAL_LAUNCHER",
+    ):
+        proof_env.pop(inherited_launcher_setting, None)
     proof_env["PYTHONPATH"] = os.pathsep.join(
-        part
-        for part in (str(ROOT), str(RUNTIME_CHECKOUT), str(RUNTIME_PYTHON), proof_env.get("PYTHONPATH", ""))
-        if part
+        part for part in (str(ROOT), proof_env.get("PYTHONPATH", "")) if part
     )
     for selector in sorted(selectors):
         completed = subprocess.run(
@@ -154,7 +166,7 @@ def test_stage1_capability_parity_is_explicit_and_family_proven(tmp_path: Path) 
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     assert report["schema"] == "astrid.stage1.capability_parity.v1"
-    assert report["discovered_count"] == 68
+    assert report["discovered_count"] == 75
     discovered_ids = {record.id for record in records}
     assert discovered_ids <= set(host.matrix)
     assert len(set(host.matrix) - discovered_ids) == 9

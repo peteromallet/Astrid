@@ -7,6 +7,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from astrid.sdk import host_bootstrap
+from astrid.core.execution.host_lane_policy import effective_host_capacity
+from banodoco_workspace_client.contract_metadata import PROTOCOL, SCHEMA_DIGEST
+
+_CAPACITY = effective_host_capacity(
+    2, parallel_lanes_enabled=True, resource_keys=("astrid-orchestration", "cpu")
+)
 
 
 def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
@@ -28,9 +34,11 @@ def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
         def health(self):
             return {
                 "status": "ok",
+                "protocol": PROTOCOL,
                 "runtime_epoch": 7,
                 "runtime_instance_id": "runtime-7",
-                "schema_digest": "schema-7",
+                "runtime_session_id": "session-7",
+                "schema_digest": SCHEMA_DIGEST,
             }
 
     class FakeProcess:
@@ -60,10 +68,15 @@ def test_host_bootstrap_binds_manifest_in_argv_and_reuses_exact_binding(
                 "source_inventory_identity": "",
                 "runtime_instance_id": "runtime-7",
             "runtime_epoch": 7,
-            "schema_digest": "schema-7",
+            "schema_digest": SCHEMA_DIGEST,
             "boot_manifest_path": str(manifest),
             "boot_manifest_hash": load_boot_manifest_hash(manifest, support_root=support),
+            "readiness_profile_path": None,
+            "readiness_profile_hash": None,
+            "vibecomfy_execution_attestation": None,
             "ready_capabilities": ["shots.example"],
+            "effective_capacity": _CAPACITY,
+            "registration": {"effective_capacity": _CAPACITY},
         }
         ready.parent.mkdir(parents=True, exist_ok=True)
         ready.write_text(json.dumps(expected), encoding="utf-8")

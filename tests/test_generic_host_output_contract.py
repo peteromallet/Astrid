@@ -9,7 +9,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from astrid.core.execution.generic_host import GenericPackHost, HostError, RuntimeProtocolClient
+from astrid.core.execution.generic_host import (
+    GenericPackHost,
+    HostError,
+    RuntimeProtocolClient,
+    _generation_output_port,
+)
+from astrid.sdk.invocation import _generation_primary_output_port
 
 
 _METADATA = {
@@ -64,6 +70,8 @@ def test_upload_outputs_preserves_explicit_contract_fields_without_gen_metadata(
         "path": str(staged),
         "filename": "derived.bin",
         "artifact_type": "application/octet-stream",
+        "digest": digest,
+        "size": len(payload),
         **_METADATA,
     }
 
@@ -126,6 +134,8 @@ def test_upload_outputs_maps_known_namespaces_at_runtime_boundary(
         "ordinal": 0,
         "role": "result",
         "is_primary": True,
+        "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
         "producer": {"capability_id": "fixture.generation"},
         "provenance": {"source": "fixture"},
     }
@@ -196,8 +206,8 @@ def test_upload_outputs_rejects_known_namespace_leaf_collisions(tmp_path: Path) 
     with pytest.raises(HostError, match="collide on managed filename"):
         host._upload_outputs(
             [
-                {"name": "first", "path": str(first), "filename": "agent-view/structure.md"},
-                {"name": "second", "path": str(second), "filename": "agent-view/structure.md"},
+                {"name": "first", "path": str(first), "filename": "agent-view/structure.md", "digest": "sha256:" + hashlib.sha256(b"first").hexdigest(), "size": 5},
+                {"name": "second", "path": str(second), "filename": "agent-view/structure.md", "digest": "sha256:" + hashlib.sha256(b"second").hexdigest(), "size": 6},
             ],
             project_id=None,
         )
@@ -218,8 +228,12 @@ def test_runtime_upload_binding_uses_leaf_and_stable_replay_key(tmp_path: Path) 
 
     client = object.__new__(RuntimeProtocolClient)
     client.executor_id = "executor-1"
+    client._attempt_runtime_epochs = {"attempt-1": 1}
     client.INLINE_SETTLEMENT_OUTPUTS = False
-    client.generated = SimpleNamespace(ingest_object=ingest_object)
+    client.generated = SimpleNamespace(
+        health=lambda: {"runtime_epoch": 1},
+        ingest_object=ingest_object,
+    )
     host = object.__new__(GenericPackHost)
     host.client = client
     descriptor = {
@@ -232,6 +246,8 @@ def test_runtime_upload_binding_uses_leaf_and_stable_replay_key(tmp_path: Path) 
         "variant_key": "original",
         "selector": {"group_key": "main", "variant_key": "original"},
         "ordinal": 0,
+        "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
     }
     kwargs = {
         "project_id": "project-1",
@@ -289,5 +305,102 @@ def test_upload_outputs_rejects_traversal_and_arbitrary_filename_nesting(
     with pytest.raises(HostError, match="invalid managed filename"):
         host._upload_outputs(
             [{"name": "generated_images", "path": str(staged), "filename": filename}],
+            project_id="project-1",
+        )
+
+
+def test_sdk_and_host_resolve_the_same_definition_owned_publication_port() -> None:
+    definition = SimpleNamespace(
+        metadata={
+            "output_result_manifest": True,
+            "generation_publication": {
+                "version": 1,
+                "modality": "video",
+                "output_port": "verified_candidate",
+            },
+        },
+        outputs=(
+            SimpleNamespace(name="verified_candidate", type="file", artifact_type="video/mp4"),
+            SimpleNamespace(name="verification", type="file", artifact_type="application/json"),
+        ),
+    )
+    capability = SimpleNamespace(
+        capability_type="executor",
+        definition={
+            "metadata": definition.metadata,
+            "outputs": [output.__dict__ for output in definition.outputs],
+        },
+    )
+    record = SimpleNamespace(definition=definition)
+    intent = {"modality": "video", "groups": []}
+    assert _generation_primary_output_port(capability, "video") == _generation_output_port(record, intent)
+
+
+@pytest.mark.parametrize("inline", [False, True])
+def test_upload_outputs_rejects_same_size_post_harvest_mutation(tmp_path: Path, inline: bool) -> None:
+    staged = tmp_path / "candidate.mp4"
+    original = b"original-bytes"
+    staged.write_bytes(original)
+    descriptor = {
+        "name": "verified_candidate",
+        "path": str(staged),
+        "filename": "candidate.mp4",
+        "digest": "sha256:" + hashlib.sha256(original).hexdigest(),
+        "size": len(original),
+    }
+
+    class Client:
+        INLINE_SETTLEMENT_OUTPUTS = inline
+
+        def upload_object(self, path: Path, **_kwargs: object) -> object:
+            data = path.read_bytes()
+            return SimpleNamespace(
+                digest="sha256:" + hashlib.sha256(data).hexdigest(),
+                size=len(data),
+            )
+
+    staged.write_bytes(b"mutated-bytes!")
+    host = object.__new__(GenericPackHost)
+    host.client = Client()
+    with pytest.raises(HostError, match="changed after harvest|identity"):
+        host._upload_outputs([descriptor], project_id="project-1")
+
+
+@pytest.mark.parametrize("wrong_field", ["digest", "size"])
+def test_upload_outputs_rejects_wrong_non_inline_upload_identity(tmp_path: Path, wrong_field: str) -> None:
+    payload = b"stable-bytes"
+    staged = tmp_path / "candidate.mp4"
+    staged.write_bytes(payload)
+    digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+
+    class Client:
+        INLINE_SETTLEMENT_OUTPUTS = False
+
+        def upload_object(self, path: Path, **_kwargs: object) -> object:
+            return SimpleNamespace(
+                digest=("sha256:" + "0" * 64) if wrong_field == "digest" else digest,
+                size=(len(payload) + 1) if wrong_field == "size" else len(payload),
+            )
+
+    host = object.__new__(GenericPackHost)
+    host.client = Client()
+    with pytest.raises(HostError, match="identity"):
+        host._upload_outputs(
+            [{"name": "candidate", "path": str(staged), "filename": staged.name, "digest": digest, "size": len(payload)}],
+            project_id="project-1",
+        )
+
+
+def test_upload_outputs_rejects_missing_identity(tmp_path: Path) -> None:
+    staged = tmp_path / "candidate.mp4"
+    staged.write_bytes(b"candidate")
+    host = object.__new__(GenericPackHost)
+    host.client = SimpleNamespace(
+        INLINE_SETTLEMENT_OUTPUTS=True,
+        upload_object=lambda *_args, **_kwargs: pytest.fail("upload must not be attempted"),
+    )
+    with pytest.raises(HostError, match="sha256 digest"):
+        host._upload_outputs(
+            [{"name": "candidate", "path": str(staged), "filename": staged.name}],
             project_id="project-1",
         )

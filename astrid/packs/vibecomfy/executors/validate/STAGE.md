@@ -33,11 +33,16 @@ beyond those modes — LoRAs, IP-adapter, ControlNet, custom samplers — belong
 - `vibecomfy.run` maps to `python -m vibecomfy.cli run {workflow}`
 - `vibecomfy.validate` maps to `python -m vibecomfy.cli validate {workflow}`
 
-For Astrid tasks, UI JSON validation uses static VibeComfy ingestion and needs
-no Python consent. A canonical Python/companion/source bundle requires the
-explicit scalar `python_execution_consent="confirmed"`; that value is mapped
-to the existing audited VibeComfy `--yes` gate. The `validation-report.json`
-artifact records the consent value and gate audit.
+For Astrid tasks, list-shaped ComfyUI UI JSON remains on static UI ingestion and
+needs no Python consent. A versioned VibeWorkflow envelope is validated through
+the package's lossless envelope decoder, exact identity/round-trip checks, and
+structural validation; its graph data remains authoritative and stored API
+projections cannot replace it. Ambiguous, malformed, or inconsistent envelope
+data fails closed. These static JSON paths do not execute Python or start
+ComfyUI. A canonical Python/companion/source bundle requires the explicit
+scalar `python_execution_consent="confirmed"`; that value is mapped to the
+existing audited VibeComfy `--yes` gate. The `validation-report.json` artifact
+records the validation authority/mode, consent value, and gate audit.
 
 Install the executor packages before running these actions. Both executors
 share the `vibecomfy` package environment via the folder-level `PACKAGE_ID`.

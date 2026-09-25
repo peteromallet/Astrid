@@ -1,0 +1,53 @@
+schema_version: 2
+id: h3_av
+name: Astrid H3 audiovisual transformations
+version: 0.1.0
+status: experimental
+domain: generation
+stability: experimental
+support: project
+visibility: visible
+permissions:
+  - id: project_files
+    reason: Reads source media, references, masks, and writes attempt-local preparation and result artifacts.
+  - id: subprocess
+    reason: Uses ffprobe/ffmpeg and the VibeComfy executor for media preparation and generation.
+  - id: accelerator
+    reason: H3 generation requires a CUDA-capable ComfyUI runtime.
+  - id: network
+    reason: VibeComfy may contact the managed ComfyUI/RunPod runtime and resolve declared model assets.
+  - id: external_services
+    reason: The transform may target a managed RunPod worker through the existing runtime contract.
+description: Prepare, compile, execute, compose, and verify flexible MiniMax H3 audiovisual transformations from one bounded request contract.
+keywords:
+  - h3
+  - minimax
+  - video
+  - audio
+  - mask
+  - continuation
+  - inpaint
+  - comfyui
+  - runpod
+capabilities:
+  - prepare_transform
+  - compile_transform
+  - compose_transform
+  - verify_transform
+  - transform
+agent:
+  purpose: Use this pack for request-driven H3 video/audio continuation, editing, masking, and reference-guided generation.
+  do_not_use_for: Do not use this pack for editorial timeline cutting, generic raw ComfyUI graph authoring, or final media publication.
+  normal_entrypoints:
+    - h3_av.transform
+    - h3_av.prepare
+    - h3_av.compile
+  required_context:
+    - schemas/request.v1.json
+    - profiles/native-v1.yaml
+content:
+  executors: executors
+  orchestrators: orchestrators
+documentation:
+  kind: skill
+  path: skill/SKILL.md

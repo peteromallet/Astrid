@@ -1,3 +1,4 @@
+import hashlib
 from types import SimpleNamespace
 
 from astrid.core.execution.generic_host import GenericPackHost, _settlement_media_type
@@ -41,7 +42,7 @@ def test_upload_boundary_preserves_filename_for_video_mime_mapping(tmp_path) -> 
 
         def upload_object(self, path, *, project_id, media_type, filename=None):
             return SimpleNamespace(
-                digest="sha256:" + "0" * 64,
+                digest="sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
                 size=path.stat().st_size,
                 project_id=project_id,
                 media_type=media_type,
@@ -57,6 +58,8 @@ def test_upload_boundary_preserves_filename_for_video_mime_mapping(tmp_path) -> 
                 "artifact_type": "clip/visual",
                 "path": str(output),
                 "filename": "render.mp4",
+                "digest": "sha256:" + hashlib.sha256(b"video").hexdigest(),
+                "size": len(b"video"),
             }
         ],
         project_id="project",

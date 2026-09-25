@@ -22,6 +22,14 @@ Treat the v23 cut as the timing and continuity reference for the next generation
 
 The practical order is: lock the Astrid timeline and phrase timing; test one H3 audio/video inpainting passage; inspect the generated line and both audio boundaries; then test the hand/object or reflection replacement separately. Combine them only after each pass is visually stable. A still-based reference-keyframe preview can establish design and timing, but it cannot prove temporal consistency, lip-sync, identity preservation or reflection continuity.
 
+For the complementary full-frame continuation method, use [Matrix Minkhole H3 extension video generation](matrix-minkhole-extension-video-generation.md). The first speaking-start candidates are already in the current source cut: Morpheus at source `74.9347368421–76.40s` for the short “two options” pose, and Morpheus at `81.05–84.30s` for the primary extension pilot. Use extension when the shot may move beyond that start state; use the inpainting guide when the body/pose must remain fixed.
+
+For the current bridge test, the continuation prompt must explicitly begin
+with the source dialogue **“This is your last chance.”** The experimental
+follow-on line is **“You can poo or pee on my face.”** Do not replace the first
+line with a placeholder: it is the audible line in the source passage and is
+part of the prompt contract.
+
 ## Lessons from the reference-keyframe revisions
 
 - **Review mode is the default during feedback.** Use `--review` on every revision and inspect the actual exported labels. The filmstrip complements the video; it does not replace those labels.

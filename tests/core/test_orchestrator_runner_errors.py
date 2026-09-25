@@ -23,6 +23,7 @@ from astrid.core.execution.orchestrator.runner import (
     build_orchestrator_command,
     run_orchestrator,
 )
+from astrid.core.execution.orchestrator import runner as runner_module
 from astrid.core.execution.orchestrator.schema import OrchestratorDefinition, RuntimeSpec
 from astrid.core.foundation import project_paths
 
@@ -116,6 +117,51 @@ def _require_timeline_schema() -> None:
     pytest.importorskip("banodoco_timeline_schema")
 
 
+def test_command_preserves_validated_host_runtime_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = "/attempt/.astrid-runtime-handoff.json"
+    digest = "sha256:" + "a" * 64
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    monkeypatch.setenv("ASTRID_NESTED_RUNTIME_HANDOFF_PATH", path)
+    monkeypatch.setenv("ASTRID_NESTED_RUNTIME_HANDOFF_HASH", digest)
+    monkeypatch.setenv("UNRELATED_PRIVATE_TOKEN", "do-not-copy")
+
+    env = runner_module._command_subprocess_env(
+        _command_orchestrator(), OrchestratorRunRequest(orchestrator_id="test.command"), {}
+    )
+
+    assert env["ASTRID_NESTED_RUNTIME_HANDOFF_PATH"] == path
+    assert env["ASTRID_NESTED_RUNTIME_HANDOFF_HASH"] == digest
+    assert "UNRELATED_PRIVATE_TOKEN" not in env
+
+
+@pytest.mark.parametrize("scope", ["manifest", "project"])
+def test_command_cannot_override_host_runtime_handoff(
+    monkeypatch: pytest.MonkeyPatch, scope: str,
+) -> None:
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    monkeypatch.setenv("ASTRID_NESTED_RUNTIME_HANDOFF_PATH", "/attempt/context.json")
+    monkeypatch.setenv("ASTRID_NESTED_RUNTIME_HANDOFF_HASH", "sha256:" + "a" * 64)
+
+    command_env = (
+        {"ASTRID_NESTED_RUNTIME_HANDOFF_PATH": "/forged"}
+        if scope == "manifest" else {}
+    )
+    if scope == "project":
+        monkeypatch.setattr(
+            runner_module,
+            "_project_subprocess_env",
+            lambda _request: {"ASTRID_NESTED_RUNTIME_HANDOFF_PATH": "/forged"},
+        )
+    with pytest.raises(OrchestratorRunnerError, match="cannot override the host runtime handoff"):
+        runner_module._command_subprocess_env(
+            _command_orchestrator(env=command_env),
+            OrchestratorRunRequest(orchestrator_id="test.command"),
+            command_env,
+        )
+
+
 # ---------------------------------------------------------------------------
 # build_orchestrator_command — error paths
 # ---------------------------------------------------------------------------
@@ -197,6 +243,30 @@ def test_command_orchestrator_preserves_declared_passthrough_env(
 
     assert result.returncode == 0
     assert out_file.read_text(encoding="utf-8") == "from-parent"
+
+
+def test_internal_command_orchestrator_preserves_host_selected_pythonpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_pythonpath = str(tmp_path / "selected-h3-checkout" / "python")
+    monkeypatch.setenv("ASTRID_INTERNAL_INVOCATION", "1")
+    monkeypatch.setenv("PYTHONPATH", selected_pythonpath)
+    out_file = tmp_path / "selected-pythonpath.txt"
+    script = (
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "Path(sys.argv[1]).write_text(os.environ.get('PYTHONPATH', ''), encoding='utf-8')\n"
+    )
+    orch = _command_orchestrator(
+        argv=(sys.executable, "-c", script, str(out_file)),
+    )
+
+    result = run_orchestrator(
+        OrchestratorRunRequest(orchestrator_id=orch.id, out=tmp_path), _registry(orch)
+    )
+
+    assert result.returncode == 0
+    assert out_file.read_text(encoding="utf-8") == selected_pythonpath
 
 
 def test_command_orchestrator_does_not_spread_undeclared_host_env(

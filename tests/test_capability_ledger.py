@@ -1,5 +1,7 @@
 """B9.1 source reconciliation and no-drop coverage."""
 
+import copy
+import json
 from pathlib import Path
 
 from astrid.core.execution.capability_ledger import load_capability_ledger
@@ -9,9 +11,9 @@ def test_shipped_ledger_reconciles_historical_capability_sets():
     ledger = load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
     sources = ledger["sources"]
 
-    assert sources["counts"]["pack_labels"] == 89
-    assert sources["counts"]["historical_pack_labels"] == 94
-    assert sources["counts"]["executor_inventory"] == 86
+    assert sources["counts"]["pack_labels"] == 94
+    assert sources["counts"]["historical_pack_labels"] == 99
+    assert sources["counts"]["executor_inventory"] == 90
     assert sources["counts"]["legacy_ids"] == 19
     assert all(section["complete"] for section in sources["coverage"].values())
     assert not sources["coverage"]["source_labels"]["missing"]
@@ -40,8 +42,8 @@ def test_host_consumes_the_reconciled_ledger_before_readiness_matrix():
     from astrid.core.execution.generic_host import GenericPackHost
 
     host = GenericPackHost(pack_roots=[Path("astrid/packs")])
-    assert host.ledger["sources"]["counts"]["pack_labels"] == 89
-    assert len(host.matrix) == 80
+    assert host.ledger["sources"]["counts"]["pack_labels"] == 94
+    assert len(host.matrix) == 84
 
 
 def test_vibecomfy_readiness_reserves_gpu_for_workflow_execution():
@@ -174,8 +176,135 @@ def test_source_census_still_rejects_unreviewed_pack_labels(monkeypatch):
         }]
 
     monkeypatch.setattr(capability_ledger, "_source_labels", with_unreviewed_label)
-    with pytest.raises(capability_ledger.CapabilityLedgerError, match="source census drifted"):
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
         load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
+
+
+def test_source_census_rejects_same_count_label_substitution(monkeypatch):
+    import pytest
+
+    from astrid.core.execution import capability_ledger
+
+    original = capability_ledger._source_labels
+
+    def substituted(repo_root):
+        rows = original(repo_root)
+        rows[-1] = {**rows[-1], "label": "unreviewed_same_count"}
+        return rows
+
+    monkeypatch.setattr(capability_ledger, "_source_labels", substituted)
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
+        load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
+
+
+def test_source_census_rejects_removed_label(monkeypatch):
+    import pytest
+
+    from astrid.core.execution import capability_ledger
+
+    original = capability_ledger._source_labels
+
+    def removed(repo_root):
+        return original(repo_root)[:-1]
+
+    monkeypatch.setattr(capability_ledger, "_source_labels", removed)
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
+        load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
+
+
+def test_source_census_rejects_duplicate_label_occurrence(monkeypatch):
+    import pytest
+
+    from astrid.core.execution import capability_ledger
+
+    original = capability_ledger._source_labels
+
+    def duplicated(repo_root):
+        rows = original(repo_root)
+        return rows + [dict(rows[-1])]
+
+    monkeypatch.setattr(capability_ledger, "_source_labels", duplicated)
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
+        load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
+
+
+def test_source_census_rejects_changed_manifest_bytes(monkeypatch):
+    import pytest
+
+    from astrid.core.execution import capability_ledger
+
+    original = capability_ledger._manifest_witnesses
+
+    def altered(repo_root):
+        rows = original(repo_root)
+        return [{**rows[0], "sha256": "0" * 64}, *rows[1:]]
+
+    monkeypatch.setattr(capability_ledger, "_manifest_witnesses", altered)
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
+        load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
+
+
+def test_source_census_rejects_non_external_stale_executor_row(monkeypatch):
+    import pytest
+
+    from astrid.core.execution import capability_ledger
+
+    original = capability_ledger._executor_inventory
+
+    def stale(repo_root):
+        return original(repo_root) + [{
+            "id": "stale.local.executor",
+            "result_contract": "manifest",
+            "disposition": "historical",
+            "source": "test",
+        }]
+
+    monkeypatch.setattr(capability_ledger, "_executor_inventory", stale)
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
+        load_capability_ledger(Path("config/astrid-beta-capabilities.json"))
+
+
+def test_source_census_rejects_tampered_matrix_baseline_without_regeneration():
+    import pytest
+
+    from astrid.core.execution import capability_ledger
+
+    matrix = json.loads(Path("config/astrid-beta-capabilities.json").read_text(encoding="utf-8"))
+    tampered = copy.deepcopy(matrix)
+    tampered["capabilities"] = [row for row in tampered["capabilities"] if row["id"] != "h3_av.verify"]
+    root = Path(".").resolve()
+    labels = capability_ledger._source_labels(root)
+    current_ids = {row["id"] for row in tampered["capabilities"]}
+    for row in labels:
+        row["canonical_id"] = f"{row['pack']}.{row['label']}" if f"{row['pack']}.{row['label']}" in current_ids else None
+        row["disposition"] = "advertised" if row["canonical_id"] else "unmapped_source_label"
+    historical = [
+        row for row in labels
+        if row["pack"] != "fal" and not (row["pack"] == "iteration" and row["label"] == "collect_runtime_provenance")
+    ]
+    historical.extend(copy.deepcopy(capability_ledger._HISTORICAL_SOURCE_LABELS))
+    historical.sort(key=lambda row: (row["pack"], row["label"]))
+    executors = capability_ledger._executor_inventory(root)
+    for row in executors:
+        if row["id"] in current_ids:
+            row["disposition"] = "advertised"
+            row["discovery_status"] = "discovered"
+        elif row["id"].startswith(("hivemind.", "discord_local.", "seedance_local.")):
+            row["disposition"] = "unavailable_external"
+            row["discovery_status"] = "not_installed"
+            row["reason"] = "optional external pack is not installed in this checkout"
+        elif row["disposition"] == "historical":
+            row["discovery_status"] = "historical_only"
+            row["executable"] = False
+    with pytest.raises(capability_ledger.CapabilityLedgerError, match="identity drifted"):
+        capability_ledger._validate_source_census(
+            root,
+            matrix,
+            labels=labels,
+            historical_labels=historical,
+            executors=executors,
+            legacy=capability_ledger._legacy_ids(root),
+        )
 
 
 def test_hivemind_matrix_contract_is_not_mistaken_for_bundled_source():

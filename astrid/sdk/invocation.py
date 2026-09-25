@@ -21,8 +21,19 @@ from astrid.core.contracts.binding import (
     assert_provided_inputs_bound,
     expand_command,
 )
+from astrid.core.contracts.generation_publication import (
+    GenerationPublicationError,
+    resolve_generation_publication,
+)
 
-from .execution_request import ExecutionRequest, ExecutionRequestError, normalize_execution_request
+from .execution_request import (
+    ExecutionRequest,
+    ExecutionRequestError,
+    merge_execution_input_manifest,
+    merge_execution_request_inputs,
+    normalize_execution_request,
+    reject_caller_execution_binding,
+)
 
 from ._module import _sdk_module
 from .exceptions import (
@@ -1610,6 +1621,20 @@ def _generation_capability_modality(capability_id: str) -> str | None:
 
 def _generation_primary_output_port(capability: Any, modality: str) -> str:
     """Resolve the single published file port for a typed generation route."""
+    try:
+        declared_publication = resolve_generation_publication(
+            getattr(capability, "definition", None),
+            capability_type=getattr(capability, "capability_type", "executor"),
+        )
+    except GenerationPublicationError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
+    if declared_publication is not None:
+        if declared_publication.modality != modality:
+            raise CapabilityValidationError(
+                "generation publication declaration modality does not match intent"
+            )
+        return declared_publication.output_port
+
     expected = {
         "image": "generated_images",
         "video": "generated_videos",
@@ -1651,6 +1676,17 @@ def _generation_primary_output_port(capability: Any, modality: str) -> str:
     raise CapabilityValidationError(
         f"generation capability must declare exactly one primary {modality!r} output"
     )
+
+
+def _declared_generation_publication(capability: Any) -> Any | None:
+    """Validate the registered definition's explicit-only publication opt-in."""
+    try:
+        return resolve_generation_publication(
+            getattr(capability, "definition", None),
+            capability_type=getattr(capability, "capability_type", "executor"),
+        )
+    except GenerationPublicationError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
 
 
 def _automatic_generation_intent(
@@ -1758,6 +1794,7 @@ def _kernel_invoke(
     generation_intent: Mapping[str, Any] | None = None,
     execution_request: Mapping[str, Any] | None = None,
     storage_estimate: Mapping[str, int] | None = None,
+    orchestrator_args: tuple[str, ...] = (),
     registry: Any | None = None,
     _client: Any | None = None,
 ) -> tuple[str, str, str, Path | None, dict[str, Any], bool, Any]:
@@ -1770,6 +1807,12 @@ def _kernel_invoke(
     the runtime admission request.
     """
     del registry
+
+    try:
+        reject_caller_execution_binding(execution_request, None)
+        execution_request = normalize_execution_request(execution_request)
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
 
     request_inputs = dict(inputs or {})
     # Runtime workers expand the manifest command directly and therefore do
@@ -1792,7 +1835,58 @@ def _kernel_invoke(
         "inputs": _json_safe_mapping(request_inputs),
         "outputs": _json_safe_mapping(dict(outputs or {})),
         "extra_pack_roots": list(extra_pack_roots),
+        "orchestrator_args": [str(value) for value in orchestrator_args],
     }
+    try:
+        spec = merge_execution_request_inputs(execution_request, spec)
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
+    if str(capability.id) == "vibecomfy.run":
+        # Canonical sibling/source invocations use the same preflight as the
+        # direct remote task route.  Convert request-owned descriptors into the
+        # preflight view when callers supplied only the frozen request, and do
+        # this before any task admission or worker work.
+        canonical_names = {"python", "companion", "source", "source_video"}
+        contract_inputs = (
+            execution_request.get("inputs", [])
+            if isinstance(execution_request, Mapping)
+            else []
+        )
+        preflight_inputs = dict(request_inputs)
+        if isinstance(contract_inputs, list):
+            for item in contract_inputs:
+                if not isinstance(item, Mapping) or not isinstance(item.get("name"), str):
+                    continue
+                preflight_inputs.setdefault(
+                    str(item["name"]),
+                    {
+                        "object_id": item.get("object_id"),
+                        "digest": item.get("digest") or item.get("object_id"),
+                        "filename": item.get("filename"),
+                    },
+                )
+        if (
+            canonical_names & set(preflight_inputs)
+            or isinstance(execution_request, Mapping)
+            and "workflow" in execution_request
+        ):
+            from .remote import _vibecomfy_invocation_preflight
+
+            transport = getattr(_client, "_transport", _client)
+            if not callable(getattr(transport, "get_object", None)):
+                raise CapabilityValidationError(
+                    "canonical VibeComfy preflight requires the runtime object reader"
+                )
+            try:
+                spec["invocation_preflight"] = _vibecomfy_invocation_preflight(
+                    transport,
+                    {"inputs": preflight_inputs},
+                    strict=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - admission validation boundary
+                raise CapabilityValidationError(
+                    f"VibeComfy invocation preflight failed: {exc}"
+                ) from exc
     if str(capability.id) == "generation.generate_image_codex":
         # Bounded host profiles consume typed params as their single input
         # authority, including the ordered CAS descriptors.
@@ -1803,12 +1897,43 @@ def _kernel_invoke(
         # Keep the transparent estimate out of capability inputs: it is task
         # admission evidence, not an executor-authored input.
         spec["admission_metadata"] = _json_safe_mapping(dict(admission_metadata))
-    if execution_request is not None:
-        spec["execution_request"] = dict(execution_request)
     # Managed renders authorize their snapshot registry media at admission:
     # derive task input_object_ids from the immutable timeline snapshot so
     # the generic host can materialize registry assets below the attempt.
     input_manifest: list[str] = []
+    input_digests: list[dict[str, str]] = []
+    # File ports are Runtime-owned CAS inputs on the task path.  Keep the
+    # digest in both the explicit input-digest witness and the authorization
+    # manifest; otherwise a remote GenericPackHost can see the descriptor but
+    # is correctly forbidden from fetching it.  This was especially easy to
+    # miss for VibeComfy's canonical sibling bundle and managed source video.
+    file_input_names = {
+        str(port.name)
+        for port in (getattr(capability, "inputs", ()) or ())
+        if getattr(port, "name", None)
+        and str(getattr(port, "type", "")).lower() == "file"
+    }
+    for name in sorted(file_input_names):
+        value = request_inputs.get(name)
+        raw_digest = None
+        if isinstance(value, Mapping):
+            raw_digest = value.get("digest") or value.get("object_id")
+        elif isinstance(value, str) and re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", value):
+            raw_digest = value
+        if raw_digest is None:
+            continue
+        digest = str(raw_digest)
+        normalized = digest.removeprefix("sha256:")
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+            raise CapabilityValidationError(
+                f"file input {name!r} requires a valid SHA-256 object digest"
+            )
+        canonical = "sha256:" + normalized
+        if canonical not in input_manifest:
+            input_manifest.append(canonical)
+        input_digests.append({"name": name, "digest": canonical})
+    if input_digests:
+        spec["input_digests"] = input_digests
     if str(capability.id) == "generation.generate_image_codex":
         for name in ("image_ref", "style_ref", "brand_ref"):
             reference = request_inputs.get(name)
@@ -1946,23 +2071,13 @@ def _kernel_invoke(
                 )
             input_manifest.append(transcript_input["digest"])
 
-    idempotency_material: dict[str, Any] = {
-        "spec": spec,
-        "input_object_ids": sorted(input_manifest),
-        "storage_estimate": dict(storage_estimate or {}),
-    }
-    if generation_intent is not None:
-        idempotency_material["generation_intent"] = _json_safe_mapping(
-            dict(generation_intent)
+    try:
+        input_manifest = merge_execution_input_manifest(
+            execution_request,
+            input_manifest,
         )
-    idempotency_key = hashlib.sha256(
-        json.dumps(
-            idempotency_material,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    except ExecutionRequestError as exc:
+        raise CapabilityValidationError(str(exc)) from exc
 
     if _client is None:
         raise CapabilityInvocationError(
@@ -1980,7 +2095,9 @@ def _kernel_invoke(
         "capability": str(capability.id),
         "spec": spec,
         "input_manifest": input_manifest,
-        "idempotency_key": idempotency_key,
+        # RemoteTasks finalizes automatic identity after selecting the live
+        # capability definition and normalizing the complete admission.
+        "idempotency_key": None,
         "storage_estimate": dict(storage_estimate) if storage_estimate is not None else None,
     }
     if generation_intent is not None:
@@ -2244,7 +2361,27 @@ def invoke(
     if capability.capability_type == "element":
         raise UnsupportedCapabilityError(f"elements are not invokable via the SDK: {capability.id}")
 
-    intent_modality = _generation_capability_modality(str(capability.id))
+    # Publication metadata is an executor-owned contract.  Orchestrators may
+    # coordinate child publication without carrying an executor declaration.
+    declared_publication = (
+        _declared_generation_publication(capability)
+        if capability.capability_type == "executor"
+        else None
+    )
+    legacy_intent_modality = _generation_capability_modality(str(capability.id))
+    if (
+        declared_publication is not None
+        and legacy_intent_modality is not None
+        and declared_publication.modality != legacy_intent_modality
+    ):
+        raise CapabilityValidationError(
+            "generation publication declaration modality conflicts with capability family"
+        )
+    # A reusable declaration enables an explicit-only route.  It does not
+    # participate in the legacy automatic-generation family selection.
+    intent_modality = legacy_intent_modality or (
+        declared_publication.modality if declared_publication is not None else None
+    )
     request_inputs = dict(inputs or {})
     generation_intent: dict[str, Any] | None = None
     if "generation_intent" in request_inputs:
@@ -2269,7 +2406,7 @@ def invoke(
         )
         # Intent is admission metadata, not an executor-facing input port.
         request_inputs.pop("generation_intent")
-    elif not dry_run:
+    elif not dry_run and declared_publication is None:
         generation_intent = _automatic_generation_intent(
             capability,
             request_inputs,
@@ -2530,6 +2667,7 @@ def invoke(
             "idempotency_context": invocation_authority_context,
             "admission_metadata": invocation_admission_metadata,
             "storage_estimate": invocation_storage_estimate,
+            "orchestrator_args": tuple(orchestrator_args),
         }
         if generation_intent is not None:
             kernel_kwargs["generation_intent"] = generation_intent

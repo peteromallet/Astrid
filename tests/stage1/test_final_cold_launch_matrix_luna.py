@@ -15,8 +15,10 @@ Run directly from the Astrid checkout::
     PYTHONPATH=.:../banodoco-workspace-runtime/packages/python \
       python3 -m pytest -q tests/stage1/test_final_cold_launch_matrix_luna.py
 
-The runtime source is archived at the immutable commit below before launch;
-the working runtime checkout is never imported by the daemon in this test.
+The runtime source is materialized into the fixture root before launch.  When
+the selected revision is the qualified checkout's current HEAD, the snapshot
+also carries that checkout's reviewed working-tree changes; the working
+checkout itself is never imported by the daemon in this test.
 """
 
 from __future__ import annotations
@@ -64,6 +66,35 @@ RUNTIME_COMMIT = os.environ.get(
 
 def _archive_runtime(destination: Path) -> Path:
     destination.mkdir()
+    # The T9 fixture venv is installed from the qualified Runtime checkout,
+    # which may contain the reviewed contract alignment while HEAD remains the
+    # selected revision.  A plain ``git archive HEAD`` would silently discard
+    # those working-tree changes and launch a daemon with a different health
+    # contract than the generated Astrid client.  Materialize a fresh,
+    # fixture-owned snapshot only for that exact qualified-HEAD case; retain
+    # the immutable archive path for historical pins and ordinary callers.
+    head = subprocess.run(
+        ["git", "-C", str(RUNTIME_CHECKOUT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if head == RUNTIME_COMMIT:
+        shutil.copytree(
+            RUNTIME_CHECKOUT,
+            destination,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                ".otto",
+                ".DS_Store",
+                "__pycache__",
+                "*.egg-info",
+                "build",
+                "dist",
+            ),
+        )
+        return destination
     archive = subprocess.run(
         ["git", "-C", str(RUNTIME_CHECKOUT), "archive", "--format=tar", RUNTIME_COMMIT],
         check=True,
@@ -163,10 +194,11 @@ def test_final_cold_launch_matrix_no_mocks(tmp_path: Path) -> None:
     source_manifest.write_text(
         json.dumps(
             {
-                "profile": "astrid",
-                "runtime_checkout": str(runtime_archive),
-                "source_checkout": str(ROOT),
-                "runtime_command": [],
+                    "profile": "astrid",
+                    "runtime_checkout": str(runtime_archive),
+                    "source_checkout": str(ROOT),
+                    "runtime_environment": sys.prefix,
+                    "runtime_command": [],
                 "protocol_version": "workspace.v1",
                 "schema_version": "workspace-schema-v1",
             }
@@ -178,6 +210,7 @@ def test_final_cold_launch_matrix_no_mocks(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["HOME"] = str(home)
     env["BANODOCO_LOCAL_HOME"] = str(home)
+    env["BANODOCO_LOCAL_DATA_ROOT"] = str(support)
     env["BANODOCO_LOCAL_LAUNCHER"] = str(launcher)
     env["BANODOCO_LOCAL_SOURCE_MANIFEST"] = str(source_manifest)
     env["PYTHONPATH"] = os.pathsep.join(
@@ -327,6 +360,27 @@ def test_final_cold_launch_matrix_no_mocks(tmp_path: Path) -> None:
         seed_data = seed_result["data"]
         seed_object_id = str(seed_data.get("object_id") or seed_data["digest"])
         worker_seed.unlink()
+
+        # Project/media CLI routes deliberately remain no-pack-host operations.
+        # Cross the supported public SDK launcher boundary explicitly before
+        # reading the host marker: ensure_runtime invokes the configured
+        # neutral launcher and performs the guarded pack-host handoff.
+        pack_host = _run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import json, sys; "
+                    "from astrid.sdk.autobootstrap import ensure_runtime; "
+                    "print(json.dumps(ensure_runtime(start_pack_host=True, "
+                    "data_root=sys.argv[1])))"
+                ),
+                str(support),
+            ],
+            envless,
+        )
+        pack_host_result = json.loads(pack_host.stdout)
+        assert pack_host_result["host_status"] == "ready", pack_host_result
 
         from astrid.core.execution.generic_host import GenericPackHost, RuntimeProtocolClient
         from astrid.sdk.client import AstridClient

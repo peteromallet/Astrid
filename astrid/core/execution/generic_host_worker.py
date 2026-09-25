@@ -13,7 +13,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .generic_host import _canonical_digest, _source_digest_for_roots
+from .generic_host import _capability_digest, _source_digest_for_roots
 
 
 def _json_value(value: Any) -> Any:
@@ -62,7 +62,7 @@ def run(payload_path: str | Path) -> int:
     if str(definition_payload.get("id") or "") != capability_id:
         raise ValueError("admitted definition does not match capability identity")
     expected_digest = str(admission.get("capability_digest") or "")
-    if expected_digest and _canonical_digest(definition_payload) != expected_digest:
+    if expected_digest and _capability_digest(definition_payload) != expected_digest:
         raise ValueError("admitted capability definition digest changed")
     expected_version = admission.get("version")
     if expected_version is not None and str(definition_payload.get("version")) != str(expected_version):

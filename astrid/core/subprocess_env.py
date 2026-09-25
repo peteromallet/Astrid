@@ -89,6 +89,17 @@ _ASTRID_PROPAGATED_ENV = frozenset(
         PACKS_PATH_ENV,
         ASTRID_NODE_EXECUTABLE,
         ASTRID_REMOTION_PROJECT_DIR,
+        # The public launcher boundary is reused by orchestrator children.
+        # These are explicit non-secret fixture/runtime paths, not credentials.
+        "BANODOCO_LOCAL_HOME",
+        "BANODOCO_LOCAL_DATA_ROOT",
+        "BANODOCO_LOCAL_LAUNCHER",
+        "BANODOCO_LOCAL_SOURCE_MANIFEST",
+        # RunPod executor manifests explicitly declare this host-owned path.
+        # It must survive the supervised host -> executor -> SSH child
+        # boundary; unlike a private key value, the path itself is not secret.
+        "RUNPOD_SSH_IDENTITY_PATH",
+        "RUNPOD_SSH_IDENTITY_PUBLIC_PATH",
     }
 )
 

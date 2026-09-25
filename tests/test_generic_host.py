@@ -24,10 +24,18 @@ from astrid.core.execution.generic_host import (
     _assert_live_storage_envelope,
     _attempt_tree_bytes,
     _completed_process_evidence,
+    _effective_cli_max_concurrency,
     _storage_tree_bytes,
     _task_storage_envelope,
     _terminate_process_group,
 )
+
+
+def test_canonical_run_cli_defaults_to_two_lanes_without_flag():
+    assert _effective_cli_max_concurrency("run", None) == 2
+    assert _effective_cli_max_concurrency("supervise", None) == 1
+    assert _effective_cli_max_concurrency(None, None) == 1
+    assert _effective_cli_max_concurrency("run", 1) == 1
 
 
 class FakeRuntime:
@@ -117,6 +125,7 @@ def test_runtime_failure_preserves_structured_guard_diagnostic() -> None:
     client = object.__new__(RuntimeProtocolClient)
     client.generated = generated
     client._runtime_epoch = None
+    client._attempt_runtime_epochs = {"attempt-1": 7}
 
     client.fail(
         "task-1",
@@ -1516,6 +1525,7 @@ def test_runtime_protocol_client_settlement_preserves_structured_result(monkeypa
 
     monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", WorkerGenerated)
     client = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    client._attempt_runtime_epochs["attempt-1"] = 7
     result = {
         "adapter_family": "render",
         "capability_digest": "sha256:" + "a" * 64,
@@ -1641,6 +1651,7 @@ def test_runtime_protocol_client_uses_a_fresh_idempotency_key_for_each_heartbeat
 
     monkeypatch.setattr("banodoco_workspace_client.WorkspaceClient", WorkerGenerated)
     client = RuntimeProtocolClient("http://127.0.0.1:8765", "worker-token")
+    client._attempt_runtime_epochs["attempt-1"] = 7
 
     client.heartbeat("task-1", "lease-1", attempt_id="attempt-1", fence=3)
     client.heartbeat("task-1", "lease-1", attempt_id="attempt-1", fence=3)

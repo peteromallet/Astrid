@@ -8,6 +8,8 @@ ledger consumed before host readiness is evaluated.
 from __future__ import annotations
 
 import json
+import hashlib
+from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -189,6 +191,45 @@ _LEGACY_REIGH_IDS: tuple[tuple[str, str], ...] = (
     ("reigh.flux_klein_edit", "vibecomfy"),
 )
 
+_CENSUS_SCHEMA_VERSION = 1
+_H3_LABEL_BINDINGS: tuple[dict[str, str], ...] = (
+    {
+        "pack": "h3_av",
+        "label": "prepare_transform",
+        "kind": "executor",
+        "canonical_id": "h3_av.prepare",
+        "manifest": "astrid/packs/h3_av/executors/prepare/executor.yaml",
+    },
+    {
+        "pack": "h3_av",
+        "label": "compile_transform",
+        "kind": "executor",
+        "canonical_id": "h3_av.compile",
+        "manifest": "astrid/packs/h3_av/executors/compile/executor.yaml",
+    },
+    {
+        "pack": "h3_av",
+        "label": "compose_transform",
+        "kind": "executor",
+        "canonical_id": "h3_av.compose",
+        "manifest": "astrid/packs/h3_av/executors/compose/executor.yaml",
+    },
+    {
+        "pack": "h3_av",
+        "label": "verify_transform",
+        "kind": "executor",
+        "canonical_id": "h3_av.verify",
+        "manifest": "astrid/packs/h3_av/executors/verify/executor.yaml",
+    },
+    {
+        "pack": "h3_av",
+        "label": "transform",
+        "kind": "orchestrator",
+        "canonical_id": "h3_av.transform",
+        "manifest": "astrid/packs/h3_av/orchestrators/transform/orchestrator.yaml",
+    },
+)
+
 
 def _repo_root_for_matrix(path: Path) -> Path | None:
     candidate = path.expanduser().resolve().parent.parent
@@ -311,7 +352,153 @@ def _provider_inventory(capabilities: list[Mapping[str, Any]]) -> list[dict[str,
     return [{"credential": key, "capabilities": sorted(value)} for key, value in sorted(providers.items())]
 
 
-def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _row_counter(rows: list[Mapping[str, Any]]) -> Counter[bytes]:
+    return Counter(_canonical_json_bytes(dict(row)) for row in rows)
+
+
+def _row_delta(expected: list[Mapping[str, Any]], actual: list[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    expected_counter = _row_counter(expected)
+    actual_counter = _row_counter(actual)
+    missing: list[dict[str, Any]] = []
+    unexpected: list[dict[str, Any]] = []
+    expected_by_bytes = {_canonical_json_bytes(dict(row)): dict(row) for row in expected}
+    actual_by_bytes = {_canonical_json_bytes(dict(row)): dict(row) for row in actual}
+    for encoded, count in (expected_counter - actual_counter).items():
+        missing.extend([expected_by_bytes[encoded]] * count)
+    for encoded, count in (actual_counter - expected_counter).items():
+        unexpected.extend([actual_by_bytes[encoded]] * count)
+    return {"missing": missing, "unexpected": unexpected}
+
+
+def _matrix_inventory(capabilities: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in capabilities:
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str) or not row["id"]:
+            raise CapabilityLedgerError("capability matrix rows require a non-empty string id")
+        capability_id = str(row["id"])
+        if capability_id in seen:
+            raise CapabilityLedgerError(f"capability matrix contains duplicate id {capability_id!r}")
+        seen.add(capability_id)
+        rows.append(dict(row))
+    return sorted(rows, key=lambda item: str(item["id"]))
+
+
+def _manifest_witnesses(repo_root: Path) -> list[dict[str, str]]:
+    manifests = [
+        manifest
+        for manifest in sorted((repo_root / "astrid" / "packs").glob("*/pack.yaml"))
+        if manifest.parent.name not in _OPTIONAL_PROJECT_PACK_IDS
+    ]
+    manifests.extend(
+        repo_root / relative
+        for relative in (
+            "astrid/packs/h3_av/executors/prepare/executor.yaml",
+            "astrid/packs/h3_av/executors/compile/executor.yaml",
+            "astrid/packs/h3_av/executors/compose/executor.yaml",
+            "astrid/packs/h3_av/executors/verify/executor.yaml",
+            "astrid/packs/h3_av/orchestrators/transform/orchestrator.yaml",
+        )
+    )
+    rows: list[dict[str, str]] = []
+    for manifest in sorted(set(manifests)):
+        if not manifest.is_file():
+            raise CapabilityLedgerError(f"sealed capability manifest is missing: {manifest}")
+        rows.append({
+            "path": str(manifest.relative_to(repo_root)),
+            "sha256": _sha256_bytes(manifest.read_bytes()),
+        })
+    return rows
+
+
+def _label_bindings(repo_root: Path) -> list[dict[str, str]]:
+    rows = [dict(row) for row in _H3_LABEL_BINDINGS]
+    for row in rows:
+        manifest = repo_root / row["manifest"]
+        if not manifest.is_file():
+            raise CapabilityLedgerError(f"reviewed H3 label binding manifest is missing: {manifest}")
+        payload = _load_manifest_payload(manifest)
+        if payload.get("id") != row["canonical_id"]:
+            raise CapabilityLedgerError(
+                f"reviewed H3 label binding {row['label']!r} points to {row['canonical_id']!r}, "
+                f"but {manifest} declares {payload.get('id')!r}"
+            )
+    return rows
+
+
+def _census_content(
+    repo_root: Path,
+    *,
+    labels: list[dict[str, Any]],
+    historical_labels: list[dict[str, Any]],
+    executors: list[dict[str, Any]],
+    legacy: list[dict[str, Any]],
+    capabilities: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    snapshot = repo_root / "astrid" / "core" / "contracts" / "output_result_exemptions.json"
+    return {
+        "schema_version": _CENSUS_SCHEMA_VERSION,
+        "pack_labels": sorted((dict(row) for row in labels), key=lambda row: (row["source"], row["pack"], row["label"])),
+        "historical_pack_labels": sorted((dict(row) for row in historical_labels), key=lambda row: (row["pack"], row["label"], row["source"])),
+        "executor_inventory": sorted((dict(row) for row in executors), key=lambda row: row["id"]),
+        "legacy_ids": sorted((dict(row) for row in legacy), key=lambda row: row["id"]),
+        "matrix_inventory": _matrix_inventory(capabilities),
+        "manifest_witnesses": _manifest_witnesses(repo_root),
+        "result_contract_snapshot": {
+            "path": str(snapshot.relative_to(repo_root)),
+            "sha256": _sha256_bytes(snapshot.read_bytes()),
+        },
+        "label_bindings": _label_bindings(repo_root),
+    }
+
+
+def _validate_source_census(
+    repo_root: Path,
+    payload: Mapping[str, Any],
+    *,
+    labels: list[dict[str, Any]],
+    historical_labels: list[dict[str, Any]],
+    executors: list[dict[str, Any]],
+    legacy: list[dict[str, Any]],
+) -> None:
+    census = payload.get("source_census")
+    if not isinstance(census, Mapping) or census.get("schema_version") != _CENSUS_SCHEMA_VERSION:
+        raise CapabilityLedgerError("capability matrix requires versioned source_census schema_version 1")
+    expected_content = {str(key): value for key, value in census.items() if key != "content_sha256"}
+    digest = census.get("content_sha256")
+    if not isinstance(digest, str) or digest != _sha256_bytes(_canonical_json_bytes(expected_content)):
+        raise CapabilityLedgerError("capability source census content digest is invalid")
+    actual_content = _census_content(
+        repo_root,
+        labels=labels,
+        historical_labels=historical_labels,
+        executors=executors,
+        legacy=legacy,
+        capabilities=payload["capabilities"],
+    )
+    if actual_content != expected_content:
+        changed = [key for key in sorted(set(actual_content) | set(expected_content)) if actual_content.get(key) != expected_content.get(key)]
+        raise CapabilityLedgerError(f"capability source census identity drifted: sections={changed}")
+
+
+def _reconcile_sources(
+    repo_root: Path,
+    capabilities: list[Mapping[str, Any]],
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
     labels = _source_labels(repo_root)
     # Keep current manifests distinct from the historical projection.  The
     # latter includes retired source occurrences, while Fal's two current
@@ -358,15 +545,36 @@ def _reconcile_sources(repo_root: Path, capabilities: list[Mapping[str, Any]]) -
         if row.get("discovery_status") != "discovered":
             row.setdefault("executable", False)
     expected_hivemind = sorted(row["id"] for row in executors if row["id"].startswith("hivemind."))
-    # Blessed census baseline. Hivemind remains represented by the optional
-    # external contract below; it is deliberately absent from the in-tree
-    # source-label census. Optional project packs remain represented by their
-    # matrix contracts, but do not advance the canonical source counts.
+    _validate_source_census(
+        repo_root,
+        payload,
+        labels=labels,
+        historical_labels=historical_labels,
+        executors=executors,
+        legacy=legacy,
+    )
+    census = payload["source_census"]
+    expected_rows = {
+        "source_labels": census["pack_labels"],
+        "historical_source_labels": census["historical_pack_labels"],
+        "executor_inventory": census["executor_inventory"],
+        "legacy_ids": census["legacy_ids"],
+    }
+    actual_rows = {
+        "source_labels": labels,
+        "historical_source_labels": historical_labels,
+        "executor_inventory": executors,
+        "legacy_ids": legacy,
+    }
     coverage = {
-        "source_labels": {"source": 89, "ledger": len(labels), "missing": [], "complete": len(labels) == 89},
-        "historical_source_labels": {"source": 94, "ledger": len(historical_labels), "missing": [], "complete": len(historical_labels) == 94},
-        "executor_inventory": {"source": 86, "ledger": len(executors), "missing": [], "complete": len(executors) == 86},
-        "legacy_ids": {"source": 19, "ledger": len(legacy), "missing": [], "complete": len(legacy) == 19},
+        section: {
+            "source": len(expected_rows[section]),
+            "ledger": len(actual_rows[section]),
+            **_row_delta(expected_rows[section], actual_rows[section]),
+            "complete": not _row_delta(expected_rows[section], actual_rows[section])["missing"]
+            and not _row_delta(expected_rows[section], actual_rows[section])["unexpected"],
+        }
+        for section in expected_rows
     }
     if not all(section["complete"] for section in coverage.values()):
         raise CapabilityLedgerError(f"capability source census drifted: {coverage}")
@@ -408,7 +616,7 @@ def load_capability_ledger(matrix_path: str | Path) -> dict[str, Any]:
         raise CapabilityLedgerError("capability ledger requires schema_version 1 and a capabilities list")
     result = dict(payload)
     repo_root = _repo_root_for_matrix(path)
-    result["sources"] = _reconcile_sources(repo_root, payload["capabilities"]) if repo_root else {"counts": {}, "coverage": {}}
+    result["sources"] = _reconcile_sources(repo_root, payload["capabilities"], payload) if repo_root else {"counts": {}, "coverage": {}}
     return result
 
 

@@ -34,6 +34,18 @@ def test_child_environment_does_not_propagate_retired_session_id() -> None:
     assert child["ASTRID_PROJECT_SLUG"] == "demo"
 
 
+def test_child_environment_preserves_declared_runpod_identity_path() -> None:
+    child = build_child_subprocess_env(
+        base={"PATH": "/usr/bin"},
+        parent={
+            "RUNPOD_SSH_IDENTITY_PATH": "/tmp/runpod-ed25519",
+            "RUNPOD_SSH_IDENTITY_PUBLIC_PATH": "/tmp/runpod-ed25519.pub",
+        },
+    )
+    assert child["RUNPOD_SSH_IDENTITY_PATH"] == "/tmp/runpod-ed25519"
+    assert child["RUNPOD_SSH_IDENTITY_PUBLIC_PATH"] == "/tmp/runpod-ed25519.pub"
+
+
 def test_gateway_help_describes_live_backup_routes_and_json_truthfully(capsys) -> None:
     _print_entrypoint_help()
     entrypoint = capsys.readouterr().out

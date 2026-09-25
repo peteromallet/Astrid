@@ -13,6 +13,12 @@ from astrid.core.generation.vibecomfy_dependency import VIBECOMFY_ENGINE_REVISIO
 from astrid.core.gateway.dispatch import compose_profile_handoff
 from astrid.sdk import host_bootstrap as bootstrap
 from astrid.core._shared.boot_manifest import load_boot_manifest_hash
+from astrid.core.execution.host_lane_policy import effective_host_capacity
+from banodoco_workspace_client.contract_metadata import PROTOCOL, SCHEMA_DIGEST
+
+_CAPACITY = effective_host_capacity(
+    2, parallel_lanes_enabled=True, resource_keys=("astrid-orchestration", "cpu")
+)
 
 
 @pytest.mark.parametrize("source_changed", [False, True])
@@ -48,10 +54,11 @@ def test_bootstrap_reuses_only_the_selected_interpreter(
         "support_root": str(support), "source_checkout": str(source),
         "source_checkout_digest": "source-digest", "runtime_instance_id": "instance",
         "source_inventory_identity": "",
-        "runtime_epoch": 1, "schema_digest": "schema", "pid": 101,
+        "runtime_epoch": 1, "schema_digest": SCHEMA_DIGEST, "pid": 101,
         "process_birth_id": "birth",
         "boot_manifest_path": str(boot_manifest),
         "boot_manifest_hash": load_boot_manifest_hash(boot_manifest, support_root=support),
+        "effective_capacity": _CAPACITY,
     }
     if source_changed:
         current["source_checkout_digest"] = "previous-source-digest"
@@ -60,11 +67,15 @@ def test_bootstrap_reuses_only_the_selected_interpreter(
             selected_python if previous_python == "selected" else "/other-venv/bin/python"
         )
     bootstrap._write_object(support / "generic-host.json", current)
-    bootstrap._write_object(ready_path, {**current, "status": "ready"})
+    bootstrap._write_object(ready_path, {**current, "status": "ready", "registration": {"effective_capacity": _CAPACITY}})
     monkeypatch.setattr(bootstrap.sys, "executable", "/selected-venv/bin/python")
     monkeypatch.setattr(generic_host, "source_checkout_digest", lambda _: "source-digest")
     monkeypatch.setattr(generic_host, "RuntimeProtocolClient", lambda *args: SimpleNamespace(
-        health=lambda: {"status": "ok", "runtime_epoch": 1, "schema_digest": "schema"}))
+        health=lambda: {
+            "status": "ok", "protocol": PROTOCOL, "runtime_epoch": 1,
+            "schema_digest": SCHEMA_DIGEST, "runtime_instance_id": "instance",
+            "runtime_session_id": "session-1",
+        }))
     monkeypatch.setattr(
         "astrid.core.pack.source_setup.active_source_inventory",
         lambda: SimpleNamespace(identity="", roots=(), sources=()),
@@ -85,6 +96,8 @@ def test_bootstrap_reuses_only_the_selected_interpreter(
             "source_checkout_digest": "source-digest",
             "boot_manifest_hash": boot_manifest_hash,
             "pid": 202, "process_birth_id": "new-birth",
+            "effective_capacity": _CAPACITY,
+            "registration": {"effective_capacity": _CAPACITY},
         })
         return SimpleNamespace(pid=202, poll=lambda: None)
 

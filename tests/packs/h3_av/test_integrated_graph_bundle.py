@@ -127,11 +127,12 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
     assert binding["shared_components"]["settings"]["seed"] == 17
     assert binding["pinned_seitanism"]["commit"] == PINNED_SEITANISM_COMMIT
     assert binding["final_sampler_validation"]["status"] == "valid"
-    assert state["sampler_sockets"]["latent_image"] == "c3-hard-anchors.0"
+    assert state["sampler_sockets"]["latent_image"] == "c3-av-mask.0"
     assert state["sampler_sockets"]["guider"] == "121.0"
     graph = binding["executable_graph"]
     assert graph["final_sampler"] == {"node": "124", "guider": "121", "output": "946"}
     edges = {(edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"]) for edge in graph["edges"]}
+    assert ("c3-av-mask", "0", "124", "latent_image") in edges
     for stream in ("video", "audio"):
         assert (f"c3-{stream}-mask-loader", "0", f"c3-{stream}-image-to-mask", "image") in edges
         assert (f"c3-{stream}-image-to-mask", "0", f"c3-{stream}-threshold-mask", "mask") in edges
@@ -139,7 +140,7 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
     assert ("c3-soft-anchors", "0", "121", "conditioning") in edges
     validate_final_sampler_state(
         state,
-        required_latent_kinds={"source_av_context", "nested_av_mask", "hard_anchor"},
+        required_latent_kinds={"source_av_context", "nested_av_mask"},
         required_conditioning_kinds={"reference_conditioning", "soft_keyframe"},
     )
 

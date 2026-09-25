@@ -7,9 +7,12 @@ contract. Endpoint and credential values are supplied by the caller.
 
 from __future__ import annotations
 
+import errno
 import ipaddress
 import json
 import os
+import stat
+import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -117,10 +120,44 @@ class WorkspaceClientError(RuntimeError):
 
 
 def _read_credential(path: Path) -> str:
-    path = _safe_local_path(path, field="credential")
+    # A target-bound worker may be allowed to open only this exact token file;
+    # its parent directory is intentionally denied. Inspecting every parent
+    # with lstat makes that narrow grant unusable. Compare the opened file's
+    # kernel-resolved path with the lexical path instead: this also rejects a
+    # symlink in any parent, without probing or opening those directories.
+    path = Path(path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if ".." in path.parts:
+        raise _reconfigure("credential", f"credential path must not traverse a parent; {RECONFIGURE_ACTION}")
     try:
-        raw = path.read_text(encoding="utf-8").strip()
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if not nofollow:
+            # Retain the older all-parent inspection policy on platforms that
+            # cannot obtain a no-follow descriptor for the leaf.
+            path = _safe_local_path(path, field="credential")
+        descriptor = os.open(path, os.O_RDONLY | nofollow)
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise _reconfigure("credential", f"runtime credential is not a regular file; {RECONFIGURE_ACTION}")
+            if sys.platform == "darwin":
+                import fcntl
+
+                raw_path = fcntl.fcntl(handle.fileno(), fcntl.F_GETPATH, bytes(1024))
+                opened_path = os.fsdecode(raw_path.split(b"\0", 1)[0])
+            elif sys.platform.startswith("linux"):
+                opened_path = os.readlink(f"/proc/self/fd/{handle.fileno()}")
+            else:
+                # The fallback checks each parent where descriptor-path
+                # inspection is unavailable; it never silently accepts one.
+                path = _safe_local_path(path, field="credential")
+                opened_path = str(path)
+            if not opened_path or opened_path != str(path):
+                raise _reconfigure("credential", f"credential path must not contain a symlink; {RECONFIGURE_ACTION}")
+            raw = handle.read().strip()
     except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise _reconfigure("credential", f"credential path must not contain a symlink; {RECONFIGURE_ACTION}") from exc
         raise _reconfigure("credential", f"runtime credential is unavailable; {RECONFIGURE_ACTION}") from exc
     if not raw:
         raise _reconfigure("credential", f"runtime credential is empty; {RECONFIGURE_ACTION}")
@@ -181,6 +218,7 @@ class WorkspaceClient:
         # Populated after the explicit Astrid handshake.  On-demand local
         # Runtime work must use the authenticated actor as its executor.
         self.actor_id: str | None = None
+        self._last_handshake: Any | None = None
 
     def _call_generated(self, operation: str, *args: Any, **kwargs: Any) -> Any:
         """Invoke one generated operation and normalize its typed value."""
@@ -272,7 +310,9 @@ class WorkspaceClient:
         return self._call_generated("health")
 
     def handshake(self, client_name: str, client_version: str, requested_scopes: list[str]) -> Any:
-        return self._call_generated("handshake", client_name, client_version, requested_scopes)
+        value = self._call_generated("handshake", client_name, client_version, requested_scopes)
+        self._last_handshake = value
+        return value
 
     def doctor(self) -> Any:
         return self._call_generated("doctor")
@@ -686,35 +726,67 @@ class WorkspaceClient:
         required_facts: Mapping[str, Any] | None = None,
         execution_request: Mapping[str, Any] | None = None,
     ) -> Any:
-        """Admit one task while carrying optional target metadata.
+        """Admit one task through the Runtime-owned admission contract.
 
-        ``execution_request`` is a client-owned extension until the runtime
-        schema grows a first-class field.  The existing runtime transport
-        persists the request in the task spec envelope, so show/restart paths
-        retain it; scheduler enforcement remains a runtime-owner concern.
+        Targeted requests are fail-closed unless the handshake explicitly
+        advertises first-class targeted execution binding.  The current
+        workspace.v1 Runtime has no such field or claim contract, so a target
+        is never queued as an opaque spec hint.
         """
         wire_spec = dict(spec or {})
         if execution_request is not None:
-            from .execution_request import normalize_execution_request
+            from .execution_request import (
+                merge_execution_input_manifest,
+                merge_execution_request_inputs,
+                normalize_execution_request,
+                reject_caller_execution_binding,
+                require_targeted_execution_binding_support,
+            )
 
+            reject_caller_execution_binding(execution_request, wire_spec)
             normalized = normalize_execution_request(execution_request)
             if normalized is None:
                 raise ValueError("execution_request must not normalize to null")
-            wire_spec["execution_request"] = normalized
-        return self._call_generated(
-            "admit_task",
-            capability_id=capability_id,
-            capability_digest=capability_digest,
-            input_object_ids=input_object_ids,
-            idempotency_key=idempotency_key,
-            schema_version=schema_version,
-            settlement_effect=settlement_effect,
-            project_id=project_id,
-            spec=wire_spec if execution_request is not None else spec,
-            generation_intent=generation_intent,
-            storage_estimate=storage_estimate,
-            required_facts=required_facts,
-        )
+            require_targeted_execution_binding_support(self)
+            wire_spec = merge_execution_request_inputs(normalized, wire_spec)
+            input_object_ids = merge_execution_input_manifest(
+                normalized,
+                input_object_ids,
+            )
+        else:
+            from .execution_request import reject_caller_execution_binding
+
+            reject_caller_execution_binding(None, wire_spec)
+        if capability_id == "vibecomfy.run":
+            from .remote import _vibecomfy_invocation_preflight
+
+            strict = bool(
+                isinstance(wire_spec.get("execution_request"), Mapping)
+                and "workflow" in wire_spec["execution_request"]
+            )
+            receipt = _vibecomfy_invocation_preflight(
+                self,
+                wire_spec,
+                strict=strict,
+            )
+            if receipt is not None:
+                wire_spec["invocation_preflight"] = receipt
+        admission = {
+            "capability_id": capability_id,
+            "capability_digest": capability_digest,
+            "input_object_ids": input_object_ids,
+            "idempotency_key": idempotency_key,
+            "schema_version": schema_version,
+            "settlement_effect": settlement_effect,
+            "project_id": project_id,
+            "spec": wire_spec if execution_request is not None else spec,
+            "generation_intent": generation_intent,
+            "storage_estimate": storage_estimate,
+            "required_facts": required_facts,
+        }
+        if execution_request is not None:
+            admission["execution_request"] = normalized
+        return self._call_generated("admit_task", **admission)
 
     def get_task(self, task_id: str) -> Any:
         return self._call_generated("get_task", task_id)
@@ -840,6 +912,7 @@ class WorkspaceClient:
         capability_ids: list[str],
         idempotency_key: str,
         runtime_epoch: int | None = None,
+        target: Mapping[str, Any] | None = None,
     ) -> Any:
         if runtime_epoch is None:
             health = self.health()
@@ -850,6 +923,7 @@ class WorkspaceClient:
             capability_ids=capability_ids,
             idempotency_key=idempotency_key,
             runtime_epoch=runtime_epoch,
+            target=target,
         )
 
     def register_executor(self, executor: Mapping[str, Any], *, idempotency_key: str) -> Any:

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Iterator
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -603,7 +604,7 @@ def test_pip_embedded_consumes_canonical_bundle_and_pinned_session_config(
     result = production_engine._run_profile(
         object(),
         "pip_embedded",
-        None,
+        profile,
         model_id="z-image",
         template_id="image/z_image",
         task_identity="task-1",
@@ -622,3 +623,166 @@ def test_pip_embedded_consumes_canonical_bundle_and_pinned_session_config(
     ]
     assert config.runtime_root == (tmp_path / "task-out" / ".vibecomfy-runtime").resolve()
     assert config.cwd == root.resolve()
+    assert config.strict_drift is True
+
+
+def _exact_embedded_workflow_and_profile():
+    from vibecomfy.contracts.runtime import RuntimeRequirements
+
+    workflow = SimpleNamespace(
+        metadata={
+            "comfy_commit": "comfy-a",
+            "custom_node_packs": {
+                "pack-a": {"commit": "node-a", "class_schema_sha256": "schema-a"},
+            },
+            "model_assets": [{"name": "model-a", "sha256": "model-a-hash"}],
+        },
+        requirements=SimpleNamespace(runtime=RuntimeRequirements.from_dict({
+            "comfy_commit": "comfy-a",
+            "packages": {"torch": "==2.10.0"},
+        })),
+    )
+    profile = {
+        "comfyui_candidate": {"revision": "comfy-a"},
+        "runtime_attestation": {
+            "comfy_commit": "comfy-a",
+            "packages": {"torch": "2.10.0"},
+            "custom_nodes": {"pack-a": {
+                "name": "pack-a", "commit": "node-a", "class_schema_sha256": "schema-a",
+            }},
+            "models": {"model-a": {"name": "model-a", "sha256": "model-a-hash"}},
+        },
+    }
+    return SimpleNamespace(workflow=workflow), profile
+
+
+def test_embedded_exact_attestation_matches() -> None:
+    bundle, profile = _exact_embedded_workflow_and_profile()
+    production_engine._verify_embedded_workflow_attestation(bundle, profile)
+
+
+def test_embedded_workflow_cannot_disable_strict_drift(tmp_path: Path) -> None:
+    bundle = SimpleNamespace(workflow=SimpleNamespace(
+        metadata={"comfy_configuration": {"strict_drift": False}},
+    ))
+    with pytest.raises(
+        production_engine.ProductionEngineError,
+        match="host-owned keys: strict_drift",
+    ):
+        production_engine._embedded_session_config(
+            bundle, tmp_path, tmp_path, task_identity="test-task",
+        )
+
+
+def test_h3_workflow_requires_embedded_runtime_attestation() -> None:
+    from astrid.packs.h3_av.workflows.native_h3_continuation_refs import workflow
+
+    with pytest.raises(
+        production_engine.ProductionEngineError,
+        match="requires runtime dependency attestation",
+    ):
+        production_engine._verify_embedded_workflow_attestation(
+            SimpleNamespace(workflow=workflow.build()),
+            {"comfyui_candidate": {"revision": "ee71d5c4993f29086b27fde1629a945ae48425bf"}},
+        )
+
+
+def test_embedded_execution_rejects_missing_attestation_before_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, profile = _exact_embedded_workflow_and_profile()
+    del profile["runtime_attestation"]
+    monkeypatch.setattr(
+        production_engine, "_bootstrap_embedded_comfy_client", lambda _profile: tmp_path,
+    )
+    monkeypatch.setattr(
+        production_engine, "_canonical_bundle", lambda _resolved: (object(), bundle),
+    )
+    runtime_run = importlib.import_module("vibecomfy.runtime.run")
+    run_embedded_sync = Mock()
+    monkeypatch.setattr(runtime_run, "run_embedded_sync", run_embedded_sync)
+
+    with pytest.raises(
+        production_engine.ProductionEngineError,
+        match="requires runtime dependency attestation",
+    ):
+        production_engine._run_profile(
+            object(), "pip_embedded", profile,
+            model_id="model-a", template_id="image/a",
+            task_identity="test-task", destination=tmp_path,
+        )
+    run_embedded_sync.assert_not_called()
+
+
+def test_embedded_execution_accepts_matching_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, profile = _exact_embedded_workflow_and_profile()
+    monkeypatch.setattr(
+        production_engine, "_bootstrap_embedded_comfy_client", lambda _profile: tmp_path,
+    )
+    monkeypatch.setattr(
+        production_engine, "_canonical_bundle", lambda _resolved: (object(), bundle),
+    )
+    runtime_run = importlib.import_module("vibecomfy.runtime.run")
+    output = tmp_path / "output.png"
+    output.write_bytes(b"image")
+    run_embedded_sync = Mock(return_value=SimpleNamespace(outputs=[output]))
+    monkeypatch.setattr(runtime_run, "run_embedded_sync", run_embedded_sync)
+
+    outputs = production_engine._run_profile(
+        object(), "pip_embedded", profile,
+        model_id="model-a", template_id="image/a",
+        task_identity="test-task", destination=tmp_path,
+    )
+    assert outputs == (output.resolve(),)
+    assert run_embedded_sync.call_args.kwargs["config"].strict_drift is True
+
+
+def test_t9_cpu_stub_keeps_its_explicit_substitute_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verify = Mock()
+    monkeypatch.setattr(production_engine, "_verify_embedded_workflow_attestation", verify)
+    with pytest.raises(
+        production_engine.ProductionEngineError,
+        match="T9 deterministic substitute was not active",
+    ):
+        production_engine._run_profile(
+            object(), "t9_cpu_stub", {},
+            model_id="model-a", template_id="image/a",
+            task_identity="test-task", destination=tmp_path,
+        )
+    verify.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("missing", "requires runtime dependency attestation"),
+        ("comfy", "comfy_commit"),
+        ("node", "custom_nodes.pack-a"),
+        ("schema", "custom_nodes.pack-a.class_schema_sha256"),
+        ("model", "models.model-a"),
+        ("package", "packages.torch"),
+    ],
+)
+def test_embedded_exact_attestation_fails_closed(field: str, expected: str) -> None:
+    bundle, profile = _exact_embedded_workflow_and_profile()
+    profile = deepcopy(profile)
+    target = profile["runtime_attestation"]
+    if field == "missing":
+        del profile["runtime_attestation"]
+    elif field == "comfy":
+        target["comfy_commit"] = "comfy-b"
+        profile["comfyui_candidate"]["revision"] = "comfy-b"
+    elif field == "node":
+        target["custom_nodes"]["pack-a"]["commit"] = "node-b"
+    elif field == "schema":
+        target["custom_nodes"]["pack-a"]["class_schema_sha256"] = "schema-b"
+    elif field == "model":
+        target["models"]["model-a"]["sha256"] = "model-b-hash"
+    else:
+        target["packages"]["torch"] = "2.9.0"
+    with pytest.raises(production_engine.ProductionEngineError, match=expected):
+        production_engine._verify_embedded_workflow_attestation(bundle, profile)

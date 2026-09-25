@@ -671,6 +671,7 @@ def _embedded_session_config(
         "custom_nodes_path",
         "quiet_schema_degradation",
         "schema_warn_only",
+        "strict_drift",
     }
     overridden = sorted(set(configured).intersection(host_owned_keys))
     if overridden:
@@ -692,6 +693,7 @@ def _embedded_session_config(
             "port": None,
             "warm_policy": "never",
             "quiet_schema_degradation": False,
+            "strict_drift": True,
         }
     )
     config = SessionConfig.from_dict(values)
@@ -702,6 +704,69 @@ def _embedded_session_config(
     if attempt_identity is not None:
         config.extra["attempt_id"] = attempt_identity
     return config
+
+
+def _verify_embedded_workflow_attestation(bundle: Any, profile: Any) -> None:
+    """Match canonical workflow pins to the host's observed runtime facts."""
+    from vibecomfy.runtime.dependencies import (
+        compare_runtime,
+        runtime_requirements_from_workflow,
+    )
+
+    workflow = bundle.workflow
+    metadata = getattr(workflow, "metadata", {})
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    declared = runtime_requirements_from_workflow(workflow)
+    requirements = declared.to_dict() if declared is not None else {}
+    packs = metadata.get("custom_node_packs", {})
+    if not isinstance(packs, Mapping):
+        raise ProductionEngineError("workflow custom_node_packs must be an object")
+    custom_nodes = list(requirements.get("custom_nodes", ()))
+    for name, row in packs.items():
+        if not isinstance(row, Mapping):
+            raise ProductionEngineError(f"workflow custom-node pack {name!r} is invalid")
+        exact = {key: row[key] for key in ("commit", "class_schema_sha256", "schema_hash") if row.get(key)}
+        if exact:
+            custom_nodes.append({"name": name, **exact})
+    if custom_nodes:
+        requirements["custom_nodes"] = custom_nodes
+    assets = metadata.get("model_assets", ())
+    if not isinstance(assets, (list, tuple)):
+        raise ProductionEngineError("workflow model_assets must be an array")
+    models = list(requirements.get("models", ()))
+    workflow_models = getattr(getattr(workflow, "requirements", None), "models", ())
+    models.extend(row for row in workflow_models if isinstance(row, Mapping))
+    models.extend(row for row in assets if isinstance(row, Mapping) and row.get("sha256"))
+    if models:
+        requirements["models"] = models
+    if not requirements:
+        return
+
+    target = profile.get("runtime_attestation") if isinstance(profile, Mapping) else None
+    if not isinstance(target, Mapping):
+        raise ProductionEngineError("embedded workflow requires runtime dependency attestation")
+    candidate = profile.get("comfyui_candidate")
+    revision = candidate.get("revision") if isinstance(candidate, Mapping) else None
+    if revision and target.get("comfy_commit") != revision:
+        raise ProductionEngineError("runtime attestation Comfy commit disagrees with verified Comfy tree")
+    report = compare_runtime(requirements, target=target)
+    failures = [
+        str(check["path"])
+        for check in report["checks"]
+        if check["status"] != "matching"
+    ]
+    observed_nodes = target.get("custom_nodes")
+    for row in custom_nodes:
+        name = row.get("name") or row.get("slug")
+        observed = observed_nodes.get(name) if isinstance(observed_nodes, Mapping) else None
+        for key in ("class_schema_sha256", "schema_hash"):
+            if row.get(key) and (not isinstance(observed, Mapping) or observed.get(key) != row[key]):
+                failures.append(f"custom_nodes.{name}.{key}")
+    if failures:
+        raise ProductionEngineError(
+            "embedded workflow runtime attestation is missing or mismatched: "
+            + ", ".join(sorted(set(failures)))
+        )
 
 
 @contextmanager
@@ -778,6 +843,7 @@ def _run_profile_result(
             record, bundle = _canonical_bundle(resolved)
         else:
             record, bundle = _canonical_bundle(resolved, run_inputs=run_inputs)
+        _verify_embedded_workflow_attestation(bundle, hc03_profile)
         previous_warm = os.environ.get("VIBECOMFY_WARM")
         previous_warn_only = os.environ.get("VIBECOMFY_SCHEMA_WARN_ONLY")
         previous_configuration = os.environ.get("VIBECOMFY_COMFY_CONFIGURATION")

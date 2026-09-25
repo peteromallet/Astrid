@@ -10,7 +10,7 @@ from pathlib import Path
 from astrid.core.pack.entrypoint import guard_canonical_entrypoint, run_pack_main
 
 from astrid.packs.h3_av.src.compose import compose_candidate
-from astrid.packs.h3_av.src.input_bundle import resolve_preparation_assets
+from astrid.packs.h3_av.src.input_bundle import primary_baseline_asset, resolve_preparation_assets
 
 
 def _portable_evidence(value: object) -> object:
@@ -54,14 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             args.out / ".input-assets",
         )
         if args.source is None:
-            request = preparation.get("request", {})
-            source_spec = request.get("source") if isinstance(request, dict) else None
-            source_asset = source_spec.get("asset") if isinstance(source_spec, dict) else None
-            if source_asset is None and isinstance(request, dict):
-                for item in request.get("media", []):
-                    if isinstance(item, dict) and item.get("role") == "timeline" and item.get("modality") == "video":
-                        source_asset = item.get("asset")
-                        break
+            source_asset = primary_baseline_asset(preparation)
             for asset in preparation.get("assets", []):
                 if isinstance(asset, dict) and asset.get("asset") == source_asset:
                     args.source = Path(str(asset["path"]))

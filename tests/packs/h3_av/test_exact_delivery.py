@@ -222,6 +222,63 @@ def test_exact_cpu_delivery_keeps_separate_video_and_audio_outputs_independent(t
     assert composition["delivery_contract"]["baseline_representation"]["audio"]["channel_order"] == "prepared_channel_order"
 
 
+def test_managed_audio_timeline_baseline_composes_and_verifies_through_public_executors(tmp_path: Path) -> None:
+    from astrid.packs.h3_av.executors.compose.run import main as compose_main
+    from astrid.packs.h3_av.executors.verify.run import main as verify_main
+    from astrid.packs.h3_av.src.input_bundle import build_input_bundle, bundle_digest
+
+    baseline = tmp_path / "baseline.wav"
+    generated = tmp_path / "generated.mkv"
+    _audio_only(baseline, tone=440)
+    _media(generated, colour="red", tone=880)
+    request = normalize_request(
+        {
+            "version": 2,
+            "prompt": "Audio baseline exactness.",
+            "duration": 1,
+            "media": [
+                {
+                    "id": "baseline-audio",
+                    "asset": "baseline.wav",
+                    "role": "timeline",
+                    "modality": "audio",
+                    "at": {"seconds": 0},
+                    "range": [0, 1],
+                }
+            ],
+        }
+    )
+    bundle = build_input_bundle(request, {"baseline.wav": baseline}, tmp_path / "input.zip")
+    preparation = prepare_request(
+        request,
+        asset_map={"baseline.wav": str(baseline)},
+        fps=24,
+        width=4,
+        height=2,
+        sample_rate=48000,
+    )
+    preparation["input_bundle_sha256"] = bundle_digest(bundle)
+    preparation_path = tmp_path / "preparation.json"
+    preparation_path.write_text(json.dumps(preparation), encoding="utf-8")
+
+    compose_dir = tmp_path / "compose"
+    assert compose_main(
+        ["--preparation", str(preparation_path), "--generated", str(generated), "--input-bundle", str(bundle), "--out", str(compose_dir)]
+    ) == 0
+    composition = json.loads((compose_dir / "composition-manifest.json").read_text(encoding="utf-8"))
+    assert composition["source"]["sha256"] == hashlib.sha256(baseline.read_bytes()).hexdigest()
+    compose_manifest = json.loads((compose_dir / "manifest.json").read_text(encoding="utf-8"))
+    candidate = compose_dir / compose_manifest["outputs"][0]["path"]
+
+    verify_dir = tmp_path / "verify"
+    assert verify_main(
+        ["--preparation", str(preparation_path), "--composition", str(compose_dir / "composition-manifest.json"), "--candidate", str(candidate), "--input-bundle", str(bundle), "--out", str(verify_dir)]
+    ) == 0
+    verification = json.loads((verify_dir / "verification.json").read_text(encoding="utf-8"))
+    assert verification["exact_equality"]["audio"]["mismatch_count"] == 0
+    assert verification["preservation"]["status"] == "exact_delivery_domain"
+
+
 def _source_plus_timeline_material_request(material_id: str, material_asset: str, frame: int) -> object:
     return normalize_request(
         {
@@ -288,7 +345,6 @@ def _assert_composite_baseline_delivery(
     assert report["preservation"]["video_mismatches"] == 0
     assert report["preservation"]["audio_mismatches"] == 0
     assert {anchor["id"]: anchor["frame"] for anchor in report["exact_equality"]["anchors"]} == {
-        "source": 0,
         material_id: frame,
     }
 

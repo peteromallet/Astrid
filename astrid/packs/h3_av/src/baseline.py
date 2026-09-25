@@ -88,6 +88,10 @@ def render_timeline_baseline(
                     path = primary_source.resolve()
                 if not path.is_file() or _hash(path) != member.get("sha256"):
                     raise BaselineError(f"baseline asset {asset!r} failed identity check")
+                if item["modality"] == "image":
+                    # Still timeline members are restored by exact keyframe
+                    # composition, not decoded as video or audio ranges.
+                    continue
                 start, end = item["resolved_range"]
                 at = item["resolved_at"]["value"]
                 if item["modality"] == "video":

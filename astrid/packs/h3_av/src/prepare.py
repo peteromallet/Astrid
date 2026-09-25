@@ -311,7 +311,8 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
     for item in media:
         at = int(item.get("resolved_at", {}).get("value", 0)) if item["role"] == "timeline" else 0
         if item["role"] == "timeline":
-            anchors.append({"id": item["occurrence_id"], "frame": at, "mode": "hard" if item.get("hard") else "soft", "latent_pin": item.get("latent_pin", False)})
+            if item.get("modality") == "image":
+                anchors.append({"id": item["occurrence_id"], "frame": at, "mode": "hard" if item.get("hard") else "soft", "latent_pin": item.get("latent_pin", False), "modality": "image"})
             if item.get("modality") in {"video", "audio"}:
                 video_range, audio_range = _baseline_interval(item, frames=frames, samples=samples, fps=fps, sample_rate=sample_rate)
                 if item.get("modality") == "video":

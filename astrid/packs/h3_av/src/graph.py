@@ -463,14 +463,23 @@ def require_supported_source_timeline(request: H3Request) -> None:
 
 
 def _anchors(artifact: Mapping[str, Any], request: H3Request) -> list[dict[str, Any]]:
+    image_timeline_ids = {
+        str(item.get("id", item["occurrence_id"]))
+        for item in _timeline_items(request)
+        if item.get("modality") == "image"
+    }
     supplied = artifact.get("anchors")
     if supplied is not None:
         if not isinstance(supplied, Sequence) or isinstance(supplied, (str, bytes)):
             raise GraphBindingError("prepared anchors must be an array")
-        return [dict(_mapping(item, f"anchors[{index}]")) for index, item in enumerate(supplied)]
+        return [
+            anchor
+            for index, item in enumerate(supplied)
+            if str((anchor := dict(_mapping(item, f"anchors[{index}]"))).get("id")) in image_timeline_ids
+        ]
     result: list[dict[str, Any]] = []
     for item in _timeline_items(request):
-        if item.get("modality") not in {"image", "video"}:
+        if item.get("modality") != "image":
             continue
         result.append(
             {

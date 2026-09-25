@@ -248,9 +248,31 @@ def resolve_preparation_assets(
     }
 
 
+def primary_baseline_asset(preparation: Mapping[str, Any]) -> str | None:
+    """Return the primary asset named by the prepared baseline identity."""
+
+    artifact = preparation.get("prepared_av_mask")
+    mapping = artifact.get("mapping") if isinstance(artifact, Mapping) else None
+    identity = mapping.get("baseline_identity") if isinstance(mapping, Mapping) else None
+    if not isinstance(identity, Mapping) or identity.get("kind") == "none":
+        return None
+    members = identity.get("members")
+    occurrence = identity.get("primary_occurrence")
+    if not isinstance(members, list) or not isinstance(occurrence, str):
+        raise PreparationError("prepared baseline identity has no primary managed asset")
+    primary = [
+        member for member in members
+        if isinstance(member, Mapping) and member.get("occurrence_id") == occurrence
+    ]
+    if len(primary) != 1 or not isinstance(primary[0].get("asset"), str):
+        raise PreparationError("prepared baseline identity has no primary managed asset")
+    return str(primary[0]["asset"])
+
+
 __all__ = [
     "build_input_bundle",
     "bundle_digest",
     "materialize_input_bundle",
+    "primary_baseline_asset",
     "resolve_preparation_assets",
 ]

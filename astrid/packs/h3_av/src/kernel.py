@@ -205,6 +205,11 @@ def classify_anchors(
     seen_ids: set[str] = set()
 
     for index, raw in enumerate(anchors):
+        # Only still-image timeline members describe visual keyframes. Audio
+        # and video timeline members remain baseline material for composition.
+        modality = raw.get("modality")
+        if modality is not None and modality != "image":
+            continue
         anchor_id = str(raw.get("id", f"anchor-{index}"))
         if anchor_id in seen_ids:
             raise H3KernelContractError(f"duplicate anchor id {anchor_id!r}")

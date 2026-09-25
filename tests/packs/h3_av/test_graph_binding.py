@@ -15,13 +15,13 @@ from astrid.packs.h3_av.src.graph import (
     build_h3_graph_binding,
     validate_h3_graph_binding,
 )
-from astrid.packs.h3_av.src.kernel import H3KernelContractError, validate_final_sampler_state
+from astrid.packs.h3_av.src.kernel import H3KernelContractError, classify_anchors, validate_final_sampler_state
 from astrid.packs.h3_av.src.prepare import prepare_request
 from astrid.packs.h3_av.src.request import normalize_request
 from tests.packs.h3_av.test_request_contract import FIXTURE_DIGESTS, FIXTURES
 
 
-def _request(*, source: bool = True, mixed_refs: bool = True, edits: bool = False):
+def _request(*, source: bool = True, mixed_refs: bool = True, edits: bool = False, extra_timeline_images: int = 0):
     media: list[dict[str, object]] = []
     if source:
         media.append(
@@ -37,6 +37,16 @@ def _request(*, source: bool = True, mixed_refs: bool = True, edits: bool = Fals
                     {"stream": "video", "during": [3, 6], "mask": {"full_frame": True}, "guides": ["picture"]},
                     {"stream": "audio", "during": [3, 6], "text": "The exact line.", "guides": ["voice"]},
                 ] if edits else [],
+            }
+        )
+    for index in range(extra_timeline_images):
+        media.append(
+            {
+                "id": f"anchor-{index + 2}",
+                "asset": f"anchor-{index + 2}.png",
+                "role": "timeline",
+                "modality": "image",
+                "at": {"frame": index + 3},
             }
         )
     media.extend(
@@ -356,6 +366,18 @@ def test_audio_only_preserves_video_mask_and_still_emits_both_streams() -> None:
     assert any(edge["to_node"] == "c3-av-mask" and edge["to_input"] == "audio_mask" for edge in binding["executable_graph"]["edges"])
 
 
+def test_anchor_classifier_only_accepts_image_timeline_members() -> None:
+    classified = classify_anchors(
+        [
+            {"id": "still", "frame": 2, "modality": "image"},
+            {"id": "soundtrack", "frame": 0, "modality": "audio"},
+            {"id": "clip", "frame": 0, "modality": "video"},
+        ],
+        latent_steps=7,
+    )
+    assert [item["id"] for item in classified] == ["still"]
+
+
 def test_fixture_c_audio_timeline_channel_edits_and_voice_reference_compile(tmp_path: Path) -> None:
     request = normalize_request(FIXTURES["C"]())
     assets: dict[str, str] = {}
@@ -367,6 +389,7 @@ def test_fixture_c_audio_timeline_channel_edits_and_voice_reference_compile(tmp_
 
     preparation = prepare_request(request, asset_map=assets, width=32, height=32)
     artifact = preparation["prepared_av_mask"]
+    assert artifact["anchors"] == []
     assert artifact["video"]["shape"] == {"frames": 360, "height": 32, "width": 32}
     from astrid.packs.h3_av.src.masks import load_prepared_av_mask
 
@@ -388,6 +411,9 @@ def test_fixture_c_audio_timeline_channel_edits_and_voice_reference_compile(tmp_
     }
     assert ("c3-timeline-audio-0", "0", "110", "ref_audios.ref_audio_0") in edges
     assert ("c3-reference-audio-0", "0", "110", "ref_audios.ref_audio_1") in edges
+    assert not any(to_node == "c3-soft-anchors" and to_input.startswith("keyframe_image_") for _, _, to_node, to_input in edges)
+    assert not any(to_node == "c3-hard-anchors" and to_input.startswith("keyframe_image_") for _, _, to_node, to_input in edges)
+    assert not any(node["class_type"] == "MiniMaxH3CustomKeyframes" for node in binding["executable_graph"]["nodes"])
     with zipfile.ZipFile(compiled["managed_assets"]["path"]) as archive:
         manifest = json.loads(archive.read("manifest.json"))
     assert {row["binding"] for row in manifest["assets"]} >= {"source-c.wav", "voice-c.wav"}
@@ -462,12 +488,13 @@ def test_missing_audio_stream_fails_before_graph_admission() -> None:
 
 def test_protected_and_colliding_hard_anchors_fail_without_shifting() -> None:
     request = _request()
-    for anchors, message in (
-        ([{"id": "source", "frame": 0, "mode": "hard"}], "protected"),
-            ([{"id": "source", "frame": 1, "mode": "hard"}], "cell_spans_multiple_delivery_frames"),
-            ([{"id": "source", "frame": 1, "mode": "hard"}, {"id": "anchor", "frame": 2, "mode": "hard"}], "hard_anchor_cell_collision"),
-    ):
-        prepared = _prepared(request, anchors=anchors)
+    cases = (
+        (request, [{"id": "anchor", "frame": 0, "mode": "hard"}], "protected"),
+        (request, [{"id": "anchor", "frame": 1, "mode": "hard"}], "cell_spans_multiple_delivery_frames"),
+        (_request(extra_timeline_images=1), [{"id": "anchor", "frame": 1, "mode": "hard"}, {"id": "anchor-2", "frame": 2, "mode": "hard"}], "hard_anchor_cell_collision"),
+    )
+    for case_request, anchors, message in cases:
+        prepared = _prepared(case_request, anchors=anchors)
         if message == "protected":
             prepared["prepared_input"]["protected_cells"] = [0]
         with pytest.raises(GraphBindingError, match=message):
@@ -475,7 +502,7 @@ def test_protected_and_colliding_hard_anchors_fail_without_shifting() -> None:
 
 
 def test_late_sampler_latent_overwrite_is_rejected_by_t3_validator() -> None:
-    binding = build_h3_graph_binding(_prepared(_request(), anchors=[{"id": "source", "frame": 0, "mode": "hard"}]))
+    binding = build_h3_graph_binding(_prepared(_request(), anchors=[{"id": "anchor", "frame": 0, "mode": "hard"}]))
     state = json.loads(json.dumps(binding["sampler_state"]))
     state["sampler_sockets"]["latent_image"] = "stale-before-mask.out"
     with pytest.raises(H3KernelContractError, match="final latent mutation"):

@@ -254,6 +254,11 @@ def primary_baseline_asset(preparation: Mapping[str, Any]) -> str | None:
     artifact = preparation.get("prepared_av_mask")
     mapping = artifact.get("mapping") if isinstance(artifact, Mapping) else None
     identity = mapping.get("baseline_identity") if isinstance(mapping, Mapping) else None
+    if not isinstance(identity, Mapping):
+        request = preparation.get("request")
+        source = request.get("source") if isinstance(request, Mapping) else None
+        asset = source.get("asset") if isinstance(source, Mapping) else None
+        return str(asset) if isinstance(asset, str) else None
     if not isinstance(identity, Mapping) or identity.get("kind") == "none":
         return None
     members = identity.get("members")

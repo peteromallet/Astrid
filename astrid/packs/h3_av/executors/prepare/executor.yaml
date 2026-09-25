@@ -15,6 +15,10 @@ inputs:
     type: file
     required: false
     description: Optional JSON object mapping managed asset ids to local files.
+  - name: input_bundle
+    type: file
+    required: false
+    description: Hash-verified managed bundle of request-declared input assets.
   - name: fps
     type: number
     required: false
@@ -57,6 +61,9 @@ command:
   input_args:
     - input: asset_map
       flag: "--asset-map"
+      optional: true
+    - input: input_bundle
+      flag: "--input-bundle"
       optional: true
     - input: fps
       flag: "--fps"

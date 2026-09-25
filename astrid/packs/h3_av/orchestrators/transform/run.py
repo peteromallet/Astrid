@@ -592,18 +592,22 @@ def run_transform(args: argparse.Namespace) -> dict[str, Any]:
         asset_map,
         root / "00-input" / "h3-input-bundle.zip",
     )
-    input_bundle_sha256 = bundle_digest(input_bundle_path)
     with AstridClient.open_from_launcher() as client:
+        input_bundle_descriptor = _import_runtime_file(
+            client, project=args.project, path=input_bundle_path, filename="h3-input-bundle.zip"
+        )
         prepared = _invoke(
             client, "h3_av.prepare",
-            inputs={"request": str(args.request), "asset_map": str(args.asset_map)},
+            inputs={"request": str(args.request), "input_bundle": input_bundle_descriptor},
             out=root / "01-prepare", project=args.project,
         )
         preparation_path, preparation_row = _materialize_output(client, prepared, "preparation", root / "01-prepare")
         preparation = _json_mapping(preparation_path)
-        preparation["input_bundle_sha256"] = input_bundle_sha256
         compiled = _invoke(
-            client, "h3_av.compile", inputs={"preparation": _descriptor(preparation_row, filename="preparation.json")},
+            client, "h3_av.compile", inputs={
+                "preparation": _descriptor(preparation_row, filename="preparation.json"),
+                "input_bundle": input_bundle_descriptor,
+            },
             out=root / "02-compile", project=args.project,
         )
         compilation_path, compilation_row = _materialize_output(client, compiled, "compilation", root / "02-compile")
@@ -675,9 +679,6 @@ def run_transform(args: argparse.Namespace) -> dict[str, Any]:
             source_descriptor = _import_runtime_file(
                 client, project=args.project, path=source_path, filename=source_path.name
             )
-        input_bundle_descriptor = _import_runtime_file(
-            client, project=args.project, path=input_bundle_path, filename="h3-input-bundle.zip"
-        )
         generated_descriptor = _import_runtime_file(
             client,
             project=args.project,

@@ -16,6 +16,7 @@ from astrid.packs.h3_av.src.compile import compile_preparation
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compile a prepared H3 request.")
     parser.add_argument("--preparation", type=Path, required=True)
+    parser.add_argument("--input-bundle", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     return parser
 
@@ -32,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     preparation = json.loads(args.preparation.read_text(encoding="utf-8"))
     if not isinstance(preparation, dict):
         raise ValueError("preparation must be a JSON object")
-    result = compile_preparation(preparation, out_dir=args.out)
+    result = compile_preparation(preparation, out_dir=args.out, input_bundle=args.input_bundle)
     if "workflow" not in result:
         # The generalized v2 boundary emits one shared graph manifest rather
         # than selecting a workflow-per-fixture trio.  The graph binding and

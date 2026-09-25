@@ -11,12 +11,14 @@ from astrid.core.pack.entrypoint import guard_canonical_entrypoint, run_pack_mai
 
 from astrid.packs.h3_av.src.prepare import prepare_request, write_preparation
 from astrid.packs.h3_av.src.request import load_request
+from astrid.packs.h3_av.src.input_bundle import bundle_digest, materialize_input_bundle
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare an H3 audiovisual request.")
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--asset-map", type=Path)
+    parser.add_argument("--input-bundle", type=Path)
     parser.add_argument("--fps", type=float, default=24.0)
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=576)
@@ -42,6 +44,13 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(raw, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in raw.items()):
             raise ValueError("asset map must be a JSON object of string ids to string paths")
         asset_map = raw
+    if args.input_bundle:
+        asset_map, identities = materialize_input_bundle(
+            request, args.input_bundle, args.out.parent / ".input-assets"
+        )
+    else:
+        asset_map = None
+        identities = None
     manifest = prepare_request(
         request,
         asset_map=asset_map,
@@ -52,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         target_model_dimensions=(json.loads(args.target_model_dimensions.read_text(encoding="utf-8")) if args.target_model_dimensions else None),
         channel_layout=args.channel_layout,
     )
+    if identities is not None:
+        manifest["input_bundle_sha256"] = bundle_digest(args.input_bundle)
     write_preparation(args.out, manifest)
     write_manifest(
         result_manifest_path,

@@ -70,6 +70,42 @@ def test_bundle_relocation_does_not_reopen_caller_path(tmp_path: Path) -> None:
     assert direct["managed_assets"]["sha256"] == relocated["managed_assets"]["sha256"]
 
 
+def test_public_prepare_and_compile_use_staged_bundle_after_caller_asset_changes(tmp_path: Path) -> None:
+    from astrid.packs.h3_av.executors.compile.run import main as compile_main
+    from astrid.packs.h3_av.executors.prepare.run import main as prepare_main
+
+    request = _request()
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request.value), encoding="utf-8")
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    source = caller / "source.mp4"
+    source.write_bytes(b"managed original source")
+    bundle = build_input_bundle(request, {"source": source}, tmp_path / "managed.zip")
+
+    preparation_path = tmp_path / "prepare" / "preparation.json"
+    assert prepare_main([
+        "--request", str(request_path), "--input-bundle", str(bundle),
+        "--out", str(preparation_path),
+    ]) == 0
+    source.write_bytes(b"caller asset changed after staging")
+
+    compile_dir = tmp_path / "compile"
+    assert compile_main([
+        "--preparation", str(preparation_path), "--input-bundle", str(bundle),
+        "--out", str(compile_dir),
+    ]) == 0
+    compiled = json.loads((compile_dir / "compilation.json").read_text(encoding="utf-8"))
+    with zipfile.ZipFile(compile_dir / "managed-assets.zip") as archive:
+        source_members = [
+            name for name in archive.namelist()
+            if name.endswith("source.mp4")
+        ]
+        assert len(source_members) == 1
+        assert archive.read(source_members[0]) == b"managed original source"
+    assert compiled["workflow_inputs"]["source_video"] == Path(source_members[0]).name
+
+
 def _normalized_v2_request():
     return normalize_request(
         {

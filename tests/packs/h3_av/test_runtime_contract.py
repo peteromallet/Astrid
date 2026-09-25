@@ -124,6 +124,10 @@ def test_transform_reaches_default_canonical_sdk_before_prepare(monkeypatch, tmp
 
     monkeypatch.setattr(transform, "build_input_bundle", build_bundle)
     monkeypatch.setattr(transform, "bundle_digest", lambda _path: "fixture-digest")
+    monkeypatch.setattr(
+        transform, "_import_runtime_file",
+        lambda *_args, **_kwargs: {"object_id": "managed-bundle", "filename": "h3-input-bundle.zip"},
+    )
     args = SimpleNamespace(
         out=tmp_path / "out", dry_run=False, execution_request=None,
         request=tmp_path / "request.json", asset_map=tmp_path / "assets.json",
@@ -362,14 +366,20 @@ def test_serialized_prepare_compile_canonical_run_compose_verify_with_bundle_ass
         json.dumps({"source": str(source), "look": str(reference)}), encoding="utf-8"
     )
 
-    assert prepare_main(["--request", str(request_path), "--asset-map", str(asset_map_path), "--out", str(preparation_path)]) == 0
+    assert prepare_main([
+        "--request", str(request_path), "--input-bundle", str(input_bundle),
+        "--out", str(preparation_path),
+    ]) == 0
     preparation = json.loads(preparation_path.read_text(encoding="utf-8"))
     preparation["input_bundle_sha256"] = bundle_digest(input_bundle)
     preparation["provenance"] = {"request_digest": preparation["request_digest"], "assets": preparation["assets"]}
     preparation_path.write_text(json.dumps(preparation), encoding="utf-8")
 
     compilation_dir = tmp_path / "compile"
-    assert compile_main(["--preparation", str(preparation_path), "--out", str(compilation_dir)]) == 0
+    assert compile_main([
+        "--preparation", str(preparation_path), "--input-bundle", str(input_bundle),
+        "--out", str(compilation_dir),
+    ]) == 0
     compilation = json.loads((compilation_dir / "compilation.json").read_text(encoding="utf-8"))
     assert compilation["output_contract"]["graph_outputs"][0]["modality"] == "video"
 

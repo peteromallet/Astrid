@@ -186,7 +186,7 @@ def _verify_exact_candidate(
     protected_video = sum(1 for frame in permissions_video for row in frame for value in row if value == 0)
     protected_audio = sum(1 for channel in permissions_audio for value in channel if value == 0)
     anchors = _anchor_items(preparation, artifact)
-    if source_path is None and (protected_video or protected_audio):
+    if not baseline_identity.get("members") and source_path is None and (protected_video or protected_audio):
         raise VerificationError("exact protected verification requires an authoritative source baseline")
     composition_method = composition.get("composition")
     if not isinstance(composition_method, Mapping):
@@ -226,12 +226,19 @@ def _verify_exact_candidate(
                 str(item.get("asset")) == source_asset_for_anchors and item.get("modality") == "video"
                 for _anchor, item in anchors
             )
-            if source_path is not None and (protected_video or source_video_anchor):
-                frame_offset, _ = _exact_offsets(preparation, fps, sample_rate)
-                _decode_exact_video(source_path, source_video, frames=frames, width=width, height=height, fps=fps, start_frame=frame_offset)
-            if source_path is not None and protected_audio:
-                _, sample_offset = _exact_offsets(preparation, fps, sample_rate)
-                _decode_exact_audio(source_path, source_audio, samples=samples, sample_rate=sample_rate, channels=channels, start_sample=sample_offset)
+            if baseline_identity.get("members"):
+                from .baseline import render_timeline_baseline
+
+                render_timeline_baseline(preparation, artifact, root, primary_source=source_path)
+                source_video = root / "baseline.rgba"
+                source_audio = root / "baseline.s32le"
+            else:
+                if source_path is not None and (protected_video or source_video_anchor):
+                    frame_offset, _ = _exact_offsets(preparation, fps, sample_rate)
+                    _decode_exact_video(source_path, source_video, frames=frames, width=width, height=height, fps=fps, start_frame=frame_offset)
+                if source_path is not None and protected_audio:
+                    _, sample_offset = _exact_offsets(preparation, fps, sample_rate)
+                    _decode_exact_audio(source_path, source_audio, samples=samples, sample_rate=sample_rate, channels=channels, start_sample=sample_offset)
         except Exception as exc:  # noqa: BLE001 - fail-closed verification boundary
             raise VerificationError("authoritative source media is missing, short, corrupt, or has the wrong decoded format") from exc
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
@@ -15,7 +16,7 @@ from astrid.packs.vibecomfy.asset_manifest import (
     build_asset_manifest,
 )
 
-from .graph import GraphBindingError, build_h3_graph_binding, require_supported_source_timeline, validate_h3_graph_binding
+from .graph import GraphBindingError, _branch, build_h3_graph_binding, require_supported_source_timeline, validate_h3_graph_binding
 from .masks import PreparedAVMaskError, load_prepared_av_mask
 from .output_contract import build_output_contract, validate_output_contract
 from .request import H3Request, read_prepared_request
@@ -602,17 +603,63 @@ def _compile_prepared_v2(preparation: Mapping[str, Any], destination: Path) -> d
         from .masks import load_prepared_av_mask
 
         prepared = load_prepared_av_mask(prepared_path)
+        import numpy as np
+        from .kernel import temporal_cells
+
+        frames, height, width = prepared.video_shape
+        native_frames = max(5, frames)
+        while native_frames % 17 != 5:
+            native_frames += 1
+        latent_steps = 2 if native_frames <= 5 else ((native_frames - 5) // 17) * 5 + 2
+        latent_height, latent_width = height // 16, width // 16
+        if min(latent_height, latent_width) < 1 or height % 16 or width % 16:
+            raise CompilationError("H3 video mask geometry must be divisible by 16")
+        flat = np.unpackbits(np.frombuffer(prepared.video_payload, dtype=np.uint8), bitorder="big")
+        delivery = flat[:frames * height * width].reshape((frames, height, width))
+        cells = np.zeros((latent_steps, latent_height, latent_width), dtype=np.uint8)
+        for cell in temporal_cells(latent_steps):
+            start, end = cell["start"], min(cell["end"], frames)
+            if start >= end:
+                continue
+            spatial = delivery[start:end].max(axis=0)
+            for row in range(latent_height):
+                y0, y1 = row * height // latent_height, (row + 1) * height // latent_height
+                for column in range(latent_width):
+                    x0, x1 = column * width // latent_width, (column + 1) * width // latent_width
+                    cells[cell["cell"], row, column] = spatial[y0:y1, x0:x1].max()
         mask_paths["prepared_video_mask"] = _write_mask_video(
-            destination / "prepared-video-mask.mkv",
-            prepared.video_delivery(),
-            rate=24,
+            destination / "prepared-video-mask.mkv", cells.tolist(), rate=24,
         )
+        native_audio_ticks = round(native_frames * 40 / 24)
+        audio_ticks = list(prepared.audio_sampling_envelope())
+        if len(audio_ticks) > native_audio_ticks:
+            raise CompilationError("prepared audio mask exceeds native H3 audio grid")
+        audio_ticks.extend([0] * (native_audio_ticks - len(audio_ticks)))
         mask_paths["prepared_audio_mask"] = _write_mask_video(
             destination / "prepared-audio-mask.mkv",
-            tuple(((value,),) for value in prepared.audio_sampling_envelope()),
+            tuple(((value,),) for value in audio_ticks),
             rate=40,
         )
     assets.update(mask_paths)
+    baseline_binding = None
+    if _branch(request) == "source_backed_v2v":
+        from .baseline import BaselineError, encode_native_baseline, render_timeline_baseline
+
+        native_frames = max(5, prepared.video_shape[0])
+        while native_frames % 17 != 5:
+            native_frames += 1
+        try:
+            with tempfile.TemporaryDirectory(prefix="h3-delivery-baseline-") as temp:
+                video_raw, audio_raw = render_timeline_baseline(
+                    preparation, prepared, Path(temp), native_frames=native_frames,
+                )
+                baseline_binding = "prepared_source_baseline"
+                assets[baseline_binding] = encode_native_baseline(
+                    video_raw, audio_raw, destination / "prepared-source-baseline.mkv",
+                    frames=native_frames, width=prepared.video_shape[2], height=prepared.video_shape[1],
+                )
+        except BaselineError as exc:
+            raise CompilationError(str(exc)) from exc
     # These are compilation provenance, not public graph inputs.  Keep their
     # witnesses in graph_binding/prepared_artifact metadata below.
     workflow_inputs: dict[str, Any] = {}
@@ -633,6 +680,7 @@ def _compile_prepared_v2(preparation: Mapping[str, Any], destination: Path) -> d
             preparation,
             asset_members=asset_members,
             mask_members=mask_members,
+            baseline_member=members.get(baseline_binding) if baseline_binding else None,
         )
     except GraphBindingError as exc:
         raise CompilationError(str(exc)) from exc

@@ -67,8 +67,8 @@ def _prepared(tmp_path: Path, *, source: bool = True, edits: bool = False) -> tu
             request,
             asset_map=asset_map,
             width=32,
-            height=18,
-            target_model_dimensions={"frames": 7, "height": 5, "width": 8},
+            height=32,
+            target_model_dimensions={"frames": 107, "height": 2, "width": 2},
         ),
         asset_dir,
     )
@@ -118,7 +118,7 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
 
     binding = build_h3_graph_binding(reloaded_preparation)
     state = binding["sampler_state"]
-    assert binding["branch"] == "source_backed_v2v"
+    assert binding["branch"] == "extension_context"
     assert binding["prepared_artifact_digest"] == artifact.artifact_digest
     assert len(binding["inputs"]["references"]) == 4
     assert {item["modality"] for item in binding["inputs"]["references"]} == {"image", "video", "audio"}
@@ -171,14 +171,10 @@ def test_real_t2_artifact_reloads_into_t4_graph_and_relocates_as_one_bundle(tmp_
 
 @pytest.mark.parametrize(
     ("source", "edits", "expected"),
-    [(True, False, "source_backed_v2v"), (True, True, "extension_context")],
+    [(True, False, "extension_context"), (True, True, "source_backed_v2v")],
 )
 def test_real_preparation_exposes_all_internal_branches(tmp_path: Path, source: bool, edits: bool, expected: str) -> None:
     preparation, _ = _prepared(tmp_path, source=source, edits=edits)
-    if edits:
-        with pytest.raises(GraphBindingError, match="unsupported in-place source edits"):
-            build_h3_graph_binding(preparation)
-        return
     binding = build_h3_graph_binding(preparation)
     assert binding["branch"] == expected
     assert binding["shared_components"]["loaders"] == "shared_h3_av_media_loaders"

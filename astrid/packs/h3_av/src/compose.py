@@ -562,7 +562,7 @@ def _compose_exact_media(
     protected_audio = sum(1 for channel in audio_permissions for value in channel if value == 0)
     editable_video = frames * height * width - protected_video
     editable_audio = channels * samples - protected_audio
-    if source is None and (protected_video or protected_audio):
+    if not baseline_identity.get("members") and (protected_video or protected_audio):
         raise CompositionError("exact protected composition requires an authoritative source baseline")
     if source is not None and artifact.source_baseline_digest:
         if artifact.source_baseline_digest.removeprefix("sha256:") != _sha256(source):
@@ -581,15 +581,25 @@ def _compose_exact_media(
         generated_audio_raw = temp_dir / "generated-audio.s32le"
         composed_video_raw = temp_dir / "composed-video.rgba"
         composed_audio_raw = temp_dir / "composed-audio.s32le"
-        source_frame_offset, source_sample_offset = _exact_offsets(preparation, fps, sample_rate)
+        if baseline_identity.get("members"):
+            from .baseline import BaselineError, render_timeline_baseline
+
+            try:
+                render_timeline_baseline(preparation, artifact, temp_dir, primary_source=source)
+            except (BaselineError, CompositionError) as exc:
+                raise CompositionError(f"could not resolve delivery-clock baseline: {exc}") from exc
+            source_video_raw = temp_dir / "baseline.rgba"
+            source_audio_raw = temp_dir / "baseline.s32le"
         source_asset = _primary_baseline_asset(preparation, artifact)
         anchor_needs_source_video = any(
             str(item.get("asset")) == source_asset and item.get("modality") == "video"
             for _anchor, item in _anchor_items(preparation, artifact)
         )
-        if source is not None and (protected_video or anchor_needs_source_video):
+        if not baseline_identity.get("members") and source is not None and (protected_video or anchor_needs_source_video):
+            source_frame_offset, _ = _exact_offsets(preparation, fps, sample_rate)
             _decode_exact_video(source, source_video_raw, frames=frames, width=width, height=height, fps=fps, start_frame=source_frame_offset)
-        if source is not None and protected_audio:
+        if not baseline_identity.get("members") and source is not None and protected_audio:
+            _, source_sample_offset = _exact_offsets(preparation, fps, sample_rate)
             _decode_exact_audio(source, source_audio_raw, samples=samples, sample_rate=sample_rate, channels=channels, start_sample=source_sample_offset)
         if generated_video is not None:
             _decode_exact_video(generated_video, generated_video_raw, frames=frames, width=width, height=height, fps=fps)

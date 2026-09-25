@@ -156,19 +156,20 @@ def _real_prepared_for_compile(tmp_path: Path) -> dict[str, object]:
         request,
         asset_map=asset_map,
         width=32,
-        height=18,
-        target_model_dimensions={"frames": 7, "height": 5, "width": 8},
+        height=32,
+        target_model_dimensions={"frames": 107, "height": 2, "width": 2},
     )
 
 
-def test_mixed_media_source_edits_do_not_bind_extension_output() -> None:
+def test_mixed_media_source_edits_bind_full_source_sampler() -> None:
     request = _request(edits=True)
     prepared = _prepared(
         request,
         anchors=[{"id": "source", "frame": 0, "mode": "hard"}, {"id": "anchor", "frame": 2, "mode": "soft"}],
     )
-    with pytest.raises(GraphBindingError, match="unsupported in-place source edits"):
-        build_h3_graph_binding(prepared)
+    binding = build_h3_graph_binding(prepared)
+    assert binding["branch"] == "source_backed_v2v"
+    assert binding["executable_graph"]["outputs"][0]["node_id"] == "992"
 
 
 def test_fixture_a_source_free_uses_one_native_conditioner_sampler_and_mux() -> None:
@@ -272,7 +273,7 @@ def test_four_images_bind_through_the_preserved_source_backed_branch() -> None:
         (edge["from_node"], edge["from_output"], edge["to_node"], edge["to_input"])
         for edge in binding["executable_graph"]["edges"]
     }
-    assert binding["branch"] == "source_backed_v2v"
+    assert binding["branch"] == "extension_context"
     assert ("c3-reference-image-3", "0", "110", "ref_images.ref_image_3") in edges
     assert ("103", "0", "c3-av-mask", "latent") in edges
     assert binding["executable_graph"]["final_sampler"]["output"] == "946"
@@ -364,9 +365,9 @@ def test_fixture_c_audio_timeline_channel_edits_and_voice_reference_compile(tmp_
         path.write_bytes(asset.encode("utf-8"))
         assets[asset] = str(path)
 
-    preparation = prepare_request(request, asset_map=assets, width=8, height=8)
+    preparation = prepare_request(request, asset_map=assets, width=32, height=32)
     artifact = preparation["prepared_av_mask"]
-    assert artifact["video"]["shape"] == {"frames": 360, "height": 8, "width": 8}
+    assert artifact["video"]["shape"] == {"frames": 360, "height": 32, "width": 32}
     from astrid.packs.h3_av.src.masks import load_prepared_av_mask
 
     prepared_mask = load_prepared_av_mask(artifact)
@@ -422,8 +423,9 @@ def test_checked_in_anchor_fixtures_prepare_and_compile_without_latent_reinterpr
     assert all(anchor["exact_final_restoration"] for anchor in classified)
     assert any(anchor["classification"] == "restoration_only" for anchor in classified)
     if label in {"E", "X"}:
-        with pytest.raises(CompilationError, match="unsupported (in-place source edits|source placement/range)"):
-            compile_preparation(preparation, out_dir=tmp_path / "compiled")
+        binding = build_h3_graph_binding(preparation)
+        assert binding["branch"] == "source_backed_v2v"
+        assert binding["executable_graph"]["outputs"][0]["node_id"] == "992"
         return
     compiled = compile_preparation(preparation, out_dir=tmp_path / "compiled")
     binding = json.loads(Path(compiled["graph_binding"]["path"]).read_text(encoding="utf-8"))

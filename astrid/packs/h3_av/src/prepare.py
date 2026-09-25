@@ -178,6 +178,26 @@ def _load_mask_json(path: Path, *, height: int, width: int) -> list[list[list[in
     return frames
 
 
+def _load_mask_png(path: Path, *, height: int, width: int) -> list[list[list[int]]]:
+    """Accept one exact binary still mask without resampling its pixels."""
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(path) as image:
+            if image.format != "PNG" or image.size != (width, height):
+                raise PreparationError(f"mask asset {path} must be a {width}x{height} PNG")
+            if "A" in image.getbands() and image.getchannel("A").getextrema() != (255, 255):
+                raise PreparationError(f"mask asset {path} has ambiguous transparency")
+            gray = image.convert("L")
+            pixels = gray.tobytes()
+    except (OSError, UnidentifiedImageError) as exc:
+        raise PreparationError(f"mask asset {path} could not be decoded as PNG") from exc
+    if any(value not in (0, 255) for value in pixels):
+        raise PreparationError(f"mask asset {path} must be binary black/white")
+    return [[[int(pixels[row * width + column] == 255) for column in range(width)] for row in range(height)]]
+
+
 def _merge_int_ranges(ranges: list[list[int]], length: int) -> list[list[int]]:
     for start, end in ranges:
         if type(start) is not int or type(end) is not int or start < 0 or end <= start or end > length:
@@ -320,9 +340,14 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                     moving = None
                     if raster is None:
                         mask_path = assets.get(str(mask["asset"]))
-                        if mask_path is None or mask_path.suffix.lower() != ".json":
-                            raise PreparationError("supplied masks must be resolved binary JSON rasters at T2")
-                        moving = _load_mask_json(mask_path, height=height, width=width)
+                        if mask_path is None:
+                            raise PreparationError("supplied mask asset is unresolved")
+                        if mask_path.suffix.lower() == ".json":
+                            moving = _load_mask_json(mask_path, height=height, width=width)
+                        elif mask_path.suffix.lower() == ".png":
+                            moving = _load_mask_png(mask_path, height=height, width=width)
+                        else:
+                            raise PreparationError("supplied masks must be binary JSON rasters or PNG stills")
                     for offset, frame in enumerate(range(start, end)):
                         current = moving[offset] if moving and len(moving) > 1 else (moving[0] if moving else raster)
                         if moving and len(moving) not in {1, end - start}:
@@ -345,24 +370,13 @@ def _edit_ranges(request: H3Request, *, frames: int, samples: int, fps: Fraction
                     audio_coverage.append([start, end])
     if has_baseline:
         video_coverage = _merge_int_ranges(baseline_video, frames) if has_video_baseline else [[0, frames]]
-        if has_audio_timeline:
-            audio_coverage = _merge_int_ranges(baseline_audio, samples)
-        else:
-            audio_coverage = _merge_int_ranges(baseline_audio_from_video, samples) if baseline_audio_from_video else [[0, samples]]
-        video_generated = any(
-            edit.get("stream") == "video" and edit.get("action") == "generate"
-            for item in media if item["role"] == "timeline" for edit in item.get("edit", [])
-        )
-        audio_generated = any(
-            edit.get("stream") == "audio" and edit.get("action") == "generate"
-            for item in media if item["role"] == "timeline" for edit in item.get("edit", [])
-        )
-        if has_video_baseline and video_coverage != [[0, frames]] and not video_generated:
-            raise PreparationError("video baseline is short and no generated video interval covers the remainder")
+        audio_members = baseline_audio_from_video + baseline_audio
+        audio_coverage = _merge_int_ranges(audio_members, samples) if audio_members else [[0, samples]]
         if video_coverage != [[0, frames]] and not has_video_baseline:
             video_coverage = [[0, frames]]
-        if audio_coverage != [[0, samples]] and not audio_generated:
-            raise PreparationError("audio baseline is short and no generated audio interval covers the remainder")
+        # Uncovered delivery positions were initialized as generated above.
+        # They are explicit generation spans, including the tail of an ordinary
+        # continuation, rather than invented protected source samples.
     else:
         video_coverage = [[0, frames]]
         audio_coverage = [[0, samples]]

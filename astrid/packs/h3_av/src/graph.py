@@ -453,26 +453,13 @@ def _timeline_items(request: H3Request) -> list[Mapping[str, Any]]:
 
 
 def require_supported_source_timeline(request: H3Request) -> None:
-    """Reject source edits that the continuation graph cannot put on the delivery clock."""
+    """Keep only true unedited prefixes on the continuation branch."""
 
     for item in _timeline_items(request):
         if item.get("modality") != "video":
             continue
-        occurrence = str(item.get("id", item.get("occurrence_id", "video timeline")))
-        at = item.get("resolved_at", {}).get("value")
-        source_range = item.get("resolved_range")
-        if at != 0 or not isinstance(source_range, list) or source_range[0] != 0:
-            raise GraphBindingError(
-                f"video timeline {occurrence!r} has unsupported source placement/range: "
-                "the continuation loader starts at source and delivery zero; "
-                "an output-clock source baseline is required"
-            )
-        if any(edit.get("action") == "generate" for edit in item.get("edit", [])):
-            raise GraphBindingError(
-                f"video timeline {occurrence!r} has unsupported in-place source edits: "
-                "the current H3 output contains the original source prefix followed by "
-                "generated extension, so it cannot supply edited samples at delivery positions"
-            )
+        if not isinstance(item.get("resolved_range"), list) or not isinstance(item.get("resolved_at"), Mapping):
+            raise GraphBindingError("video timeline is missing resolved range or placement")
 
 
 def _anchors(artifact: Mapping[str, Any], request: H3Request) -> list[dict[str, Any]]:
@@ -574,8 +561,15 @@ def _branch(request: H3Request) -> str:
     has_source = any(item.get("modality") in {"video", "audio"} for item in timeline)
     if not has_source:
         return "source_free"
-    has_context = any(item.get("edit") for item in timeline)
-    return "extension_context" if has_context else "source_backed_v2v"
+    video = [item for item in timeline if item.get("modality") == "video"]
+    continuation = (
+        len(video) == 1
+        and all(item.get("modality") in {"video", "image"} for item in timeline)
+        and not video[0].get("edit")
+        and video[0]["resolved_at"]["value"] == 0
+        and video[0]["resolved_range"][0] == 0
+    )
+    return "extension_context" if continuation else "source_backed_v2v"
 
 
 def _lineage_item(node: str, output: str, kind: str, input_source: str | None) -> dict[str, str | None]:
@@ -759,6 +753,7 @@ def _materialize_executable_graph(
     anchors: Sequence[Mapping[str, Any]],
     audio_only: bool,
     geometry: Mapping[str, Any],
+    baseline_member: str | None,
 ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
     """Bind the request to one real H3 graph path and return its IR evidence."""
 
@@ -766,7 +761,7 @@ def _materialize_executable_graph(
     branch = _branch(request)
     source_items = _timeline_items(request)
     source = next((item for item in source_items if item.get("modality") == "video"), None)
-    source_member = _asset_member(str(source["asset"]), asset_members) if source is not None else None
+    source_member = (baseline_member if branch == "source_backed_v2v" else _asset_member(str(source["asset"]), asset_members)) if source is not None else None
 
     # Remove the packaged multi-extension fan-out and rebuild one public path.
     for target in ("946.extension_2", "946.extension_3", "946.extension_4", "946.extension_5", "946.extension_6"):
@@ -792,7 +787,7 @@ def _materialize_executable_graph(
     workflow.set_input("steps", int(settings.get("steps", workflow.inputs["steps"].value)))
     workflow.nodes["937"].inputs["sampler_name"] = str(settings.get("sampler", workflow.nodes["937"].inputs.get("sampler_name", "res_multistep")))
 
-    if branch in {"source_free", "audio_only"}:
+    if branch in {"source_free", "audio_only", "source_backed_v2v"}:
         for target in ("110.width", "110.height", "110.length"):
             _disconnect_target(workflow, target)
         native = geometry["native"]
@@ -841,7 +836,7 @@ def _materialize_executable_graph(
 
     conditioning_source = "110.0"
     soft = [item for item in anchors if item.get("classification") == "soft_conditioned"]
-    hard = [item for item in anchors if item.get("classification") == "hard_conditioned"]
+    hard = [item for item in anchors if item.get("classification") == "hard_conditioned" and (branch != "source_backed_v2v" or any(t.get("modality") == "image" and str(t.get("id", t.get("occurrence_id"))) == str(item["id"]) for t in source_items))]
     timeline_loaders: dict[str, tuple[str, str, str | None]] = {}
     for index, item in enumerate(source_items):
         binding = str(item["asset"])
@@ -864,6 +859,25 @@ def _materialize_executable_graph(
     for index, item in enumerate(audio_timeline):
         loader = timeline_loaders[str(item.get("id", item["occurrence_id"]))]
         workflow.connect(f"{loader[0]}.{loader[1]}", f"110.ref_audios.ref_audio_{index}")
+    if branch == "source_backed_v2v":
+        if baseline_member is None:
+            baseline_member = "prepared-source-baseline.mkv"
+        workflow.set_input("source_video", baseline_member)
+        _add_node(
+            workflow, "H3V2VGranularFractionalDenoise", "c3-full-source-v2v",
+            source_fps=24.0, mode="global", global_strength=0.0,
+            inside_strength=1.0, outside_strength=0.0, audio_strength=0.0,
+            source_fit="start", crop="disabled", mask_temporal_reduce="max", invert_mask=False,
+        )
+        workflow.connect("110.1", "c3-full-source-v2v.latent")
+        workflow.connect("5.0", "c3-full-source-v2v.model")
+        workflow.connect("3.0", "c3-full-source-v2v.vae")
+        workflow.connect("1046.0", "c3-full-source-v2v.audio_vae")
+        workflow.connect("99.0", "c3-full-source-v2v.source_frames")
+        workflow.connect("99.2", "c3-full-source-v2v.source_audio")
+        _disconnect_target(workflow, "121.model")
+        workflow.connect("c3-full-source-v2v.1", "121.model")
+        soft = [item for item in soft if any(t.get("modality") == "image" and str(t.get("id", t.get("occurrence_id"))) == str(item["id"]) for t in source_items)]
     if soft:
         state = {"count": len(soft), "positions": [int(item["frame"]) + 1 for item in soft]}
         _add_node(
@@ -956,7 +970,8 @@ def _materialize_executable_graph(
         "video",
     )
     _add_node(workflow, "MiniMaxH3SetAVNoiseMask", "c3-av-mask")
-    workflow.connect("110.1" if branch in {"source_free", "audio_only"} else "103.0", "c3-av-mask.latent")
+    mask_latent = "c3-full-source-v2v.0" if branch == "source_backed_v2v" else ("110.1" if branch in {"source_free", "audio_only"} else "103.0")
+    workflow.connect(mask_latent, "c3-av-mask.latent")
     for stream in ("video", "audio"):
         loader = f"c3-{stream}-mask-loader"
         image_mask = f"c3-{stream}-image-to-mask"
@@ -994,10 +1009,10 @@ def _materialize_executable_graph(
     workflow.connect(latent_source, "124.latent_image")
 
     # The graph has one public output and one final sampler/guider ancestry.
-    if branch in {"source_free", "audio_only"}:
+    if branch in {"source_free", "audio_only", "source_backed_v2v"}:
         workflow.nodes["992"].inputs.update(
             {
-                "filename_prefix": "video/h3_source_free_av",
+                "filename_prefix": "video/h3_source_backed_av" if branch == "source_backed_v2v" else "video/h3_source_free_av",
                 "save_output": True,
                 "save_metadata": False,
                 "trim_to_audio": False,
@@ -1027,12 +1042,12 @@ def _materialize_executable_graph(
         VibeOutput(
             node_id=output_node,
             output_type=workflow.nodes[output_node].class_type,
-            name="av" if branch in {"source_free", "audio_only"} else "continuation",
+            name="av" if branch in {"source_free", "audio_only", "source_backed_v2v"} else "continuation",
             artifact_kind="video",
             mime_type="video/mp4",
             filename_prefix=(
-                "video/h3_source_free_av"
-                if branch in {"source_free", "audio_only"}
+                ("video/h3_source_backed_av" if branch == "source_backed_v2v" else "video/h3_source_free_av")
+                if branch in {"source_free", "audio_only", "source_backed_v2v"}
                 else "video/masked_av_extension"
             ),
             expected_cardinality="one",
@@ -1133,6 +1148,7 @@ def build_h3_graph_binding(
     *,
     asset_members: Mapping[str, str] | None = None,
     mask_members: Mapping[str, str] | None = None,
+    baseline_member: str | None = None,
 ) -> dict[str, Any]:
     """Validate T2's artifact and emit one executable H3 VibeWorkflow binding."""
 
@@ -1212,6 +1228,7 @@ def build_h3_graph_binding(
         anchors=anchors,
         audio_only=audio_only,
         geometry=geometry,
+        baseline_member=baseline_member,
     )
     actual_nodes = [
         {"id": str(node_id), "class_type": node.class_type, "inputs": dict(node.inputs)}
@@ -1259,17 +1276,23 @@ def build_h3_graph_binding(
         }
         for output in reloaded.outputs
     ]
-    expected_sink = "992" if branch in {"source_free", "audio_only"} else "946"
+    expected_sink = "992" if branch in {"source_free", "audio_only", "source_backed_v2v"} else "946"
     if len(output_descriptors) != 1 or output_descriptors[0]["node_id"] != expected_sink:
         raise GraphBindingError("serialized H3 graph must declare exactly one real AV sink")
     if output_descriptors[0]["expected_cardinality"] != "one":
         raise GraphBindingError("serialized H3 AV sink must declare cardinality one")
 
-    hard = [item for item in anchors if item["classification"] == "hard_conditioned"]
+    hard = [item for item in anchors if item["classification"] == "hard_conditioned" and (branch != "source_backed_v2v" or any(t.get("modality") == "image" and str(t.get("id", t.get("occurrence_id"))) == str(item["id"]) for t in timeline_items))]
     if branch in {"source_free", "audio_only"}:
         latent = [
             _lineage_item("110", "110.1", "empty_av_latent", None),
             _lineage_item("c3-av-mask", "c3-av-mask.0", "nested_av_mask", "110.1"),
+        ]
+    elif branch == "source_backed_v2v":
+        latent = [
+            _lineage_item("110", "110.1", "empty_av_latent", None),
+            _lineage_item("c3-full-source-v2v", "c3-full-source-v2v.0", "source_av_context", "110.1"),
+            _lineage_item("c3-av-mask", "c3-av-mask.0", "nested_av_mask", "c3-full-source-v2v.0"),
         ]
     else:
         latent = [
@@ -1286,7 +1309,8 @@ def build_h3_graph_binding(
             None,
         )
     ]
-    if any(item.get("classification") == "soft_conditioned" for item in anchors):
+    active_soft = [item for item in anchors if item.get("classification") == "soft_conditioned" and (branch != "source_backed_v2v" or any(t.get("modality") == "image" and str(t.get("id", t.get("occurrence_id"))) == str(item["id"]) for t in timeline_items))]
+    if active_soft:
         conditioning.append(_lineage_item("c3-soft-anchors", "c3-soft-anchors.0", "soft_keyframe", conditioning[-1]["output"] if conditioning else "110.0"))
     conditioning.extend(_lineage_item(f"c3-motion-guide-{index}", f"c3-motion-guide-{index}.0", "motion_context", conditioning[-1]["output"] if conditioning else "110.0") for index, _ in enumerate(guides))
     final_conditioning = conditioning[-1]["output"] if conditioning else "110.0"
@@ -1317,7 +1341,7 @@ def build_h3_graph_binding(
         required_conditioning.add("motion_context")
     if references:
         required_conditioning.add("reference_conditioning")
-    if any(item.get("classification") == "soft_conditioned" for item in anchors):
+    if active_soft:
         required_conditioning.add("soft_keyframe")
     try:
         validation = validate_final_sampler_state(
